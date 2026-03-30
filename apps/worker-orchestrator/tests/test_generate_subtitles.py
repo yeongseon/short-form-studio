@@ -336,3 +336,57 @@ def test_generate_subtitles_without_audio(monkeypatch: pytest.MonkeyPatch) -> No
     assert "audio_path" not in params
     assert params["format"] == "srt"
     assert params["output_path"] == "data/artifacts/106/subtitles/subtitles.srt"
+
+
+class _CASSkipStorage(FakeStorage):
+    """FakeStorage variant where conditional_update_run always returns (False, row).
+
+    Simulates a concurrent stage change between the provider call and
+    the atomic success/failure transition.
+    """
+
+    async def conditional_update_run(
+        self,
+        run_id: int,
+        updates: dict[str, object],
+        expected_stages: frozenset[str],
+    ) -> tuple[bool, dict[str, object] | None]:
+        self.cas_calls.append((run_id, updates, expected_stages))
+        row = self._runs.get(run_id)
+        # Always reject — stage was moved by another worker.
+        return False, dict(row) if row else None
+
+
+def test_generate_subtitles_cas_skip_on_stage_change(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When another worker advances the stage during subtitle generation,
+    the CAS success transition is skipped gracefully (no error, no stage mutation).
+    """
+    provider = FakeProvider()
+    _patch_registry(monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider))
+
+    script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Narration text"))
+    audio_service = FakeAudioService(artifact=None)
+    subtitle_service = FakeSubtitleService(artifact_id=50)
+
+    # Storage starts at AUDIO_GENERATING (passes stage guard) but CAS always rejects.
+    run_row: dict[str, object] = {"id": 107, "current_stage": "AUDIO_GENERATING"}
+    storage = _CASSkipStorage(runs={107: run_row})
+    _patch_services(monkeypatch, script_service, audio_service, subtitle_service, storage)
+
+    result = _invoke_task(run_id=107)
+
+    # Task still succeeds — subtitles were generated and artifact created.
+    assert result["status"] == "success"
+    assert result["subtitle_artifact_id"] == 50
+
+    # Provider was called normally.
+    assert len(provider.calls) == 1
+
+    # Subtitle artifact was saved.
+    assert len(subtitle_service.calls) == 1
+
+    # CAS was attempted but the transition was NOT applied.
+    assert len(storage.cas_calls) == 1
+    assert storage.cas_calls[0][1] == {"current_stage": "RENDER_GENERATING", "status": "running"}
+    # No actual updates were applied (calls stays empty).
+    assert storage.calls == []
