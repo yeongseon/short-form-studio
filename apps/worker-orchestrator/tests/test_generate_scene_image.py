@@ -457,6 +457,31 @@ def test_all_scenes_fail_marks_run_failed(monkeypatch: pytest.MonkeyPatch) -> No
     assert len(va_service.calls) == 0
 
 
+def test_all_scenes_fail_and_cas_raises_propagates_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If ALL scenes fail AND the CAS to FAILED itself errors, the exception must propagate.
+
+    Regression: previously the except-block swallowed the storage error and returned
+    a 'failed' payload, making Celery mark the task as SUCCESS while the run stayed
+    stuck in its original stage.
+    """
+    provider = FakeImageProvider(error=RuntimeError("GPU crashed"))
+    entry = FakeEntry(requires_gpu=False)
+    registry = FakeRegistry(entry=entry, provider=provider)
+    _patch_registry(monkeypatch, registry)
+
+    scenes = [
+        FakeVisualScene(scene_id="scene-sec-0", prompt="Hook"),
+    ]
+    plan = FakeVisualPlan(run_id=203, scenes=scenes)
+    vp_service = FakeVisualPlanService(plan=plan)
+    va_service = FakeVisualAssetService()
+    storage = _make_storage(run_id=203, stage="VISUAL_PLAN_REVIEW")
+    storage.error = ConnectionError("Redis down")  # CAS itself fails
+    _patch_services(monkeypatch, vp_service, va_service, storage)
+
+    with pytest.raises(ConnectionError, match="Redis down"):
+        _invoke_task(run_id=203)
+
 # ──────────────────────────────────────────────────────────────────────
 # Stage guard tests
 # ──────────────────────────────────────────────────────────────────────

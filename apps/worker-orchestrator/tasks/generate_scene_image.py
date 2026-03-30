@@ -292,6 +292,7 @@ def generate_scene_image(
                     )
             except Exception:
                 logger.exception("Failed to mark run %d as FAILED", run_id)
+                raise
         else:
             # At least some scenes succeeded — advance to VISUAL_ASSET_REVIEW.
             overall_status = "success" if failed == 0 else "partial"
