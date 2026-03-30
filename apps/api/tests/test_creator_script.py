@@ -692,6 +692,8 @@ async def test_parse_markdown_success(client, stub_parse_markdown_services):
     assert body["version"] == 2  # new draft version saved
     assert len(parse_calls) == 1
     assert parse_calls[0]["markdown"] == "## Hook\n\nGreat opening\n\n## Body\n\nDetails"
+    # Verify source_type is preserved from original draft (pasted_markdown, not edited_manually)
+    assert script_service.save_draft_calls[-1]["source_type"] == "pasted_markdown"
 
 
 @pytest.mark.asyncio

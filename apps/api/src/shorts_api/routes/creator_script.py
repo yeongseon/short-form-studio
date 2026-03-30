@@ -190,7 +190,7 @@ async def parse_script_markdown(run_id: int) -> dict[str, object]:
 
     saved_draft = await script_service.save_draft(
         run_id=run_id,
-        source_type="edited_manually",
+        source_type=draft.source_type,
         markdown_content=draft.markdown_content,
         structured_script=sections,
     )
