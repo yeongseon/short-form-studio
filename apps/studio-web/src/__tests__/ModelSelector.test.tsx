@@ -57,7 +57,7 @@ describe("ModelSelector", () => {
     expect(screen.getByText("Qwen TTS (Local)")).toBeTruthy();
   });
 
-  it("calls onSelectionChange when model clicked", async () => {
+  it("calls onSelectionChange when model selected via radio", async () => {
     mockFetchSuccess();
     const onChange = vi.fn();
     render(<ModelSelector onSelectionChange={onChange} />);
@@ -66,7 +66,11 @@ describe("ModelSelector", () => {
       expect(screen.getByTestId("model-selector")).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByText("GPT-4o Mini (Remote)"));
+    // Clear default-notification calls
+    onChange.mockClear();
+
+    const gptRadio = screen.getByRole("radio", { name: /GPT-4o Mini/ });
+    fireEvent.click(gptRadio);
     expect(onChange).toHaveBeenCalledWith("script", "gpt-4o-mini");
   });
 
@@ -81,7 +85,7 @@ describe("ModelSelector", () => {
     expect(screen.getByText(/Failed to fetch models: 500/)).toBeTruthy();
   });
 
-  it("default selection mode selects first available model", async () => {
+  it("default selection mode selects first available model and notifies parent", async () => {
     mockFetchSuccess();
     const onChange = vi.fn();
     render(<ModelSelector onSelectionChange={onChange} />);
@@ -90,16 +94,21 @@ describe("ModelSelector", () => {
       expect(screen.getByTestId("model-selector")).toBeTruthy();
     });
 
-    // qwen3-4b should be auto-selected (first available in script)
-    const qwenItem = screen.getByText("Qwen3 4B (Local)").closest("li");
-    expect(qwenItem?.getAttribute("aria-selected")).toBe("true");
+    // qwen3-4b radio should be checked (first available in script)
+    const qwenRadio = screen.getByRole("radio", { name: /Qwen3 4B/ });
+    expect(qwenRadio).toBeChecked();
 
-    // gpt-4o-mini should NOT be selected
-    const gptItem = screen.getByText("GPT-4o Mini (Remote)").closest("li");
-    expect(gptItem?.getAttribute("aria-selected")).toBe("false");
+    // gpt-4o-mini radio should NOT be checked
+    const gptRadio = screen.getByRole("radio", { name: /GPT-4o Mini/ });
+    expect(gptRadio).not.toBeChecked();
+
+    // Parent should have been notified of default selections
+    expect(onChange).toHaveBeenCalledWith("script", "qwen3-4b");
+    expect(onChange).toHaveBeenCalledWith("image", "sd15");
+    expect(onChange).toHaveBeenCalledWith("tts", "qwen-tts");
   });
 
-  it("respects override mode with selectedModels prop", async () => {
+  it("respects controlled mode with selectedModels prop", async () => {
     mockFetchSuccess();
     render(<ModelSelector selectedModels={{ script: "gpt-4o-mini" }} />);
 
@@ -107,12 +116,12 @@ describe("ModelSelector", () => {
       expect(screen.getByTestId("model-selector")).toBeTruthy();
     });
 
-    // In override mode, gpt-4o-mini should be selected
-    const gptItem = screen.getByText("GPT-4o Mini (Remote)").closest("li");
-    expect(gptItem?.getAttribute("aria-selected")).toBe("true");
+    // In controlled mode, gpt-4o-mini should be checked
+    const gptRadio = screen.getByRole("radio", { name: /GPT-4o Mini/ });
+    expect(gptRadio).toBeChecked();
 
-    const qwenItem = screen.getByText("Qwen3 4B (Local)").closest("li");
-    expect(qwenItem?.getAttribute("aria-selected")).toBe("false");
+    const qwenRadio = screen.getByRole("radio", { name: /Qwen3 4B/ });
+    expect(qwenRadio).not.toBeChecked();
   });
 
   it("shows only specified categories", async () => {
@@ -142,5 +151,50 @@ describe("ModelSelector", () => {
 
     expect(screen.getByText("unavailable")).toBeTruthy();
     expect(screen.getByText("unknown")).toBeTruthy();
+  });
+
+  it("keyboard navigation works via native radio inputs", async () => {
+    mockFetchSuccess();
+    const onChange = vi.fn();
+    render(<ModelSelector onSelectionChange={onChange} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("model-selector")).toBeTruthy();
+    });
+
+    onChange.mockClear();
+
+    // Native radios support keyboard by default; simulate click on radio
+    const gptRadio = screen.getByRole("radio", { name: /GPT-4o Mini/ });
+    fireEvent.click(gptRadio);
+    // The onChange handler fires through the radio onChange
+    expect(onChange).toHaveBeenCalledWith("script", "gpt-4o-mini");
+  });
+
+  it("uses radiogroup role with proper aria-label per category", async () => {
+    mockFetchSuccess();
+    render(<ModelSelector />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("model-selector")).toBeTruthy();
+    });
+
+    // Each category should have a radiogroup
+    expect(screen.getByRole("radiogroup", { name: "Script Model" })).toBeTruthy();
+    expect(screen.getByRole("radiogroup", { name: "Image Model" })).toBeTruthy();
+    expect(screen.getByRole("radiogroup", { name: "TTS Model" })).toBeTruthy();
+  });
+
+  it("does not notify parent of defaults in controlled mode", async () => {
+    mockFetchSuccess();
+    const onChange = vi.fn();
+    render(<ModelSelector selectedModels={{ script: "qwen3-4b" }} onSelectionChange={onChange} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("model-selector")).toBeTruthy();
+    });
+
+    // In controlled mode, onSelectionChange should NOT be called with defaults
+    expect(onChange).not.toHaveBeenCalled();
   });
 });

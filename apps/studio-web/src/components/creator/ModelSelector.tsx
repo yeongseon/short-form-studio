@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 
 /** Shape of a single model entry returned by GET /api/creator/models. */
 interface ModelEntry {
@@ -34,9 +34,9 @@ const CATEGORY_MAP: Record<string, CategoryMeta> = {
 const ALL_CATEGORIES = Object.keys(CATEGORY_MAP);
 
 export interface ModelSelectorProps {
-  /** Explicit selection map: category → model key. Enables override mode. */
+  /** Explicit selection map: category → model key. Enables controlled mode. */
   selectedModels?: Record<string, string>;
-  /** Called when the user selects a model. */
+  /** Called when the user selects a model, or when defaults are computed on load. */
   onSelectionChange?: (category: string, modelKey: string) => void;
   /** Subset of categories to display. Defaults to all. */
   categories?: string[];
@@ -61,8 +61,13 @@ export default function ModelSelector({
   const [loading, setLoading] = useState(true);
   const [localSelection, setLocalSelection] = useState<Record<string, string>>({});
 
-  const visibleCategories = categories ?? ALL_CATEGORIES;
+  const visibleCategories = useMemo(() => categories ?? ALL_CATEGORIES, [categories]);
 
+  // Stable ref for onSelectionChange to avoid effect re-fires when callback identity changes
+  const onChangeRef = useRef(onSelectionChange);
+  onChangeRef.current = onSelectionChange;
+
+  // Effect 1: Fetch model catalog when apiBase changes
   useEffect(() => {
     let cancelled = false;
 
@@ -77,19 +82,6 @@ export default function ModelSelector({
         const json: ModelsResponse = await res.json();
         if (!cancelled) {
           setData(json);
-
-          // Default-selection mode: pick first available model per category
-          const defaults: Record<string, string> = {};
-          for (const cat of visibleCategories) {
-            const meta = CATEGORY_MAP[cat];
-            if (!meta) continue;
-            const models = json[meta.responseKey];
-            const firstAvailable = models.find((m) => m.status === "available") ?? models[0];
-            if (firstAvailable) {
-              defaults[cat] = firstAvailable.key;
-            }
-          }
-          setLocalSelection(defaults);
         }
       } catch (err) {
         if (!cancelled) {
@@ -106,8 +98,33 @@ export default function ModelSelector({
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiBase]);
+
+  // Effect 2: Derive default selections when data or visible categories change (uncontrolled mode only).
+  // Also notifies parent of defaults so UI and parent state stay in sync.
+  useEffect(() => {
+    if (!data || selectedModels) return;
+
+    const defaults: Record<string, string> = {};
+    for (const cat of visibleCategories) {
+      const meta = CATEGORY_MAP[cat];
+      if (!meta) continue;
+      const models = data[meta.responseKey];
+      const firstAvailable = models.find((m) => m.status === "available") ?? models[0];
+      if (firstAvailable) {
+        defaults[cat] = firstAvailable.key;
+      }
+    }
+    setLocalSelection(defaults);
+
+    // Notify parent of computed defaults
+    const cb = onChangeRef.current;
+    if (cb) {
+      for (const [cat, key] of Object.entries(defaults)) {
+        cb(cat, key);
+      }
+    }
+  }, [data, visibleCategories, selectedModels]);
 
   const handleSelect = useCallback(
     (category: string, modelKey: string) => {
@@ -139,6 +156,7 @@ export default function ModelSelector({
         const meta = CATEGORY_MAP[cat];
         if (!meta) return null;
         const models = data[meta.responseKey];
+        const groupName = `model-${cat}`;
 
         return (
           <fieldset key={cat} style={{ marginBottom: 16, border: "1px solid #ddd", borderRadius: 6, padding: 12 }}>
@@ -146,15 +164,14 @@ export default function ModelSelector({
             {models.length === 0 ? (
               <div style={{ color: "#888", fontSize: 13 }}>No models available</div>
             ) : (
-              <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
+              <div role="radiogroup" aria-label={meta.displayName}>
                 {models.map((model) => {
                   const isSelected = activeSelection[cat] === model.key;
+                  const inputId = `${groupName}-${model.key}`;
                   return (
-                    <li
+                    <label
                       key={model.key}
-                      role="option"
-                      aria-selected={isSelected}
-                      onClick={() => handleSelect(cat, model.key)}
+                      htmlFor={inputId}
                       style={{
                         display: "flex",
                         alignItems: "center",
@@ -167,6 +184,15 @@ export default function ModelSelector({
                         marginBottom: 4,
                       }}
                     >
+                      <input
+                        type="radio"
+                        id={inputId}
+                        name={groupName}
+                        value={model.key}
+                        checked={isSelected}
+                        onChange={() => handleSelect(cat, model.key)}
+                        style={{ margin: 0 }}
+                      />
                       <span style={{ flex: 1, fontSize: 13 }}>{model.label}</span>
                       <span style={STATUS_STYLES[model.status] ?? STATUS_STYLES.unknown}>
                         {model.status}
@@ -176,10 +202,10 @@ export default function ModelSelector({
                           local
                         </span>
                       )}
-                    </li>
+                    </label>
                   );
                 })}
-              </ul>
+              </div>
             )}
           </fieldset>
         );
