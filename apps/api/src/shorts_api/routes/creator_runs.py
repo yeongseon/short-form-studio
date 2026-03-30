@@ -29,10 +29,7 @@ def dispatch_generate_script(
 
     Separated into a function so tests can monkeypatch without importing Celery.
     """
-    # Lazy import — Celery is not available in test/API-only environments
     from importlib import import_module
-
-    from celery import Celery  # noqa: F401
 
     tasks = import_module("tasks.generate_script")
     result = tasks.generate_script.delay(run_id, idea_brief, model_key, instructions)
@@ -122,49 +119,61 @@ async def generate_script_trigger(run_id: int, request: GenerateScriptRequest) -
         raise HTTPException(status_code=404, detail="Run not found")
 
     # 2. Validate stage — only IDEA_READY and SCRIPT_REVIEW can trigger generation
-    allowed = {"IDEA_READY", "SCRIPT_REVIEW"}
-    if run.current_stage not in allowed:
+    allowed_stages = frozenset({"IDEA_READY", "SCRIPT_REVIEW"})
+    if run.current_stage not in allowed_stages:
         raise HTTPException(
             status_code=400,
             detail=f"Run is in stage '{run.current_stage}', "
-            f"expected one of {sorted(allowed)}",
+            f"expected one of {sorted(allowed_stages)}",
         )
 
-    # 3. Advance to SCRIPT_GENERATING
-    #    - IDEA_READY → forward progression (advance_stage)
-    #    - SCRIPT_REVIEW → re-generation (restart_run sets restart_from)
-    try:
-        if run.current_stage == "IDEA_READY":
-            updated_run = await run_service.advance_stage(
-                run_id=run_id, target_stage="SCRIPT_GENERATING"
-            )
-        else:
-            updated_run = await run_service.restart_run(
-                run_id=run_id, from_stage="SCRIPT_GENERATING"
-            )
-    except ValueError as exc:
-        detail = str(exc)
-        if "not found" in detail.lower():
-            raise HTTPException(status_code=404, detail=detail) from exc
-        raise HTTPException(status_code=400, detail=detail) from exc
-
-    # 4. Get project for idea_brief
-    project = await project_service.get_project(updated_run.project_id)
+    # 3. Resolve all preconditions BEFORE mutating state
+    project = await project_service.get_project(run.project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
     idea_brief = project.idea_brief or project.title or ""
 
-    # 5. Dispatch Celery task
-    task_id = dispatch_generate_script(
-        run_id=run_id,
-        idea_brief=idea_brief,
-        model_key=request.model_key,
-        instructions=request.instructions,
+    # 4. Atomically advance to SCRIPT_GENERATING via CAS
+    #    Prevents duplicate dispatch from concurrent requests.
+    #    For SCRIPT_REVIEW restarts, also set restart_from.
+    updates: dict[str, object] = {"current_stage": "SCRIPT_GENERATING"}
+    if run.current_stage == "SCRIPT_REVIEW":
+        updates["restart_from"] = "SCRIPT_GENERATING"
+
+    ok, row = await run_service.storage.conditional_update_run(
+        run_id, updates, expected_stages=allowed_stages,
     )
+    if not ok:
+        if row is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        raise HTTPException(
+            status_code=409,
+            detail=f"Stage conflict: run is now in '{row.get('current_stage')}'",
+        )
+
+    # 5. Dispatch Celery task — if this fails, roll back stage
+    try:
+        task_id = dispatch_generate_script(
+            run_id=run_id,
+            idea_brief=idea_brief,
+            model_key=request.model_key,
+            instructions=request.instructions,
+        )
+    except Exception:
+        # Best-effort rollback: restore original stage so run isn't stuck
+        await run_service.storage.conditional_update_run(
+            run_id,
+            {"current_stage": run.current_stage, "restart_from": run.restart_from},
+            expected_stages=frozenset({"SCRIPT_GENERATING"}),
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Failed to enqueue script generation task",
+        ) from None
 
     return {
         "task_id": task_id,
         "run_id": run_id,
-        "current_stage": updated_run.current_stage,
+        "current_stage": "SCRIPT_GENERATING",
     }

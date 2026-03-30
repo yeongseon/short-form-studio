@@ -31,6 +31,7 @@ class StubRunService:
         self.restart_run_calls: list[dict[str, object]] = []
         self.advance_stage_calls: list[dict[str, object]] = []
         self.runs: dict[int, StubPipelineRun] = {}
+        self.storage = StubRunStorage(self)
         self._next_id = 1
 
     async def create_run(
@@ -99,6 +100,35 @@ class StubRunService:
         self.runs[run_id] = updated
         return updated
 
+
+class StubRunStorage:
+    """Minimal storage stub that supports conditional_update_run."""
+
+    def __init__(self, run_svc: "StubRunService") -> None:
+        self._run_svc = run_svc
+        self.conditional_update_calls: list[dict[str, object]] = []
+
+    async def conditional_update_run(
+        self,
+        run_id: int,
+        updates: dict[str, object],
+        expected_stages: frozenset[str],
+    ) -> tuple[bool, dict[str, object] | None]:
+        self.conditional_update_calls.append({
+            "run_id": run_id,
+            "updates": dict(updates),
+            "expected_stages": expected_stages,
+        })
+
+        run = self._run_svc.runs.get(run_id)
+        if run is None:
+            return False, None
+        if run.current_stage not in expected_stages:
+            return False, run.model_dump(mode="json")
+
+        updated = run.model_copy(update=updates)
+        self._run_svc.runs[run_id] = updated
+        return True, updated.model_dump(mode="json")
 class StubStageReviewService:
     def __init__(self, run_svc: StubRunService) -> None:
         self.approve_calls: list[dict[str, object]] = []
@@ -488,8 +518,12 @@ async def test_generate_script_from_idea_ready(client, stub_generate_services):
     assert body["task_id"] == "test-task-id-123"
     assert body["run_id"] == 10
     assert body["current_stage"] == "SCRIPT_GENERATING"
-    assert run_svc.advance_stage_calls == [{"run_id": 10, "target_stage": "SCRIPT_GENERATING"}]
-    assert len(run_svc.restart_run_calls) == 0
+    # CAS was called for IDEA_READY → SCRIPT_GENERATING (no restart_from)
+    cas_calls = run_svc.storage.conditional_update_calls
+    assert len(cas_calls) == 1
+    assert cas_calls[0]["run_id"] == 10
+    assert cas_calls[0]["updates"] == {"current_stage": "SCRIPT_GENERATING"}
+    assert "IDEA_READY" in cas_calls[0]["expected_stages"]
     assert dispatcher.calls == [{
         "run_id": 10,
         "idea_brief": "Create a cooking tutorial",
@@ -510,11 +544,15 @@ async def test_generate_script_from_script_review(client, stub_generate_services
     )
 
     assert response.status_code == 202
-    body = response.json()
-    assert body["current_stage"] == "SCRIPT_GENERATING"
-    assert len(run_svc.restart_run_calls) == 1
-    assert run_svc.restart_run_calls[0] == {"run_id": 11, "from_stage": "SCRIPT_GENERATING"}
-    assert len(run_svc.advance_stage_calls) == 0
+    # CAS was called for SCRIPT_REVIEW → SCRIPT_GENERATING with restart_from
+    cas_calls = run_svc.storage.conditional_update_calls
+    assert len(cas_calls) == 1
+    assert cas_calls[0]["run_id"] == 11
+    assert cas_calls[0]["updates"] == {
+        "current_stage": "SCRIPT_GENERATING",
+        "restart_from": "SCRIPT_GENERATING",
+    }
+    assert "SCRIPT_REVIEW" in cas_calls[0]["expected_stages"]
     assert dispatcher.calls[0]["idea_brief"] == "Science explainer"
 
 
@@ -591,3 +629,89 @@ async def test_generate_script_idea_brief_fallback_to_title(client, stub_generat
 
     assert response.status_code == 202
     assert dispatcher.calls[0]["idea_brief"] == "Fallback Title"
+
+
+@pytest.mark.asyncio
+async def test_generate_script_cas_conflict(client, stub_generate_services):
+    """CAS fails because stage changed between initial check and CAS."""
+    run_svc, project_svc, dispatcher = stub_generate_services
+    # Set stage to IDEA_READY so the initial check passes
+    run_svc.runs[20] = _make_run(20, "IDEA_READY")
+    project_svc.projects[1] = _make_project(1, "Conflict test")
+
+    # Simulate a concurrent stage change: after the initial read, change stage
+    # so CAS will find mismatch.  We do this by mutating the run between the
+    # initial get_run and the CAS call.  Because the route reads once then CAS,
+    # we override conditional_update_run to simulate conflict.
+
+    async def cas_conflict(run_id, updates, expected_stages):
+        # Return conflict: stage changed to SCRIPT_GENERATING
+        return False, {"current_stage": "SCRIPT_GENERATING", "id": run_id}
+
+    run_svc.storage.conditional_update_run = cas_conflict
+
+    response = await client.post(
+        "/api/creator/runs/20/generate-script",
+        json={},
+    )
+
+    assert response.status_code == 409
+    assert "conflict" in response.json()["detail"].lower()
+    # Dispatcher was NOT called
+    assert len(dispatcher.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_generate_script_dispatch_failure_rollback(client, stub_generate_services):
+    """Celery dispatch failure triggers rollback to original stage."""
+    run_svc, project_svc, _ = stub_generate_services
+    run_svc.runs[21] = _make_run(21, "IDEA_READY")
+    project_svc.projects[1] = _make_project(1, "Dispatch fail test")
+
+    def failing_dispatcher(run_id, idea_brief, model_key, instructions):
+        raise RuntimeError("Celery broker down")
+
+    # Patch the dispatcher for this test
+    from shorts_api.main import runs_router as _r
+    for route in _r.routes:
+        if route.name == "generate_script_trigger":
+            route.endpoint.__globals__["dispatch_generate_script"] = failing_dispatcher
+
+    response = await client.post(
+        "/api/creator/runs/21/generate-script",
+        json={},
+    )
+
+    assert response.status_code == 503
+    assert "enqueue" in response.json()["detail"].lower()
+
+    # Rollback: CAS was called twice — first to advance, then to rollback
+    cas_calls = run_svc.storage.conditional_update_calls
+    assert len(cas_calls) == 2
+    # Second CAS = rollback to IDEA_READY
+    rollback = cas_calls[1]
+    assert rollback["updates"]["current_stage"] == "IDEA_READY"
+    assert rollback["expected_stages"] == frozenset({"SCRIPT_GENERATING"})
+
+    # Verify run was actually rolled back to IDEA_READY
+    assert run_svc.runs[21].current_stage == "IDEA_READY"
+
+
+@pytest.mark.asyncio
+async def test_generate_script_project_not_found(client, stub_generate_services):
+    """Project not found returns 404 BEFORE any state mutation."""
+    run_svc, project_svc, dispatcher = stub_generate_services
+    run_svc.runs[22] = _make_run(22, "IDEA_READY")
+    # Do NOT add project — project_svc.projects is empty
+
+    response = await client.post(
+        "/api/creator/runs/22/generate-script",
+        json={},
+    )
+
+    assert response.status_code == 404
+    assert "project" in response.json()["detail"].lower()
+    # No CAS call — precondition failed before mutation
+    assert len(run_svc.storage.conditional_update_calls) == 0
+    # No dispatch
+    assert len(dispatcher.calls) == 0
