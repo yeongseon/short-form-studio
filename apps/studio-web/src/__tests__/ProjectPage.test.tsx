@@ -38,6 +38,22 @@ const MOCK_RUN_GENERATING = {
   restart_from: null,
 };
 
+const MOCK_RUN_VP_GENERATING = {
+  id: 1,
+  project_id: 7,
+  current_stage: "VISUAL_PLAN_GENERATING",
+  status: "running",
+  restart_from: null,
+};
+
+const MOCK_RUN_VP_REVIEW = {
+  id: 1,
+  project_id: 7,
+  current_stage: "VISUAL_PLAN_REVIEW",
+  status: "running",
+  restart_from: null,
+};
+
 // ---- helpers ----
 
 const mockNavigate = vi.fn();
@@ -177,7 +193,7 @@ describe("ProjectPage", () => {
     expect(screen.getByRole("button", { name: "Generate Script" })).toBeInTheDocument();
     // Approve and Regenerate should not be visible
     expect(screen.queryByRole("button", { name: "Approve Script" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Regenerate" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Regenerate Script" })).not.toBeInTheDocument();
   });
 
   // ---- Project with run in SCRIPT_REVIEW ----
@@ -190,11 +206,10 @@ describe("ProjectPage", () => {
     // Editor tabs
     expect(screen.getByRole("tab", { name: "Markdown" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Structured" })).toBeInTheDocument();
-    // Approve + Regenerate visible
+    // Approve + Regenerate Script + Generate Visual Plan visible
     expect(screen.getByRole("button", { name: "Approve Script" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Regenerate" })).toBeInTheDocument();
-    // Generate should not be visible
-    expect(screen.queryByRole("button", { name: "Generate Script" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Regenerate Script" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Generate Visual Plan" })).toBeInTheDocument();
   });
 
   it("switches between markdown and structured tabs", async () => {
@@ -275,12 +290,12 @@ describe("ProjectPage", () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Regenerate" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Regenerate Script" })).toBeInTheDocument();
     });
 
     const fetchSpy = vi.spyOn(globalThis, "fetch");
 
-    fireEvent.click(screen.getByRole("button", { name: "Regenerate" }));
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate Script" }));
 
     await waitFor(() => {
       const calls = fetchSpy.mock.calls.map(([url]) =>
@@ -364,6 +379,101 @@ describe("ProjectPage", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Stage conflict")).toBeInTheDocument();
+    });
+  });
+  // ---- Visual Plan stages ----
+
+  it("shows VP generating indicator for VISUAL_PLAN_GENERATING", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VP_GENERATING]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("vp-generating-indicator")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Generating Visual Plan\u2026")).toBeInTheDocument();
+    // Script editor tabs should NOT be visible
+    expect(screen.queryByRole("tab", { name: "Markdown" })).not.toBeInTheDocument();
+  });
+
+  it("shows VisualPlanEditor and action buttons for VISUAL_PLAN_REVIEW", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VP_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("visual-plan-editor")).toBeInTheDocument();
+    });
+    // Approve and Regenerate Plan visible
+    expect(screen.getByRole("button", { name: "Approve Visual Plan" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Regenerate Plan" })).toBeInTheDocument();
+    // Script actions should not be visible
+    expect(screen.queryByRole("button", { name: "Approve Script" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Generate Script" })).not.toBeInTheDocument();
+  });
+
+  it("calls approve-visual-plan endpoint on Approve Visual Plan click", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VP_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Approve Visual Plan" })).toBeInTheDocument();
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    fireEvent.click(screen.getByRole("button", { name: "Approve Visual Plan" }));
+
+    await waitFor(() => {
+      const calls = fetchSpy.mock.calls.map(([url]) =>
+        typeof url === "string" ? url : (url as Request).url,
+      );
+      expect(calls.some((u) => u.includes("/approve-visual-plan"))).toBe(true);
+    });
+  });
+
+  it("shows Generate Visual Plan button in SCRIPT_REVIEW", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Generate Visual Plan" })).toBeInTheDocument();
+    });
+  });
+
+  it("calls generate-visual-plan endpoint from SCRIPT_REVIEW", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Generate Visual Plan" })).toBeInTheDocument();
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    fireEvent.click(screen.getByRole("button", { name: "Generate Visual Plan" }));
+
+    await waitFor(() => {
+      const calls = fetchSpy.mock.calls.map(([url]) =>
+        typeof url === "string" ? url : (url as Request).url,
+      );
+      expect(calls.some((u) => u.includes("/generate-visual-plan"))).toBe(true);
+    });
+  });
+
+  it("calls restart with VISUAL_PLAN_GENERATING stage on Regenerate Plan click", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VP_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Regenerate Plan" })).toBeInTheDocument();
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate Plan" }));
+
+    await waitFor(() => {
+      const calls = fetchSpy.mock.calls;
+      const restartCall = calls.find(([url]) => {
+        const u = typeof url === "string" ? url : (url as Request).url;
+        return u.includes("/restart");
+      });
+      expect(restartCall).toBeDefined();
+      const body = JSON.parse(restartCall![1]!.body as string);
+      expect(body.stage).toBe("VISUAL_PLAN_GENERATING");
     });
   });
 });
