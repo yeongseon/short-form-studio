@@ -1057,3 +1057,204 @@ async def test_generate_visual_plan_dispatch_failure_rollback(client, stub_gener
 
     # Verify run was actually rolled back to SCRIPT_REVIEW
     assert run_svc.runs[36].current_stage == "SCRIPT_REVIEW"
+
+
+
+
+# -- generate-visual-assets tests -----------------------------------------------
+
+
+
+
+class StubImageDispatcher:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+        self.task_id = "test-img-task-id-789"
+
+    def __call__(
+        self, run_id: int, model_key: str, scene_id: str | None,
+        prompt_override: str | None, is_active: bool,
+    ) -> str:
+        self.calls.append({
+            "run_id": run_id,
+            "model_key": model_key,
+            "scene_id": scene_id,
+            "prompt_override": prompt_override,
+            "is_active": is_active,
+        })
+        return self.task_id
+
+
+@pytest.fixture
+def stub_generate_visual_assets_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubImageDispatcher]:
+    run_svc = StubRunService()
+    dispatcher = StubImageDispatcher()
+
+    for route in runs_router.routes:
+        if route.name == "generate_visual_assets_trigger":
+            monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
+            monkeypatch.setitem(route.endpoint.__globals__, "dispatch_generate_scene_image", dispatcher)
+
+    return run_svc, dispatcher
+
+
+@pytest.mark.asyncio
+async def test_generate_visual_assets_from_visual_plan_review(client, stub_generate_visual_assets_services):
+    run_svc, dispatcher = stub_generate_visual_assets_services
+    run_svc.runs[60] = _make_run(60, "VISUAL_PLAN_REVIEW")
+
+    response = await client.post(
+        "/api/creator/runs/60/generate-visual-assets",
+        json={"model_key": "sd15"},
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["task_id"] == "test-img-task-id-789"
+    assert body["run_id"] == 60
+    assert body["current_stage"] == "VISUAL_ASSET_GENERATING"
+    # CAS was called for VISUAL_PLAN_REVIEW → VISUAL_ASSET_GENERATING (no restart_from)
+    cas_calls = run_svc.storage.conditional_update_calls
+    assert len(cas_calls) == 1
+    assert cas_calls[0]["run_id"] == 60
+    assert cas_calls[0]["updates"] == {"current_stage": "VISUAL_ASSET_GENERATING"}
+    assert "VISUAL_PLAN_REVIEW" in cas_calls[0]["expected_stages"]
+    assert dispatcher.calls == [{
+        "run_id": 60,
+        "model_key": "sd15",
+        "scene_id": None,
+        "prompt_override": None,
+        "is_active": True,
+    }]
+
+
+@pytest.mark.asyncio
+async def test_generate_visual_assets_retry_from_generating(client, stub_generate_visual_assets_services):
+    run_svc, dispatcher = stub_generate_visual_assets_services
+    run_svc.runs[61] = _make_run(61, "VISUAL_ASSET_GENERATING")
+
+    response = await client.post(
+        "/api/creator/runs/61/generate-visual-assets",
+        json={"model_key": "sd15"},
+    )
+
+    assert response.status_code == 202
+    # CAS was called for VISUAL_ASSET_GENERATING → VISUAL_ASSET_GENERATING with restart_from
+    cas_calls = run_svc.storage.conditional_update_calls
+    assert len(cas_calls) == 1
+    assert cas_calls[0]["run_id"] == 61
+    assert cas_calls[0]["updates"] == {
+        "current_stage": "VISUAL_ASSET_GENERATING",
+        "restart_from": "VISUAL_ASSET_GENERATING",
+    }
+    assert "VISUAL_ASSET_GENERATING" in cas_calls[0]["expected_stages"]
+    assert len(dispatcher.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_visual_assets_default_model(client, stub_generate_visual_assets_services):
+    run_svc, dispatcher = stub_generate_visual_assets_services
+    run_svc.runs[62] = _make_run(62, "VISUAL_PLAN_REVIEW")
+
+    response = await client.post(
+        "/api/creator/runs/62/generate-visual-assets",
+        json={},
+    )
+
+    assert response.status_code == 202
+    assert dispatcher.calls[0]["model_key"] == "sd15"
+
+
+@pytest.mark.asyncio
+async def test_generate_visual_assets_run_not_found(client, stub_generate_visual_assets_services):
+    _, _ = stub_generate_visual_assets_services
+    response = await client.post(
+        "/api/creator/runs/999/generate-visual-assets",
+        json={},
+    )
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_generate_visual_assets_wrong_stage(client, stub_generate_visual_assets_services):
+    run_svc, _ = stub_generate_visual_assets_services
+    run_svc.runs[63] = _make_run(63, "IDEA_READY")
+
+    response = await client.post(
+        "/api/creator/runs/63/generate-visual-assets",
+        json={},
+    )
+
+    assert response.status_code == 400
+    assert "IDEA_READY" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_generate_visual_assets_wrong_stage_script_review(client, stub_generate_visual_assets_services):
+    run_svc, _ = stub_generate_visual_assets_services
+    run_svc.runs[64] = _make_run(64, "SCRIPT_REVIEW")
+
+    response = await client.post(
+        "/api/creator/runs/64/generate-visual-assets",
+        json={},
+    )
+
+    assert response.status_code == 400
+    assert "SCRIPT_REVIEW" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_generate_visual_assets_cas_conflict(client, stub_generate_visual_assets_services):
+    """CAS fails because stage changed between initial check and CAS."""
+    run_svc, dispatcher = stub_generate_visual_assets_services
+    run_svc.runs[65] = _make_run(65, "VISUAL_PLAN_REVIEW")
+
+    async def cas_conflict(run_id, updates, expected_stages):
+        return False, {"current_stage": "VISUAL_ASSET_GENERATING", "id": run_id}
+
+    run_svc.storage.conditional_update_run = cas_conflict
+
+    response = await client.post(
+        "/api/creator/runs/65/generate-visual-assets",
+        json={},
+    )
+
+    assert response.status_code == 409
+    assert "conflict" in response.json()["detail"].lower()
+    assert len(dispatcher.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_generate_visual_assets_dispatch_failure_rollback(client, stub_generate_visual_assets_services):
+    """Celery dispatch failure triggers rollback to original stage."""
+    run_svc, _ = stub_generate_visual_assets_services
+    run_svc.runs[66] = _make_run(66, "VISUAL_PLAN_REVIEW")
+
+    def failing_dispatcher(run_id, model_key, scene_id, prompt_override, is_active):
+        raise RuntimeError("Celery broker down")
+
+    from shorts_api.main import runs_router as _r
+    for route in _r.routes:
+        if route.name == "generate_visual_assets_trigger":
+            route.endpoint.__globals__["dispatch_generate_scene_image"] = failing_dispatcher
+
+    response = await client.post(
+        "/api/creator/runs/66/generate-visual-assets",
+        json={},
+    )
+
+    assert response.status_code == 503
+    assert "enqueue" in response.json()["detail"].lower()
+
+    # Rollback: CAS was called twice — first to advance, then to rollback
+    cas_calls = run_svc.storage.conditional_update_calls
+    assert len(cas_calls) == 2
+    # Second CAS = rollback to VISUAL_PLAN_REVIEW
+    rollback = cas_calls[1]
+    assert rollback["updates"]["current_stage"] == "VISUAL_PLAN_REVIEW"
+    assert rollback["expected_stages"] == frozenset({"VISUAL_ASSET_GENERATING"})
+
+    # Verify run was actually rolled back to VISUAL_PLAN_REVIEW
+    assert run_svc.runs[66].current_stage == "VISUAL_PLAN_REVIEW"
