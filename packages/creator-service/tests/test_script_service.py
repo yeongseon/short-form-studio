@@ -127,3 +127,18 @@ def test_list_draft_versions_returns_newest_first(service: ScriptService) -> Non
     drafts = run(service.list_draft_versions(107))
 
     assert [draft.version for draft in drafts] == [3, 2, 1]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_saves_produce_unique_versions() -> None:
+    """Two concurrent saves for the same run_id must produce distinct versions."""
+    storage = InMemoryScriptStorage()
+    service = ScriptService(storage)
+
+    results = await asyncio.gather(
+        service.save_draft(run_id=200, source_type="pasted_markdown", markdown_content="## hook\nA"),
+        service.save_draft(run_id=200, source_type="pasted_markdown", markdown_content="## hook\nB"),
+    )
+
+    versions = sorted(d.version for d in results)
+    assert versions == [1, 2], f"Expected unique versions [1, 2], got {versions}"

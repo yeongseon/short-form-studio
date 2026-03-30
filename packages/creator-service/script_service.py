@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -56,6 +57,7 @@ class InMemoryScriptStorage:
 class ScriptService:
     def __init__(self, storage: ScriptStorageBackend | None = None) -> None:
         self.storage = storage if storage is not None else InMemoryScriptStorage()
+        self._run_locks: dict[int, asyncio.Lock] = {}
 
     async def save_draft(
         self,
@@ -70,37 +72,42 @@ class ScriptService:
         parse the markdown to generate the structured script.
         If this run already has drafts, use existing sections for stable IDs.
         Every save increments the version number.
+
+        Version allocation is serialised per run_id via an asyncio.Lock
+        to prevent duplicate versions under concurrent saves.
         """
-        current = await self.storage.get_active_draft(run_id)
-        next_version = 1
-        existing_sections: list[ScriptSection] | None = None
+        lock = self._run_locks.setdefault(run_id, asyncio.Lock())
+        async with lock:
+            current = await self.storage.get_active_draft(run_id)
+            next_version = 1
+            existing_sections: list[ScriptSection] | None = None
 
-        if current is not None:
-            next_version = current.get("version", 0) + 1
-            existing_json = current.get("structured_script_json")
-            if existing_json:
-                try:
-                    existing_data = json.loads(existing_json)
-                    existing_sections = [ScriptSection.model_validate(section) for section in existing_data]
-                except (json.JSONDecodeError, Exception):
-                    existing_sections = None
+            if current is not None:
+                next_version = current.get("version", 0) + 1
+                existing_json = current.get("structured_script_json")
+                if existing_json:
+                    try:
+                        existing_data = json.loads(existing_json)
+                        existing_sections = [ScriptSection.model_validate(section) for section in existing_data]
+                    except (json.JSONDecodeError, Exception):
+                        existing_sections = None
 
-        if markdown_content is not None and structured_script is None:
-            structured_script = parse_markdown(markdown_content, existing_sections=existing_sections)
+            if markdown_content is not None and structured_script is None:
+                structured_script = parse_markdown(markdown_content, existing_sections=existing_sections)
 
-        structured_script_json: str | None = None
-        if structured_script is not None:
-            structured_script_json = json.dumps([section.model_dump(mode="json") for section in structured_script])
+            structured_script_json: str | None = None
+            if structured_script is not None:
+                structured_script_json = json.dumps([section.model_dump(mode="json") for section in structured_script])
 
-        row = await self.storage.save_draft(
-            {
-                "run_id": run_id,
-                "source_type": source_type,
-                "markdown_content": markdown_content,
-                "structured_script_json": structured_script_json,
-                "version": next_version,
-            }
-        )
+            row = await self.storage.save_draft(
+                {
+                    "run_id": run_id,
+                    "source_type": source_type,
+                    "markdown_content": markdown_content,
+                    "structured_script_json": structured_script_json,
+                    "version": next_version,
+                }
+            )
 
         return self._row_to_draft(row)
 
