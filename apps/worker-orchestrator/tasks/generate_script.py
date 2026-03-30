@@ -49,6 +49,14 @@ logger = logging.getLogger(__name__)
 _ALLOWED_STAGES = frozenset({RunStage.IDEA_READY, RunStage.SCRIPT_GENERATING})
 
 
+class _StageGuardError(ValueError):
+    """Raised when a run is not in an acceptable stage for generation.
+
+    This is a validation/rejection error — the run state must NOT be mutated
+    to FAILED because the run may already be in a later stage (e.g. SCRIPT_REVIEW).
+    """
+
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -96,11 +104,16 @@ def generate_script(
         # Stage guard: verify run is in an acceptable stage
         run = await _run_service.storage.get_run(run_id)
         if run is None:
-            raise ValueError(f"Run {run_id} not found")
+            raise _StageGuardError(f"Run {run_id} not found")
 
-        current = RunStage(run["current_stage"])
+        try:
+            current = RunStage(run["current_stage"])
+        except ValueError as exc:
+            raise _StageGuardError(
+                f"Run {run_id} has invalid stage {run['current_stage']!r}"
+            ) from exc
         if current not in _ALLOWED_STAGES:
-            raise ValueError(
+            raise _StageGuardError(
                 f"Run {run_id} is in stage {current.value}, "
                 f"expected one of {', '.join(s.value for s in _ALLOWED_STAGES)}"
             )
@@ -164,6 +177,11 @@ def generate_script(
             "status": "success",
             "error": None,
         }
+    except _StageGuardError:
+        # Validation rejection — do NOT mutate run state to FAILED.
+        # A stale/duplicate task should not downgrade a run already past generation.
+        raise
+
     except Exception:
         try:
             asyncio.run(

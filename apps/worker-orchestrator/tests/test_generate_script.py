@@ -322,8 +322,8 @@ def test_stage_guard_rejects_wrong_stage(monkeypatch: pytest.MonkeyPatch) -> Non
     # Provider should never have been called
     assert provider.calls == []
     assert script_service.calls == []
-    # Should still mark run as FAILED
-    assert storage.calls == [(200, {"current_stage": "FAILED", "status": "failed"})]
+    # Run state must NOT be mutated — this is a validation rejection, not a failure
+    assert storage.calls == []
 
 
 def test_stage_guard_accepts_script_generating(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -358,7 +358,8 @@ def test_stage_guard_run_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
         _invoke_task(run_id=999, idea_brief="Ghost run")
 
     assert provider.calls == []
-
+    # Run state must NOT be mutated for a non-existent run
+    assert storage.calls == []
 
 # ──────────────────────────────────────────────────────────────────────
 # Oracle-requested: re-raise propagation
@@ -427,3 +428,45 @@ def test_update_run_failure_in_error_path_still_re_raises_original(monkeypatch: 
     # Original error must still propagate even if FAILED-stage update fails
     with pytest.raises(RuntimeError, match="original error"):
         _invoke_task(run_id=500, idea_brief="Double failure")
+
+
+def test_stage_guard_wrong_stage_preserves_run_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A run in SCRIPT_REVIEW must stay in SCRIPT_REVIEW after stage guard rejection."""
+    provider = FakeProvider(result="Should not run")
+    entry = FakeEntry(requires_gpu=False)
+    registry = FakeRegistry(entry=entry, provider=provider)
+    _patch_registry(monkeypatch, registry)
+
+    script_service = FakeScriptService()
+    storage = _make_storage(run_id=600, stage="SCRIPT_REVIEW")
+    _patch_services(monkeypatch, script_service, storage)
+
+    with pytest.raises(ValueError, match="expected one of"):
+        _invoke_task(run_id=600, idea_brief="Stale duplicate task")
+
+    # The run must NOT have been mutated at all
+    assert storage.calls == []
+    assert provider.calls == []
+    # Verify the run still has its original stage
+    run = storage._runs[600]
+    assert run["current_stage"] == "SCRIPT_REVIEW"
+
+
+def test_stage_guard_invalid_stage_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Malformed current_stage value in storage should raise without marking FAILED."""
+    provider = FakeProvider()
+    entry = FakeEntry(requires_gpu=False)
+    registry = FakeRegistry(entry=entry, provider=provider)
+    _patch_registry(monkeypatch, registry)
+
+    script_service = FakeScriptService()
+    # Simulate corrupted stage value in storage
+    storage = _make_storage(run_id=700, stage="BOGUS_STAGE")
+    _patch_services(monkeypatch, script_service, storage)
+
+    # RunStage("BOGUS_STAGE") will raise ValueError — should NOT mark run FAILED
+    with pytest.raises(ValueError):
+        _invoke_task(run_id=700, idea_brief="Corrupted stage")
+
+    assert provider.calls == []
+    assert storage.calls == []
