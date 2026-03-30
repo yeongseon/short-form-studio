@@ -199,7 +199,7 @@ def _patch_services(
     monkeypatch.setattr(render_video_module, "_visual_asset_service", fake_vas)
     monkeypatch.setattr(render_video_module, "_audio_service", fake_audio)
     monkeypatch.setattr(render_video_module, "_subtitle_service", fake_subtitle)
-    monkeypatch.setattr(render_video_module, "FFmpegService", lambda: fake_ffmpeg)
+    monkeypatch.setattr(render_video_module, "FFmpegService", lambda profile=None: fake_ffmpeg)
 
 
 def _invoke_task(**kwargs: Any) -> dict[str, object]:
@@ -468,3 +468,41 @@ def test_render_video_default_profile(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result["render_profile"] == "shorts_default"
     assert fake_render_service.manifest_calls[0]["render_profile_name"] == "shorts_default"
     assert fake_render_service.create_calls[0]["render_profile"] == "shorts_default"
+
+
+def test_render_video_profile_propagated_to_ffmpeg(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify non-default render_profile is actually passed to FFmpegService."""
+    run_id = 208
+    storage = _make_storage(run_id=run_id, stage="RENDER_GENERATING")
+    fake_render_service = FakeRenderService(
+        manifest=_manifest(run_id=run_id),
+        artifact_path="data/artifacts/208/render/output.mp4",
+    )
+    fake_vas = FakeVisualAssetService()
+    fake_audio = FakeAudioService()
+    fake_subtitle = FakeSubtitleService()
+    fake_ffmpeg = FakeFFmpegService()
+
+    # Capture the profile argument passed to FFmpegService constructor
+    captured_profiles: list[Any] = []
+
+    def ffmpeg_factory(profile: Any = None) -> FakeFFmpegService:
+        captured_profiles.append(profile)
+        return fake_ffmpeg
+
+    monkeypatch.setattr(render_video_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr(render_video_module, "_render_service", fake_render_service)
+    monkeypatch.setattr(render_video_module, "_visual_asset_service", fake_vas)
+    monkeypatch.setattr(render_video_module, "_audio_service", fake_audio)
+    monkeypatch.setattr(render_video_module, "_subtitle_service", fake_subtitle)
+    monkeypatch.setattr(render_video_module, "FFmpegService", ffmpeg_factory)
+
+    result = _invoke_task(run_id=run_id, render_profile="high_quality")
+
+    assert result["status"] == "success"
+    assert result["render_profile"] == "high_quality"
+    assert len(captured_profiles) == 1
+    profile = captured_profiles[0]
+    assert profile.name == "high_quality"
+    assert profile.crf == 18
+    assert profile.preset == "slow"

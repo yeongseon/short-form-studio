@@ -53,8 +53,10 @@ except ImportError:
 
 try:
     from creator_service.ffmpeg_service import FFmpegService, RenderInput
+    from creator_service.render_profile import RenderProfile
 except ImportError:
     from ffmpeg_service import FFmpegService, RenderInput
+    from render_profile import RenderProfile
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +67,20 @@ _SAFE_STAGES = frozenset({RunStage.RENDER_GENERATING.value})
 class _StageGuardError(ValueError):
     pass
 
+# Map profile name → RenderProfile constructor
+_PROFILE_REGISTRY: dict[str, object] = {
+    "shorts_default": RenderProfile.default,
+    "high_quality": RenderProfile.high_quality,
+    "fast_preview": RenderProfile.fast_preview,
+}
+
+
+def _resolve_profile(name: str) -> RenderProfile:
+    factory = _PROFILE_REGISTRY.get(name)
+    if factory is None:
+        logger.warning("Unknown render profile %r, falling back to default", name)
+        return RenderProfile.default()
+    return factory()
 
 @celery_app.task(bind=True, name="render_video")
 def render_video(
@@ -121,7 +137,8 @@ def render_video(
 
         output_path = f"data/artifacts/{run_id}/render/output.mp4"
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        ffmpeg = FFmpegService()
+        resolved_profile = _resolve_profile(render_profile)
+        ffmpeg = FFmpegService(profile=resolved_profile)
         ffmpeg.render(render_input, Path(output_path))
 
         artifact = await _render_service.create_artifact(
