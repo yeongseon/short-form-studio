@@ -1,4 +1,3 @@
-# pyright: reportMissingImports=false
 """Celery task for scene image generation via image providers.
 
 Consumes an approved visual plan and generates images for one or all scenes.
@@ -18,15 +17,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../..", "packages"))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../..", "packages", "creator-service"))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../..", "packages", "creator-provider"))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../..", "packages", "creator-domain"))
 
 try:
     import redis
@@ -34,33 +27,12 @@ except ImportError:
     redis = None  # type: ignore[assignment]
 
 from celery_app import celery_app
-
-try:
-    from creator_domain.models.stage import RunStage
-except ImportError:
-    from models.stage import RunStage
-
-try:
-    from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
-    from creator_provider.registry import ProviderRegistry
-except ImportError:
-    from gpu_lock import acquire_gpu_lock, release_gpu_lock
-    from registry import ProviderRegistry
-
-try:
-    from creator_service.run_service import run_service as _run_service
-except ImportError:
-    from run_service import run_service as _run_service
-
-try:
-    from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
-except ImportError:
-    from visual_plan_service import visual_plan_service as _visual_plan_service
-
-try:
-    from creator_service.visual_asset_service import visual_asset_service as _visual_asset_service
-except ImportError:
-    from visual_asset_service import visual_asset_service as _visual_asset_service
+from creator_domain.models.stage import RunStage
+from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
+from creator_provider.registry import ProviderRegistry
+from creator_service.run_service import run_service as _run_service
+from creator_service.visual_asset_service import visual_asset_service as _visual_asset_service
+from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
 
 logger = logging.getLogger(__name__)
 

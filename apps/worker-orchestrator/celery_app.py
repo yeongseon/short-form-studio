@@ -3,13 +3,9 @@
 
 import logging
 import os
-import sys
 
 from celery import Celery
 from celery.signals import after_setup_logger
-
-# Add packages to path for imports
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../..", "packages"))
 
 from creator_service.logging_config import setup_json_logging
 
