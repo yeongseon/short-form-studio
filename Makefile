@@ -9,8 +9,13 @@ dev:
 	@echo "- Web: npm --prefix apps/studio-web run dev"
 
 lint:
+	ruff check apps packages
 	python3 -m compileall apps packages
 	@if [ -d apps/studio-web/node_modules ]; then npm --prefix apps/studio-web run lint; else echo "Skipping studio-web lint (run make install first)"; fi
+
+format:
+	ruff format apps packages
+	@if [ -d apps/studio-web/node_modules ]; then npm --prefix apps/studio-web run format; else echo "Skipping studio-web format (run make install first)"; fi
 
 test:
 	@echo "No tests scaffolded yet."

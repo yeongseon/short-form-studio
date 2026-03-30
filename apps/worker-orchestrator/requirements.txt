@@ -1,3 +1,7 @@
 celery
 redis
 watchfiles
+
+
+# Dev dependencies
+ruff
