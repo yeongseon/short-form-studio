@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 
 /** Shape of a single model entry returned by GET /api/creator/models. */
 interface ModelEntry {
@@ -61,7 +61,7 @@ export default function ModelSelector({
   const [loading, setLoading] = useState(true);
   const [localSelection, setLocalSelection] = useState<Record<string, string>>({});
 
-  const visibleCategories = useMemo(() => categories ?? ALL_CATEGORIES, [categories]);
+  const visibleCategories = categories ?? ALL_CATEGORIES;
 
   // Stable ref for onSelectionChange to avoid effect re-fires when callback identity changes
   const onChangeRef = useRef(onSelectionChange);
@@ -100,31 +100,56 @@ export default function ModelSelector({
     };
   }, [apiBase]);
 
+  // Stable string key for categories to avoid re-triggering effect on array identity changes.
+  const categoriesKey = visibleCategories.join(",");
+
   // Effect 2: Derive default selections when data or visible categories change (uncontrolled mode only).
-  // Also notifies parent of defaults so UI and parent state stay in sync.
+  // Only initializes selections for categories that don't already have a user-chosen value,
+  // so manual selections survive parent re-renders and categories changes.
   useEffect(() => {
     if (!data || selectedModels) return;
 
-    const defaults: Record<string, string> = {};
-    for (const cat of visibleCategories) {
-      const meta = CATEGORY_MAP[cat];
-      if (!meta) continue;
-      const models = data[meta.responseKey];
-      const firstAvailable = models.find((m) => m.status === "available") ?? models[0];
-      if (firstAvailable) {
-        defaults[cat] = firstAvailable.key;
-      }
-    }
-    setLocalSelection(defaults);
+    const cats = categoriesKey.split(",");
+    setLocalSelection((prev) => {
+      const next = { ...prev };
+      const newDefaults: Array<[string, string]> = [];
 
-    // Notify parent of computed defaults
-    const cb = onChangeRef.current;
-    if (cb) {
-      for (const [cat, key] of Object.entries(defaults)) {
-        cb(cat, key);
+      for (const cat of cats) {
+        // Skip categories that already have a selection
+        if (next[cat]) {
+          // Verify the selected model still exists in the catalog
+          const meta = CATEGORY_MAP[cat];
+          if (meta) {
+            const models = data[meta.responseKey];
+            const stillExists = models.some((m) => m.key === next[cat]);
+            if (stillExists) continue;
+          }
+        }
+
+        const meta = CATEGORY_MAP[cat];
+        if (!meta) continue;
+        const models = data[meta.responseKey];
+        const firstAvailable = models.find((m) => m.status === "available") ?? models[0];
+        if (firstAvailable) {
+          next[cat] = firstAvailable.key;
+          newDefaults.push([cat, firstAvailable.key]);
+        }
       }
-    }
-  }, [data, visibleCategories, selectedModels]);
+
+      // Notify parent only for newly defaulted categories
+      if (newDefaults.length > 0) {
+        const cb = onChangeRef.current;
+        if (cb) {
+          // Schedule notification after state update to avoid calling setState during render
+          queueMicrotask(() => {
+            for (const [c, k] of newDefaults) cb(c, k);
+          });
+        }
+      }
+
+      return next;
+    });
+  }, [data, categoriesKey, selectedModels]);
 
   const handleSelect = useCallback(
     (category: string, modelKey: string) => {

@@ -197,4 +197,64 @@ describe("ModelSelector", () => {
     // In controlled mode, onSelectionChange should NOT be called with defaults
     expect(onChange).not.toHaveBeenCalled();
   });
+
+  it("does not fire duplicate default callbacks when categories array identity changes", async () => {
+    mockFetchSuccess();
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <ModelSelector categories={["script", "image"]} onSelectionChange={onChange} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("model-selector")).toBeTruthy();
+    });
+
+    // Initial defaults should have fired for script + image
+    expect(onChange).toHaveBeenCalledWith("script", "qwen3-4b");
+    expect(onChange).toHaveBeenCalledWith("image", "sd15");
+    const initialCallCount = onChange.mock.calls.length;
+    onChange.mockClear();
+
+    // Rerender with a NEW array reference but same content
+    rerender(
+      <ModelSelector categories={["script", "image"]} onSelectionChange={onChange} />,
+    );
+
+    // Allow any effects to settle
+    await new Promise((r) => setTimeout(r, 50));
+
+    // No duplicate callbacks should have fired — selections already exist
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("manual uncontrolled selection survives parent rerender", async () => {
+    mockFetchSuccess();
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <ModelSelector onSelectionChange={onChange} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("model-selector")).toBeTruthy();
+    });
+
+    // Manually select gpt-4o-mini (overriding the default qwen3-4b)
+    const gptRadio = screen.getByRole("radio", { name: /GPT-4o Mini/ });
+    fireEvent.click(gptRadio);
+    expect(gptRadio).toBeChecked();
+
+    onChange.mockClear();
+
+    // Rerender with new categories array identity (same content)
+    rerender(
+      <ModelSelector categories={["script", "image", "tts", "stt"]} onSelectionChange={onChange} />,
+    );
+
+    // Allow effects to settle
+    await new Promise((r) => setTimeout(r, 50));
+
+    // The manually selected gpt-4o-mini should still be checked, not overwritten by default
+    const gptRadioAfter = screen.getByRole("radio", { name: /GPT-4o Mini/ });
+    expect(gptRadioAfter).toBeChecked();
+  });
 });
