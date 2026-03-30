@@ -4,6 +4,7 @@
  * Loads the project detail and its latest run, then renders:
  * - PipelineStepper (header progress bar)
  * - Editor area with markdown / structured toggle (during script stages)
+ * - VisualPlanEditor (during visual plan stages)
  * - StageActionBar (save / approve / generate / restart)
  */
 
@@ -16,6 +17,7 @@ import StageActionBar, {
 } from "../components/creator/StageActionBar";
 import MarkdownScriptEditor from "../components/creator/MarkdownScriptEditor";
 import StructuredScriptEditor from "../components/creator/StructuredScriptEditor";
+import VisualPlanEditor from "../components/creator/VisualPlanEditor";
 
 const API_BASE = "/api/creator";
 
@@ -41,8 +43,11 @@ type EditorMode = "markdown" | "structured";
 // Script stages where the editor area is relevant
 const SCRIPT_STAGES = new Set(["SCRIPT_GENERATING", "SCRIPT_REVIEW"]);
 
+// Visual plan stages where the editor area is relevant
+const VISUAL_PLAN_STAGES = new Set(["VISUAL_PLAN_GENERATING", "VISUAL_PLAN_REVIEW"]);
+
 // Stages where editing is allowed (not generating)
-const EDITABLE_STAGES = new Set(["SCRIPT_REVIEW"]);
+const EDITABLE_STAGES = new Set(["SCRIPT_REVIEW", "VISUAL_PLAN_REVIEW"]);
 
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -187,14 +192,84 @@ export default function ProjectPage() {
     }
   }, [run, refreshRun]);
 
+  const handleApproveVisualPlan = useCallback(async () => {
+    if (!run) return;
+    setApproving(true);
+    setStatusMessage(null);
+    try {
+      const res = await fetch(`${API_BASE}/runs/${run.id}/approve-visual-plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reviewer: "agent" }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail ?? `Approve failed (${res.status})`);
+      }
+      setStatusMessage("Visual plan approved");
+      await refreshRun(run.id);
+    } catch (err) {
+      setStatusMessage(err instanceof Error ? err.message : "Approve failed");
+    } finally {
+      setApproving(false);
+    }
+  }, [run, refreshRun]);
+
+  const handleGenerateVisualPlan = useCallback(async () => {
+    if (!run) return;
+    setGenerating(true);
+    setStatusMessage(null);
+    try {
+      const res = await fetch(`${API_BASE}/runs/${run.id}/generate-visual-plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model_key: "qwen3-4b" }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail ?? `Generate failed (${res.status})`);
+      }
+      setStatusMessage("Visual plan generation started");
+      setTimeout(() => refreshRun(run.id), 2000);
+    } catch (err) {
+      setStatusMessage(err instanceof Error ? err.message : "Generate failed");
+    } finally {
+      setGenerating(false);
+    }
+  }, [run, refreshRun]);
+
+  const handleRestartVisualPlan = useCallback(async () => {
+    if (!run) return;
+    setRestarting(true);
+    setStatusMessage(null);
+    try {
+      const res = await fetch(`${API_BASE}/runs/${run.id}/restart`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stage: "VISUAL_PLAN_GENERATING" }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail ?? `Restart failed (${res.status})`);
+      }
+      setStatusMessage("Restarting visual plan generation…");
+      await refreshRun(run.id);
+    } catch (err) {
+      setStatusMessage(err instanceof Error ? err.message : "Restart failed");
+    } finally {
+      setRestarting(false);
+    }
+  }, [run, refreshRun]);
+
   // ---- derived state ----
 
   const currentStage = run?.current_stage ?? "IDEA_READY";
   const isFailed = run?.status === "failed";
   const isScriptStage = SCRIPT_STAGES.has(currentStage);
+  const isVisualPlanStage = VISUAL_PLAN_STAGES.has(currentStage);
   const isEditable = EDITABLE_STAGES.has(currentStage);
   const isGenerating = currentStage === "SCRIPT_GENERATING";
-
+  const isVPGenerating = currentStage === "VISUAL_PLAN_GENERATING";
   // ---- action bar config ----
 
   const buildActionBar = (): {
@@ -203,11 +278,31 @@ export default function ProjectPage() {
     generate: ActionConfig;
     restart: ActionConfig;
   } => {
+    // Visual plan stages
+    if (isVisualPlanStage) {
+      return {
+        save: { visible: false },
+        approve: {
+          visible: currentStage === "VISUAL_PLAN_REVIEW",
+          disabled: approving,
+          loading: approving,
+          onClick: handleApproveVisualPlan,
+          label: "Approve Visual Plan",
+        },
+        generate: { visible: false },
+        restart: {
+          visible: currentStage === "VISUAL_PLAN_REVIEW",
+          disabled: restarting,
+          loading: restarting,
+          onClick: handleRestartVisualPlan,
+          label: "Regenerate Plan",
+        },
+      };
+    }
+
+    // Script stages and transitions
     return {
-      save: {
-        // Save is handled inside the editor components directly
-        visible: false,
-      },
+      save: { visible: false },
       approve: {
         visible: currentStage === "SCRIPT_REVIEW",
         disabled: approving,
@@ -216,18 +311,18 @@ export default function ProjectPage() {
         label: "Approve Script",
       },
       generate: {
-        visible: currentStage === "IDEA_READY",
+        visible: currentStage === "IDEA_READY" || currentStage === "SCRIPT_REVIEW",
         disabled: generating,
         loading: generating,
-        onClick: handleGenerate,
-        label: "Generate Script",
+        onClick: currentStage === "SCRIPT_REVIEW" ? handleGenerateVisualPlan : handleGenerate,
+        label: currentStage === "SCRIPT_REVIEW" ? "Generate Visual Plan" : "Generate Script",
       },
       restart: {
         visible: currentStage === "SCRIPT_REVIEW",
         disabled: restarting,
         loading: restarting,
         onClick: handleRestart,
-        label: "Regenerate",
+        label: "Regenerate Script",
       },
     };
   };
@@ -362,6 +457,27 @@ export default function ProjectPage() {
         </div>
       )}
 
+      {/* Visual plan generating indicator */}
+      {run && isVPGenerating && (
+        <div
+          data-testid="vp-generating-indicator"
+          style={{
+            textAlign: "center",
+            padding: 32,
+            background: "#f0fdf4",
+            borderRadius: 8,
+            border: "1px solid #bbf7d0",
+            color: "#166534",
+            marginBottom: 24,
+          }}
+        >
+          <p style={{ margin: "0 0 4px", fontWeight: 600 }}>Generating Visual Plan…</p>
+          <p style={{ margin: 0, fontSize: 13 }}>
+            The AI model is creating scene descriptions. This may take a moment.
+          </p>
+        </div>
+      )}
+
       {/* Script editor area */}
       {run && isScriptStage && !isGenerating && (
         <div style={{ marginBottom: 24 }}>
@@ -438,6 +554,17 @@ export default function ProjectPage() {
               />
             </div>
           )}
+        </div>
+      )}
+      {/* Visual plan editor area */}
+      {run && isVisualPlanStage && !isVPGenerating && (
+        <div style={{ marginBottom: 24 }}>
+          <VisualPlanEditor
+            runId={run.id}
+            readOnly={currentStage !== "VISUAL_PLAN_REVIEW"}
+            onSuccess={() => setStatusMessage("Visual plan saved")}
+            onError={(_action, msg) => setStatusMessage(msg)}
+          />
         </div>
       )}
 
