@@ -1,26 +1,10 @@
 """Routes for creator model management."""
-# pyright: reportMissingImports=false
-
 import logging
-import os
-import sys
 
 from fastapi import APIRouter, HTTPException, Query
-
-# Add packages to path for imports
-_PACKAGES_DIR = os.path.join(os.path.dirname(__file__), "../../../../..", "packages")
-sys.path.insert(0, _PACKAGES_DIR)
-sys.path.insert(0, os.path.join(_PACKAGES_DIR, "creator-service"))
-sys.path.insert(0, os.path.join(_PACKAGES_DIR, "creator-provider"))
-
-try:
-    from creator_provider.registry import ProviderRegistry
-    from creator_service.model_catalog_service import ModelCatalogService
-    from creator_service.model_health_service import ModelHealthService
-except ImportError:
-    from model_catalog_service import ModelCatalogService
-    from model_health_service import ModelHealthService
-    from registry import ProviderRegistry
+from creator_provider.registry import ProviderRegistry
+from creator_service.model_catalog_service import ModelCatalogService
+from creator_service.model_health_service import ModelHealthService
 
 logger = logging.getLogger(__name__)
 
