@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import sys
 from datetime import datetime, timezone
@@ -42,6 +43,10 @@ try:
     from creator_service.script_service import script_service as _script_service
 except ImportError:
     from script_service import script_service as _script_service
+
+logger = logging.getLogger(__name__)
+
+_ALLOWED_STAGES = frozenset({RunStage.IDEA_READY, RunStage.SCRIPT_GENERATING})
 
 
 def _utc_now_iso() -> str:
@@ -86,6 +91,36 @@ def generate_script(
     redis_client: Any | None = None
     lock_acquired = False
 
+    async def _run_generation() -> str:
+        """Single async coroutine wrapping all async operations."""
+        # Stage guard: verify run is in an acceptable stage
+        run = await _run_service.storage.get_run(run_id)
+        if run is None:
+            raise ValueError(f"Run {run_id} not found")
+
+        current = RunStage(run["current_stage"])
+        if current not in _ALLOWED_STAGES:
+            raise ValueError(
+                f"Run {run_id} is in stage {current.value}, "
+                f"expected one of {', '.join(s.value for s in _ALLOWED_STAGES)}"
+            )
+
+        params = dict(entry.default_params or {})
+        generated = await provider.generate(prompt, params)
+        await _script_service.save_draft(
+            run_id=run_id,
+            source_type="generated_by_model",
+            markdown_content=generated,
+        )
+        await _run_service.storage.update_run(
+            run_id,
+            {
+                "current_stage": RunStage.SCRIPT_REVIEW.value,
+                "status": "running",
+            },
+        )
+        return generated
+
     try:
         registry = ProviderRegistry.create_default()
         entry = registry.resolve(model_key)
@@ -103,28 +138,14 @@ def generate_script(
             gpu_lock_acquired_at = _utc_now_iso()
 
         try:
-            params = dict(entry.default_params or {})
-            generated_script = asyncio.run(provider.generate(prompt, params))
-            asyncio.run(
-                _script_service.save_draft(
-                    run_id=run_id,
-                    source_type="generated_by_model",
-                    markdown_content=generated_script,
-                )
-            )
-            asyncio.run(
-                _run_service.storage.update_run(
-                    run_id,
-                    {
-                        "current_stage": RunStage.SCRIPT_REVIEW.value,
-                        "status": "running",
-                    },
-                )
-            )
+            asyncio.run(_run_generation())
         finally:
             if lock_acquired:
-                release_gpu_lock(redis_client, task_id)
-                gpu_lock_released_at = _utc_now_iso()
+                try:
+                    release_gpu_lock(redis_client, task_id)
+                    gpu_lock_released_at = _utc_now_iso()
+                except Exception:
+                    logger.exception("Failed to release GPU lock for task %s", task_id)
 
         end_time = datetime.now(timezone.utc)
         duration_seconds = (end_time - start_time).total_seconds()
@@ -143,7 +164,7 @@ def generate_script(
             "status": "success",
             "error": None,
         }
-    except Exception as exc:
+    except Exception:
         try:
             asyncio.run(
                 _run_service.storage.update_run(
@@ -155,22 +176,6 @@ def generate_script(
                 )
             )
         except Exception:
-            pass
+            logger.exception("Failed to mark run %d as FAILED after task error", run_id)
 
-        end_time = datetime.now(timezone.utc)
-        duration_seconds = (end_time - start_time).total_seconds()
-        return {
-            "task_id": task_id,
-            "run_id": run_id,
-            "model_key": model_key,
-            "provider_type": provider_type,
-            "endpoint": endpoint,
-            "gpu_lock_acquired_at": gpu_lock_acquired_at,
-            "gpu_lock_released_at": gpu_lock_released_at,
-            "prompt_summary": idea_brief[:200],
-            "start_time": start_iso,
-            "end_time": end_time.isoformat(),
-            "duration_seconds": duration_seconds,
-            "status": "failed",
-            "error": str(exc),
-        }
+        raise
