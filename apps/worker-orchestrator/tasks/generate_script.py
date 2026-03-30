@@ -149,13 +149,29 @@ def generate_script(
                 source_type="generated_by_model",
                 markdown_content=generated,
             )
-            await _run_service.storage.update_run(
-                run_id,
-                {
-                    "current_stage": RunStage.SCRIPT_REVIEW.value,
-                    "status": "running",
-                },
-            )
+            # Conditional success transition: only advance if run is still in a
+            # generating-compatible stage. A competing task may have already
+            # advanced the run past generation.
+            current_run = await _run_service.storage.get_run(run_id)
+            if current_run is not None:
+                try:
+                    cur_stage = RunStage(current_run["current_stage"])
+                except ValueError:
+                    cur_stage = None
+                if cur_stage in _FAIL_SAFE_STAGES:
+                    await _run_service.storage.update_run(
+                        run_id,
+                        {
+                            "current_stage": RunStage.SCRIPT_REVIEW.value,
+                            "status": "running",
+                        },
+                    )
+                else:
+                    logger.info(
+                        "Run %d is in stage %s after generation -- skipping SCRIPT_REVIEW transition",
+                        run_id,
+                        current_run["current_stage"],
+                    )
         finally:
             if lock_acquired:
                 try:

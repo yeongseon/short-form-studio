@@ -499,18 +499,24 @@ def test_stage_guard_blocks_before_provider_resolution(monkeypatch: pytest.Monke
 
 
 class RaceConditionStorage(FakeStorage):
-    """Storage that simulates a competing task advancing the run between guard and error handler."""
+    """Storage that simulates a competing task advancing the run between calls.
 
-    def __init__(self, run_id: int, initial_stage: str, advanced_stage: str) -> None:
+    After `advance_after` calls to get_run for the target run_id, the run's
+    stage is changed to `advanced_stage`. This allows testing both:
+    - Success path race: advance_after=1 (guard sees IDEA_READY, success check sees advanced)
+    - Failure path race: advance_after=1 (guard sees IDEA_READY, error handler sees advanced)
+    """
+
+    def __init__(self, run_id: int, initial_stage: str, advanced_stage: str, advance_after: int = 1) -> None:
         super().__init__(runs={run_id: {"id": run_id, "current_stage": initial_stage}})
         self._target_id = run_id
         self._advanced_stage = advanced_stage
+        self._advance_after = advance_after
         self._get_count = 0
 
     async def get_run(self, run_id: int) -> dict[str, object] | None:
         self._get_count += 1
-        if run_id == self._target_id and self._get_count > 1:
-            # Second get_run call (from _conditional_fail) sees the advanced stage
+        if run_id == self._target_id and self._get_count > self._advance_after:
             self._runs[run_id] = {"id": run_id, "current_stage": self._advanced_stage}
         return self._runs.get(run_id)
 
@@ -561,3 +567,38 @@ def test_conditional_fail_marks_failed_when_still_in_generating_stage(monkeypatc
 
     # Run was still in IDEA_READY -> FAILED write should happen
     assert storage.calls == [(901, {"current_stage": "FAILED", "status": "failed"})]
+
+
+def test_success_transition_skips_when_run_already_advanced(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If a competing task advances the run past generation before this task's
+    success transition, the SCRIPT_REVIEW write must be skipped.
+
+    Scenario: two duplicate tasks both pass the stage guard (both see IDEA_READY).
+    Task A completes and moves the run to VISUAL_PLAN_GENERATING. Task B then
+    completes generation -- its success transition re-checks and sees the run is
+    no longer in a generating stage, so it skips the SCRIPT_REVIEW write.
+    """
+    provider = FakeProvider(result="Duplicate draft")
+    entry = FakeEntry(requires_gpu=False)
+    registry = FakeRegistry(entry=entry, provider=provider)
+    _patch_registry(monkeypatch, registry)
+
+    script_service = FakeScriptService()
+    # First get_run (stage guard) returns IDEA_READY -> passes guard.
+    # Second get_run (success transition check) returns VISUAL_PLAN_GENERATING
+    # -> competing task already advanced the run further.
+    storage = RaceConditionStorage(
+        run_id=950, initial_stage="IDEA_READY", advanced_stage="VISUAL_PLAN_GENERATING"
+    )
+    _patch_services(monkeypatch, script_service, storage)
+
+    result = _invoke_task(run_id=950, idea_brief="Duplicate success scenario")
+
+    # Task still reports success (it generated and saved the draft)
+    assert result["status"] == "success"
+    # But the SCRIPT_REVIEW update_run must NOT have happened
+    assert storage.calls == []
+    # Draft was still saved (that is fine -- it will not be the active one)
+    assert script_service.calls == [(950, "generated_by_model", "Duplicate draft")]
+    # Run stays at the advanced stage, not overwritten to SCRIPT_REVIEW
+    assert storage._runs[950]["current_stage"] == "VISUAL_PLAN_GENERATING"
