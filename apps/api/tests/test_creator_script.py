@@ -610,3 +610,190 @@ async def test_update_script_structured_preserves_section_id(client, stub_run_sc
     assert saved_sections is not None
     assert saved_sections[0].section_id == "original-101"
     assert saved_sections[1].section_id == "original-102"
+
+
+# --- parse-markdown endpoint tests ---
+
+
+class StubScriptSection:
+    """Minimal stub matching ScriptSection interface for parse_markdown mock."""
+
+    def __init__(self, section_id: str, type: str, text: str) -> None:
+        self.section_id = section_id
+        self.type = type
+        self.text = text
+        self.display_text = text
+        self.speaker = "host"
+        self.duration = None
+        self.turn_kind = None
+        self.visual_override = None
+
+    def model_dump(self, *, mode: str = "python") -> dict:
+        return {
+            "section_id": self.section_id,
+            "type": self.type,
+            "text": self.text,
+            "display_text": self.display_text,
+            "speaker": self.speaker,
+            "duration": self.duration,
+            "turn_kind": self.turn_kind,
+            "visual_override": self.visual_override,
+        }
+
+
+@pytest.fixture
+def stub_parse_markdown_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunServiceRead, StubScriptService, list]:
+    """Fixture that also patches parse_markdown for run_script_router routes."""
+    run = StubRunServiceRead()
+    script = StubScriptService()
+    parse_calls: list[dict] = []
+
+    def fake_parse_markdown(markdown: str, existing_sections=None):
+        parse_calls.append({"markdown": markdown, "existing_sections": existing_sections})
+        sections = []
+        for line in markdown.split("\n"):
+            if line.startswith("## "):
+                heading = line[3:].strip().lower()
+                sections.append(StubScriptSection(
+                    section_id=f"{heading}-{len(sections)+1}",
+                    type=heading,
+                    text=f"Text for {heading}",
+                ))
+        if not sections:
+            sections.append(StubScriptSection(
+                section_id="body-1", type="body", text=markdown.strip()
+            ))
+        return sections
+
+    for route in run_script_router.routes:
+        monkeypatch.setitem(route.endpoint.__globals__, "run_service", run)
+        monkeypatch.setitem(route.endpoint.__globals__, "script_service", script)
+        monkeypatch.setitem(route.endpoint.__globals__, "parse_markdown", fake_parse_markdown)
+
+    return run, script, parse_calls
+
+
+@pytest.mark.asyncio
+async def test_parse_markdown_success(client, stub_parse_markdown_services):
+    run_service, script_service, parse_calls = stub_parse_markdown_services
+    run_service.runs[70] = StubPipelineRun(id=70, project_id=1)
+    await script_service.save_draft(
+        run_id=70,
+        source_type="pasted_markdown",
+        markdown_content="## Hook\n\nGreat opening\n\n## Body\n\nDetails",
+    )
+
+    response = await client.post("/api/creator/runs/70/script/parse-markdown")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_id"] == 70
+    assert len(body["sections"]) > 0
+    assert body["version"] == 2  # new draft version saved
+    assert len(parse_calls) == 1
+    assert parse_calls[0]["markdown"] == "## Hook\n\nGreat opening\n\n## Body\n\nDetails"
+
+
+@pytest.mark.asyncio
+async def test_parse_markdown_run_not_found(client, stub_parse_markdown_services):
+    _run_service, script_service, parse_calls = stub_parse_markdown_services
+
+    response = await client.post("/api/creator/runs/999/script/parse-markdown")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Run 999 not found"}
+    assert script_service.save_draft_calls == []
+    assert parse_calls == []
+
+
+@pytest.mark.asyncio
+async def test_parse_markdown_no_draft(client, stub_parse_markdown_services):
+    run_service, script_service, parse_calls = stub_parse_markdown_services
+    run_service.runs[71] = StubPipelineRun(id=71, project_id=1)
+
+    response = await client.post("/api/creator/runs/71/script/parse-markdown")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "No script draft found for this run"}
+    assert script_service.save_draft_calls == []
+    assert parse_calls == []
+
+
+@pytest.mark.asyncio
+async def test_parse_markdown_empty_content(client, stub_parse_markdown_services):
+    run_service, script_service, parse_calls = stub_parse_markdown_services
+    run_service.runs[72] = StubPipelineRun(id=72, project_id=1)
+    await script_service.save_draft(
+        run_id=72,
+        source_type="pasted_markdown",
+        markdown_content="",
+    )
+
+    response = await client.post("/api/creator/runs/72/script/parse-markdown")
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Draft has no markdown content to parse"}
+    assert parse_calls == []
+
+
+@pytest.mark.asyncio
+async def test_parse_markdown_whitespace_only_content(client, stub_parse_markdown_services):
+    run_service, script_service, parse_calls = stub_parse_markdown_services
+    run_service.runs[73] = StubPipelineRun(id=73, project_id=1)
+    await script_service.save_draft(
+        run_id=73,
+        source_type="pasted_markdown",
+        markdown_content="   \n  \t  ",
+    )
+
+    response = await client.post("/api/creator/runs/73/script/parse-markdown")
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Draft has no markdown content to parse"}
+    assert parse_calls == []
+
+
+@pytest.mark.asyncio
+async def test_parse_markdown_preserves_existing_sections(client, stub_parse_markdown_services):
+    """Parse passes existing structured_script to parse_markdown for stable IDs."""
+    run_service, script_service, parse_calls = stub_parse_markdown_services
+    run_service.runs[74] = StubPipelineRun(id=74, project_id=1)
+
+    existing_sections = [
+        StubScriptSection(section_id="existing-1", type="hook", text="Old hook"),
+    ]
+    await script_service.save_draft(
+        run_id=74,
+        source_type="edited_manually",
+        markdown_content="## Hook\n\nOld hook",
+        structured_script=existing_sections,
+    )
+
+    response = await client.post("/api/creator/runs/74/script/parse-markdown")
+
+    assert response.status_code == 200
+    assert len(parse_calls) == 1
+    # Verify existing_sections was passed to parse_markdown
+    assert parse_calls[0]["existing_sections"] is not None
+    assert parse_calls[0]["existing_sections"][0].section_id == "existing-1"
+
+
+@pytest.mark.asyncio
+async def test_parse_markdown_none_content(client, stub_parse_markdown_services):
+    """Draft with markdown_content=None should return 400."""
+    run_service, script_service, parse_calls = stub_parse_markdown_services
+    run_service.runs[75] = StubPipelineRun(id=75, project_id=1)
+    script_service.active_drafts[75] = StubScriptDraft(
+        id=100,
+        run_id=75,
+        source_type="edited_manually",
+        markdown_content=None,
+        version=1,
+        created_at=datetime.now(timezone.utc),
+    )
+
+    response = await client.post("/api/creator/runs/75/script/parse-markdown")
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Draft has no markdown content to parse"}
+    assert parse_calls == []
