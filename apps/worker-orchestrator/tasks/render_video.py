@@ -1,4 +1,3 @@
-# pyright: reportMissingImports=false
 """Celery task for run-level video rendering via FFmpeg.
 
 Consumes active visual assets and optional audio/subtitle artifacts,
@@ -9,54 +8,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../..", "packages"))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../..", "packages", "creator-service"))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../..", "packages", "creator-provider"))
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../../..", "packages", "creator-domain"))
-
 from celery_app import celery_app
-
-try:
-    from creator_domain.models.stage import RunStage
-except ImportError:
-    from models.stage import RunStage
-
-try:
-    from creator_service.run_service import run_service as _run_service
-except ImportError:
-    from run_service import run_service as _run_service
-
-try:
-    from creator_service.render_service import render_service as _render_service
-except ImportError:
-    from render_service import render_service as _render_service
-
-try:
-    from creator_service.visual_asset_service import visual_asset_service as _visual_asset_service
-except ImportError:
-    from visual_asset_service import visual_asset_service as _visual_asset_service
-
-try:
-    from creator_service.audio_service import audio_service as _audio_service
-except ImportError:
-    from audio_service import audio_service as _audio_service
-
-try:
-    from creator_service.subtitle_service import subtitle_service as _subtitle_service
-except ImportError:
-    from subtitle_service import subtitle_service as _subtitle_service
-
-try:
-    from creator_service.ffmpeg_service import FFmpegService, RenderInput
-    from creator_service.render_profile import RenderProfile
-except ImportError:
-    from ffmpeg_service import FFmpegService, RenderInput
-    from render_profile import RenderProfile
+from creator_domain.models.stage import RunStage
+from creator_service.audio_service import audio_service as _audio_service
+from creator_service.ffmpeg_service import FFmpegService, RenderInput
+from creator_service.render_profile import RenderProfile
+from creator_service.render_service import render_service as _render_service
+from creator_service.run_service import run_service as _run_service
+from creator_service.subtitle_service import subtitle_service as _subtitle_service
+from creator_service.visual_asset_service import visual_asset_service as _visual_asset_service
 
 logger = logging.getLogger(__name__)
 

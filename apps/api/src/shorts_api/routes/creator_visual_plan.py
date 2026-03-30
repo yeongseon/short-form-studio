@@ -1,32 +1,11 @@
 """Routes for creator visual plan management."""
-# pyright: reportMissingImports=false
-
-import os
-import sys
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-# Add packages to path for imports
-_PACKAGES_DIR = os.path.join(os.path.dirname(__file__), "../../../../..", "packages")
-sys.path.insert(0, _PACKAGES_DIR)
-sys.path.insert(0, os.path.join(_PACKAGES_DIR, "creator-service"))
-sys.path.insert(0, os.path.join(_PACKAGES_DIR, "creator-domain"))
-
-try:
-    from creator_service.run_service import run_service
-except ImportError:
-    from run_service import run_service
-
-try:
-    from creator_service.visual_plan_service import VersionConflictError, visual_plan_service
-except ImportError:
-    from visual_plan_service import VersionConflictError, visual_plan_service
-
-try:
-    from creator_domain.models.visual_plan import VisualScene
-except ImportError:
-    from models.visual_plan import VisualScene
+from creator_domain.models.visual_plan import VisualScene
+from creator_service.run_service import run_service
+from creator_service.visual_plan_service import VersionConflictError, visual_plan_service
 
 router = APIRouter(prefix="/runs/{run_id}/visual-plan", tags=["visual-plan"])
 
