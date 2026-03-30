@@ -1,11 +1,8 @@
 import asyncio
-import sys
 import unittest
-from pathlib import Path
 from unittest.mock import Mock, patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from gpu_lock import GPU_LOCK_KEY, RELEASE_LOCK_SCRIPT, acquire_gpu_lock, gpu_lock_context, release_gpu_lock
+from creator_provider.gpu_lock import GPU_LOCK_KEY, RELEASE_LOCK_SCRIPT, acquire_gpu_lock, gpu_lock_context, release_gpu_lock
 
 
 class GpuLockTests(unittest.TestCase):
@@ -27,7 +24,7 @@ class GpuLockTests(unittest.TestCase):
         redis_client = Mock()
         redis_client.set.side_effect = [False, False, True]
 
-        with patch("gpu_lock.time.sleep") as sleep_mock:
+        with patch("creator_provider.gpu_lock.time.sleep") as sleep_mock:
             acquired = acquire_gpu_lock(redis_client, "task-2", retry_interval=0.01, max_wait=1.0)
 
         self.assertTrue(acquired)
@@ -55,7 +52,7 @@ class GpuLockTests(unittest.TestCase):
         redis_client = Mock()
         redis_client.set.return_value = False
 
-        with patch("gpu_lock.time.monotonic", side_effect=[0.0, 0.5, 1.1]), patch("gpu_lock.time.sleep"):
+        with patch("creator_provider.gpu_lock.time.monotonic", side_effect=[0.0, 0.5, 1.1]), patch("creator_provider.gpu_lock.time.sleep"):
             with self.assertRaises(TimeoutError):
                 acquire_gpu_lock(redis_client, "task-timeout", retry_interval=0.01, max_wait=1.0)
 
