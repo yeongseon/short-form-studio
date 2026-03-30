@@ -1,30 +1,20 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import ModelSelector from "../components/creator/ModelSelector";
+import IdeaForm, { type IdeaFormData } from "../components/creator/IdeaForm";
 
 type Tab = "idea" | "markdown";
-
-interface IdeaFormState {
-  title: string;
-  ideaBrief: string;
-  targetDuration: number;
-  contentGoal: string;
-}
 
 interface MarkdownFormState {
   title: string;
   markdown: string;
 }
 
-export default function CreatePage() {
-  const [activeTab, setActiveTab] = useState<Tab>("idea");
+const API_BASE = "/api/creator";
 
-  // Idea form state
-  const [ideaForm, setIdeaForm] = useState<IdeaFormState>({
-    title: "",
-    ideaBrief: "",
-    targetDuration: 60,
-    contentGoal: "",
-  });
+export default function CreatePage() {
+  const navigate = useNavigate();
+  const [activeTab, setActiveTab] = useState<Tab>("idea");
 
   // Markdown form state
   const [markdownForm, setMarkdownForm] = useState<MarkdownFormState>({
@@ -35,6 +25,16 @@ export default function CreatePage() {
   // Shared state
   const [stylePreset, setStylePreset] = useState("default");
   const [modelDefaults, setModelDefaults] = useState<Record<string, string>>({});
+
+  // Submission state
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Stable ref for modelDefaults so IdeaForm submit handler always has latest
+  const modelDefaultsRef = useRef(modelDefaults);
+  modelDefaultsRef.current = modelDefaults;
+  const stylePresetRef = useRef(stylePreset);
+  stylePresetRef.current = stylePreset;
 
   const handleModelChange = useCallback((category: string, modelKey: string) => {
     setModelDefaults((prev) => ({ ...prev, [category]: modelKey }));
@@ -53,16 +53,69 @@ export default function CreatePage() {
     reader.readAsText(file);
   }, []);
 
-  const handleSubmit = useCallback(() => {
-    const formData = {
-      tab: activeTab,
-      ...(activeTab === "idea" ? ideaForm : markdownForm),
+  const handleIdeaSubmit = useCallback(
+    async (data: IdeaFormData) => {
+      setSubmitting(true);
+      setError(null);
+
+      try {
+        // 1. Create project
+        const projRes = await fetch(`${API_BASE}/projects`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: data.title,
+            source_type: "idea",
+            idea_brief: data.ideaBrief,
+          }),
+        });
+
+        if (!projRes.ok) {
+          const body = await projRes.json().catch(() => null);
+          throw new Error(body?.detail ?? `Failed to create project (${projRes.status})`);
+        }
+
+        const project = await projRes.json();
+
+        // 2. Create run
+        const runRes = await fetch(`${API_BASE}/projects/${project.id}/runs`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model_defaults: modelDefaultsRef.current,
+            style_preset: stylePresetRef.current,
+            metadata: {
+              content_goal: data.contentGoal || undefined,
+              target_duration: data.targetDuration,
+            },
+          }),
+        });
+
+        if (!runRes.ok) {
+          const body = await runRes.json().catch(() => null);
+          throw new Error(body?.detail ?? `Failed to create run (${runRes.status})`);
+        }
+
+        // 3. Navigate to project page
+        navigate(`/projects/${project.id}`);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "An unexpected error occurred");
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [navigate],
+  );
+
+  const handleMarkdownSubmit = useCallback(() => {
+    // eslint-disable-next-line no-console
+    console.log("CreatePage markdown submit (stub):", {
+      tab: "markdown",
+      ...markdownForm,
       stylePreset,
       modelDefaults,
-    };
-    // eslint-disable-next-line no-console
-    console.log("CreatePage submit (stub):", formData);
-  }, [activeTab, ideaForm, markdownForm, stylePreset, modelDefaults]);
+    });
+  }, [markdownForm, stylePreset, modelDefaults]);
 
   return (
     <div style={{ maxWidth: 720, margin: "0 auto", padding: 24 }}>
@@ -113,65 +166,7 @@ export default function CreatePage() {
       {/* Idea tab panel */}
       {activeTab === "idea" && (
         <div role="tabpanel" id="tabpanel-idea" aria-labelledby="tab-idea">
-          <div style={{ marginBottom: 16 }}>
-            <label htmlFor="idea-title" style={{ display: "block", fontWeight: 600, marginBottom: 4, fontSize: 13 }}>
-              Title <span style={{ color: "#c00" }}>*</span>
-            </label>
-            <input
-              id="idea-title"
-              type="text"
-              required
-              value={ideaForm.title}
-              onChange={(e) => setIdeaForm((prev) => ({ ...prev, title: e.target.value }))}
-              placeholder="Project title"
-              style={{ width: "100%", padding: "8px 12px", border: "1px solid #ccc", borderRadius: 4, fontSize: 14, boxSizing: "border-box" }}
-            />
-          </div>
-
-          <div style={{ marginBottom: 16 }}>
-            <label htmlFor="idea-brief" style={{ display: "block", fontWeight: 600, marginBottom: 4, fontSize: 13 }}>
-              Idea Brief <span style={{ color: "#c00" }}>*</span>
-            </label>
-            <textarea
-              id="idea-brief"
-              required
-              value={ideaForm.ideaBrief}
-              onChange={(e) => setIdeaForm((prev) => ({ ...prev, ideaBrief: e.target.value }))}
-              placeholder="Describe your video idea..."
-              rows={4}
-              style={{ width: "100%", padding: "8px 12px", border: "1px solid #ccc", borderRadius: 4, fontSize: 14, resize: "vertical", boxSizing: "border-box" }}
-            />
-          </div>
-
-          <div style={{ display: "flex", gap: 16, marginBottom: 16 }}>
-            <div style={{ flex: 1 }}>
-              <label htmlFor="target-duration" style={{ display: "block", fontWeight: 600, marginBottom: 4, fontSize: 13 }}>
-                Target Duration (seconds)
-              </label>
-              <input
-                id="target-duration"
-                type="number"
-                min={10}
-                max={180}
-                value={ideaForm.targetDuration}
-                onChange={(e) => setIdeaForm((prev) => ({ ...prev, targetDuration: Number(e.target.value) }))}
-                style={{ width: "100%", padding: "8px 12px", border: "1px solid #ccc", borderRadius: 4, fontSize: 14, boxSizing: "border-box" }}
-              />
-            </div>
-            <div style={{ flex: 1 }}>
-              <label htmlFor="content-goal" style={{ display: "block", fontWeight: 600, marginBottom: 4, fontSize: 13 }}>
-                Content Goal
-              </label>
-              <input
-                id="content-goal"
-                type="text"
-                value={ideaForm.contentGoal}
-                onChange={(e) => setIdeaForm((prev) => ({ ...prev, contentGoal: e.target.value }))}
-                placeholder="e.g., educational, entertainment"
-                style={{ width: "100%", padding: "8px 12px", border: "1px solid #ccc", borderRadius: 4, fontSize: 14, boxSizing: "border-box" }}
-              />
-            </div>
-          </div>
+          <IdeaForm onSubmit={handleIdeaSubmit} submitting={submitting} error={error} />
         </div>
       )}
 
@@ -249,19 +244,23 @@ export default function CreatePage() {
       <div style={{ marginTop: 24 }}>
         <button
           type="button"
-          onClick={handleSubmit}
+          disabled={submitting}
+          onClick={activeTab === "idea" ? () => {
+            const form = document.querySelector<HTMLFormElement>('[data-testid="idea-form"]');
+            form?.requestSubmit();
+          } : handleMarkdownSubmit}
           style={{
             padding: "10px 24px",
-            background: "#4285f4",
+            background: submitting ? "#93b4f4" : "#4285f4",
             color: "#fff",
             border: "none",
             borderRadius: 6,
             fontSize: 14,
             fontWeight: 600,
-            cursor: "pointer",
+            cursor: submitting ? "not-allowed" : "pointer",
           }}
         >
-          Create Project
+          {submitting ? "Creating…" : "Create Project"}
         </button>
       </div>
     </div>

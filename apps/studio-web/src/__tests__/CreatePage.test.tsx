@@ -14,11 +14,39 @@ const MOCK_MODELS = {
   stt_models: [],
 };
 
+const MOCK_PROJECT = { id: 42, title: "Test", source_type: "idea", idea_brief: "Brief" };
+const MOCK_RUN = { id: 7, project_id: 42, current_stage: "IDEA_READY" };
+
+// Track navigate calls
+const mockNavigate = vi.fn();
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual("react-router-dom");
+  return { ...actual, useNavigate: () => mockNavigate };
+});
+
 function mockFetchSuccess() {
   vi.spyOn(globalThis, "fetch").mockResolvedValue({
     ok: true,
     json: () => Promise.resolve(MOCK_MODELS),
   } as Response);
+}
+
+/** Mock fetch that handles models, project creation, and run creation */
+function mockFetchFullFlow() {
+  vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+    const url = typeof input === "string" ? input : (input as Request).url;
+
+    if (url.includes("/models")) {
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_MODELS) } as Response);
+    }
+    if (url.includes("/projects") && url.includes("/runs")) {
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_RUN) } as Response);
+    }
+    if (url.includes("/projects")) {
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_PROJECT) } as Response);
+    }
+    return Promise.resolve({ ok: true, json: () => Promise.resolve({}) } as Response);
+  });
 }
 
 function renderCreatePage() {
@@ -33,6 +61,7 @@ describe("CreatePage", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     mockFetchSuccess();
+    mockNavigate.mockReset();
   });
 
   it("renders the page heading", () => {
@@ -127,17 +156,6 @@ describe("CreatePage", () => {
     expect(screen.getByRole("button", { name: "Create Project" })).toBeTruthy();
   });
 
-  it("submit logs form state to console", () => {
-    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    renderCreatePage();
-
-    fireEvent.click(screen.getByRole("button", { name: "Create Project" }));
-    expect(consoleSpy).toHaveBeenCalledWith(
-      "CreatePage submit (stub):",
-      expect.objectContaining({ tab: "idea" }),
-    );
-  });
-
   it("renders ModelSelector with script and image categories", async () => {
     renderCreatePage();
 
@@ -195,5 +213,146 @@ describe("CreatePage", () => {
     const select = screen.getByLabelText(/Style Preset/) as HTMLSelectElement;
     const options = Array.from(select.options).map((o) => o.value);
     expect(options).toEqual(["default", "cinematic", "dynamic", "minimal"]);
+  });
+
+  // --- New tests for Issue #33: API submission flow ---
+
+  it("submits idea form and navigates to project page", async () => {
+    mockFetchFullFlow();
+    renderCreatePage();
+
+    fireEvent.change(screen.getByLabelText(/^Title/), { target: { value: "My Video" } });
+    fireEvent.change(screen.getByLabelText(/Idea Brief/), { target: { value: "A cooking tutorial" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Project" }));
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith("/projects/42");
+    });
+
+    // Verify project creation API was called
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    const projectCall = calls.find(
+      (c: unknown[]) => typeof c[0] === "string" && c[0].includes("/projects") && !c[0].includes("/runs") && !c[0].includes("/models"),
+    );
+    expect(projectCall).toBeTruthy();
+    const projectBody = JSON.parse((projectCall![1] as RequestInit).body as string);
+    expect(projectBody.title).toBe("My Video");
+    expect(projectBody.source_type).toBe("idea");
+    expect(projectBody.idea_brief).toBe("A cooking tutorial");
+  });
+
+  it("creates a run with model defaults and metadata", async () => {
+    mockFetchFullFlow();
+    renderCreatePage();
+
+    fireEvent.change(screen.getByLabelText(/^Title/), { target: { value: "My Video" } });
+    fireEvent.change(screen.getByLabelText(/Idea Brief/), { target: { value: "Brief" } });
+    fireEvent.change(screen.getByLabelText(/Content Goal/), { target: { value: "educational" } });
+    fireEvent.change(screen.getByLabelText(/Target Duration/), { target: { value: "90" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Project" }));
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith("/projects/42");
+    });
+
+    // Verify run creation API was called with metadata
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    const runCall = calls.find((c: unknown[]) => typeof c[0] === "string" && c[0].includes("/runs"));
+    expect(runCall).toBeTruthy();
+    const runBody = JSON.parse((runCall![1] as RequestInit).body as string);
+    expect(runBody.metadata.content_goal).toBe("educational");
+    expect(runBody.metadata.target_duration).toBe(90);
+    expect(runBody.style_preset).toBe("default");
+  });
+
+  it("shows error when project creation fails", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.includes("/models")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_MODELS) } as Response);
+      }
+      // Project creation fails
+      return Promise.resolve({
+        ok: false,
+        status: 400,
+        json: () => Promise.resolve({ detail: "Title is required" }),
+      } as Response);
+    });
+
+    renderCreatePage();
+
+    fireEvent.change(screen.getByLabelText(/^Title/), { target: { value: "T" } });
+    fireEvent.change(screen.getByLabelText(/Idea Brief/), { target: { value: "B" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create Project" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("idea-form-error")).toBeTruthy();
+    });
+    expect(screen.getByTestId("idea-form-error").textContent).toBe("Title is required");
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it("shows error when run creation fails", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.includes("/models")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_MODELS) } as Response);
+      }
+      if (url.includes("/projects") && !url.includes("/runs")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_PROJECT) } as Response);
+      }
+      // Run creation fails
+      return Promise.resolve({
+        ok: false,
+        status: 500,
+        json: () => Promise.resolve({ detail: "Internal error" }),
+      } as Response);
+    });
+
+    renderCreatePage();
+
+    fireEvent.change(screen.getByLabelText(/^Title/), { target: { value: "T" } });
+    fireEvent.change(screen.getByLabelText(/Idea Brief/), { target: { value: "B" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create Project" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("idea-form-error")).toBeTruthy();
+    });
+    expect(screen.getByTestId("idea-form-error").textContent).toBe("Internal error");
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it("shows 'Creating…' on submit button while submitting", async () => {
+    // Make fetch hang so we can observe the loading state
+    let resolveProject!: (value: Response) => void;
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.includes("/models")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_MODELS) } as Response);
+      }
+      return new Promise((resolve) => { resolveProject = resolve; });
+    });
+
+    renderCreatePage();
+
+    fireEvent.change(screen.getByLabelText(/^Title/), { target: { value: "T" } });
+    fireEvent.change(screen.getByLabelText(/Idea Brief/), { target: { value: "B" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create Project" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Creating…" })).toBeTruthy();
+    });
+
+    // Resolve to clean up
+    resolveProject({ ok: true, json: () => Promise.resolve(MOCK_PROJECT) } as Response);
+  });
+
+  it("renders IdeaForm inside the idea tab panel", () => {
+    renderCreatePage();
+    const panel = screen.getByRole("tabpanel");
+    const form = screen.getByTestId("idea-form");
+    expect(panel.contains(form)).toBe(true);
   });
 });
