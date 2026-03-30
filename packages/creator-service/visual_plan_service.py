@@ -22,6 +22,40 @@ from models.visual_plan import VisualPlan, VisualScene  # type: ignore[reportMis
 
 
 # ---------------------------------------------------------------------------
+# Patchable field allowlist
+# ---------------------------------------------------------------------------
+
+# Fields that patch_scene is allowed to modify.  Immutable identity fields
+# (scene_id, section_id, scene_index, section_type, original_text) and
+# system-managed fields (latest_asset_id, generation_status) are excluded.
+_PATCHABLE_SCENE_FIELDS: frozenset[str] = frozenset({
+    "prompt",
+    "prompt_edited",
+    "prompt_source",
+    "style_tags",
+    "mood",
+    "composition",
+})
+
+
+class VersionConflictError(Exception):
+    """Raised when a patch targets a stale plan version."""
+
+    def __init__(self, run_id: int, expected: int, actual: int) -> None:
+        self.run_id = run_id
+        self.expected_version = expected
+        self.actual_version = actual
+        super().__init__(
+            f"Version conflict for run {run_id}: "
+            f"expected version {expected}, active is {actual}"
+        )
+
+
+class DataIntegrityError(Exception):
+    """Raised when stored scenes_json is malformed or unparseable."""
+
+
+# ---------------------------------------------------------------------------
 # Storage Protocol
 # ---------------------------------------------------------------------------
 
@@ -129,18 +163,34 @@ class VisualPlanService:
         run_id: int,
         scene_id: str,
         updates: dict[str, Any],
+        *,
+        expected_version: int | None = None,
     ) -> VisualPlan:
         """Patch a single scene in the active plan and save a new version.
 
-        Loads the active plan, applies *updates* to the scene matching
-        *scene_id*, then persists the entire plan as a new version.
+        Loads the active plan, validates *expected_version* if provided,
+        applies *updates* (restricted to patchable fields) to the scene
+        matching *scene_id*, then persists the entire plan as a new version.
 
         Raises:
-            ValueError: If no active plan exists or scene_id not found.
+            ValueError: If no active plan, scene_id not found, or unknown keys.
+            VersionConflictError: If expected_version doesn't match active version.
         """
+        # Validate update keys against allowlist
+        unknown_keys = set(updates.keys()) - _PATCHABLE_SCENE_FIELDS
+        if unknown_keys:
+            raise ValueError(
+                f"Cannot patch immutable/unknown fields: {sorted(unknown_keys)}"
+            )
+
         active_row = await self.storage.get_active_plan(run_id)
         if active_row is None:
             raise ValueError(f"No active visual plan for run {run_id}")
+
+        # Optimistic concurrency check
+        active_version = active_row.get("version", 1)
+        if expected_version is not None and active_version != expected_version:
+            raise VersionConflictError(run_id, expected_version, active_version)
 
         scenes = self._parse_scenes(active_row)
         patched = False
@@ -178,27 +228,41 @@ class VisualPlanService:
 
     @staticmethod
     def _parse_scenes(row: dict[str, Any]) -> list[VisualScene]:
-        """Parse scenes_json from a storage row into domain objects."""
+        """Parse scenes_json from a storage row into domain objects.
+
+        Raises DataIntegrityError if the stored JSON is malformed or
+        contains invalid scene data — callers should NOT silently
+        swallow corruption.
+        """
         scenes_json = row.get("scenes_json")
         if not scenes_json:
             return []
         try:
             data = json.loads(scenes_json)
+        except json.JSONDecodeError as exc:
+            raise DataIntegrityError(
+                f"Malformed scenes_json for run {row.get('run_id')}: {exc}"
+            ) from exc
+
+        if not isinstance(data, list):
+            raise DataIntegrityError(
+                f"scenes_json for run {row.get('run_id')} is not a JSON array"
+            )
+
+        try:
             return [VisualScene.model_validate(s) for s in data]
-        except (json.JSONDecodeError, Exception):
-            return []
+        except Exception as exc:
+            raise DataIntegrityError(
+                f"Invalid scene data for run {row.get('run_id')}: {exc}"
+            ) from exc
 
     @staticmethod
     def _row_to_plan(row: dict[str, Any]) -> VisualPlan:
-        """Convert a storage row to a VisualPlan domain model."""
-        scenes_json = row.get("scenes_json")
-        scenes: list[VisualScene] = []
-        if scenes_json:
-            try:
-                data = json.loads(scenes_json)
-                scenes = [VisualScene.model_validate(s) for s in data]
-            except (json.JSONDecodeError, Exception):
-                scenes = []
+        """Convert a storage row to a VisualPlan domain model.
+
+        Raises DataIntegrityError on malformed scenes_json.
+        """
+        scenes = VisualPlanService._parse_scenes(row)
 
         return VisualPlan(
             id=row["id"],
