@@ -31,6 +31,7 @@ class StubRunService:
         self.restart_run_calls: list[dict[str, object]] = []
         self.advance_stage_calls: list[dict[str, object]] = []
         self.runs: dict[int, StubPipelineRun] = {}
+        self.storage = StubRunStorage(self)
         self._next_id = 1
 
     async def create_run(
@@ -99,6 +100,35 @@ class StubRunService:
         self.runs[run_id] = updated
         return updated
 
+
+class StubRunStorage:
+    """Minimal storage stub that supports conditional_update_run."""
+
+    def __init__(self, run_svc: "StubRunService") -> None:
+        self._run_svc = run_svc
+        self.conditional_update_calls: list[dict[str, object]] = []
+
+    async def conditional_update_run(
+        self,
+        run_id: int,
+        updates: dict[str, object],
+        expected_stages: frozenset[str],
+    ) -> tuple[bool, dict[str, object] | None]:
+        self.conditional_update_calls.append({
+            "run_id": run_id,
+            "updates": dict(updates),
+            "expected_stages": expected_stages,
+        })
+
+        run = self._run_svc.runs.get(run_id)
+        if run is None:
+            return False, None
+        if run.current_stage not in expected_stages:
+            return False, run.model_dump(mode="json")
+
+        updated = run.model_copy(update=updates)
+        self._run_svc.runs[run_id] = updated
+        return True, updated.model_dump(mode="json")
 class StubStageReviewService:
     def __init__(self, run_svc: StubRunService) -> None:
         self.approve_calls: list[dict[str, object]] = []
@@ -140,7 +170,7 @@ def stub_run_service(monkeypatch: pytest.MonkeyPatch) -> StubRunService:
     service = StubRunService()
 
     for route in runs_router.routes:
-        if route.name in {"create_run", "get_run_detail", "restart_run", "approve_script"}:
+        if route.name in {"create_run", "get_run_detail", "restart_run", "approve_script", "generate_script_trigger"}:
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", service)
 
     return service
@@ -405,3 +435,283 @@ async def test_approve_script_wrong_stage_generating(client, stub_approve_servic
 
     assert response.status_code == 409
     assert "conflict" in response.json()["detail"].lower()
+
+
+class StubProject(BaseModel):
+    id: int
+    title: str | None = None
+    source_type: str = "idea"
+    idea_brief: str | None = None
+    markdown_source: str | None = None
+    url_source: str | None = None
+    status: str = "draft"
+    created_at: datetime
+    updated_at: datetime
+
+
+class StubProjectService:
+    def __init__(self) -> None:
+        self.projects: dict[int, StubProject] = {}
+
+    async def get_project(self, project_id: int) -> StubProject | None:
+        return self.projects.get(project_id)
+
+
+class StubDispatcher:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+        self.task_id = "test-task-id-123"
+
+    def __call__(
+        self, run_id: int, idea_brief: str, model_key: str, instructions: str | None
+    ) -> str:
+        self.calls.append({
+            "run_id": run_id,
+            "idea_brief": idea_brief,
+            "model_key": model_key,
+            "instructions": instructions,
+        })
+        return self.task_id
+
+
+@pytest.fixture
+def stub_generate_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubProjectService, StubDispatcher]:
+    run_svc = StubRunService()
+    project_svc = StubProjectService()
+    dispatcher = StubDispatcher()
+
+    for route in runs_router.routes:
+        if route.name == "generate_script_trigger":
+            monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
+            monkeypatch.setitem(route.endpoint.__globals__, "project_service", project_svc)
+            monkeypatch.setitem(route.endpoint.__globals__, "dispatch_generate_script", dispatcher)
+
+    return run_svc, project_svc, dispatcher
+
+
+def _make_project(project_id: int, idea_brief: str = "Test idea") -> StubProject:
+    now = datetime.now(timezone.utc)
+    return StubProject(
+        id=project_id,
+        title="Test Project",
+        source_type="idea",
+        idea_brief=idea_brief,
+        status="draft",
+        created_at=now,
+        updated_at=now,
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_script_from_idea_ready(client, stub_generate_services):
+    run_svc, project_svc, dispatcher = stub_generate_services
+    run_svc.runs[10] = _make_run(10, "IDEA_READY")
+    project_svc.projects[1] = _make_project(1, "Create a cooking tutorial")
+
+    response = await client.post(
+        "/api/creator/runs/10/generate-script",
+        json={"model_key": "qwen3-4b", "instructions": "Focus on pasta"},
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["task_id"] == "test-task-id-123"
+    assert body["run_id"] == 10
+    assert body["current_stage"] == "SCRIPT_GENERATING"
+    # CAS was called for IDEA_READY → SCRIPT_GENERATING (no restart_from)
+    cas_calls = run_svc.storage.conditional_update_calls
+    assert len(cas_calls) == 1
+    assert cas_calls[0]["run_id"] == 10
+    assert cas_calls[0]["updates"] == {"current_stage": "SCRIPT_GENERATING"}
+    assert "IDEA_READY" in cas_calls[0]["expected_stages"]
+    assert dispatcher.calls == [{
+        "run_id": 10,
+        "idea_brief": "Create a cooking tutorial",
+        "model_key": "qwen3-4b",
+        "instructions": "Focus on pasta",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_generate_script_from_script_review(client, stub_generate_services):
+    run_svc, project_svc, dispatcher = stub_generate_services
+    run_svc.runs[11] = _make_run(11, "SCRIPT_REVIEW")
+    project_svc.projects[1] = _make_project(1, "Science explainer")
+
+    response = await client.post(
+        "/api/creator/runs/11/generate-script",
+        json={"model_key": "qwen3-4b"},
+    )
+
+    assert response.status_code == 202
+    # CAS was called for SCRIPT_REVIEW → SCRIPT_GENERATING with restart_from
+    cas_calls = run_svc.storage.conditional_update_calls
+    assert len(cas_calls) == 1
+    assert cas_calls[0]["run_id"] == 11
+    assert cas_calls[0]["updates"] == {
+        "current_stage": "SCRIPT_GENERATING",
+        "restart_from": "SCRIPT_GENERATING",
+    }
+    assert "SCRIPT_REVIEW" in cas_calls[0]["expected_stages"]
+    assert dispatcher.calls[0]["idea_brief"] == "Science explainer"
+
+
+@pytest.mark.asyncio
+async def test_generate_script_default_model(client, stub_generate_services):
+    run_svc, project_svc, dispatcher = stub_generate_services
+    run_svc.runs[12] = _make_run(12, "IDEA_READY")
+    project_svc.projects[1] = _make_project(1, "My idea")
+
+    response = await client.post(
+        "/api/creator/runs/12/generate-script",
+        json={},
+    )
+
+    assert response.status_code == 202
+    assert dispatcher.calls[0]["model_key"] == "qwen3-4b"
+    assert dispatcher.calls[0]["instructions"] is None
+
+
+@pytest.mark.asyncio
+async def test_generate_script_run_not_found(client, stub_generate_services):
+    _, _, _ = stub_generate_services
+    response = await client.post(
+        "/api/creator/runs/999/generate-script",
+        json={},
+    )
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_generate_script_wrong_stage_generating(client, stub_generate_services):
+    run_svc, _, _ = stub_generate_services
+    run_svc.runs[14] = _make_run(14, "SCRIPT_GENERATING")
+
+    response = await client.post(
+        "/api/creator/runs/14/generate-script",
+        json={},
+    )
+
+    assert response.status_code == 400
+    assert "SCRIPT_GENERATING" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_generate_script_wrong_stage_visual(client, stub_generate_services):
+    run_svc, _, _ = stub_generate_services
+    run_svc.runs[15] = _make_run(15, "VISUAL_PLAN_GENERATING")
+
+    response = await client.post(
+        "/api/creator/runs/15/generate-script",
+        json={},
+    )
+
+    assert response.status_code == 400
+    assert "VISUAL_PLAN_GENERATING" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_generate_script_idea_brief_fallback_to_title(client, stub_generate_services):
+    run_svc, project_svc, dispatcher = stub_generate_services
+    run_svc.runs[16] = _make_run(16, "IDEA_READY")
+    now = datetime.now(timezone.utc)
+    project_svc.projects[1] = StubProject(
+        id=1, title="Fallback Title", idea_brief=None,
+        created_at=now, updated_at=now,
+    )
+
+    response = await client.post(
+        "/api/creator/runs/16/generate-script",
+        json={},
+    )
+
+    assert response.status_code == 202
+    assert dispatcher.calls[0]["idea_brief"] == "Fallback Title"
+
+
+@pytest.mark.asyncio
+async def test_generate_script_cas_conflict(client, stub_generate_services):
+    """CAS fails because stage changed between initial check and CAS."""
+    run_svc, project_svc, dispatcher = stub_generate_services
+    # Set stage to IDEA_READY so the initial check passes
+    run_svc.runs[20] = _make_run(20, "IDEA_READY")
+    project_svc.projects[1] = _make_project(1, "Conflict test")
+
+    # Simulate a concurrent stage change: after the initial read, change stage
+    # so CAS will find mismatch.  We do this by mutating the run between the
+    # initial get_run and the CAS call.  Because the route reads once then CAS,
+    # we override conditional_update_run to simulate conflict.
+
+    async def cas_conflict(run_id, updates, expected_stages):
+        # Return conflict: stage changed to SCRIPT_GENERATING
+        return False, {"current_stage": "SCRIPT_GENERATING", "id": run_id}
+
+    run_svc.storage.conditional_update_run = cas_conflict
+
+    response = await client.post(
+        "/api/creator/runs/20/generate-script",
+        json={},
+    )
+
+    assert response.status_code == 409
+    assert "conflict" in response.json()["detail"].lower()
+    # Dispatcher was NOT called
+    assert len(dispatcher.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_generate_script_dispatch_failure_rollback(client, stub_generate_services):
+    """Celery dispatch failure triggers rollback to original stage."""
+    run_svc, project_svc, _ = stub_generate_services
+    run_svc.runs[21] = _make_run(21, "IDEA_READY")
+    project_svc.projects[1] = _make_project(1, "Dispatch fail test")
+
+    def failing_dispatcher(run_id, idea_brief, model_key, instructions):
+        raise RuntimeError("Celery broker down")
+
+    # Patch the dispatcher for this test
+    from shorts_api.main import runs_router as _r
+    for route in _r.routes:
+        if route.name == "generate_script_trigger":
+            route.endpoint.__globals__["dispatch_generate_script"] = failing_dispatcher
+
+    response = await client.post(
+        "/api/creator/runs/21/generate-script",
+        json={},
+    )
+
+    assert response.status_code == 503
+    assert "enqueue" in response.json()["detail"].lower()
+
+    # Rollback: CAS was called twice — first to advance, then to rollback
+    cas_calls = run_svc.storage.conditional_update_calls
+    assert len(cas_calls) == 2
+    # Second CAS = rollback to IDEA_READY
+    rollback = cas_calls[1]
+    assert rollback["updates"]["current_stage"] == "IDEA_READY"
+    assert rollback["expected_stages"] == frozenset({"SCRIPT_GENERATING"})
+
+    # Verify run was actually rolled back to IDEA_READY
+    assert run_svc.runs[21].current_stage == "IDEA_READY"
+
+
+@pytest.mark.asyncio
+async def test_generate_script_project_not_found(client, stub_generate_services):
+    """Project not found returns 404 BEFORE any state mutation."""
+    run_svc, project_svc, dispatcher = stub_generate_services
+    run_svc.runs[22] = _make_run(22, "IDEA_READY")
+    # Do NOT add project — project_svc.projects is empty
+
+    response = await client.post(
+        "/api/creator/runs/22/generate-script",
+        json={},
+    )
+
+    assert response.status_code == 404
+    assert "project" in response.json()["detail"].lower()
+    # No CAS call — precondition failed before mutation
+    assert len(run_svc.storage.conditional_update_calls) == 0
+    # No dispatch
+    assert len(dispatcher.calls) == 0

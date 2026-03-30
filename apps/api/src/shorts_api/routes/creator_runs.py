@@ -13,11 +13,27 @@ sys.path.insert(0, _PACKAGES_DIR)
 sys.path.insert(0, os.path.join(_PACKAGES_DIR, "creator-service"))
 
 try:
+    from creator_service.project_service import project_service
     from creator_service.run_service import run_service
     from creator_service.stage_review_service import stage_review_service
 except ImportError:
+    from project_service import project_service
     from run_service import run_service
     from stage_review_service import stage_review_service
+
+
+def dispatch_generate_script(
+    run_id: int, idea_brief: str, model_key: str, instructions: str | None
+) -> str:
+    """Dispatch generate_script Celery task. Returns task id.
+
+    Separated into a function so tests can monkeypatch without importing Celery.
+    """
+    from importlib import import_module
+
+    tasks = import_module("tasks.generate_script")
+    result = tasks.generate_script.delay(run_id, idea_brief, model_key, instructions)
+    return str(result.id)
 
 router = APIRouter(tags=["runs"])
 
@@ -36,6 +52,10 @@ class ApproveScriptRequest(BaseModel):
     reviewer: str = "agent"
     notes: str | None = None
 
+
+class GenerateScriptRequest(BaseModel):
+    model_key: str = "qwen3-4b"
+    instructions: str | None = None
 
 @router.post("/projects/{project_id}/runs", status_code=201)
 async def create_run(project_id: int, request: CreateRunRequest) -> dict[str, object]:
@@ -89,3 +109,71 @@ async def approve_script(run_id: int, request: ApproveScriptRequest) -> dict[str
         raise HTTPException(status_code=400, detail=detail) from exc
 
     return updated_run.model_dump(mode="json")
+
+
+@router.post("/runs/{run_id}/generate-script", status_code=202)
+async def generate_script_trigger(run_id: int, request: GenerateScriptRequest) -> dict[str, object]:
+    # 1. Check run exists
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    # 2. Validate stage — only IDEA_READY and SCRIPT_REVIEW can trigger generation
+    allowed_stages = frozenset({"IDEA_READY", "SCRIPT_REVIEW"})
+    if run.current_stage not in allowed_stages:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Run is in stage '{run.current_stage}', "
+            f"expected one of {sorted(allowed_stages)}",
+        )
+
+    # 3. Resolve all preconditions BEFORE mutating state
+    project = await project_service.get_project(run.project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    idea_brief = project.idea_brief or project.title or ""
+
+    # 4. Atomically advance to SCRIPT_GENERATING via CAS
+    #    Prevents duplicate dispatch from concurrent requests.
+    #    For SCRIPT_REVIEW restarts, also set restart_from.
+    updates: dict[str, object] = {"current_stage": "SCRIPT_GENERATING"}
+    if run.current_stage == "SCRIPT_REVIEW":
+        updates["restart_from"] = "SCRIPT_GENERATING"
+
+    ok, row = await run_service.storage.conditional_update_run(
+        run_id, updates, expected_stages=allowed_stages,
+    )
+    if not ok:
+        if row is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        raise HTTPException(
+            status_code=409,
+            detail=f"Stage conflict: run is now in '{row.get('current_stage')}'",
+        )
+
+    # 5. Dispatch Celery task — if this fails, roll back stage
+    try:
+        task_id = dispatch_generate_script(
+            run_id=run_id,
+            idea_brief=idea_brief,
+            model_key=request.model_key,
+            instructions=request.instructions,
+        )
+    except Exception:
+        # Best-effort rollback: restore original stage so run isn't stuck
+        await run_service.storage.conditional_update_run(
+            run_id,
+            {"current_stage": run.current_stage, "restart_from": run.restart_from},
+            expected_stages=frozenset({"SCRIPT_GENERATING"}),
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Failed to enqueue script generation task",
+        ) from None
+
+    return {
+        "task_id": task_id,
+        "run_id": run_id,
+        "current_stage": "SCRIPT_GENERATING",
+    }
