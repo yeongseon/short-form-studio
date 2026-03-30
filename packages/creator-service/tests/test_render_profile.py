@@ -160,12 +160,13 @@ class TestFFmpegService(unittest.TestCase):
         
         cmd = service.build_command(input_data, output_path)
         
-        # Verify custom settings are in command
-        self.assertIn("720", cmd)
-        self.assertIn("1280", cmd)
-        self.assertIn("24", cmd)
-        self.assertIn("20", cmd)
-        self.assertIn("fast", cmd)
+        # Verify custom settings are in command string
+        cmd_str = " ".join(cmd)
+        self.assertIn("720", cmd_str)
+        self.assertIn("1280", cmd_str)
+        self.assertIn("24", cmd_str)
+        self.assertIn("20", cmd_str)
+        self.assertIn("fast", cmd_str)
 
     @patch("subprocess.run")
     @patch("pathlib.Path.mkdir")
