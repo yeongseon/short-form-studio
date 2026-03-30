@@ -68,6 +68,15 @@ async def create_run(project_id: int, request: CreateRunRequest) -> dict[str, ob
     return run.model_dump(mode="json")
 
 
+@router.get("/projects/{project_id}/runs")
+async def list_runs_for_project(project_id: int) -> dict[str, object]:
+    runs = await run_service.list_runs_by_project(project_id)
+    return {
+        "runs": [r.model_dump(mode="json") for r in runs],
+        "total": len(runs),
+    }
+
+
 @router.get("/runs/{run_id}")
 async def get_run_detail(run_id: int) -> dict[str, object]:
     run = await run_service.get_run(run_id)

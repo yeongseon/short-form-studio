@@ -1,0 +1,369 @@
+import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import ProjectPage from "../pages/ProjectPage";
+
+// ---- mock data ----
+
+const MOCK_PROJECT = {
+  id: 7,
+  title: "My Short",
+  source_type: "idea",
+  status: "active",
+  created_at: "2025-03-15T10:00:00Z",
+  updated_at: "2025-03-15T12:00:00Z",
+};
+
+const MOCK_RUN_IDEA = {
+  id: 1,
+  project_id: 7,
+  current_stage: "IDEA_READY",
+  status: "pending",
+  restart_from: null,
+};
+
+const MOCK_RUN_REVIEW = {
+  id: 1,
+  project_id: 7,
+  current_stage: "SCRIPT_REVIEW",
+  status: "running",
+  restart_from: null,
+};
+
+const MOCK_RUN_GENERATING = {
+  id: 1,
+  project_id: 7,
+  current_stage: "SCRIPT_GENERATING",
+  status: "running",
+  restart_from: null,
+};
+
+// ---- helpers ----
+
+const mockNavigate = vi.fn();
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual("react-router-dom");
+  return { ...actual, useNavigate: () => mockNavigate };
+});
+
+function renderPage(projectId = "7") {
+  return render(
+    <MemoryRouter initialEntries={[`/projects/${projectId}`]}>
+      <Routes>
+        <Route path="/projects/:projectId" element={<ProjectPage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+type MockRun = typeof MOCK_RUN_IDEA;
+
+function mockFetchProjectAndRuns(
+  project: typeof MOCK_PROJECT | null,
+  runs: MockRun[] = [],
+) {
+  vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+    const url = typeof input === "string" ? input : (input as Request).url;
+
+    // GET /projects/:id/runs
+    if (url.includes("/projects/") && url.includes("/runs")) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ runs, total: runs.length }),
+      } as Response);
+    }
+    // GET /projects/:id
+    if (url.includes("/projects/")) {
+      if (!project) {
+        return Promise.resolve({
+          ok: false,
+          status: 404,
+          json: () => Promise.resolve({ detail: "Project not found" }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(project),
+      } as Response);
+    }
+    // GET /runs/:id (for refreshRun)
+    if (url.includes("/runs/")) {
+      const latestRun = runs[0];
+      if (latestRun) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve(latestRun),
+        } as Response);
+      }
+    }
+    return Promise.resolve({ ok: true, json: () => Promise.resolve({}) } as Response);
+  });
+}
+
+beforeEach(() => {
+  vi.restoreAllMocks();
+  mockNavigate.mockReset();
+});
+
+describe("ProjectPage", () => {
+  // ---- Loading ----
+  it("shows loading state initially", () => {
+    vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise(() => {}));
+    renderPage();
+    expect(screen.getByRole("status")).toHaveTextContent("Loading project");
+  });
+
+  // ---- Error ----
+  it("shows error when project not found", async () => {
+    mockFetchProjectAndRuns(null);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent("Project not found");
+  });
+
+  it("shows back link on error", async () => {
+    mockFetchProjectAndRuns(null);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("Back to projects")).toBeInTheDocument();
+    });
+  });
+
+  // ---- Invalid project ID ----
+  it("shows invalid ID message for non-numeric id", () => {
+    render(
+      <MemoryRouter initialEntries={["/projects/abc"]}>
+        <Routes>
+          <Route path="/projects/:projectId" element={<ProjectPage />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText("Invalid project ID.")).toBeInTheDocument();
+  });
+
+  // ---- Project loaded, no runs ----
+  it("shows project title and no-run state", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, []);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("My Short")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("no-run")).toBeInTheDocument();
+    expect(screen.getByText("No runs yet")).toBeInTheDocument();
+  });
+
+  it("shows source and status metadata", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, []);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText(/Source: idea/)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Status: active/)).toBeInTheDocument();
+  });
+
+  // ---- Project with run in IDEA_READY ----
+  it("shows stepper and Generate Script button for IDEA_READY", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_IDEA]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("My Short")).toBeInTheDocument();
+    });
+    // Stepper should be present (PipelineStepper renders step labels)
+    expect(screen.getByText("Idea")).toBeInTheDocument();
+    expect(screen.getByText("Script")).toBeInTheDocument();
+    // Generate button visible
+    expect(screen.getByRole("button", { name: "Generate Script" })).toBeInTheDocument();
+    // Approve and Regenerate should not be visible
+    expect(screen.queryByRole("button", { name: "Approve Script" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Regenerate" })).not.toBeInTheDocument();
+  });
+
+  // ---- Project with run in SCRIPT_REVIEW ----
+  it("shows editor tabs and action buttons for SCRIPT_REVIEW", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("My Short")).toBeInTheDocument();
+    });
+    // Editor tabs
+    expect(screen.getByRole("tab", { name: "Markdown" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Structured" })).toBeInTheDocument();
+    // Approve + Regenerate visible
+    expect(screen.getByRole("button", { name: "Approve Script" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Regenerate" })).toBeInTheDocument();
+    // Generate should not be visible
+    expect(screen.queryByRole("button", { name: "Generate Script" })).not.toBeInTheDocument();
+  });
+
+  it("switches between markdown and structured tabs", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("tab", { name: "Markdown" })).toBeInTheDocument();
+    });
+
+    // Default: Markdown tab selected
+    const mdTab = screen.getByRole("tab", { name: "Markdown" });
+    expect(mdTab.getAttribute("aria-selected")).toBe("true");
+
+    // Switch to structured
+    fireEvent.click(screen.getByRole("tab", { name: "Structured" }));
+
+    const stTab = screen.getByRole("tab", { name: "Structured" });
+    expect(stTab.getAttribute("aria-selected")).toBe("true");
+    expect(mdTab.getAttribute("aria-selected")).toBe("false");
+  });
+
+  // ---- SCRIPT_GENERATING state ----
+  it("shows generating indicator for SCRIPT_GENERATING", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_GENERATING]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("generating-indicator")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Generating Script…")).toBeInTheDocument();
+    // Editor tabs should NOT be visible during generation
+    expect(screen.queryByRole("tab", { name: "Markdown" })).not.toBeInTheDocument();
+  });
+
+  // ---- Approve action ----
+  it("calls approve endpoint and shows status", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Approve Script" })).toBeInTheDocument();
+    });
+
+    // Override fetch for the approve call
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    fireEvent.click(screen.getByRole("button", { name: "Approve Script" }));
+
+    await waitFor(() => {
+      // Verify approve endpoint was called
+      const calls = fetchSpy.mock.calls.map(([url]) =>
+        typeof url === "string" ? url : (url as Request).url,
+      );
+      expect(calls.some((u) => u.includes("/approve-script"))).toBe(true);
+    });
+  });
+
+  // ---- Generate action ----
+  it("calls generate endpoint on button click", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_IDEA]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Generate Script" })).toBeInTheDocument();
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    fireEvent.click(screen.getByRole("button", { name: "Generate Script" }));
+
+    await waitFor(() => {
+      const calls = fetchSpy.mock.calls.map(([url]) =>
+        typeof url === "string" ? url : (url as Request).url,
+      );
+      expect(calls.some((u) => u.includes("/generate-script"))).toBe(true);
+    });
+  });
+
+  // ---- Restart action ----
+  it("calls restart endpoint on Regenerate click", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Regenerate" })).toBeInTheDocument();
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate" }));
+
+    await waitFor(() => {
+      const calls = fetchSpy.mock.calls.map(([url]) =>
+        typeof url === "string" ? url : (url as Request).url,
+      );
+      expect(calls.some((u) => u.includes("/restart"))).toBe(true);
+    });
+  });
+
+  // ---- API calls ----
+  it("fetches project and runs on mount", async () => {
+    const spy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.includes("/runs")) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ runs: [], total: 0 }),
+        } as Response);
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(MOCK_PROJECT),
+      } as Response);
+    });
+
+    renderPage();
+
+    await waitFor(() => {
+      const calls = spy.mock.calls.map(([url]) =>
+        typeof url === "string" ? url : (url as Request).url,
+      );
+      expect(calls.some((u) => u.includes("/projects/7") && !u.includes("/runs"))).toBe(true);
+      expect(calls.some((u) => u.includes("/projects/7/runs"))).toBe(true);
+    });
+  });
+
+  // ---- Untitled project ----
+  it("shows 'Untitled Project' for null title", async () => {
+    mockFetchProjectAndRuns({ ...MOCK_PROJECT, title: null }, []);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("Untitled Project")).toBeInTheDocument();
+    });
+  });
+
+  // ---- Back link ----
+  it("renders back link to projects", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_IDEA]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("← Projects")).toBeInTheDocument();
+    });
+  });
+
+  // ---- Action error display ----
+  it("shows error status when approve fails", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Approve Script" })).toBeInTheDocument();
+    });
+
+    // Override fetch to fail on approve
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.includes("/approve-script")) {
+        return Promise.resolve({
+          ok: false,
+          status: 409,
+          json: () => Promise.resolve({ detail: "Stage conflict" }),
+        } as Response);
+      }
+      // Fallback for other calls
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve(MOCK_RUN_REVIEW),
+      } as Response);
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Approve Script" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Stage conflict")).toBeInTheDocument();
+    });
+  });
+});

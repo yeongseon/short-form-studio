@@ -100,6 +100,13 @@ class StubRunService:
         self.runs[run_id] = updated
         return updated
 
+    async def list_runs_by_project(self, project_id: int) -> list[StubPipelineRun]:
+        return sorted(
+            [r for r in self.runs.values() if r.project_id == project_id],
+            key=lambda r: r.id,
+            reverse=True,
+        )
+
 
 class StubRunStorage:
     """Minimal storage stub that supports conditional_update_run."""
@@ -170,7 +177,7 @@ def stub_run_service(monkeypatch: pytest.MonkeyPatch) -> StubRunService:
     service = StubRunService()
 
     for route in runs_router.routes:
-        if route.name in {"create_run", "get_run_detail", "restart_run", "approve_script", "generate_script_trigger"}:
+        if route.name in {"create_run", "get_run_detail", "restart_run", "approve_script", "generate_script_trigger", "list_runs_for_project"}:
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", service)
 
     return service
@@ -715,3 +722,32 @@ async def test_generate_script_project_not_found(client, stub_generate_services)
     assert len(run_svc.storage.conditional_update_calls) == 0
     # No dispatch
     assert len(dispatcher.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_list_runs_for_project(client, stub_run_service: StubRunService):
+    # Create 2 runs for project 7 and 1 for project 8
+    await stub_run_service.create_run(project_id=7, model_defaults=None, style_preset="default", metadata=None)
+    await stub_run_service.create_run(project_id=7, model_defaults=None, style_preset="default", metadata=None)
+    await stub_run_service.create_run(project_id=8, model_defaults=None, style_preset="default", metadata=None)
+
+    response = await client.get("/api/creator/projects/7/runs")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 2
+    assert len(body["runs"]) == 2
+    # Newest first
+    assert body["runs"][0]["id"] > body["runs"][1]["id"]
+    assert all(r["project_id"] == 7 for r in body["runs"])
+
+
+@pytest.mark.asyncio
+async def test_list_runs_for_project_empty(client, stub_run_service: StubRunService):
+    _ = stub_run_service
+    response = await client.get("/api/creator/projects/999/runs")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 0
+    assert body["runs"] == []
