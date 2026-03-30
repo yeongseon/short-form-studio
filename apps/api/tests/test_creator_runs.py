@@ -2235,3 +2235,329 @@ async def test_generate_subtitles_dispatch_failure_rollback(client, stub_generat
 
     # Verify run was actually rolled back to AUDIO_GENERATING
     assert run_svc.runs[126].current_stage == "AUDIO_GENERATING"
+
+
+# ── Render endpoint tests ──────────────────────────────────────────
+
+
+class StubRenderDispatcher:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+        self.task_id = "test-render-task-id-xyz"
+
+    def __call__(self, run_id: int, render_profile: str) -> str:
+        self.calls.append({
+            "run_id": run_id,
+            "render_profile": render_profile,
+        })
+        return self.task_id
+
+
+@pytest.fixture
+def stub_generate_render_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubRenderDispatcher]:
+    run_svc = StubRunService()
+    dispatcher = StubRenderDispatcher()
+
+    for route in runs_router.routes:
+        if route.name == "render_trigger":
+            monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
+            monkeypatch.setitem(route.endpoint.__globals__, "dispatch_render_video", dispatcher)
+
+    return run_svc, dispatcher
+
+
+def _make_render_run(run_id: int, stage: str = "SUBTITLE_GENERATING") -> StubPipelineRun:
+    """Helper to create a run in render-relevant stage."""
+    now = datetime.now(timezone.utc)
+    return StubPipelineRun(
+        id=run_id,
+        project_id=1,
+        current_stage=stage,
+        status="running",
+        review_stage=None,
+        restart_from=None,
+        model_defaults=None,
+        metadata=None,
+        style_preset="default",
+        started_at=now,
+        finished_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+@pytest.mark.asyncio
+async def test_render_from_subtitle_generating(client, stub_generate_render_services):
+    run_svc, dispatcher = stub_generate_render_services
+    run_svc.runs[130] = _make_render_run(130, "SUBTITLE_GENERATING")
+
+    response = await client.post(
+        "/api/creator/runs/130/render",
+        json={"render_profile": "high_quality"},
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["task_id"] == "test-render-task-id-xyz"
+    assert body["run_id"] == 130
+    assert body["current_stage"] == "RENDER_GENERATING"
+    cas_calls = run_svc.storage.conditional_update_calls
+    assert len(cas_calls) == 1
+    assert cas_calls[0]["run_id"] == 130
+    assert cas_calls[0]["updates"] == {"current_stage": "RENDER_GENERATING"}
+    assert "SUBTITLE_GENERATING" in cas_calls[0]["expected_stages"]
+    assert dispatcher.calls == [{
+        "run_id": 130,
+        "render_profile": "high_quality",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_render_retry_from_generating(client, stub_generate_render_services):
+    run_svc, dispatcher = stub_generate_render_services
+    run_svc.runs[131] = _make_render_run(131, "RENDER_GENERATING")
+
+    response = await client.post(
+        "/api/creator/runs/131/render",
+        json={"render_profile": "shorts_default"},
+    )
+
+    assert response.status_code == 202
+    cas_calls = run_svc.storage.conditional_update_calls
+    assert len(cas_calls) == 1
+    assert cas_calls[0]["updates"] == {
+        "current_stage": "RENDER_GENERATING",
+        "restart_from": "RENDER_GENERATING",
+    }
+    assert "RENDER_GENERATING" in cas_calls[0]["expected_stages"]
+    assert len(dispatcher.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_render_default_profile(client, stub_generate_render_services):
+    run_svc, dispatcher = stub_generate_render_services
+    run_svc.runs[132] = _make_render_run(132, "SUBTITLE_GENERATING")
+
+    response = await client.post(
+        "/api/creator/runs/132/render",
+        json={},
+    )
+
+    assert response.status_code == 202
+    assert dispatcher.calls[0]["render_profile"] == "shorts_default"
+
+
+@pytest.mark.asyncio
+async def test_render_run_not_found(client, stub_generate_render_services):
+    _, _ = stub_generate_render_services
+    response = await client.post(
+        "/api/creator/runs/999/render",
+        json={},
+    )
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_render_wrong_stage(client, stub_generate_render_services):
+    run_svc, _ = stub_generate_render_services
+    run_svc.runs[133] = _make_render_run(133, "IDEA_READY")
+
+    response = await client.post(
+        "/api/creator/runs/133/render",
+        json={},
+    )
+
+    assert response.status_code == 400
+    assert "IDEA_READY" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_render_cas_conflict(client, stub_generate_render_services):
+    run_svc, dispatcher = stub_generate_render_services
+    run_svc.runs[134] = _make_render_run(134, "SUBTITLE_GENERATING")
+
+    async def cas_conflict(run_id, updates, expected_stages):
+        return False, {"current_stage": "RENDER_GENERATING", "id": run_id}
+
+    run_svc.storage.conditional_update_run = cas_conflict
+
+    response = await client.post(
+        "/api/creator/runs/134/render",
+        json={},
+    )
+
+    assert response.status_code == 409
+    assert "conflict" in response.json()["detail"].lower()
+    assert len(dispatcher.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_render_dispatch_failure_rollback(client, stub_generate_render_services):
+    run_svc, _ = stub_generate_render_services
+    run_svc.runs[135] = _make_render_run(135, "SUBTITLE_GENERATING")
+
+    def failing_dispatcher(run_id, render_profile):
+        raise RuntimeError("Celery broker down")
+
+    from shorts_api.main import runs_router as _r
+    for route in _r.routes:
+        if route.name == "render_trigger":
+            route.endpoint.__globals__["dispatch_render_video"] = failing_dispatcher
+
+    response = await client.post(
+        "/api/creator/runs/135/render",
+        json={},
+    )
+
+    assert response.status_code == 503
+    assert "enqueue" in response.json()["detail"].lower()
+
+    cas_calls = run_svc.storage.conditional_update_calls
+    assert len(cas_calls) == 2
+    rollback = cas_calls[1]
+    assert rollback["updates"]["current_stage"] == "SUBTITLE_GENERATING"
+    assert rollback["expected_stages"] == frozenset({"RENDER_GENERATING"})
+
+    assert run_svc.runs[135].current_stage == "SUBTITLE_GENERATING"
+
+
+# ── Preview endpoint tests ────────────────────────────────────────
+
+
+class StubVideoArtifact:
+    def __init__(self, id: int, path: str, render_profile: str | None, created_at: datetime) -> None:
+        self.id = id
+        self.path = path
+        self.render_profile = render_profile
+        self.created_at = created_at
+
+
+class StubAudioArtifact:
+    def __init__(self, id: int, path: str, model_used: str, created_at: datetime) -> None:
+        self.id = id
+        self.path = path
+        self.model_used = model_used
+        self.created_at = created_at
+
+
+class StubSubtitleArtifact:
+    def __init__(self, id: int, path: str, fmt: str, created_at: datetime) -> None:
+        self.id = id
+        self.path = path
+        self.format = fmt
+        self.created_at = created_at
+
+
+class StubPreviewRenderService:
+    def __init__(self, artifact: StubVideoArtifact | None = None) -> None:
+        self.artifact = artifact
+
+    async def get_latest(self, run_id: int) -> StubVideoArtifact | None:
+        return self.artifact
+
+
+class StubPreviewAudioService:
+    def __init__(self, artifact: StubAudioArtifact | None = None) -> None:
+        self.artifact = artifact
+
+    async def get_latest(self, run_id: int) -> StubAudioArtifact | None:
+        return self.artifact
+
+
+class StubPreviewSubtitleService:
+    def __init__(self, artifact: StubSubtitleArtifact | None = None) -> None:
+        self.artifact = artifact
+
+    async def get_latest(self, run_id: int) -> StubSubtitleArtifact | None:
+        return self.artifact
+
+
+@pytest.fixture
+def stub_preview_services(monkeypatch: pytest.MonkeyPatch):
+    now = datetime.now(timezone.utc)
+    run_svc = StubRunService()
+    render_svc = StubPreviewRenderService(
+        StubVideoArtifact(1, "data/artifacts/200/render/output.mp4", "shorts_default", now)
+    )
+    audio_svc = StubPreviewAudioService(
+        StubAudioArtifact(2, "data/artifacts/200/audio/audio.wav", "piper", now)
+    )
+    subtitle_svc = StubPreviewSubtitleService(
+        StubSubtitleArtifact(3, "data/artifacts/200/subtitles/subtitles.srt", "srt", now)
+    )
+
+    for route in runs_router.routes:
+        if route.name == "get_preview":
+            monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
+            monkeypatch.setitem(route.endpoint.__globals__, "render_service", render_svc)
+            monkeypatch.setitem(route.endpoint.__globals__, "audio_service", audio_svc)
+            monkeypatch.setitem(route.endpoint.__globals__, "subtitle_service", subtitle_svc)
+
+    return run_svc, render_svc, audio_svc, subtitle_svc
+
+
+def _make_preview_run(run_id: int, stage: str = "FINAL_REVIEW") -> StubPipelineRun:
+    now = datetime.now(timezone.utc)
+    return StubPipelineRun(
+        id=run_id,
+        project_id=1,
+        current_stage=stage,
+        status="running",
+        review_stage=None,
+        restart_from=None,
+        model_defaults=None,
+        metadata=None,
+        style_preset="default",
+        started_at=now,
+        finished_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+@pytest.mark.asyncio
+async def test_preview_full_artifacts(client, stub_preview_services):
+    run_svc, _, _, _ = stub_preview_services
+    run_svc.runs[200] = _make_preview_run(200, "FINAL_REVIEW")
+
+    response = await client.get("/api/creator/runs/200/preview")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_id"] == 200
+    assert body["current_stage"] == "FINAL_REVIEW"
+    assert body["video"]["id"] == 1
+    assert body["video"]["path"] == "data/artifacts/200/render/output.mp4"
+    assert body["video"]["render_profile"] == "shorts_default"
+    assert body["audio"]["id"] == 2
+    assert body["audio"]["model_used"] == "piper"
+    assert body["subtitle"]["id"] == 3
+    assert body["subtitle"]["format"] == "srt"
+
+
+@pytest.mark.asyncio
+async def test_preview_no_artifacts(client, stub_preview_services):
+    run_svc, render_svc, audio_svc, subtitle_svc = stub_preview_services
+    render_svc.artifact = None
+    audio_svc.artifact = None
+    subtitle_svc.artifact = None
+    run_svc.runs[201] = _make_preview_run(201, "RENDER_GENERATING")
+
+    response = await client.get("/api/creator/runs/201/preview")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["video"] is None
+    assert body["audio"] is None
+    assert body["subtitle"] is None
+
+
+@pytest.mark.asyncio
+async def test_preview_run_not_found(client, stub_preview_services):
+    _, _, _, _ = stub_preview_services
+    response = await client.get("/api/creator/runs/999/preview")
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
