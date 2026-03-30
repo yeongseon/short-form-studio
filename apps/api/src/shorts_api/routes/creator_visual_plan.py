@@ -5,7 +5,7 @@ import os
 import sys
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 # Add packages to path for imports
 _PACKAGES_DIR = os.path.join(os.path.dirname(__file__), "../../../../..", "packages")
@@ -19,9 +19,9 @@ except ImportError:
     from run_service import run_service
 
 try:
-    from creator_service.visual_plan_service import visual_plan_service
+    from creator_service.visual_plan_service import VersionConflictError, visual_plan_service
 except ImportError:
-    from visual_plan_service import visual_plan_service
+    from visual_plan_service import VersionConflictError, visual_plan_service
 
 try:
     from creator_domain.models.visual_plan import VisualScene
@@ -68,6 +68,60 @@ async def replace_visual_plan(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     plan = await visual_plan_service.save_plan(run_id, scenes)
+
+    return {
+        "run_id": run_id,
+        "version": plan.version,
+        "scenes": [s.model_dump(mode="json") for s in plan.scenes],
+    }
+
+
+class PatchSceneRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    prompt: str | None = None
+    prompt_edited: bool | None = None
+    prompt_source: str | None = None
+    style_tags: list[str] | None = None
+    mood: str | None = None
+    composition: str | None = None
+    expected_version: int | None = None
+
+
+@router.patch("/scenes/{scene_id}")
+async def patch_scene(
+    run_id: int, scene_id: str, request: PatchSceneRequest
+) -> dict[str, object]:
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+    # Build updates dict from non-None fields (exclude expected_version)
+    updates = {
+        k: v
+        for k, v in request.model_dump(exclude={"expected_version"}).items()
+        if v is not None
+    }
+    if not updates:
+        raise HTTPException(status_code=400, detail="No patchable fields provided")
+
+    try:
+        plan = await visual_plan_service.patch_scene(
+            run_id=run_id,
+            scene_id=scene_id,
+            updates=updates,
+            expected_version=request.expected_version,
+        )
+    except VersionConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        ) from exc
+    except ValueError as exc:
+        detail = str(exc)
+        if "not found" in detail.lower() or "no active" in detail.lower():
+            raise HTTPException(status_code=404, detail=detail) from exc
+        raise HTTPException(status_code=400, detail=detail) from exc
 
     return {
         "run_id": run_id,
