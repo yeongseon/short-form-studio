@@ -47,6 +47,7 @@ class StubProjectService:
 class StubRunService:
     def __init__(self) -> None:
         self.create_run_calls: list[dict[str, object]] = []
+        self.raise_error_message: str | None = None
         self.next_run_id = 1
 
     async def create_run(
@@ -56,6 +57,9 @@ class StubRunService:
         style_preset: str,
         metadata: dict[str, object] | None = None,
     ) -> StubPipelineRun:
+        if self.raise_error_message is not None:
+            raise ValueError(self.raise_error_message)
+
         self.create_run_calls.append(
             {
                 "project_id": project_id,
@@ -246,3 +250,35 @@ async def test_import_markdown_service_error(client, stub_services):
             "metadata": None,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_import_markdown_whitespace_only(client, stub_services):
+    project_service, run_service, script_service = stub_services
+    project_service.projects[7] = StubProject(id=7, title="Project 7")
+
+    response = await client.post(
+        "/api/creator/projects/7/script/import-markdown",
+        json={"markdown": "   \n  \t  "},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "markdown content must not be empty"}
+    assert run_service.create_run_calls == []
+    assert script_service.save_draft_calls == []
+
+
+@pytest.mark.asyncio
+async def test_import_markdown_create_run_failure(client, stub_services):
+    project_service, run_service, script_service = stub_services
+    project_service.projects[20] = StubProject(id=20, title="Project 20")
+    run_service.raise_error_message = "Duplicate run not allowed"
+
+    response = await client.post(
+        "/api/creator/projects/20/script/import-markdown",
+        json={"markdown": "# Valid content"},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "Duplicate run not allowed"}
+    assert script_service.save_draft_calls == []
