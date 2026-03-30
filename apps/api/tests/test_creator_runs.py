@@ -29,6 +29,7 @@ class StubRunService:
         self.create_run_calls: list[dict[str, object]] = []
         self.get_run_calls: list[int] = []
         self.restart_run_calls: list[dict[str, object]] = []
+        self.advance_stage_calls: list[dict[str, object]] = []
         self.runs: dict[int, StubPipelineRun] = {}
         self._next_id = 1
 
@@ -85,6 +86,18 @@ class StubRunService:
         self.runs[run_id] = updated
         return updated
 
+    async def advance_stage(self, run_id: int, target_stage: str) -> StubPipelineRun:
+        self.advance_stage_calls.append({"run_id": run_id, "target_stage": target_stage})
+
+        run = self.runs.get(run_id)
+        if run is None:
+            raise ValueError(f"Run {run_id} not found")
+        if target_stage not in {"SCRIPT_GENERATING", "VISUAL_PLAN_GENERATING"}:
+            raise ValueError(f"Invalid stage '{target_stage}'")
+
+        updated = run.model_copy(update={"current_stage": target_stage})
+        self.runs[run_id] = updated
+        return updated
 
 class StubStageReviewService:
     def __init__(self) -> None:
@@ -321,7 +334,7 @@ async def test_approve_script_success(client, stub_approve_services):
     assert review_svc.record_approval_calls == [
         {"run_id": 10, "stage_name": "SCRIPT_REVIEW", "reviewer": "human", "notes": "Looks good"}
     ]
-    assert run_svc.restart_run_calls == [{"run_id": 10, "from_stage": "VISUAL_PLAN_GENERATING"}]
+    assert run_svc.advance_stage_calls == [{"run_id": 10, "target_stage": "VISUAL_PLAN_GENERATING"}]
 
 
 @pytest.mark.asyncio

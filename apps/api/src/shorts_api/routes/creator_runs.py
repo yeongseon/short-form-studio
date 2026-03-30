@@ -96,8 +96,8 @@ async def approve_script(run_id: int, request: ApproveScriptRequest) -> dict[str
 
     # 4. Advance stage: SCRIPT_REVIEW → VISUAL_PLAN_GENERATING
     try:
-        updated_run = await run_service.restart_run(
-            run_id=run_id, from_stage="VISUAL_PLAN_GENERATING"
+        updated_run = await run_service.advance_stage(
+            run_id=run_id, target_stage="VISUAL_PLAN_GENERATING"
         )
     except ValueError as exc:
         raise HTTPException(status_code=500, detail=f"Failed to advance stage: {exc}") from exc

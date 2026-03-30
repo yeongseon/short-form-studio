@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import importlib
+import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -163,6 +163,37 @@ class RunService:
                 "restart_from": target_stage.value,
                 "current_stage": target_stage.value,
             },
+        )
+        return PipelineRun.from_row(row)
+
+    async def advance_stage(self, run_id: int, target_stage: str) -> PipelineRun:
+        """Advance a run to the next stage (approval/forward progression).
+
+        Unlike restart_run, this does NOT set restart_from.
+        """
+        run = await self.get_run(run_id)
+        if run is None:
+            raise ValueError(f"Run {run_id} not found")
+
+        try:
+            target = RunStage(target_stage)
+        except ValueError as exc:
+            raise ValueError(f"Invalid stage '{target_stage}'") from exc
+
+        if run.current_stage is None:
+            raise ValueError(f"Run {run_id} has no current stage")
+
+        try:
+            current = RunStage(run.current_stage)
+        except ValueError as exc:
+            raise ValueError(f"Invalid current stage '{run.current_stage}' for run {run_id}") from exc
+
+        if not can_transition(current, target):
+            raise ValueError(f"Cannot transition from {current.value} to {target.value}")
+
+        row = await self.storage.update_run(
+            run_id,
+            {"current_stage": target.value},
         )
         return PipelineRun.from_row(row)
 
