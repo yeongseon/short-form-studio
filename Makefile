@@ -20,7 +20,13 @@ build:
 	@if [ -d apps/studio-web/node_modules ]; then npm --prefix apps/studio-web run build; else echo "Skipping studio-web build (run make install first)"; fi
 
 docker-up:
-	@echo "docker-compose is planned in Issue #7"
+	docker compose up -d
 
 docker-down:
-	@echo "docker-compose is planned in Issue #7"
+	docker compose down
+
+docker-up-all:
+	docker compose --profile monitoring up -d
+
+docker-logs:
+	docker compose logs -f
