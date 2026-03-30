@@ -107,15 +107,57 @@ export default function CreatePage() {
     [navigate],
   );
 
-  const handleMarkdownSubmit = useCallback(() => {
-    // eslint-disable-next-line no-console
-    console.log("CreatePage markdown submit (stub):", {
-      tab: "markdown",
-      ...markdownForm,
-      stylePreset,
-      modelDefaults,
-    });
-  }, [markdownForm, stylePreset, modelDefaults]);
+  const handleMarkdownSubmit = useCallback(async () => {
+    const title = markdownForm.title.trim();
+    const markdown = markdownForm.markdown.trim();
+    if (!markdown) return;
+
+    setSubmitting(true);
+    setError(null);
+
+    try {
+      // 1. Create project
+      const projRes = await fetch(`${API_BASE}/projects`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: title || "Untitled",
+          source_type: "markdown",
+          markdown_source: markdown,
+        }),
+      });
+
+      if (!projRes.ok) {
+        const body = await projRes.json().catch(() => null);
+        throw new Error(body?.detail ?? `Failed to create project (${projRes.status})`);
+      }
+
+      const project = await projRes.json();
+
+      // 2. Import markdown (creates run + saves draft in one call)
+      const importRes = await fetch(`${API_BASE}/projects/${project.id}/script/import-markdown`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          markdown,
+          model_defaults: modelDefaultsRef.current,
+          style_preset: stylePresetRef.current,
+        }),
+      });
+
+      if (!importRes.ok) {
+        const body = await importRes.json().catch(() => null);
+        throw new Error(body?.detail ?? `Failed to import markdown (${importRes.status})`);
+      }
+
+      // 3. Navigate to project page
+      navigate(`/projects/${project.id}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "An unexpected error occurred");
+    } finally {
+      setSubmitting(false);
+    }
+  }, [markdownForm, navigate]);
 
   return (
     <div style={{ maxWidth: 720, margin: "0 auto", padding: 24 }}>
@@ -173,6 +215,24 @@ export default function CreatePage() {
       {/* Markdown tab panel */}
       {activeTab === "markdown" && (
         <div role="tabpanel" id="tabpanel-markdown" aria-labelledby="tab-markdown">
+          {error && (
+            <div
+              data-testid="markdown-form-error"
+              role="alert"
+              style={{
+                padding: "8px 12px",
+                marginBottom: 16,
+                background: "#fef2f2",
+                border: "1px solid #fca5a5",
+                borderRadius: 4,
+                color: "#b91c1c",
+                fontSize: 13,
+              }}
+            >
+              {error}
+            </div>
+          )}
+
           <div style={{ marginBottom: 16 }}>
             <label htmlFor="md-title" style={{ display: "block", fontWeight: 600, marginBottom: 4, fontSize: 13 }}>
               Title
@@ -182,6 +242,7 @@ export default function CreatePage() {
               type="text"
               value={markdownForm.title}
               onChange={(e) => setMarkdownForm((prev) => ({ ...prev, title: e.target.value }))}
+              disabled={submitting}
               placeholder="Project title"
               style={{ width: "100%", padding: "8px 12px", border: "1px solid #ccc", borderRadius: 4, fontSize: 14, boxSizing: "border-box" }}
             />
@@ -189,12 +250,14 @@ export default function CreatePage() {
 
           <div style={{ marginBottom: 16 }}>
             <label htmlFor="md-content" style={{ display: "block", fontWeight: 600, marginBottom: 4, fontSize: 13 }}>
-              Markdown Content
+              Markdown Content <span style={{ color: "#c00" }}>*</span>
             </label>
             <textarea
               id="md-content"
+              required
               value={markdownForm.markdown}
               onChange={(e) => setMarkdownForm((prev) => ({ ...prev, markdown: e.target.value }))}
+              disabled={submitting}
               placeholder="Paste your script markdown here..."
               rows={10}
               style={{ width: "100%", padding: "8px 12px", border: "1px solid #ccc", borderRadius: 4, fontSize: 14, fontFamily: "monospace", resize: "vertical", boxSizing: "border-box" }}
@@ -210,6 +273,7 @@ export default function CreatePage() {
               type="file"
               accept=".md,.txt"
               onChange={handleFileUpload}
+              disabled={submitting}
               style={{ fontSize: 13 }}
             />
           </div>

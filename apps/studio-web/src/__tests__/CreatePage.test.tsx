@@ -355,4 +355,134 @@ describe("CreatePage", () => {
     const form = screen.getByTestId("idea-form");
     expect(panel.contains(form)).toBe(true);
   });
+
+  // --- Markdown submission flow tests ---
+
+  it("submits markdown form and navigates to project page", async () => {
+    const MOCK_IMPORT = { project_id: 42, run_id: 7, draft: {} };
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.includes("/models")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_MODELS) } as Response);
+      }
+      if (url.includes("/import-markdown")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_IMPORT) } as Response);
+      }
+      if (url.includes("/projects")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_PROJECT) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) } as Response);
+    });
+
+    renderCreatePage();
+    fireEvent.click(screen.getByRole("tab", { name: "Start from Markdown" }));
+
+    fireEvent.change(screen.getByLabelText(/^Title/), { target: { value: "MD Project" } });
+    fireEvent.change(screen.getByLabelText(/Markdown Content/), { target: { value: "# Scene 1\nHello world" } });
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Project" }));
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith("/projects/42");
+    });
+
+    // Verify project creation was called with source_type=markdown
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    const projectCall = calls.find(
+      (c: unknown[]) => typeof c[0] === "string" && c[0].includes("/projects") && !c[0].includes("/script") && !c[0].includes("/models"),
+    );
+    expect(projectCall).toBeTruthy();
+    const projectBody = JSON.parse((projectCall![1] as RequestInit).body as string);
+    expect(projectBody.source_type).toBe("markdown");
+    expect(projectBody.markdown_source).toBe("# Scene 1\nHello world");
+
+    // Verify import-markdown was called
+    const importCall = calls.find(
+      (c: unknown[]) => typeof c[0] === "string" && c[0].includes("/import-markdown"),
+    );
+    expect(importCall).toBeTruthy();
+    const importBody = JSON.parse((importCall![1] as RequestInit).body as string);
+    expect(importBody.markdown).toBe("# Scene 1\nHello world");
+  });
+
+  it("does not submit markdown when content is empty", async () => {
+    mockFetchFullFlow();
+    renderCreatePage();
+    fireEvent.click(screen.getByRole("tab", { name: "Start from Markdown" }));
+
+    // Leave markdown content empty, just set title
+    fireEvent.change(screen.getByLabelText(/^Title/), { target: { value: "My Project" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create Project" }));
+
+    // Should NOT navigate since markdown is empty
+    await new Promise((r) => setTimeout(r, 100));
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it("shows error when import-markdown fails", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.includes("/models")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_MODELS) } as Response);
+      }
+      if (url.includes("/import-markdown")) {
+        return Promise.resolve({
+          ok: false,
+          status: 400,
+          json: () => Promise.resolve({ detail: "markdown content must not be empty" }),
+        } as Response);
+      }
+      if (url.includes("/projects")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_PROJECT) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) } as Response);
+    });
+
+    renderCreatePage();
+    fireEvent.click(screen.getByRole("tab", { name: "Start from Markdown" }));
+
+    fireEvent.change(screen.getByLabelText(/Markdown Content/), { target: { value: "# Test" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create Project" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("markdown-form-error")).toBeTruthy();
+    });
+    expect(screen.getByTestId("markdown-form-error").textContent).toBe("markdown content must not be empty");
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it("uses 'Untitled' when markdown title is empty", async () => {
+    const MOCK_IMPORT = { project_id: 42, run_id: 7, draft: {} };
+    vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
+      const url = typeof input === "string" ? input : (input as Request).url;
+      if (url.includes("/models")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_MODELS) } as Response);
+      }
+      if (url.includes("/import-markdown")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_IMPORT) } as Response);
+      }
+      if (url.includes("/projects")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_PROJECT) } as Response);
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) } as Response);
+    });
+
+    renderCreatePage();
+    fireEvent.click(screen.getByRole("tab", { name: "Start from Markdown" }));
+
+    // No title, just markdown content
+    fireEvent.change(screen.getByLabelText(/Markdown Content/), { target: { value: "# Scene" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create Project" }));
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalled();
+    });
+
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    const projectCall = calls.find(
+      (c: unknown[]) => typeof c[0] === "string" && c[0].includes("/projects") && !c[0].includes("/script") && !c[0].includes("/models"),
+    );
+    const projectBody = JSON.parse((projectCall![1] as RequestInit).body as string);
+    expect(projectBody.title).toBe("Untitled");
+  });
 });
