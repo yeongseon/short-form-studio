@@ -1,0 +1,338 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+from tasks import generate_subtitles as generate_subtitles_module
+
+
+@dataclass
+class FakeEntry:
+    provider_type: str = "faster-whisper"
+    endpoint: str = "http://whisper:9000"
+    requires_gpu: bool = True
+    default_params: dict[str, object] | None = None
+
+
+class FakeProvider:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.calls: list[tuple[str, dict[str, object] | None]] = []
+
+    async def generate(self, script_text: str, params: dict[str, object] | None = None) -> None:
+        self.calls.append((script_text, params))
+        if self.error is not None:
+            raise self.error
+
+
+class FakeStorage:
+    def __init__(self, runs: dict[int, dict[str, object]] | None = None) -> None:
+        self._runs: dict[int, dict[str, object]] = runs or {}
+        self.calls: list[tuple[int, dict[str, object]]] = []
+        self.cas_calls: list[tuple[int, dict[str, object], frozenset[str]]] = []
+
+    async def get_run(self, run_id: int) -> dict[str, object] | None:
+        return self._runs.get(run_id)
+
+    async def conditional_update_run(
+        self,
+        run_id: int,
+        updates: dict[str, object],
+        expected_stages: frozenset[str],
+    ) -> tuple[bool, dict[str, object] | None]:
+        self.cas_calls.append((run_id, updates, expected_stages))
+        row = self._runs.get(run_id)
+        if row is None:
+            return False, None
+        if row.get("current_stage") not in expected_stages:
+            return False, dict(row)
+        self.calls.append((run_id, updates))
+        row.update(updates)
+        self._runs[run_id] = row
+        return True, dict(row)
+
+
+def _make_storage(run_id: int = 101, stage: str = "AUDIO_GENERATING") -> FakeStorage:
+    run_row: dict[str, object] = {"id": run_id, "current_stage": stage}
+    return FakeStorage(runs={run_id: run_row})
+
+
+@dataclass
+class FakeSection:
+    text: str = "Section text"
+    display_text: str | None = None
+
+
+@dataclass
+class FakeScriptDraft:
+    markdown_content: str | None = None
+    structured_script: list[FakeSection] | None = None
+
+
+class FakeScriptService:
+    def __init__(self, draft: FakeScriptDraft | None = None) -> None:
+        self.draft = draft
+
+    async def get_active_draft(self, _run_id: int) -> FakeScriptDraft | None:
+        return self.draft
+
+
+@dataclass
+class FakeAudioArtifact:
+    path: str
+
+
+class FakeAudioService:
+    def __init__(self, artifact: FakeAudioArtifact | None = None) -> None:
+        self.artifact = artifact
+
+    async def get_latest(self, _run_id: int) -> FakeAudioArtifact | None:
+        return self.artifact
+
+
+@dataclass
+class FakeSubtitleArtifact:
+    id: int
+    path: str
+
+
+class FakeSubtitleService:
+    def __init__(self, artifact_id: int = 1) -> None:
+        self.artifact_id = artifact_id
+        self.calls: list[dict[str, object]] = []
+
+    async def create_artifact(
+        self,
+        run_id: int,
+        path: str,
+        *,
+        format: str = "srt",
+        model_used: str | None = None,
+        provider_type: str | None = None,
+    ) -> FakeSubtitleArtifact:
+        call_data = {
+            "run_id": run_id,
+            "path": path,
+            "format": format,
+            "model_used": model_used,
+            "provider_type": provider_type,
+        }
+        self.calls.append(call_data)
+        return FakeSubtitleArtifact(id=self.artifact_id, path=path)
+
+
+class FakeRegistry:
+    def __init__(self, entry: FakeEntry, provider: FakeProvider) -> None:
+        self.entry = entry
+        self.provider = provider
+
+    def resolve(self, _model_key: str) -> FakeEntry:
+        return self.entry
+
+    def get_provider(self, _model_key: str) -> FakeProvider:
+        return self.provider
+
+
+def _patch_registry(monkeypatch: pytest.MonkeyPatch, registry: FakeRegistry) -> None:
+    class _ProviderRegistry:
+        @staticmethod
+        def create_default() -> FakeRegistry:
+            return registry
+
+    monkeypatch.setattr(generate_subtitles_module, "ProviderRegistry", _ProviderRegistry)
+
+
+def _patch_redis(monkeypatch: pytest.MonkeyPatch, redis_client: object) -> None:
+    redis_stub = SimpleNamespace(Redis=SimpleNamespace(from_url=lambda _: redis_client))
+    monkeypatch.setattr(generate_subtitles_module, "redis", redis_stub)
+
+
+def _patch_services(
+    monkeypatch: pytest.MonkeyPatch,
+    script_service: FakeScriptService,
+    audio_service: FakeAudioService,
+    subtitle_service: FakeSubtitleService,
+    storage: FakeStorage,
+) -> None:
+    monkeypatch.setattr(generate_subtitles_module, "_script_service", script_service)
+    monkeypatch.setattr(generate_subtitles_module, "_audio_service", audio_service)
+    monkeypatch.setattr(generate_subtitles_module, "_subtitle_service", subtitle_service)
+    monkeypatch.setattr(generate_subtitles_module, "_run_service", SimpleNamespace(storage=storage))
+
+
+def _invoke_task(**kwargs: Any) -> dict[str, object]:
+    task = generate_subtitles_module.generate_subtitles
+    run_callable = getattr(task, "run", task)
+    return run_callable(**kwargs)
+
+
+def test_generate_subtitles_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = FakeProvider()
+    entry = FakeEntry(requires_gpu=True, default_params={"temperature": 0.1})
+    _patch_registry(monkeypatch, FakeRegistry(entry=entry, provider=provider))
+
+    redis_client = object()
+    _patch_redis(monkeypatch, redis_client)
+
+    lock_calls: list[str] = []
+    release_calls: list[str] = []
+    monkeypatch.setattr(generate_subtitles_module, "acquire_gpu_lock", lambda _, task_id: lock_calls.append(task_id))
+    monkeypatch.setattr(generate_subtitles_module, "release_gpu_lock", lambda _, task_id: release_calls.append(task_id))
+
+    script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Hello world script"))
+    audio_service = FakeAudioService(artifact=None)
+    subtitle_service = FakeSubtitleService(artifact_id=33)
+    storage = _make_storage(run_id=101, stage="AUDIO_GENERATING")
+    _patch_services(monkeypatch, script_service, audio_service, subtitle_service, storage)
+
+    result = _invoke_task(run_id=101, subtitle_model="whisper-large", subtitle_format="srt")
+
+    assert result["status"] == "success"
+    assert result["subtitle_artifact_id"] == 33
+    assert result["provider_type"] == "faster-whisper"
+    assert result["endpoint"] == "http://whisper:9000"
+    assert result["gpu_lock_acquired_at"] is not None
+    assert result["gpu_lock_released_at"] is not None
+    assert result["subtitle_path"] == "data/artifacts/101/subtitles/subtitles.srt"
+    assert result["audio_path"] is None
+
+    assert lock_calls == ["run-101"]
+    assert release_calls == ["run-101"]
+
+    assert provider.calls == [
+        (
+            "Hello world script",
+            {
+                "temperature": 0.1,
+                "format": "srt",
+                "output_path": "data/artifacts/101/subtitles/subtitles.srt",
+            },
+        )
+    ]
+    assert subtitle_service.calls == [
+        {
+            "run_id": 101,
+            "path": "data/artifacts/101/subtitles/subtitles.srt",
+            "format": "srt",
+            "model_used": "whisper-large",
+            "provider_type": "faster-whisper",
+        }
+    ]
+    assert storage.calls == [(101, {"current_stage": "RENDER_GENERATING", "status": "running"})]
+    assert storage.cas_calls[0][2] == frozenset({"AUDIO_GENERATING", "SUBTITLE_GENERATING"})
+
+
+def test_generate_subtitles_run_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = FakeProvider()
+    _patch_registry(monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider))
+
+    script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Any"))
+    audio_service = FakeAudioService(artifact=None)
+    subtitle_service = FakeSubtitleService()
+    storage = FakeStorage()
+    _patch_services(monkeypatch, script_service, audio_service, subtitle_service, storage)
+
+    with pytest.raises(ValueError, match="Run 999 not found"):
+        _invoke_task(run_id=999)
+
+    assert provider.calls == []
+    assert storage.calls == []
+    assert subtitle_service.calls == []
+
+
+def test_generate_subtitles_wrong_stage(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = FakeProvider()
+    _patch_registry(monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider))
+
+    script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Any"))
+    audio_service = FakeAudioService(artifact=None)
+    subtitle_service = FakeSubtitleService()
+    storage = _make_storage(run_id=102, stage="SCRIPT_REVIEW")
+    _patch_services(monkeypatch, script_service, audio_service, subtitle_service, storage)
+
+    with pytest.raises(ValueError, match="expected one of"):
+        _invoke_task(run_id=102)
+
+    assert provider.calls == []
+    assert storage.calls == []
+    assert subtitle_service.calls == []
+
+
+def test_generate_subtitles_no_script(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = FakeProvider()
+    _patch_registry(monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider))
+
+    script_service = FakeScriptService(draft=None)
+    audio_service = FakeAudioService(artifact=None)
+    subtitle_service = FakeSubtitleService()
+    storage = _make_storage(run_id=103, stage="AUDIO_GENERATING")
+    _patch_services(monkeypatch, script_service, audio_service, subtitle_service, storage)
+
+    with pytest.raises(ValueError, match="No script draft found"):
+        _invoke_task(run_id=103)
+
+    assert provider.calls == []
+    assert storage.calls == []
+    assert subtitle_service.calls == []
+
+
+def test_generate_subtitles_provider_failure_marks_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = FakeProvider(error=RuntimeError("subtitle provider failed"))
+    _patch_registry(monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider))
+
+    script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Some script"))
+    audio_service = FakeAudioService(artifact=None)
+    subtitle_service = FakeSubtitleService()
+    storage = _make_storage(run_id=104, stage="AUDIO_GENERATING")
+    _patch_services(monkeypatch, script_service, audio_service, subtitle_service, storage)
+
+    with pytest.raises(RuntimeError, match="subtitle provider failed"):
+        _invoke_task(run_id=104)
+
+    assert subtitle_service.calls == []
+    assert storage.calls == [(104, {"current_stage": "FAILED", "status": "failed"})]
+    assert storage.cas_calls[0][2] == frozenset({"AUDIO_GENERATING", "SUBTITLE_GENERATING"})
+
+
+def test_generate_subtitles_with_audio_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = FakeProvider()
+    _patch_registry(monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider))
+
+    script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Narration text"))
+    audio_service = FakeAudioService(artifact=FakeAudioArtifact(path="data/artifacts/105/audio/audio.wav"))
+    subtitle_service = FakeSubtitleService()
+    storage = _make_storage(run_id=105, stage="AUDIO_GENERATING")
+    _patch_services(monkeypatch, script_service, audio_service, subtitle_service, storage)
+
+    result = _invoke_task(run_id=105, subtitle_format="vtt")
+
+    assert result["status"] == "success"
+    assert result["audio_path"] == "data/artifacts/105/audio/audio.wav"
+    params = provider.calls[0][1]
+    assert params is not None
+    assert params["audio_path"] == "data/artifacts/105/audio/audio.wav"
+    assert params["format"] == "vtt"
+    assert params["output_path"] == "data/artifacts/105/subtitles/subtitles.vtt"
+
+
+def test_generate_subtitles_without_audio(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = FakeProvider()
+    _patch_registry(monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider))
+
+    script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Narration text"))
+    audio_service = FakeAudioService(artifact=None)
+    subtitle_service = FakeSubtitleService()
+    storage = _make_storage(run_id=106, stage="SUBTITLE_GENERATING")
+    _patch_services(monkeypatch, script_service, audio_service, subtitle_service, storage)
+
+    result = _invoke_task(run_id=106)
+
+    assert result["status"] == "success"
+    assert result["audio_path"] is None
+    params = provider.calls[0][1]
+    assert params is not None
+    assert "audio_path" not in params
+    assert params["format"] == "srt"
+    assert params["output_path"] == "data/artifacts/106/subtitles/subtitles.srt"
