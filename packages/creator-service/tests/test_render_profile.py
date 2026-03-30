@@ -1,0 +1,214 @@
+import unittest
+from pathlib import Path
+from unittest.mock import patch, MagicMock
+
+from creator_service.render_profile import (
+    RenderProfile, Codec, AudioCodec, TransitionStyle
+)
+from creator_service.ffmpeg_service import FFmpegService, RenderInput
+
+
+class TestRenderProfile(unittest.TestCase):
+    """Tests for RenderProfile dataclass."""
+
+    def test_default_profile(self):
+        """Test default profile values."""
+        profile = RenderProfile.default()
+        
+        self.assertEqual(profile.name, "shorts_default")
+        self.assertEqual(profile.width, 1080)
+        self.assertEqual(profile.height, 1920)
+        self.assertEqual(profile.fps, 30)
+        self.assertEqual(profile.video_codec, Codec.H264)
+        self.assertEqual(profile.audio_codec, AudioCodec.AAC)
+        self.assertEqual(profile.transition_style, TransitionStyle.KEN_BURNS)
+        self.assertEqual(profile.crf, 23)
+        self.assertEqual(profile.preset, "medium")
+        self.assertTrue(profile.burn_subtitles)
+        self.assertEqual(profile.subtitle_font_size, 24)
+
+    def test_high_quality_preset(self):
+        """Test high_quality preset."""
+        profile = RenderProfile.high_quality()
+        
+        self.assertEqual(profile.name, "high_quality")
+        self.assertEqual(profile.crf, 18)
+        self.assertEqual(profile.preset, "slow")
+        # Check that inherited values are still correct
+        self.assertEqual(profile.width, 1080)
+        self.assertEqual(profile.height, 1920)
+
+    def test_fast_preview_preset(self):
+        """Test fast_preview preset."""
+        profile = RenderProfile.fast_preview()
+        
+        self.assertEqual(profile.name, "fast_preview")
+        self.assertEqual(profile.width, 540)
+        self.assertEqual(profile.height, 960)
+        self.assertEqual(profile.fps, 15)
+        self.assertEqual(profile.crf, 28)
+        self.assertEqual(profile.preset, "ultrafast")
+
+    def test_codec_enum_values(self):
+        """Test video codec enum values."""
+        self.assertEqual(Codec.H264.value, "libx264")
+        self.assertEqual(Codec.H265.value, "libx265")
+
+    def test_audio_codec_enum_values(self):
+        """Test audio codec enum values."""
+        self.assertEqual(AudioCodec.AAC.value, "aac")
+        self.assertEqual(AudioCodec.MP3.value, "libmp3lame")
+
+    def test_transition_style_enum_values(self):
+        """Test transition style enum values."""
+        self.assertEqual(TransitionStyle.CUT.value, "cut")
+        self.assertEqual(TransitionStyle.FADE.value, "fade")
+        self.assertEqual(TransitionStyle.KEN_BURNS.value, "ken_burns")
+
+
+class TestFFmpegService(unittest.TestCase):
+    """Tests for FFmpegService."""
+
+    def setUp(self):
+        """Set up test fixtures."""
+        self.profile = RenderProfile.default()
+        self.service = FFmpegService(self.profile)
+
+    def test_build_command_basic(self):
+        """Test build_command produces valid FFmpeg command list."""
+        input_data = RenderInput(
+            image_paths=[Path("/tmp/img1.png"), Path("/tmp/img2.png")],
+            audio_path=None,
+            subtitle_path=None,
+            scene_durations=[3.0, 4.0]
+        )
+        output_path = Path("/tmp/output.mp4")
+        
+        cmd = self.service.build_command(input_data, output_path)
+        
+        # Verify it's a list of strings
+        self.assertIsInstance(cmd, list)
+        self.assertTrue(all(isinstance(item, str) for item in cmd))
+        
+        # Verify key elements are present
+        self.assertIn("ffmpeg", cmd)
+        self.assertIn("-y", cmd)  # overwrite flag
+        self.assertIn(str(output_path), cmd)
+        
+        # Verify codec settings
+        self.assertIn("-c:v", cmd)
+        self.assertIn(self.profile.video_codec.value, cmd)
+        self.assertIn("-crf", cmd)
+        self.assertIn(str(self.profile.crf), cmd)
+        self.assertIn("-preset", cmd)
+        self.assertIn(self.profile.preset, cmd)
+
+    def test_build_command_with_audio(self):
+        """Test build_command includes audio mapping."""
+        input_data = RenderInput(
+            image_paths=[Path("/tmp/img1.png")],
+            audio_path=Path("/tmp/audio.mp3"),
+            subtitle_path=None,
+            scene_durations=[5.0]
+        )
+        output_path = Path("/tmp/output.mp4")
+        
+        cmd = self.service.build_command(input_data, output_path)
+        
+        # Verify audio codec is set
+        self.assertIn("-c:a", cmd)
+        self.assertIn(self.profile.audio_codec.value, cmd)
+
+    def test_build_command_with_subtitles(self):
+        """Test build_command includes subtitle filter."""
+        input_data = RenderInput(
+            image_paths=[Path("/tmp/img1.png")],
+            audio_path=None,
+            subtitle_path=Path("/tmp/subs.srt"),
+            scene_durations=[5.0]
+        )
+        output_path = Path("/tmp/output.mp4")
+        
+        cmd = self.service.build_command(input_data, output_path)
+        
+        # Verify subtitle filter is present
+        self.assertIn("-vf", cmd)
+        # Find the -vf value
+        vf_idx = cmd.index("-vf")
+        vf_filter = cmd[vf_idx + 1]
+        self.assertIn("subtitles", vf_filter)
+
+    def test_custom_profile(self):
+        """Test FFmpegService with custom profile."""
+        custom_profile = RenderProfile(
+            name="custom",
+            width=720,
+            height=1280,
+            fps=24,
+            crf=20,
+            preset="fast"
+        )
+        service = FFmpegService(custom_profile)
+        
+        input_data = RenderInput(
+            image_paths=[Path("/tmp/img1.png")],
+            audio_path=None,
+            subtitle_path=None,
+            scene_durations=[5.0]
+        )
+        output_path = Path("/tmp/output.mp4")
+        
+        cmd = service.build_command(input_data, output_path)
+        
+        # Verify custom settings are in command
+        self.assertIn("720", cmd)
+        self.assertIn("1280", cmd)
+        self.assertIn("24", cmd)
+        self.assertIn("20", cmd)
+        self.assertIn("fast", cmd)
+
+    @patch("subprocess.run")
+    @patch("pathlib.Path.mkdir")
+    def test_render_success(self, mock_mkdir, mock_run):
+        """Test render method on success."""
+        mock_run.return_value = MagicMock(returncode=0)
+        
+        input_data = RenderInput(
+            image_paths=[Path("/tmp/img1.png")],
+            audio_path=None,
+            subtitle_path=None,
+            scene_durations=[5.0]
+        )
+        output_path = Path("/tmp/output.mp4")
+        
+        result = self.service.render(input_data, output_path)
+        
+        self.assertEqual(result, output_path)
+        mock_mkdir.assert_called_once_with(parents=True, exist_ok=True)
+        mock_run.assert_called_once()
+
+    @patch("subprocess.run")
+    @patch("pathlib.Path.mkdir")
+    def test_render_failure(self, mock_mkdir, mock_run):
+        """Test render method on FFmpeg failure."""
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stderr="FFmpeg error message"
+        )
+        
+        input_data = RenderInput(
+            image_paths=[Path("/tmp/img1.png")],
+            audio_path=None,
+            subtitle_path=None,
+            scene_durations=[5.0]
+        )
+        output_path = Path("/tmp/output.mp4")
+        
+        with self.assertRaises(RuntimeError) as cm:
+            self.service.render(input_data, output_path)
+        
+        self.assertIn("FFmpeg render failed", str(cm.exception))
+
+
+if __name__ == "__main__":
+    unittest.main()
