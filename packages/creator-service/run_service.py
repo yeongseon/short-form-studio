@@ -44,6 +44,10 @@ class RunStorageBackend(Protocol):
         """
         ...
 
+    async def list_runs_by_project(self, project_id: int) -> list[dict[str, Any]]:
+        """Return all run rows for a given project, newest first."""
+        ...
+
 class InMemoryRunStorage:
     def __init__(self) -> None:
         self._rows: dict[int, dict[str, Any]] = {}
@@ -90,6 +94,14 @@ class InMemoryRunStorage:
         row["updated_at"] = datetime.now(timezone.utc)
         self._rows[run_id] = row
         return True, dict(row)
+
+    async def list_runs_by_project(self, project_id: int) -> list[dict[str, Any]]:
+        rows = [
+            dict(r) for r in self._rows.values()
+            if r.get("project_id") == project_id
+        ]
+        rows.sort(key=lambda r: r.get("id", 0), reverse=True)
+        return rows
 
 class RunService:
     def __init__(self, storage: RunStorageBackend):
@@ -196,6 +208,11 @@ class RunService:
             {"current_stage": target.value},
         )
         return PipelineRun.from_row(row)
+
+    async def list_runs_by_project(self, project_id: int) -> list[PipelineRun]:
+        """Return all runs for a project, newest first."""
+        rows = await self.storage.list_runs_by_project(project_id)
+        return [PipelineRun.from_row(r) for r in rows]
 
 
 run_service = RunService(InMemoryRunStorage())
