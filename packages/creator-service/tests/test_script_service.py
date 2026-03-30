@@ -142,3 +142,19 @@ async def test_concurrent_saves_produce_unique_versions() -> None:
 
     versions = sorted(d.version for d in results)
     assert versions == [1, 2], f"Expected unique versions [1, 2], got {versions}"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_saves_across_service_instances() -> None:
+    """Two ScriptService instances sharing one storage must still produce unique versions."""
+    storage = InMemoryScriptStorage()
+    service_a = ScriptService(storage)
+    service_b = ScriptService(storage)
+
+    results = await asyncio.gather(
+        service_a.save_draft(run_id=201, source_type="pasted_markdown", markdown_content="## hook\nA"),
+        service_b.save_draft(run_id=201, source_type="pasted_markdown", markdown_content="## hook\nB"),
+    )
+
+    versions = sorted(d.version for d in results)
+    assert versions == [1, 2], f"Expected unique versions [1, 2], got {versions}"
