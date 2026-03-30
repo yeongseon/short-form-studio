@@ -1,3 +1,4 @@
+import React from "react";
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import ModelSelector from "../components/creator/ModelSelector";
@@ -153,7 +154,7 @@ describe("ModelSelector", () => {
     expect(screen.getByText("unknown")).toBeTruthy();
   });
 
-  it("keyboard navigation works via native radio inputs", async () => {
+  it("radio click fires onSelectionChange with correct category and key", async () => {
     mockFetchSuccess();
     const onChange = vi.fn();
     render(<ModelSelector onSelectionChange={onChange} />);
@@ -164,10 +165,8 @@ describe("ModelSelector", () => {
 
     onChange.mockClear();
 
-    // Native radios support keyboard by default; simulate click on radio
     const gptRadio = screen.getByRole("radio", { name: /GPT-4o Mini/ });
     fireEvent.click(gptRadio);
-    // The onChange handler fires through the radio onChange
     expect(onChange).toHaveBeenCalledWith("script", "gpt-4o-mini");
   });
 
@@ -256,5 +255,35 @@ describe("ModelSelector", () => {
     // The manually selected gpt-4o-mini should still be checked, not overwritten by default
     const gptRadioAfter = screen.getByRole("radio", { name: /GPT-4o Mini/ });
     expect(gptRadioAfter).toBeChecked();
+  });
+
+  it("default callbacks fire exactly once under StrictMode", async () => {
+    mockFetchSuccess();
+    const onChange = vi.fn();
+    render(
+      <React.StrictMode>
+        <ModelSelector onSelectionChange={onChange} />
+      </React.StrictMode>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId("model-selector")).toBeTruthy();
+    });
+
+    // Each category default should fire exactly once, not doubled by StrictMode
+    const scriptCalls = onChange.mock.calls.filter(
+      ([cat, key]: [string, string]) => cat === "script" && key === "qwen3-4b",
+    );
+    expect(scriptCalls.length).toBe(1);
+
+    const imageCalls = onChange.mock.calls.filter(
+      ([cat, key]: [string, string]) => cat === "image" && key === "sd15",
+    );
+    expect(imageCalls.length).toBe(1);
+
+    const ttsCalls = onChange.mock.calls.filter(
+      ([cat, key]: [string, string]) => cat === "tts" && key === "qwen-tts",
+    );
+    expect(ttsCalls.length).toBe(1);
   });
 });

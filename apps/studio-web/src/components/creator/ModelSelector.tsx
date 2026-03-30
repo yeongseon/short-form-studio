@@ -67,6 +67,10 @@ export default function ModelSelector({
   const onChangeRef = useRef(onSelectionChange);
   onChangeRef.current = onSelectionChange;
 
+  // Ref to stage newly-computed defaults for notification in a follow-up effect.
+  // Keeping notification out of the setLocalSelection updater keeps it pure.
+  const pendingDefaultsRef = useRef<Array<[string, string]>>([]);
+
   // Effect 1: Fetch model catalog when apiBase changes
   useEffect(() => {
     let cancelled = false;
@@ -106,6 +110,7 @@ export default function ModelSelector({
   // Effect 2: Derive default selections when data or visible categories change (uncontrolled mode only).
   // Only initializes selections for categories that don't already have a user-chosen value,
   // so manual selections survive parent re-renders and categories changes.
+  // The updater is kept pure — side-effect notification is staged via ref.
   useEffect(() => {
     if (!data || selectedModels) return;
 
@@ -115,9 +120,8 @@ export default function ModelSelector({
       const newDefaults: Array<[string, string]> = [];
 
       for (const cat of cats) {
-        // Skip categories that already have a selection
+        // Skip categories that already have a selection whose model still exists
         if (next[cat]) {
-          // Verify the selected model still exists in the catalog
           const meta = CATEGORY_MAP[cat];
           if (meta) {
             const models = data[meta.responseKey];
@@ -136,20 +140,29 @@ export default function ModelSelector({
         }
       }
 
-      // Notify parent only for newly defaulted categories
-      if (newDefaults.length > 0) {
-        const cb = onChangeRef.current;
-        if (cb) {
-          // Schedule notification after state update to avoid calling setState during render
-          queueMicrotask(() => {
-            for (const [c, k] of newDefaults) cb(c, k);
-          });
-        }
-      }
+      // If nothing changed, return prev to avoid unnecessary re-render
+      if (newDefaults.length === 0) return prev;
 
+      // Stage defaults for notification in Effect 3
+      pendingDefaultsRef.current = newDefaults;
       return next;
     });
   }, [data, categoriesKey, selectedModels]);
+
+  // Effect 3: Notify parent of newly-computed defaults after state has settled.
+  // Runs after localSelection changes; checks the staged ref to avoid duplicate calls.
+  useEffect(() => {
+    const pending = pendingDefaultsRef.current;
+    if (pending.length === 0) return;
+    pendingDefaultsRef.current = [];
+
+    const cb = onChangeRef.current;
+    if (cb) {
+      for (const [cat, key] of pending) {
+        cb(cat, key);
+      }
+    }
+  }, [localSelection]);
 
   const handleSelect = useCallback(
     (category: string, modelKey: string) => {
