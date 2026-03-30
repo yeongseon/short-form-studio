@@ -29,7 +29,7 @@ class StubScriptDraft(BaseModel):
         "edited_manually",
     ]
     markdown_content: str | None = None
-    structured_script: list[dict[str, object]] | None = None
+    structured_script: list[object] | None = None
     version: int = 1
     created_at: datetime
 
@@ -102,17 +102,19 @@ class StubScriptService:
             "edited_manually",
         ],
         markdown_content: str,
+        structured_script: list | None = None,
     ) -> StubScriptDraft:
         if self.raise_error_message is not None:
             raise ValueError(self.raise_error_message)
 
-        self.save_draft_calls.append(
-            {
-                "run_id": run_id,
-                "source_type": source_type,
-                "markdown_content": markdown_content,
-            }
-        )
+        save_call: dict[str, object] = {
+            "run_id": run_id,
+            "source_type": source_type,
+            "markdown_content": markdown_content,
+        }
+        if structured_script is not None:
+            save_call["structured_script"] = structured_script
+        self.save_draft_calls.append(save_call)
         current_draft = self.active_drafts.get(run_id)
         next_version = 1 if current_draft is None else current_draft.version + 1
 
@@ -121,7 +123,7 @@ class StubScriptService:
             run_id=run_id,
             source_type=source_type,
             markdown_content=markdown_content,
-            structured_script=None,
+            structured_script=structured_script,
             version=next_version,
             created_at=datetime.now(timezone.utc),
         )
@@ -446,3 +448,165 @@ async def test_update_script_markdown_whitespace_only(client, stub_run_script_se
     assert response.status_code == 400
     assert response.json() == {"detail": "markdown content must not be empty"}
     assert script_service.save_draft_calls == []
+
+
+@pytest.mark.asyncio
+async def test_get_script_structured_success(client, stub_run_script_services):
+    run_service, script_service = stub_run_script_services
+    run_service.runs[60] = StubPipelineRun(id=60, project_id=1)
+
+    update_response = await client.put(
+        "/api/creator/runs/60/script/structured",
+        json={
+            "sections": [
+                {"section_id": "intro-1", "type": "intro", "text": "Welcome"},
+                {"section_id": "body-1", "type": "body", "text": "Main point"},
+            ]
+        },
+    )
+    assert update_response.status_code == 200
+
+    response = await client.get("/api/creator/runs/60/script/structured")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "run_id": 60,
+        "sections": [
+            {
+                "section_id": "intro-1",
+                "type": "intro",
+                "text": "Welcome",
+                "display_text": None,
+                "speaker": "host",
+                "duration": None,
+                "turn_kind": None,
+                "visual_override": None,
+            },
+            {
+                "section_id": "body-1",
+                "type": "body",
+                "text": "Main point",
+                "display_text": None,
+                "speaker": "host",
+                "duration": None,
+                "turn_kind": None,
+                "visual_override": None,
+            },
+        ],
+        "version": 1,
+    }
+    assert script_service.active_drafts[60].structured_script is not None
+
+
+@pytest.mark.asyncio
+async def test_get_script_structured_no_draft(client, stub_run_script_services):
+    run_service, _script_service = stub_run_script_services
+    run_service.runs[61] = StubPipelineRun(id=61, project_id=1)
+
+    response = await client.get("/api/creator/runs/61/script/structured")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "No script draft found for this run"}
+
+
+@pytest.mark.asyncio
+async def test_get_script_structured_run_not_found(client, stub_run_script_services):
+    _run_service, _script_service = stub_run_script_services
+
+    response = await client.get("/api/creator/runs/404/script/structured")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Run 404 not found"}
+
+
+@pytest.mark.asyncio
+async def test_get_script_structured_empty_sections(client, stub_run_script_services):
+    run_service, script_service = stub_run_script_services
+    run_service.runs[62] = StubPipelineRun(id=62, project_id=1)
+    await script_service.save_draft(
+        run_id=62,
+        source_type="edited_manually",
+        markdown_content="",
+        structured_script=[],
+    )
+
+    response = await client.get("/api/creator/runs/62/script/structured")
+
+    assert response.status_code == 200
+    assert response.json() == {"run_id": 62, "sections": [], "version": 1}
+
+
+@pytest.mark.asyncio
+async def test_update_script_structured_success(client, stub_run_script_services):
+    run_service, script_service = stub_run_script_services
+    run_service.runs[63] = StubPipelineRun(id=63, project_id=1)
+
+    response = await client.put(
+        "/api/creator/runs/63/script/structured",
+        json={
+            "sections": [
+                {"section_id": "sec-1", "type": "hook", "text": "Start here"},
+                {"section_id": "sec-2", "type": "cta", "text": "Follow for more"},
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_id"] == 63
+    assert body["draft"]["source_type"] == "edited_manually"
+    assert body["draft"]["markdown_content"] == "## hook\n\nStart here\n\n## cta\n\nFollow for more"
+    assert body["draft"]["structured_script"][0]["section_id"] == "sec-1"
+    assert script_service.save_draft_calls[-1]["source_type"] == "edited_manually"
+    assert script_service.save_draft_calls[-1]["markdown_content"] == "## hook\n\nStart here\n\n## cta\n\nFollow for more"
+
+
+@pytest.mark.asyncio
+async def test_update_script_structured_run_not_found(client, stub_run_script_services):
+    _run_service, script_service = stub_run_script_services
+
+    response = await client.put(
+        "/api/creator/runs/64/script/structured",
+        json={"sections": [{"section_id": "sec-1", "type": "hook", "text": "Start"}]},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Run 64 not found"}
+    assert script_service.save_draft_calls == []
+
+
+@pytest.mark.asyncio
+async def test_update_script_structured_invalid_section(client, stub_run_script_services):
+    run_service, script_service = stub_run_script_services
+    run_service.runs[65] = StubPipelineRun(id=65, project_id=1)
+
+    response = await client.put(
+        "/api/creator/runs/65/script/structured",
+        json={"sections": [{"type": "hook", "text": "Missing id"}]},
+    )
+
+    assert response.status_code == 400
+    assert "detail" in response.json()
+    assert script_service.save_draft_calls == []
+
+
+@pytest.mark.asyncio
+async def test_update_script_structured_preserves_section_id(client, stub_run_script_services):
+    run_service, script_service = stub_run_script_services
+    run_service.runs[66] = StubPipelineRun(id=66, project_id=1)
+
+    response = await client.put(
+        "/api/creator/runs/66/script/structured",
+        json={
+            "sections": [
+                {"section_id": "original-101", "type": "intro", "text": "Hello"},
+                {"section_id": "original-102", "type": "body", "text": "Details"},
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    saved_sections = script_service.save_draft_calls[-1]["structured_script"]
+    assert saved_sections is not None
+    assert saved_sections[0].section_id == "original-101"
+    assert saved_sections[1].section_id == "original-102"
