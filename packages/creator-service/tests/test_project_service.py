@@ -91,9 +91,9 @@ def test_list_projects_returns_newest_first(service: ProjectService) -> None:
 
 
 def test_list_projects_respects_limit_and_offset(service: ProjectService) -> None:
-    first = run(service.create_project(title="First", source_type="idea"))
-    second = run(service.create_project(title="Second", source_type="idea"))
-    third = run(service.create_project(title="Third", source_type="idea"))
+    first = run(service.create_project(title="First", source_type="idea", idea_brief="first idea"))
+    second = run(service.create_project(title="Second", source_type="idea", idea_brief="second idea"))
+    third = run(service.create_project(title="Third", source_type="idea", idea_brief="third idea"))
 
     projects = run(service.list_projects(limit=1, offset=1))
 
@@ -108,7 +108,7 @@ def test_get_and_list_include_latest_run_summary(
     service: ProjectService,
     storage: InMemoryProjectStorage,
 ) -> None:
-    project = run(service.create_project(title="With Run", source_type="idea"))
+    project = run(service.create_project(title="With Run", source_type="idea", idea_brief="test idea"))
 
     run(storage.insert_run(project.id, current_stage="script_generating", status="running"))
     latest = run(storage.insert_run(project.id, current_stage="script_review", status="paused"))
@@ -127,3 +127,18 @@ def test_get_and_list_include_latest_run_summary(
         "current_stage": "script_review",
         "status": "paused",
     }
+
+
+def test_create_project_with_markdown_missing_source_raises_value_error(service: ProjectService) -> None:
+    with pytest.raises(ValueError, match="source_type='markdown' requires markdown_source"):
+        run(service.create_project(title="Bad Markdown", source_type="markdown"))
+
+
+def test_create_project_with_url_missing_source_raises_value_error(service: ProjectService) -> None:
+    with pytest.raises(ValueError, match="source_type='url' requires url_source"):
+        run(service.create_project(title="Bad URL", source_type="url"))
+
+
+def test_create_project_with_idea_missing_brief_raises_value_error(service: ProjectService) -> None:
+    with pytest.raises(ValueError, match="source_type='idea' requires idea_brief"):
+        run(service.create_project(title="Bad Idea", source_type="idea"))

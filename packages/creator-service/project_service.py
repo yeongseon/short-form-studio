@@ -7,41 +7,19 @@ the same async service-facing interface.
 
 from __future__ import annotations
 
-import importlib
-import sys
+try:
+    from creator_domain.models import Project
+except ImportError:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "creator-domain"))
+    from models import Project
+
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import Any, Literal, Protocol
 
-
-def _load_project_model() -> Any:
-    try:
-        return importlib.import_module("models").Project
-    except ModuleNotFoundError:
-        domain_root = Path(__file__).resolve().parents[1] / "creator-domain"
-        if str(domain_root) not in sys.path:
-            sys.path.insert(0, str(domain_root))
-        return importlib.import_module("models").Project
-
-
-if TYPE_CHECKING:
-    from pydantic import BaseModel
-
-    class Project(BaseModel):
-        id: int
-        title: str | None
-        source_type: Literal["idea", "markdown", "url"]
-        idea_brief: str | None
-        markdown_source: str | None
-        url_source: str | None
-        status: Literal["draft", "active", "completed", "archived"]
-        created_at: datetime
-        updated_at: datetime
-else:
-    Project = _load_project_model()
-
-
-LatestRunSummary = dict[str, int | str]
+LatestRunSummary = dict[str, int | str | None]
 
 
 class ProjectStorageBackend(Protocol):
@@ -152,6 +130,14 @@ class ProjectService:
     ) -> Project:
         if source_type not in self._ALLOWED_SOURCE_TYPES:
             raise ValueError(f"Unsupported source_type '{source_type}'")
+
+        # Validate payload matches source_type
+        if source_type == "markdown" and markdown_source is None:
+            raise ValueError("source_type='markdown' requires markdown_source to be provided")
+        if source_type == "url" and url_source is None:
+            raise ValueError("source_type='url' requires url_source to be provided")
+        if source_type == "idea" and idea_brief is None:
+            raise ValueError("source_type='idea' requires idea_brief to be provided")
 
         row = await self.db.insert_project(
             {
