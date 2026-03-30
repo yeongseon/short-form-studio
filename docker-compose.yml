@@ -38,7 +38,6 @@ services:
       - "8000:8000"
     volumes:
       - ./apps/api/src:/app/src
-      - ./packages:/app/packages
     env_file:
       - .env
     depends_on:
@@ -56,7 +55,6 @@ services:
     volumes:
       - ./apps/worker-orchestrator/tasks:/app/tasks
       - ./apps/worker-orchestrator/celery_app.py:/app/celery_app.py
-      - ./packages:/app/packages
       - ./data/artifacts:/app/data/artifacts
     env_file:
       - .env
