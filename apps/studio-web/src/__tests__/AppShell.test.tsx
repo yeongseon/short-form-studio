@@ -1,5 +1,5 @@
 import { render, screen } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Navigate, Route, Routes } from "react-router-dom";
 import { describe, it, expect } from "vitest";
 
 import AppShell from "../components/layout/AppShell";
@@ -81,5 +81,63 @@ describe("AppShell", () => {
     renderWithRoute("/ops");
     const opsLink = screen.getByText("Ops");
     expect(opsLink).toHaveStyle({ fontWeight: 600 });
+  });
+
+  it("redirects unknown routes to /create", () => {
+    render(
+      <MemoryRouter initialEntries={["/unknown-page"]}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/create" element={<div>CreatePage</div>} />
+            <Route path="*" element={<Navigate replace to="/create" />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText("CreatePage")).toBeInTheDocument();
+  });
+
+  it("redirects root / to /create", () => {
+    render(
+      <MemoryRouter initialEntries={["/"]}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/create" element={<div>CreatePage</div>} />
+            <Route path="*" element={<Navigate replace to="/create" />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText("CreatePage")).toBeInTheDocument();
+  });
+
+  it("deep links to /ops still work after redirect setup", () => {
+    render(
+      <MemoryRouter initialEntries={["/ops"]}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/create" element={<div>CreatePage</div>} />
+            <Route path="/ops" element={<div>OpsPage</div>} />
+            <Route path="*" element={<Navigate replace to="/create" />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText("OpsPage")).toBeInTheDocument();
+  });
+
+  it("deep links to /runs still work after redirect setup", () => {
+    render(
+      <MemoryRouter initialEntries={["/runs"]}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/create" element={<div>CreatePage</div>} />
+            <Route path="/runs" element={<div>RunsPage</div>} />
+            <Route path="*" element={<Navigate replace to="/create" />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText("RunsPage")).toBeInTheDocument();
   });
 });
