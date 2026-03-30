@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install Python dependencies
+        run: python3 -m pip install -r apps/api/requirements.txt -r apps/worker-orchestrator/requirements.txt
+      - name: Install Node dependencies
+        run: npm --prefix apps/studio-web install
+      - name: Lint Python
+        run: |
+          ruff check apps packages
+          python3 -m compileall apps packages
+      - name: Lint TypeScript
+        run: npm --prefix apps/studio-web run lint
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install Python dependencies
+        run: python3 -m pip install -r apps/api/requirements.txt -r apps/worker-orchestrator/requirements.txt
+      - name: Install Node dependencies
+        run: npm --prefix apps/studio-web install
+      - name: Test API
+        run: cd apps/api && python3 -m pytest tests/ -v
+      - name: Test Worker
+        run: cd apps/worker-orchestrator && python3 -m pytest tests/ -v
+      - name: Test Frontend
+        run: npm --prefix apps/studio-web run test
