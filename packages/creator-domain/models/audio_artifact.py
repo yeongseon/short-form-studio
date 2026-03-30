@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 
 from pydantic import BaseModel
@@ -20,25 +21,25 @@ class AudioArtifact(BaseModel):
 
     @classmethod
     def from_row(cls, row: dict) -> AudioArtifact:
-        """Construct from a DB row dict, mapping column names to domain fields.
+        """Construct from a creator_artifacts DB row.
 
-        Handles:
-        - file_path (TEXT) -> path (str)
-        - metadata_json (TEXT) -> ignored (not on this model)
-        - provider (VARCHAR, if present) -> provider_type (str)
+        The creator_artifacts table stores artifact-specific fields in
+        metadata_json.  This method extracts model_used, provider_type,
+        and voice from that JSON column and maps file_path -> path.
         """
         mapped = dict(row)
         if "file_path" in mapped and "path" not in mapped:
             mapped["path"] = mapped.pop("file_path")
-        if "provider" in mapped and "provider_type" not in mapped:
-            mapped["provider_type"] = mapped.pop("provider")
+        # Extract domain fields from metadata_json
+        raw_meta = mapped.pop("metadata_json", None)
+        if raw_meta is not None:
+            meta = json.loads(raw_meta) if isinstance(raw_meta, str) else raw_meta
+            mapped.setdefault("model_used", meta.get("model_used"))
+            mapped.setdefault("provider_type", meta.get("provider_type"))
+            mapped.setdefault("voice", meta.get("voice"))
         # Discard DB-only columns not in this domain model
-        mapped.pop("metadata_json", None)
-        mapped.pop("artifact_type", None)
-        mapped.pop("scene_id", None)
-        mapped.pop("file_size_bytes", None)
-        mapped.pop("mime_type", None)
-        mapped.pop("updated_at", None)
+        for key in ("artifact_type", "scene_id", "file_size_bytes", "mime_type", "updated_at"):
+            mapped.pop(key, None)
         return cls.model_validate(mapped)
 
     def to_json(self) -> str:
