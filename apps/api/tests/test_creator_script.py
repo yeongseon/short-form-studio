@@ -73,6 +73,15 @@ class StubRunService:
         return run
 
 
+class StubRunServiceRead:
+    """Minimal run service stub for run-scoped endpoints (get_run only)."""
+
+    def __init__(self) -> None:
+        self.runs: dict[int, StubPipelineRun] = {}
+
+    async def get_run(self, run_id: int) -> StubPipelineRun | None:
+        return self.runs.get(run_id)
+
 class StubScriptService:
     def __init__(self) -> None:
         self.save_draft_calls: list[dict[str, object]] = []
@@ -136,14 +145,15 @@ def stub_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubProjectService, 
 
 
 @pytest.fixture
-def stub_run_script_services(monkeypatch: pytest.MonkeyPatch) -> StubScriptService:
+def stub_run_script_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunServiceRead, StubScriptService]:
+    run = StubRunServiceRead()
     script = StubScriptService()
 
     for route in run_script_router.routes:
+        monkeypatch.setitem(route.endpoint.__globals__, "run_service", run)
         monkeypatch.setitem(route.endpoint.__globals__, "script_service", script)
 
-    return script
-
+    return run, script
 
 @pytest.mark.asyncio
 async def test_import_markdown_success(client, stub_services):
@@ -314,7 +324,8 @@ async def test_import_markdown_create_run_failure(client, stub_services):
 
 @pytest.mark.asyncio
 async def test_get_script_markdown_success(client, stub_run_script_services):
-    script_service = stub_run_script_services
+    run_service, script_service = stub_run_script_services
+    run_service.runs[51] = StubPipelineRun(id=51, project_id=1)
     await script_service.save_draft(
         run_id=51,
         source_type="pasted_markdown",
@@ -330,10 +341,10 @@ async def test_get_script_markdown_success(client, stub_run_script_services):
         "version": 1,
     }
 
-
 @pytest.mark.asyncio
 async def test_get_script_markdown_no_draft(client, stub_run_script_services):
-    _script_service = stub_run_script_services
+    run_service, _script_service = stub_run_script_services
+    run_service.runs[999] = StubPipelineRun(id=999, project_id=1)
 
     response = await client.get("/api/creator/runs/999/script/markdown")
 
@@ -342,8 +353,18 @@ async def test_get_script_markdown_no_draft(client, stub_run_script_services):
 
 
 @pytest.mark.asyncio
+async def test_get_script_markdown_run_not_found(client, stub_run_script_services):
+    _run_service, _script_service = stub_run_script_services
+
+    response = await client.get("/api/creator/runs/888/script/markdown")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Run 888 not found"}
+
+@pytest.mark.asyncio
 async def test_update_script_markdown_success(client, stub_run_script_services):
-    script_service = stub_run_script_services
+    run_service, script_service = stub_run_script_services
+    run_service.runs[42] = StubPipelineRun(id=42, project_id=1)
     await script_service.save_draft(
         run_id=42,
         source_type="pasted_markdown",
@@ -367,10 +388,25 @@ async def test_update_script_markdown_success(client, stub_run_script_services):
         "markdown_content": "# V2\n\nUpdated",
     }
 
+@pytest.mark.asyncio
+async def test_update_script_markdown_run_not_found(client, stub_run_script_services):
+    _run_service, script_service = stub_run_script_services
+
+    response = await client.put(
+        "/api/creator/runs/77/script/markdown",
+        json={"markdown": "# Fresh draft"},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Run 77 not found"}
+    assert script_service.save_draft_calls == []
+
 
 @pytest.mark.asyncio
-async def test_update_script_markdown_without_existing_draft(client, stub_run_script_services):
-    script_service = stub_run_script_services
+async def test_update_script_markdown_first_draft(client, stub_run_script_services):
+    """PUT /markdown succeeds when run exists but no prior draft (creates first draft)."""
+    run_service, script_service = stub_run_script_services
+    run_service.runs[77] = StubPipelineRun(id=77, project_id=1)
 
     response = await client.put(
         "/api/creator/runs/77/script/markdown",
@@ -385,10 +421,9 @@ async def test_update_script_markdown_without_existing_draft(client, stub_run_sc
     assert body["draft"]["markdown_content"] == "# Fresh draft"
     assert script_service.active_drafts[77].version == 1
 
-
 @pytest.mark.asyncio
 async def test_update_script_markdown_empty(client, stub_run_script_services):
-    script_service = stub_run_script_services
+    _run_service, script_service = stub_run_script_services
 
     response = await client.put(
         "/api/creator/runs/13/script/markdown",
@@ -399,10 +434,9 @@ async def test_update_script_markdown_empty(client, stub_run_script_services):
     assert response.json() == {"detail": "markdown content must not be empty"}
     assert script_service.save_draft_calls == []
 
-
 @pytest.mark.asyncio
 async def test_update_script_markdown_whitespace_only(client, stub_run_script_services):
-    script_service = stub_run_script_services
+    _run_service, script_service = stub_run_script_services
 
     response = await client.put(
         "/api/creator/runs/13/script/markdown",

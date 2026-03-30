@@ -74,6 +74,10 @@ class UpdateMarkdownRequest(BaseModel):
 
 @run_script_router.get("/markdown")
 async def get_script_markdown(run_id: int) -> dict[str, object]:
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
     draft = await script_service.get_active_draft(run_id)
     if draft is None:
         raise HTTPException(status_code=404, detail="No script draft found for this run")
@@ -89,6 +93,10 @@ async def get_script_markdown(run_id: int) -> dict[str, object]:
 async def update_script_markdown(run_id: int, request: UpdateMarkdownRequest) -> dict[str, object]:
     if not request.markdown.strip():
         raise HTTPException(status_code=400, detail="markdown content must not be empty")
+
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
 
     try:
         draft = await script_service.save_draft(
