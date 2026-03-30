@@ -1,20 +1,10 @@
 import asyncio
-import importlib
 import json
-import sys
-from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "creator-domain"))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from run_service import InMemoryRunStorage, RunService
-
-domain_models = importlib.import_module("models")
-ModelSelection = domain_models.ModelSelection
-RunStage = domain_models.RunStage
-
+from creator_service.run_service import InMemoryRunStorage, RunService
+from creator_domain.models import ModelSelection, RunStage
 
 def test_create_run_with_model_defaults_and_style_preset() -> None:
     service = RunService(InMemoryRunStorage())

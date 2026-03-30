@@ -1,18 +1,10 @@
-import importlib
-import sys
-from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "creator-provider"))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from model_catalog_service import ModelCatalogService
-from model_health_service import ModelHealthResult, ModelStatus
-
-ProviderRegistry = importlib.import_module("registry").ProviderRegistry
-
+from creator_service.model_catalog_service import ModelCatalogService
+from creator_service.model_health_service import ModelHealthResult, ModelStatus
+from creator_provider.registry import ProviderRegistry
 
 @pytest.fixture
 def registry():

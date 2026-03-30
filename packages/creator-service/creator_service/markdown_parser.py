@@ -1,14 +1,6 @@
 import re
 
-try:
-    from creator_domain.models import ScriptSection  # pyright: ignore[reportMissingImports]
-except ImportError:
-    import sys
-    from pathlib import Path
-
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "creator-domain"))
-    from models import ScriptSection  # pyright: ignore[reportMissingImports]
-
+from creator_domain.models import ScriptSection
 
 _LEVEL_TWO_HEADING_RE = re.compile(r"^\s{0,3}##(?!#)\s*(.*?)\s*$")
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")

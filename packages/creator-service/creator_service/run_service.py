@@ -1,22 +1,10 @@
-"""Run service with in-memory storage backend."""
-
 from __future__ import annotations
 
-import importlib
 import json
-import sys
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Protocol
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "creator-domain"))
-domain_models = importlib.import_module("models")
-ModelSelection = domain_models.ModelSelection
-PipelineRun = domain_models.PipelineRun
-RunStage = domain_models.RunStage
-REVIEW_STAGES = domain_models.REVIEW_STAGES
-can_transition = domain_models.can_transition
-
+from creator_domain.models import ModelSelection, PipelineRun, RunStage, REVIEW_STAGES, can_transition
 
 class RunStorageBackend(Protocol):
     async def create_run(self, row: dict[str, Any]) -> dict[str, Any]:

@@ -1,16 +1,10 @@
 import asyncio
-import sys
-from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "creator-domain"))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from markdown_parser import parse_markdown
-from models.script_draft import ScriptSection  # type: ignore[reportMissingImports]
-from script_service import InMemoryScriptStorage, ScriptService
-
+from creator_service.markdown_parser import parse_markdown
+from creator_service.script_service import InMemoryScriptStorage, ScriptService
+from creator_domain.models.script_draft import ScriptSection
 
 def run(coro):
     return asyncio.run(coro)

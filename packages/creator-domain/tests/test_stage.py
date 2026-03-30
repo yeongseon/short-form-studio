@@ -1,11 +1,6 @@
-import sys
-from pathlib import Path
-
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from models import (  # noqa: E402
+from creator_domain.models import (
     GENERATING_STAGES,
     REVIEW_STAGES,
     TRANSITIONS,

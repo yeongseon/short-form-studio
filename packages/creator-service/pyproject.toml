@@ -9,12 +9,5 @@ dependencies = ["creator-domain>=0.1.0", "pydantic>=2.0"]
 requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-py-modules = [
-    "project_service", "run_service", "script_service",
-    "visual_plan_service", "visual_asset_service",
-    "audio_service", "subtitle_service", "render_service",
-    "ffmpeg_service", "render_profile",
-    "stage_review_service", "model_catalog_service", "model_health_service",
-    "markdown_parser", "logging_config"
-]
+[tool.setuptools.packages.find]
+include = ["creator_service", "creator_service.*"]

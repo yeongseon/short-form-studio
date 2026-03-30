@@ -10,20 +10,13 @@ VisualAssetService and ScriptService.
 
 from __future__ import annotations
 
-import sys
+import json
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Protocol
 
-import json
+from creator_domain.models.video_artifact import VideoArtifact
 
-_DOMAIN_DIR = str(Path(__file__).resolve().parent.parent / "creator-domain")
-if _DOMAIN_DIR not in sys.path:
-    sys.path.insert(0, _DOMAIN_DIR)
-
-from models.video_artifact import VideoArtifact  # type: ignore[reportMissingImports]  # noqa: E402, I001
-
-from render_profile import RenderProfile  # noqa: E402, I001
+from .render_profile import RenderProfile
 
 
 # ---------------------------------------------------------------------------

@@ -1,18 +1,12 @@
 import asyncio
-import sys
 from dataclasses import dataclass
-from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "creator-domain"))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from render_service import (  # noqa: E402
+from creator_service.render_service import (
     InMemoryRenderStorage,
     RenderService,
 )
-
 
 def run(coro):
     return asyncio.run(coro)
