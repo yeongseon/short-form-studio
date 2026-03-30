@@ -13,7 +13,7 @@ const OPS_TOOLS = [
     id: "library",
     title: "Asset Library",
     description: "Browse generated assets, templates, and reusable components.",
-    link: "/library",
+    link: "/ops/library",
     external: false,
     icon: "📁",
   },

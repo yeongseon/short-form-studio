@@ -17,7 +17,9 @@ export default function App() {
           <Route path="/projects/:projectId" element={<ProjectPage />} />
           <Route path="/review/:runId" element={<ReviewPage />} />
           <Route path="/runs" element={<RunsPage />} />
-          <Route path="/library" element={<LibraryPage />} />
+          {/* Legacy /library redirects into ops-scoped route */}
+          <Route path="/library" element={<Navigate replace to="/ops/library" />} />
+          <Route path="/ops/library" element={<LibraryPage />} />
 
           <Route path="/ops" element={<OpsPage />} />
 

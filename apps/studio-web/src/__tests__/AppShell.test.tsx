@@ -140,4 +140,35 @@ describe("AppShell", () => {
     );
     expect(screen.getByText("RunsPage")).toBeInTheDocument();
   });
+
+  it("redirects legacy /library to /ops/library", () => {
+    render(
+      <MemoryRouter initialEntries={["/library"]}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/create" element={<div>CreatePage</div>} />
+            <Route path="/library" element={<Navigate replace to="/ops/library" />} />
+            <Route path="/ops/library" element={<div>LibraryPage</div>} />
+            <Route path="*" element={<Navigate replace to="/create" />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText("LibraryPage")).toBeInTheDocument();
+  });
+
+  it("renders LibraryPage at /ops/library directly", () => {
+    render(
+      <MemoryRouter initialEntries={["/ops/library"]}>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/create" element={<div>CreatePage</div>} />
+            <Route path="/ops/library" element={<div>LibraryPage</div>} />
+            <Route path="*" element={<Navigate replace to="/create" />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+    expect(screen.getByText("LibraryPage")).toBeInTheDocument();
+  });
 });

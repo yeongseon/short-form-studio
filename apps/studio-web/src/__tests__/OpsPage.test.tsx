@@ -63,7 +63,7 @@ describe("OpsPage", () => {
     const libraryCard = screen.getByTestId("ops-tool-library");
     const link = libraryCard.querySelector("a");
     expect(link).not.toBeNull();
-    expect(link?.getAttribute("href")).toBe("/library");
+    expect(link?.getAttribute("href")).toBe("/ops/library");
     // Internal links don't have target=_blank
     expect(link?.getAttribute("target")).toBeNull();
   });
