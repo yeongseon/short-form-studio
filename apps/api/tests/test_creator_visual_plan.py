@@ -68,6 +68,42 @@ class StubVisualPlanService:
         versions.append(plan)
         return plan
 
+    async def patch_scene(
+        self,
+        run_id: int,
+        scene_id: str,
+        updates: dict[str, Any],
+        *,
+        expected_version: int | None = None,
+    ) -> StubVisualPlan:
+        """Stub patch_scene: load active plan, apply updates, save new version."""
+        active = await self.get_active_plan(run_id)
+        if active is None:
+            raise ValueError(f"No active visual plan for run {run_id}")
+
+        if expected_version is not None and active.version != expected_version:
+            from visual_plan_service import VersionConflictError
+            raise VersionConflictError(run_id, expected_version, active.version)
+
+        _patchable = {"prompt", "prompt_edited", "prompt_source", "style_tags", "mood", "composition"}
+        unknown = set(updates.keys()) - _patchable
+        if unknown:
+            raise ValueError(f"Cannot patch immutable/unknown fields: {sorted(unknown)}")
+
+        patched = False
+        new_scenes: list[VisualScene] = []
+        for scene in active.scenes:
+            d = scene.model_dump()
+            if d["scene_id"] == scene_id:
+                d.update(updates)
+                patched = True
+            new_scenes.append(VisualScene.model_validate(d))
+
+        if not patched:
+            raise ValueError(f"Scene '{scene_id}' not found in visual plan for run {run_id}")
+
+        return await self.save_plan(run_id, new_scenes)
+
 
 def _make_run(run_id: int, stage: str = "VISUAL_PLAN_REVIEW") -> StubPipelineRun:
     now = datetime.now(timezone.utc)
@@ -105,7 +141,7 @@ def stub_visual_plan_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunS
     vp_svc = StubVisualPlanService()
 
     for route in visual_plan_router.routes:
-        if route.name in {"get_visual_plan", "replace_visual_plan"}:
+        if route.name in {"get_visual_plan", "replace_visual_plan", "patch_scene"}:
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "visual_plan_service", vp_svc)
 
@@ -297,3 +333,234 @@ async def test_replace_visual_plan_multiple_scenes(client, stub_visual_plan_serv
     body = response.json()
     assert len(body["scenes"]) == 3
     assert [s["scene_id"] for s in body["scenes"]] == ["scene-0", "scene-1", "scene-2"]
+
+
+# ---------------------------------------------------------------------------
+# PATCH /runs/{run_id}/visual-plan/scenes/{scene_id}
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_patch_scene_success(client, stub_visual_plan_services):
+    """PATCH updates a single field and returns updated plan."""
+    run_svc, vp_svc = stub_visual_plan_services
+    run_svc.runs[30] = _make_run(30)
+    scene = _make_scene("scene-1")
+    vp_svc.plans[30] = [
+        StubVisualPlan(
+            id=1,
+            run_id=30,
+            version=1,
+            scenes=[scene],
+            created_at=datetime.now(timezone.utc),
+        )
+    ]
+
+    response = await client.patch(
+        "/api/creator/runs/30/visual-plan/scenes/scene-1",
+        json={"prompt": "Updated prompt text"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_id"] == 30
+    assert body["version"] == 2
+    assert body["scenes"][0]["prompt"] == "Updated prompt text"
+
+
+@pytest.mark.asyncio
+async def test_patch_scene_multiple_fields(client, stub_visual_plan_services):
+    """PATCH can update multiple patchable fields at once."""
+    run_svc, vp_svc = stub_visual_plan_services
+    run_svc.runs[31] = _make_run(31)
+    scene = _make_scene("scene-1")
+    vp_svc.plans[31] = [
+        StubVisualPlan(
+            id=1,
+            run_id=31,
+            version=1,
+            scenes=[scene],
+            created_at=datetime.now(timezone.utc),
+        )
+    ]
+
+    response = await client.patch(
+        "/api/creator/runs/31/visual-plan/scenes/scene-1",
+        json={
+            "prompt": "New prompt",
+            "mood": "dramatic",
+            "style_tags": ["noir", "high-contrast"],
+            "composition": "close-up",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    s = body["scenes"][0]
+    assert s["prompt"] == "New prompt"
+    assert s["mood"] == "dramatic"
+    assert s["style_tags"] == ["noir", "high-contrast"]
+    assert s["composition"] == "close-up"
+
+
+@pytest.mark.asyncio
+async def test_patch_scene_preserves_non_patched_fields(client, stub_visual_plan_services):
+    """Fields not in the PATCH body remain unchanged."""
+    run_svc, vp_svc = stub_visual_plan_services
+    run_svc.runs[32] = _make_run(32)
+    scene = _make_scene("scene-1")
+    vp_svc.plans[32] = [
+        StubVisualPlan(
+            id=1,
+            run_id=32,
+            version=1,
+            scenes=[scene],
+            created_at=datetime.now(timezone.utc),
+        )
+    ]
+
+    response = await client.patch(
+        "/api/creator/runs/32/visual-plan/scenes/scene-1",
+        json={"mood": "tense"},
+    )
+
+    assert response.status_code == 200
+    s = response.json()["scenes"][0]
+    assert s["prompt"] == "A person explaining something"
+    assert s["style_tags"] == ["cinematic"]
+    assert s["composition"] == "medium-shot"
+    assert s["mood"] == "tense"
+
+
+@pytest.mark.asyncio
+async def test_patch_scene_run_not_found(client, stub_visual_plan_services):
+    """PATCH returns 404 when run doesn't exist."""
+    _, _ = stub_visual_plan_services
+    response = await client.patch(
+        "/api/creator/runs/999/visual-plan/scenes/scene-1",
+        json={"prompt": "x"},
+    )
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_patch_scene_no_plan(client, stub_visual_plan_services):
+    """PATCH returns 404 when run has no visual plan."""
+    run_svc, _ = stub_visual_plan_services
+    run_svc.runs[33] = _make_run(33)
+
+    response = await client.patch(
+        "/api/creator/runs/33/visual-plan/scenes/scene-1",
+        json={"prompt": "x"},
+    )
+
+    assert response.status_code == 404
+    assert "no active" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_patch_scene_not_found(client, stub_visual_plan_services):
+    """PATCH returns 404 when scene_id doesn't exist in the plan."""
+    run_svc, vp_svc = stub_visual_plan_services
+    run_svc.runs[34] = _make_run(34)
+    scene = _make_scene("scene-1")
+    vp_svc.plans[34] = [
+        StubVisualPlan(
+            id=1,
+            run_id=34,
+            version=1,
+            scenes=[scene],
+            created_at=datetime.now(timezone.utc),
+        )
+    ]
+
+    response = await client.patch(
+        "/api/creator/runs/34/visual-plan/scenes/nonexistent",
+        json={"prompt": "x"},
+    )
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_patch_scene_version_conflict(client, stub_visual_plan_services):
+    """PATCH returns 409 when expected_version doesn't match."""
+    run_svc, vp_svc = stub_visual_plan_services
+    run_svc.runs[35] = _make_run(35)
+    scene = _make_scene("scene-1")
+    vp_svc.plans[35] = [
+        StubVisualPlan(
+            id=1,
+            run_id=35,
+            version=3,
+            scenes=[scene],
+            created_at=datetime.now(timezone.utc),
+        )
+    ]
+
+    response = await client.patch(
+        "/api/creator/runs/35/visual-plan/scenes/scene-1",
+        json={"prompt": "x", "expected_version": 1},
+    )
+
+    assert response.status_code == 409
+    assert "version conflict" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_patch_scene_empty_updates(client, stub_visual_plan_services):
+    """PATCH returns 400 when no patchable fields provided."""
+    run_svc, _ = stub_visual_plan_services
+    run_svc.runs[36] = _make_run(36)
+
+    response = await client.patch(
+        "/api/creator/runs/36/visual-plan/scenes/scene-1",
+        json={},
+    )
+
+    assert response.status_code == 400
+    assert "no patchable" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_patch_scene_unknown_fields(client, stub_visual_plan_services):
+    """PATCH returns 422 when unknown fields are sent (extra=forbid)."""
+    run_svc, _ = stub_visual_plan_services
+    run_svc.runs[37] = _make_run(37)
+
+    response = await client.patch(
+        "/api/creator/runs/37/visual-plan/scenes/scene-1",
+        json={"scene_id": "hacked", "prompt": "valid"},
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_patch_scene_with_expected_version_match(client, stub_visual_plan_services):
+    """PATCH succeeds when expected_version matches active version."""
+    run_svc, vp_svc = stub_visual_plan_services
+    run_svc.runs[38] = _make_run(38)
+    scene = _make_scene("scene-1")
+    vp_svc.plans[38] = [
+        StubVisualPlan(
+            id=1,
+            run_id=38,
+            version=2,
+            scenes=[scene],
+            created_at=datetime.now(timezone.utc),
+        )
+    ]
+
+    response = await client.patch(
+        "/api/creator/runs/38/visual-plan/scenes/scene-1",
+        json={"prompt": "Updated", "expected_version": 2},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["version"] == 3
+    assert body["scenes"][0]["prompt"] == "Updated"
