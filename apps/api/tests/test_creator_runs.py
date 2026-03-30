@@ -1258,3 +1258,207 @@ async def test_generate_visual_assets_dispatch_failure_rollback(client, stub_gen
 
     # Verify run was actually rolled back to VISUAL_PLAN_REVIEW
     assert run_svc.runs[66].current_stage == "VISUAL_PLAN_REVIEW"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Single-scene generate-image tests (Issue #52)
+# ──────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def stub_single_scene_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubImageDispatcher]:
+    run_svc = StubRunService()
+    dispatcher = StubImageDispatcher()
+
+    for route in runs_router.routes:
+        if route.name in ("generate_scene_image_endpoint", "regenerate_scene_image_endpoint"):
+            monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
+            monkeypatch.setitem(route.endpoint.__globals__, "dispatch_generate_scene_image", dispatcher)
+
+    return run_svc, dispatcher
+
+
+@pytest.mark.asyncio
+async def test_generate_scene_image_from_visual_plan_review(client, stub_single_scene_services):
+    run_svc, dispatcher = stub_single_scene_services
+    run_svc.runs[70] = _make_run(70, "VISUAL_PLAN_REVIEW")
+
+    response = await client.post(
+        "/api/creator/runs/70/visual-plan/scenes/scene-sec-0/generate-image",
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["task_id"] == "test-img-task-id-789"
+    assert body["run_id"] == 70
+    assert body["scene_id"] == "scene-sec-0"
+    assert body["current_stage"] == "VISUAL_PLAN_REVIEW"
+    assert dispatcher.calls == [{
+        "run_id": 70,
+        "model_key": "sd15",
+        "scene_id": "scene-sec-0",
+        "prompt_override": None,
+        "is_active": True,
+    }]
+
+
+@pytest.mark.asyncio
+async def test_generate_scene_image_from_asset_review(client, stub_single_scene_services):
+    """Generate-image is also allowed during VISUAL_ASSET_REVIEW (fill missing scenes)."""
+    run_svc, dispatcher = stub_single_scene_services
+    run_svc.runs[71] = _make_run(71, "VISUAL_ASSET_REVIEW")
+
+    response = await client.post(
+        "/api/creator/runs/71/visual-plan/scenes/scene-sec-1/generate-image",
+    )
+
+    assert response.status_code == 202
+    assert dispatcher.calls[0]["scene_id"] == "scene-sec-1"
+    assert dispatcher.calls[0]["is_active"] is True
+
+
+@pytest.mark.asyncio
+async def test_generate_scene_image_run_not_found(client, stub_single_scene_services):
+    response = await client.post(
+        "/api/creator/runs/999/visual-plan/scenes/scene-sec-0/generate-image",
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_generate_scene_image_wrong_stage(client, stub_single_scene_services):
+    run_svc, dispatcher = stub_single_scene_services
+    run_svc.runs[72] = _make_run(72, "SCRIPT_REVIEW")
+
+    response = await client.post(
+        "/api/creator/runs/72/visual-plan/scenes/scene-sec-0/generate-image",
+    )
+
+    assert response.status_code == 400
+    assert "SCRIPT_REVIEW" in response.json()["detail"]
+    assert len(dispatcher.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_generate_scene_image_dispatch_failure(client, stub_single_scene_services):
+    run_svc, _ = stub_single_scene_services
+    run_svc.runs[73] = _make_run(73, "VISUAL_PLAN_REVIEW")
+
+    def failing_dispatcher(run_id, model_key, scene_id, prompt_override, is_active):
+        raise RuntimeError("Celery broker down")
+
+    for route in runs_router.routes:
+        if route.name == "generate_scene_image_endpoint":
+            route.endpoint.__globals__["dispatch_generate_scene_image"] = failing_dispatcher
+
+    response = await client.post(
+        "/api/creator/runs/73/visual-plan/scenes/scene-sec-0/generate-image",
+    )
+
+    assert response.status_code == 503
+    assert "enqueue" in response.json()["detail"].lower()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Single-scene regenerate-image tests (Issue #52)
+# ──────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_regenerate_scene_image_success(client, stub_single_scene_services):
+    run_svc, dispatcher = stub_single_scene_services
+    run_svc.runs[80] = _make_run(80, "VISUAL_ASSET_REVIEW")
+
+    response = await client.post(
+        "/api/creator/runs/80/visual-plan/scenes/scene-sec-0/regenerate-image",
+        json={"model_key": "sd15", "prompt_override": "A dark moody scene"},
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["task_id"] == "test-img-task-id-789"
+    assert body["run_id"] == 80
+    assert body["scene_id"] == "scene-sec-0"
+    assert body["current_stage"] == "VISUAL_ASSET_REVIEW"
+    assert dispatcher.calls == [{
+        "run_id": 80,
+        "model_key": "sd15",
+        "scene_id": "scene-sec-0",
+        "prompt_override": "A dark moody scene",
+        "is_active": False,  # regenerated assets are inactive
+    }]
+
+
+@pytest.mark.asyncio
+async def test_regenerate_scene_image_default_model(client, stub_single_scene_services):
+    run_svc, dispatcher = stub_single_scene_services
+    run_svc.runs[81] = _make_run(81, "VISUAL_ASSET_REVIEW")
+
+    response = await client.post(
+        "/api/creator/runs/81/visual-plan/scenes/scene-sec-0/regenerate-image",
+        json={},
+    )
+
+    assert response.status_code == 202
+    assert dispatcher.calls[0]["model_key"] == "sd15"
+    assert dispatcher.calls[0]["prompt_override"] is None
+    assert dispatcher.calls[0]["is_active"] is False
+
+
+@pytest.mark.asyncio
+async def test_regenerate_scene_image_run_not_found(client, stub_single_scene_services):
+    response = await client.post(
+        "/api/creator/runs/999/visual-plan/scenes/scene-sec-0/regenerate-image",
+        json={},
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_regenerate_scene_image_wrong_stage(client, stub_single_scene_services):
+    run_svc, dispatcher = stub_single_scene_services
+    run_svc.runs[82] = _make_run(82, "VISUAL_PLAN_REVIEW")
+
+    response = await client.post(
+        "/api/creator/runs/82/visual-plan/scenes/scene-sec-0/regenerate-image",
+        json={},
+    )
+
+    assert response.status_code == 400
+    assert "VISUAL_PLAN_REVIEW" in response.json()["detail"]
+    assert len(dispatcher.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_regenerate_scene_image_wrong_stage_script(client, stub_single_scene_services):
+    run_svc, dispatcher = stub_single_scene_services
+    run_svc.runs[83] = _make_run(83, "SCRIPT_REVIEW")
+
+    response = await client.post(
+        "/api/creator/runs/83/visual-plan/scenes/scene-sec-0/regenerate-image",
+        json={},
+    )
+
+    assert response.status_code == 400
+    assert len(dispatcher.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_regenerate_scene_image_dispatch_failure(client, stub_single_scene_services):
+    run_svc, _ = stub_single_scene_services
+    run_svc.runs[84] = _make_run(84, "VISUAL_ASSET_REVIEW")
+
+    def failing_dispatcher(run_id, model_key, scene_id, prompt_override, is_active):
+        raise RuntimeError("Celery broker down")
+
+    for route in runs_router.routes:
+        if route.name == "regenerate_scene_image_endpoint":
+            route.endpoint.__globals__["dispatch_generate_scene_image"] = failing_dispatcher
+
+    response = await client.post(
+        "/api/creator/runs/84/visual-plan/scenes/scene-sec-0/regenerate-image",
+        json={"prompt_override": "New prompt"},
+    )
+
+    assert response.status_code == 503
+    assert "enqueue" in response.json()["detail"].lower()
