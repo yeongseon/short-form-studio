@@ -177,7 +177,7 @@ def stub_run_service(monkeypatch: pytest.MonkeyPatch) -> StubRunService:
     service = StubRunService()
 
     for route in runs_router.routes:
-        if route.name in {"create_run", "get_run_detail", "restart_run", "approve_script", "generate_script_trigger", "generate_visual_plan_trigger", "list_runs_for_project"}:
+        if route.name in {"create_run", "get_run_detail", "restart_run", "approve_script", "generate_script_trigger", "generate_visual_plan_trigger", "generate_audio_trigger", "list_runs_for_project"}:
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", service)
 
     return service
@@ -1813,3 +1813,211 @@ async def test_select_active_asset_during_generating(client, stub_select_service
     )
     assert response.status_code == 200
     assert response.json()["id"] == 60
+
+
+class StubAudioDispatcher:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+        self.task_id = "test-audio-task-id-abc"
+
+    def __call__(self, run_id: int, tts_model: str, voice: str) -> str:
+        self.calls.append({
+            "run_id": run_id,
+            "tts_model": tts_model,
+            "voice": voice,
+        })
+        return self.task_id
+
+
+@pytest.fixture
+def stub_generate_audio_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubAudioDispatcher]:
+    run_svc = StubRunService()
+    dispatcher = StubAudioDispatcher()
+
+    for route in runs_router.routes:
+        if route.name == "generate_audio_trigger":
+            monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
+            monkeypatch.setitem(route.endpoint.__globals__, "dispatch_generate_audio", dispatcher)
+
+    return run_svc, dispatcher
+
+
+def _make_audio_run(run_id: int, stage: str = "VISUAL_ASSET_REVIEW") -> StubPipelineRun:
+    """Helper to create a run in audio-relevant stage."""
+    now = datetime.now(timezone.utc)
+    return StubPipelineRun(
+        id=run_id,
+        project_id=1,
+        current_stage=stage,
+        status="running",
+        review_stage=None,
+        restart_from=None,
+        model_defaults=None,
+        metadata=None,
+        style_preset="default",
+        started_at=now,
+        finished_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_audio_from_visual_asset_review(client, stub_generate_audio_services):
+    run_svc, dispatcher = stub_generate_audio_services
+    run_svc.runs[110] = _make_audio_run(110, "VISUAL_ASSET_REVIEW")
+
+    response = await client.post(
+        "/api/creator/runs/110/generate-audio",
+        json={"tts_model": "piper", "voice": "en_US-lessac-medium"},
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["task_id"] == "test-audio-task-id-abc"
+    assert body["run_id"] == 110
+    assert body["current_stage"] == "AUDIO_GENERATING"
+    # CAS was called for VISUAL_ASSET_REVIEW → AUDIO_GENERATING (no restart_from)
+    cas_calls = run_svc.storage.conditional_update_calls
+    assert len(cas_calls) == 1
+    assert cas_calls[0]["run_id"] == 110
+    assert cas_calls[0]["updates"] == {"current_stage": "AUDIO_GENERATING"}
+    assert "VISUAL_ASSET_REVIEW" in cas_calls[0]["expected_stages"]
+    assert dispatcher.calls == [{
+        "run_id": 110,
+        "tts_model": "piper",
+        "voice": "en_US-lessac-medium",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_generate_audio_retry_from_generating(client, stub_generate_audio_services):
+    run_svc, dispatcher = stub_generate_audio_services
+    run_svc.runs[111] = _make_audio_run(111, "AUDIO_GENERATING")
+
+    response = await client.post(
+        "/api/creator/runs/111/generate-audio",
+        json={"tts_model": "piper", "voice": "en_US-lessac-medium"},
+    )
+
+    assert response.status_code == 202
+    # CAS was called for AUDIO_GENERATING → AUDIO_GENERATING with restart_from
+    cas_calls = run_svc.storage.conditional_update_calls
+    assert len(cas_calls) == 1
+    assert cas_calls[0]["run_id"] == 111
+    assert cas_calls[0]["updates"] == {
+        "current_stage": "AUDIO_GENERATING",
+        "restart_from": "AUDIO_GENERATING",
+    }
+    assert "AUDIO_GENERATING" in cas_calls[0]["expected_stages"]
+    assert len(dispatcher.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_audio_default_model(client, stub_generate_audio_services):
+    run_svc, dispatcher = stub_generate_audio_services
+    run_svc.runs[112] = _make_audio_run(112, "VISUAL_ASSET_REVIEW")
+
+    response = await client.post(
+        "/api/creator/runs/112/generate-audio",
+        json={},
+    )
+
+    assert response.status_code == 202
+    assert dispatcher.calls[0]["tts_model"] == "piper"
+    assert dispatcher.calls[0]["voice"] == "en_US-lessac-medium"
+
+
+@pytest.mark.asyncio
+async def test_generate_audio_run_not_found(client, stub_generate_audio_services):
+    _, _ = stub_generate_audio_services
+    response = await client.post(
+        "/api/creator/runs/999/generate-audio",
+        json={},
+    )
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_generate_audio_wrong_stage(client, stub_generate_audio_services):
+    run_svc, _ = stub_generate_audio_services
+    run_svc.runs[113] = _make_audio_run(113, "IDEA_READY")
+
+    response = await client.post(
+        "/api/creator/runs/113/generate-audio",
+        json={},
+    )
+
+    assert response.status_code == 400
+    assert "IDEA_READY" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_generate_audio_wrong_stage_script_review(client, stub_generate_audio_services):
+    run_svc, _ = stub_generate_audio_services
+    run_svc.runs[114] = _make_audio_run(114, "SCRIPT_REVIEW")
+
+    response = await client.post(
+        "/api/creator/runs/114/generate-audio",
+        json={},
+    )
+
+    assert response.status_code == 400
+    assert "SCRIPT_REVIEW" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_generate_audio_cas_conflict(client, stub_generate_audio_services):
+    """CAS fails because stage changed between initial check and CAS."""
+    run_svc, dispatcher = stub_generate_audio_services
+    run_svc.runs[115] = _make_audio_run(115, "VISUAL_ASSET_REVIEW")
+
+    async def cas_conflict(run_id, updates, expected_stages):
+        return False, {"current_stage": "AUDIO_GENERATING", "id": run_id}
+
+    run_svc.storage.conditional_update_run = cas_conflict
+
+    response = await client.post(
+        "/api/creator/runs/115/generate-audio",
+        json={},
+    )
+
+    assert response.status_code == 409
+    assert "conflict" in response.json()["detail"].lower()
+    assert len(dispatcher.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_generate_audio_dispatch_failure_rollback(client, stub_generate_audio_services):
+    """Celery dispatch failure triggers rollback to original stage."""
+    run_svc, _ = stub_generate_audio_services
+    run_svc.runs[116] = _make_audio_run(116, "VISUAL_ASSET_REVIEW")
+
+    def failing_dispatcher(run_id, tts_model, voice):
+        raise RuntimeError("Celery broker down")
+
+    from shorts_api.main import runs_router as _r
+    for route in _r.routes:
+        if route.name == "generate_audio_trigger":
+            route.endpoint.__globals__["dispatch_generate_audio"] = failing_dispatcher
+
+    response = await client.post(
+        "/api/creator/runs/116/generate-audio",
+        json={},
+    )
+
+    assert response.status_code == 503
+    assert "enqueue" in response.json()["detail"].lower()
+
+    # Rollback: CAS was called twice — first to advance, then to rollback
+    cas_calls = run_svc.storage.conditional_update_calls
+    assert len(cas_calls) == 2
+    # Second CAS = rollback to VISUAL_ASSET_REVIEW
+    rollback = cas_calls[1]
+    assert rollback["updates"]["current_stage"] == "VISUAL_ASSET_REVIEW"
+    assert rollback["expected_stages"] == frozenset({"AUDIO_GENERATING"})
+
+    # Verify run was actually rolled back to VISUAL_ASSET_REVIEW
+    assert run_svc.runs[116].current_stage == "VISUAL_ASSET_REVIEW"
