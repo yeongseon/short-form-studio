@@ -142,3 +142,75 @@ def test_create_project_with_url_missing_source_raises_value_error(service: Proj
 def test_create_project_with_idea_missing_brief_raises_value_error(service: ProjectService) -> None:
     with pytest.raises(ValueError, match="source_type='idea' requires idea_brief"):
         run(service.create_project(title="Bad Idea", source_type="idea"))
+
+
+def test_create_project_idea_with_markdown_source_raises_value_error(service: ProjectService) -> None:
+    with pytest.raises(ValueError, match="source_type='idea' cannot have markdown_source or url_source set"):
+        run(
+            service.create_project(
+                title="Conflicting Fields",
+                source_type="idea",
+                idea_brief="My idea",
+                markdown_source="# This should not be here",
+            )
+        )
+
+
+def test_create_project_idea_with_url_source_raises_value_error(service: ProjectService) -> None:
+    with pytest.raises(ValueError, match="source_type='idea' cannot have markdown_source or url_source set"):
+        run(
+            service.create_project(
+                title="Conflicting Fields",
+                source_type="idea",
+                idea_brief="My idea",
+                url_source="https://example.com",
+            )
+        )
+
+
+def test_create_project_markdown_with_url_source_raises_value_error(service: ProjectService) -> None:
+    with pytest.raises(ValueError, match="source_type='markdown' cannot have idea_brief or url_source set"):
+        run(
+            service.create_project(
+                title="Conflicting Fields",
+                source_type="markdown",
+                markdown_source="# Content",
+                url_source="https://example.com",
+            )
+        )
+
+
+def test_create_project_markdown_with_idea_brief_raises_value_error(service: ProjectService) -> None:
+    with pytest.raises(ValueError, match="source_type='markdown' cannot have idea_brief or url_source set"):
+        run(
+            service.create_project(
+                title="Conflicting Fields",
+                source_type="markdown",
+                markdown_source="# Content",
+                idea_brief="My idea",
+            )
+        )
+
+
+def test_create_project_url_with_idea_brief_raises_value_error(service: ProjectService) -> None:
+    with pytest.raises(ValueError, match="source_type='url' cannot have idea_brief or markdown_source set"):
+        run(
+            service.create_project(
+                title="Conflicting Fields",
+                source_type="url",
+                url_source="https://example.com",
+                idea_brief="My idea",
+            )
+        )
+
+
+def test_create_project_url_with_markdown_source_raises_value_error(service: ProjectService) -> None:
+    with pytest.raises(ValueError, match="source_type='url' cannot have idea_brief or markdown_source set"):
+        run(
+            service.create_project(
+                title="Conflicting Fields",
+                source_type="url",
+                url_source="https://example.com",
+                markdown_source="# Content",
+            )
+        )

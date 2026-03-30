@@ -7,16 +7,16 @@ the same async service-facing interface.
 
 from __future__ import annotations
 
-try:
-    from creator_domain.models import Project
-except ImportError:
-    import sys
-    from pathlib import Path
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "creator-domain"))
-    from models import Project
+import sys
+from pathlib import Path
+
+_DOMAIN_DIR = str(Path(__file__).resolve().parent.parent / "creator-domain")
+if _DOMAIN_DIR not in sys.path:
+    sys.path.insert(0, _DOMAIN_DIR)
+
+from models.project import Project
 
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Literal, Protocol
 
 LatestRunSummary = dict[str, int | str | None]
@@ -138,6 +138,14 @@ class ProjectService:
             raise ValueError("source_type='url' requires url_source to be provided")
         if source_type == "idea" and idea_brief is None:
             raise ValueError("source_type='idea' requires idea_brief to be provided")
+
+        # Enforce field exclusivity: each source_type should only have its corresponding field
+        if source_type == "idea" and (markdown_source is not None or url_source is not None):
+            raise ValueError("source_type='idea' cannot have markdown_source or url_source set")
+        if source_type == "markdown" and (idea_brief is not None or url_source is not None):
+            raise ValueError("source_type='markdown' cannot have idea_brief or url_source set")
+        if source_type == "url" and (idea_brief is not None or markdown_source is not None):
+            raise ValueError("source_type='url' cannot have idea_brief or markdown_source set")
 
         row = await self.db.insert_project(
             {
