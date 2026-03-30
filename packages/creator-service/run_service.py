@@ -127,8 +127,8 @@ class RunService:
         except ValueError as exc:
             raise ValueError(f"Invalid current stage '{run.current_stage}' for run {run_id}") from exc
 
-        if not can_transition(current_stage, target_stage) and target_stage not in REVIEW_STAGES:
-            raise ValueError(f"Cannot restart run {run_id} from {current_stage.value} to {target_stage.value}")
+        if not can_transition(current_stage, target_stage):
+            raise ValueError(f"Cannot transition from {current_stage.value} to {target_stage.value}")
 
         row = await self.storage.update_run(
             run_id,
