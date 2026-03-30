@@ -30,6 +30,11 @@ except ImportError:
     from script_service import script_service
 
 try:
+    from creator_service.markdown_parser import parse_markdown
+except ImportError:
+    from markdown_parser import parse_markdown
+
+try:
     from creator_domain.models.script_draft import ScriptSection
 except ImportError:
     from models.script_draft import ScriptSection
@@ -163,4 +168,35 @@ async def update_script_structured(run_id: int, request: UpdateStructuredRequest
     return {
         "run_id": run_id,
         "draft": draft.model_dump(mode="json"),
+    }
+
+
+@run_script_router.post("/parse-markdown")
+async def parse_script_markdown(run_id: int) -> dict[str, object]:
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+    draft = await script_service.get_active_draft(run_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="No script draft found for this run")
+
+    if not draft.markdown_content or not draft.markdown_content.strip():
+        raise HTTPException(status_code=400, detail="Draft has no markdown content to parse")
+
+    sections = parse_markdown(
+        draft.markdown_content, existing_sections=draft.structured_script
+    )
+
+    saved_draft = await script_service.save_draft(
+        run_id=run_id,
+        source_type=draft.source_type,
+        markdown_content=draft.markdown_content,
+        structured_script=sections,
+    )
+
+    return {
+        "run_id": run_id,
+        "sections": [s.model_dump(mode="json") for s in sections],
+        "version": saved_draft.version,
     }
