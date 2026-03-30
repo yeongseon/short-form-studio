@@ -6,3 +6,6 @@ redis
 
 # Dev dependencies
 ruff
+pytest
+httpx
+pytest-asyncio
