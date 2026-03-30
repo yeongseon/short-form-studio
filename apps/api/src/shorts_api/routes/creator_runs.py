@@ -64,6 +64,10 @@ class ApproveScriptRequest(BaseModel):
     reviewer: str = "agent"
     notes: str | None = None
 
+class ApproveVisualPlanRequest(BaseModel):
+    reviewer: str = "agent"
+    notes: str | None = None
+
 
 class GenerateScriptRequest(BaseModel):
     model_key: str = "qwen3-4b"
@@ -135,6 +139,27 @@ async def approve_script(run_id: int, request: ApproveScriptRequest) -> dict[str
 
     return updated_run.model_dump(mode="json")
 
+
+@router.post("/runs/{run_id}/approve-visual-plan")
+async def approve_visual_plan(run_id: int, request: ApproveVisualPlanRequest) -> dict[str, object]:
+    try:
+        updated_run = await stage_review_service.approve_and_advance(
+            run_service=run_service,
+            run_id=run_id,
+            stage_name="VISUAL_PLAN_REVIEW",
+            target_stage="VISUAL_ASSET_GENERATING",
+            reviewer=request.reviewer,
+            notes=request.notes,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if "not found" in detail.lower():
+            raise HTTPException(status_code=404, detail=detail) from exc
+        if "conflict" in detail.lower():
+            raise HTTPException(status_code=409, detail=detail) from exc
+        raise HTTPException(status_code=400, detail=detail) from exc
+
+    return updated_run.model_dump(mode="json")
 
 @router.post("/runs/{run_id}/generate-script", status_code=202)
 async def generate_script_trigger(run_id: int, request: GenerateScriptRequest) -> dict[str, object]:
