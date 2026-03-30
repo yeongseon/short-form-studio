@@ -285,3 +285,87 @@ async def generate_visual_plan_trigger(run_id: int, request: GenerateVisualPlanR
         "run_id": run_id,
         "current_stage": "VISUAL_PLAN_GENERATING",
     }
+
+
+class GenerateVisualAssetsRequest(BaseModel):
+    model_key: str = "sd15"
+
+
+def dispatch_generate_scene_image(
+    run_id: int, model_key: str, scene_id: str | None, prompt_override: str | None, is_active: bool
+) -> str:
+    """Dispatch generate_scene_image Celery task. Returns task id.
+
+    Separated into a function so tests can monkeypatch without importing Celery.
+    """
+    from importlib import import_module
+
+    tasks = import_module("tasks.generate_scene_image")
+    result = tasks.generate_scene_image.delay(
+        run_id, scene_id=scene_id, model_key=model_key,
+        prompt_override=prompt_override, is_active=is_active,
+    )
+    return str(result.id)
+
+
+@router.post("/runs/{run_id}/generate-visual-assets", status_code=202)
+async def generate_visual_assets_trigger(
+    run_id: int, request: GenerateVisualAssetsRequest
+) -> dict[str, object]:
+    """Generate images for all scenes in the approved visual plan."""
+    # 1. Check run exists
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    # 2. Validate stage
+    allowed_stages = frozenset({"VISUAL_PLAN_REVIEW", "VISUAL_ASSET_GENERATING"})
+    if run.current_stage not in allowed_stages:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Run is in stage '{run.current_stage}', "
+            f"expected one of {sorted(allowed_stages)}",
+        )
+
+    # 3. Atomically advance to VISUAL_ASSET_GENERATING via CAS
+    updates: dict[str, object] = {"current_stage": "VISUAL_ASSET_GENERATING"}
+    if run.current_stage == "VISUAL_ASSET_GENERATING":
+        updates["restart_from"] = "VISUAL_ASSET_GENERATING"
+
+    ok, row = await run_service.storage.conditional_update_run(
+        run_id, updates, expected_stages=allowed_stages,
+    )
+    if not ok:
+        if row is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        raise HTTPException(
+            status_code=409,
+            detail=f"Stage conflict: run is now in '{row.get('current_stage')}'",
+        )
+
+    # 4. Dispatch Celery task — if this fails, roll back stage
+    try:
+        task_id = dispatch_generate_scene_image(
+            run_id=run_id,
+            model_key=request.model_key,
+            scene_id=None,  # all scenes
+            prompt_override=None,
+            is_active=True,
+        )
+    except Exception:
+        # Best-effort rollback: restore original stage so run isn't stuck
+        await run_service.storage.conditional_update_run(
+            run_id,
+            {"current_stage": run.current_stage, "restart_from": run.restart_from},
+            expected_stages=frozenset({"VISUAL_ASSET_GENERATING"}),
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Failed to enqueue image generation task",
+        ) from None
+
+    return {
+        "task_id": task_id,
+        "run_id": run_id,
+        "current_stage": "VISUAL_ASSET_GENERATING",
+    }
