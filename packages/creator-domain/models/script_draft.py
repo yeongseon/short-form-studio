@@ -10,7 +10,7 @@ class VisualOverride(BaseModel):
 
 
 class ScriptSection(BaseModel):
-    id: str
+    section_id: str
     type: str
     text: str
     display_text: str | None = None

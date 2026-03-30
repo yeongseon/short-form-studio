@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import json
 from datetime import datetime
 from typing import Literal
 
@@ -22,8 +25,25 @@ class PipelineRun(BaseModel):
     updated_at: datetime
 
     @classmethod
-    def from_dict(cls, data: dict) -> "PipelineRun":
+    def from_dict(cls, data: dict) -> PipelineRun:
         return cls.model_validate(data)
+
+    @classmethod
+    def from_row(cls, row: dict) -> PipelineRun:
+        """Construct from a DB row dict, mapping column names to domain fields.
+
+        Handles:
+        - model_defaults_json (TEXT) -> model_defaults (ModelSelection | None)
+        - metadata_json (TEXT) -> metadata (dict | None)
+        """
+        mapped = dict(row)
+        raw_defaults = mapped.pop("model_defaults_json", None)
+        if raw_defaults is not None:
+            mapped["model_defaults"] = json.loads(raw_defaults)
+        raw_meta = mapped.pop("metadata_json", None)
+        if raw_meta is not None:
+            mapped["metadata"] = json.loads(raw_meta)
+        return cls.model_validate(mapped)
 
     def to_json(self) -> str:
         return self.model_dump_json()

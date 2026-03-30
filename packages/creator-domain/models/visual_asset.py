@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime
 
 from pydantic import BaseModel
@@ -16,8 +18,20 @@ class VisualAsset(BaseModel):
     created_at: datetime
 
     @classmethod
-    def from_dict(cls, data: dict) -> "VisualAsset":
+    def from_dict(cls, data: dict) -> VisualAsset:
         return cls.model_validate(data)
+
+    @classmethod
+    def from_row(cls, row: dict) -> VisualAsset:
+        """Construct from a DB row dict, mapping column names to domain fields.
+
+        Handles:
+        - provider (VARCHAR) -> provider_type (str)
+        """
+        mapped = dict(row)
+        if "provider" in mapped and "provider_type" not in mapped:
+            mapped["provider_type"] = mapped.pop("provider")
+        return cls.model_validate(mapped)
 
     def to_json(self) -> str:
         return self.model_dump_json()
