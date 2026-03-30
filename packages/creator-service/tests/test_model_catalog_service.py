@@ -64,9 +64,14 @@ class TestModelCatalogService:
 
         image_model = result["image_models"][0]
         assert image_model["status"] == "unavailable"
+        assert image_model["label"] == "Stable Diffusion 1.5 (Local)"
 
         tts_model = result["tts_models"][0]
         assert tts_model["status"] == "unknown"
+        assert tts_model["label"] == "Qwen TTS (Local)"
+
+        stt_model = result["stt_models"][0]
+        assert stt_model["label"] == "Whisper Medium (Local)"
 
     @pytest.mark.asyncio
     async def test_list_models_filters_script_category(self, registry, health_service: AsyncMock):
@@ -107,6 +112,14 @@ class TestModelCatalogService:
         assert provider["loaded_model"] is None
         assert provider["gpu_locked"] is False
 
+        # Provider names should match health service keys (Docker hostnames),
+        # not provider_type values from registry
+        provider_names = {p["name"] for p in result["providers"]}
+        assert provider_names == {"ollama", "stable-diffusion", "tts-qwen3", "stt-whisper"}
+        assert set(provider.keys()) == {"name", "endpoint", "healthy", "loaded_model", "gpu_locked"}
+        assert provider["loaded_model"] is None
+        assert provider["gpu_locked"] is False
+
         assert result["gpu_lock"] == {
             "active": False,
             "holder": None,
@@ -129,3 +142,16 @@ class TestModelCatalogService:
 
         for entry in all_entries:
             assert set(entry.keys()) == required_fields
+
+    @pytest.mark.asyncio
+    async def test_health_key_matches_health_service_keys(
+        self, registry, health_service: AsyncMock
+    ):
+        """Verify _health_key() produces keys that ModelHealthService recognises."""
+        service = ModelCatalogService(registry, health_service)
+
+        await service.list_models()
+
+        called_keys = {call.args[0] for call in health_service.check_model.call_args_list}
+        expected_keys = {"ollama", "stable-diffusion", "tts-qwen3", "stt-whisper"}
+        assert called_keys == expected_keys

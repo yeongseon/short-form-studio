@@ -34,6 +34,19 @@ class ModelCatalogService:
         ModelStatus.UNKNOWN: "unknown",
     }
 
+    # Explicit labels for known model keys.  New models that lack an entry
+    # fall through to the generic _format_label_fallback() formatter.
+    _KNOWN_LABELS: dict[str, str] = {
+        "qwen3-4b": "Qwen3 4B",
+        "qwen3-8b": "Qwen3 8B",
+        "sd15": "Stable Diffusion 1.5",
+        "sd-2.1": "Stable Diffusion 2.1",
+        "qwen-tts": "Qwen TTS",
+        "whisper-medium": "Whisper Medium",
+        "gpt-4o-mini": "GPT-4o Mini",
+        "llama-3.1-8b": "Llama 3.1 8B",
+    }
+
     def __init__(self, registry: Any, health_service: ModelHealthService):
         self.registry = registry
         self.health_service = health_service
@@ -79,7 +92,7 @@ class ModelCatalogService:
             health_result = await self.health_service.check_model(health_key)
             providers.append(
                 {
-                    "name": entry.provider_type,
+                    "name": self._health_key(entry),
                     "endpoint": entry.endpoint,
                     "healthy": health_result.status == ModelStatus.HEALTHY,
                     "loaded_model": None,
@@ -107,22 +120,25 @@ class ModelCatalogService:
             "status": self._HEALTH_TO_CATALOG_STATUS[health_result.status],
         }
 
-    @staticmethod
-    def _format_label(model_key: str, is_local: bool) -> str:
-        words = []
-        for token in model_key.replace("_", "-").split("-"):
-            if not token:
-                continue
-            if token[:-1].isdigit() and token[-1:].isalpha():
-                words.append(f"{token[:-1]}{token[-1:].upper()}")
-            else:
-                words.append(token[:1].upper() + token[1:])
-
+    def _format_label(self, model_key: str, is_local: bool) -> str:
+        known = self._KNOWN_LABELS.get(model_key)
+        base = known if known is not None else self._format_label_fallback(model_key)
         location = "Local" if is_local else "Remote"
-        return f"{' '.join(words)} ({location})"
+        return f"{base} ({location})"
+
+    @staticmethod
+    def _format_label_fallback(model_key: str) -> str:
+        """Best-effort title-case for unknown model keys."""
+        return model_key.replace("-", " ").replace("_", " ").title()
 
     @staticmethod
     def _health_key(entry: Any) -> str:
+        """Derive the ModelHealthService lookup key from a registry entry.
+
+        ModelHealthService is keyed by Docker service hostname (e.g.
+        "ollama", "stable-diffusion"), which matches the hostname portion
+        of the endpoint URL in the registry.
+        """
         parsed = urlparse(entry.endpoint)
         if parsed.hostname:
             return parsed.hostname
