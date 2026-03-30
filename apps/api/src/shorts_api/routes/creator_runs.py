@@ -35,6 +35,18 @@ def dispatch_generate_script(
     result = tasks.generate_script.delay(run_id, idea_brief, model_key, instructions)
     return str(result.id)
 
+def dispatch_generate_visual_plan(
+    run_id: int, model_key: str, style_preset: str | None
+) -> str:
+    """Dispatch generate_visual_plan Celery task. Returns task id.
+
+    Separated into a function so tests can monkeypatch without importing Celery.
+    """
+    from importlib import import_module
+
+    tasks = import_module("tasks.generate_visual_plan")
+    result = tasks.generate_visual_plan.delay(run_id, model_key, style_preset)
+    return str(result.id)
 router = APIRouter(tags=["runs"])
 
 
@@ -57,6 +69,10 @@ class GenerateScriptRequest(BaseModel):
     model_key: str = "qwen3-4b"
     instructions: str | None = None
 
+
+class GenerateVisualPlanRequest(BaseModel):
+    model_key: str = "qwen3-4b"
+    style_preset: str | None = None
 @router.post("/projects/{project_id}/runs", status_code=201)
 async def create_run(project_id: int, request: CreateRunRequest) -> dict[str, object]:
     run = await run_service.create_run(
@@ -185,4 +201,62 @@ async def generate_script_trigger(run_id: int, request: GenerateScriptRequest) -
         "task_id": task_id,
         "run_id": run_id,
         "current_stage": "SCRIPT_GENERATING",
+    }
+
+
+@router.post("/runs/{run_id}/generate-visual-plan", status_code=202)
+async def generate_visual_plan_trigger(run_id: int, request: GenerateVisualPlanRequest) -> dict[str, object]:
+    # 1. Check run exists
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    # 2. Validate stage — SCRIPT_REVIEW (after approval) or VISUAL_PLAN_GENERATING (retry)
+    allowed_stages = frozenset({"SCRIPT_REVIEW", "VISUAL_PLAN_GENERATING"})
+    if run.current_stage not in allowed_stages:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Run is in stage '{run.current_stage}', "
+            f"expected one of {sorted(allowed_stages)}",
+        )
+
+    # 3. Atomically advance to VISUAL_PLAN_GENERATING via CAS
+    updates: dict[str, object] = {"current_stage": "VISUAL_PLAN_GENERATING"}
+    if run.current_stage == "VISUAL_PLAN_GENERATING":
+        updates["restart_from"] = "VISUAL_PLAN_GENERATING"
+
+    ok, row = await run_service.storage.conditional_update_run(
+        run_id, updates, expected_stages=allowed_stages,
+    )
+    if not ok:
+        if row is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        raise HTTPException(
+            status_code=409,
+            detail=f"Stage conflict: run is now in '{row.get('current_stage')}'",
+        )
+
+    # 4. Dispatch Celery task — if this fails, roll back stage
+    try:
+        task_id = dispatch_generate_visual_plan(
+            run_id=run_id,
+            model_key=request.model_key,
+            style_preset=request.style_preset,
+        )
+    except Exception:
+        # Best-effort rollback: restore original stage so run isn't stuck
+        await run_service.storage.conditional_update_run(
+            run_id,
+            {"current_stage": run.current_stage, "restart_from": run.restart_from},
+            expected_stages=frozenset({"VISUAL_PLAN_GENERATING"}),
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Failed to enqueue visual plan generation task",
+        ) from None
+
+    return {
+        "task_id": task_id,
+        "run_id": run_id,
+        "current_stage": "VISUAL_PLAN_GENERATING",
     }
