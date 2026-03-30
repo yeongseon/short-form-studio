@@ -55,6 +55,13 @@ def upgrade() -> None:
         ")",
     )
 
+    # Conditional CHECK: visual_asset requires scene_id
+    op.create_check_constraint(
+        "ck_creator_artifacts_visual_asset_scene_id",
+        "creator_artifacts",
+        "artifact_type <> 'visual_asset' OR scene_id IS NOT NULL",
+    )
+
     # updated_at trigger (reuses function from migration 001)
     op.execute(
         """
@@ -99,6 +106,8 @@ def upgrade() -> None:
         "creator_runs",
         ["current_stage"],
     )
+    # Drop redundant single-column index from 002 — superseded by composite above
+    op.drop_index("ix_creator_runs_project_id", "creator_runs")
 
 
 def downgrade() -> None:
@@ -106,6 +115,8 @@ def downgrade() -> None:
     op.drop_index("ix_creator_runs_current_stage", "creator_runs")
     op.drop_index("ix_creator_runs_project_created_desc", "creator_runs")
     op.drop_index("ix_creator_projects_created_at_desc", "creator_projects")
+    # Re-create the single-column index that was dropped in upgrade
+    op.create_index("ix_creator_runs_project_id", "creator_runs", ["project_id"])
 
     # Drop creator_artifacts indexes, trigger, constraint, table
     op.drop_index("ix_creator_artifacts_run_type_created", "creator_artifacts")
@@ -113,5 +124,6 @@ def downgrade() -> None:
     op.execute(
         "DROP TRIGGER IF EXISTS set_updated_at_creator_artifacts ON creator_artifacts"
     )
+    op.drop_constraint("ck_creator_artifacts_visual_asset_scene_id", "creator_artifacts")
     op.drop_constraint("ck_creator_artifacts_artifact_type", "creator_artifacts")
     op.drop_table("creator_artifacts")
