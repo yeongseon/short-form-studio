@@ -10,6 +10,8 @@ FROM python:3.12-slim AS runtime
 WORKDIR /app
 COPY --from=builder /install /usr/local
 COPY apps/api/src ./src
+COPY apps/api/alembic.ini ./alembic.ini
+COPY apps/api/migrations ./migrations
 COPY packages ./packages
 ENV PYTHONPATH=/app/src:/app
 EXPOSE 8000
