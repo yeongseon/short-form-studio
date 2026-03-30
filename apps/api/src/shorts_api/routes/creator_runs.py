@@ -369,3 +369,102 @@ async def generate_visual_assets_trigger(
         "run_id": run_id,
         "current_stage": "VISUAL_ASSET_GENERATING",
     }
+
+
+class RegenerateSceneImageRequest(BaseModel):
+    model_key: str = "sd15"
+    prompt_override: str | None = None
+
+
+@router.post(
+    "/runs/{run_id}/visual-plan/scenes/{scene_id}/generate-image",
+    status_code=202,
+)
+async def generate_scene_image_endpoint(
+    run_id: int, scene_id: str
+) -> dict[str, object]:
+    """Generate an image for a single scene that hasn't been generated yet."""
+    # 1. Check run exists
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    # 2. Validate stage
+    allowed_stages = frozenset({"VISUAL_PLAN_REVIEW", "VISUAL_ASSET_GENERATING", "VISUAL_ASSET_REVIEW"})
+    if run.current_stage not in allowed_stages:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Run is in stage '{run.current_stage}', "
+            f"expected one of {sorted(allowed_stages)}",
+        )
+
+    # 3. Dispatch single-scene generation (no stage transition — stays in current stage)
+    try:
+        task_id = dispatch_generate_scene_image(
+            run_id=run_id,
+            model_key="sd15",
+            scene_id=scene_id,
+            prompt_override=None,
+            is_active=True,
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=503,
+            detail="Failed to enqueue image generation task",
+        ) from None
+
+    return {
+        "task_id": task_id,
+        "run_id": run_id,
+        "scene_id": scene_id,
+        "current_stage": run.current_stage,
+    }
+
+
+@router.post(
+    "/runs/{run_id}/visual-plan/scenes/{scene_id}/regenerate-image",
+    status_code=202,
+)
+async def regenerate_scene_image_endpoint(
+    run_id: int, scene_id: str, request: RegenerateSceneImageRequest
+) -> dict[str, object]:
+    """Regenerate an image for a single scene with optional model/prompt override.
+
+    Regenerated assets are created as inactive by default so the user can
+    compare versions before selecting the active one.
+    """
+    # 1. Check run exists
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    # 2. Validate stage — regeneration only allowed during asset review
+    allowed_stages = frozenset({"VISUAL_ASSET_REVIEW", "VISUAL_ASSET_GENERATING"})
+    if run.current_stage not in allowed_stages:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Run is in stage '{run.current_stage}', "
+            f"expected one of {sorted(allowed_stages)}",
+        )
+
+    # 3. Dispatch single-scene regeneration (inactive by default)
+    try:
+        task_id = dispatch_generate_scene_image(
+            run_id=run_id,
+            model_key=request.model_key,
+            scene_id=scene_id,
+            prompt_override=request.prompt_override,
+            is_active=False,  # regenerated assets are inactive until selected
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=503,
+            detail="Failed to enqueue image generation task",
+        ) from None
+
+    return {
+        "task_id": task_id,
+        "run_id": run_id,
+        "scene_id": scene_id,
+        "current_stage": run.current_stage,
+    }
