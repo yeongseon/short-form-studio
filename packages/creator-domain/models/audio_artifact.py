@@ -3,20 +3,17 @@ from datetime import datetime
 from pydantic import BaseModel
 
 
-class VisualAsset(BaseModel):
+class AudioArtifact(BaseModel):
     id: int
     run_id: int
-    scene_id: str
-    version: int = 1
-    asset_path: str
-    prompt_snapshot: str | None = None
+    path: str
     model_used: str | None = None
     provider_type: str | None = None
-    is_active: bool = True
+    voice: str | None = None
     created_at: datetime
 
     @classmethod
-    def from_dict(cls, data: dict) -> "VisualAsset":
+    def from_dict(cls, data: dict) -> "AudioArtifact":
         return cls.model_validate(data)
 
     def to_json(self) -> str:
