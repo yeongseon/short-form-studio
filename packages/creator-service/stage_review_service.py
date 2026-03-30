@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "creator-domain"))
 domain_models = importlib.import_module("models")
 RunStage = domain_models.RunStage
 REVIEW_STAGES = domain_models.REVIEW_STAGES
+can_transition = domain_models.can_transition
 
 
 class StageReviewStorageBackend(Protocol):
@@ -92,6 +93,81 @@ class StageReviewService:
             }
         )
         return row
+
+    async def approve_and_advance(
+        self,
+        *,
+        run_service: Any,
+        run_id: int,
+        stage_name: str,
+        target_stage: str,
+        reviewer: str = "agent",
+        notes: str | None = None,
+    ) -> Any:
+        """Atomically validate stage, record approval, and advance.
+
+        Uses conditional_update_run for atomic stage transition so that a
+        concurrent change between the approval record and the advance cannot
+        leave the system in an inconsistent state.
+
+        Returns the updated PipelineRun.
+
+        Raises:
+            ValueError: If run not found, stage mismatch, or invalid transition.
+        """
+        # 1. Validate stage_name is a review stage
+        try:
+            stage = RunStage(stage_name)
+        except ValueError as exc:
+            raise ValueError(f"Invalid stage '{stage_name}'") from exc
+
+        if stage not in REVIEW_STAGES:
+            raise ValueError(
+                f"Stage '{stage_name}' is not a review stage. "
+                f"Valid review stages: {sorted(s.value for s in REVIEW_STAGES)}"
+            )
+
+        # 2. Validate target_stage is a valid enum and transition is allowed
+        try:
+            target = RunStage(target_stage)
+        except ValueError as exc:
+            raise ValueError(f"Invalid target stage '{target_stage}'") from exc
+
+        if not can_transition(stage, target):
+            raise ValueError(
+                f"Cannot transition from {stage.value} to {target.value}"
+            )
+
+        # 3. Atomically advance stage (CAS — fails if stage changed concurrently)
+        ok, row = await run_service.storage.conditional_update_run(
+            run_id,
+            {"current_stage": target.value},
+            frozenset({stage.value}),
+        )
+
+        if not ok:
+            if row is None:
+                raise ValueError(f"Run {run_id} not found")
+            raise ValueError(
+                f"Stage conflict: run is now in '{row.get('current_stage')}', "
+                f"expected '{stage_name}'"
+            )
+
+        # 4. Record approval (only after CAS succeeds — no orphan reviews)
+        await self.storage.create_review(
+            {
+                "run_id": run_id,
+                "stage_name": stage_name,
+                "review_status": "approved",
+                "reviewer": reviewer,
+                "notes": notes,
+            }
+        )
+
+        # 5. Build domain model from the CAS result
+        from run_service import PipelineRun  # noqa: E402 — avoid circular at module level
+
+        return PipelineRun.from_row(row)
 
     async def get_latest_review(
         self, run_id: int, stage_name: str

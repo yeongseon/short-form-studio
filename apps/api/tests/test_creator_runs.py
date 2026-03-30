@@ -100,25 +100,40 @@ class StubRunService:
         return updated
 
 class StubStageReviewService:
-    def __init__(self) -> None:
-        self.record_approval_calls: list[dict[str, object]] = []
+    def __init__(self, run_svc: StubRunService) -> None:
+        self.approve_calls: list[dict[str, object]] = []
+        self._run_svc = run_svc
 
-    async def record_approval(
-        self, run_id: int, stage_name: str, reviewer: str = "agent", notes: str | None = None
-    ) -> dict[str, object]:
-        self.record_approval_calls.append(
-            {"run_id": run_id, "stage_name": stage_name, "reviewer": reviewer, "notes": notes}
-        )
-        return {
-            "id": len(self.record_approval_calls),
+    async def approve_and_advance(
+        self,
+        *,
+        run_service: object,
+        run_id: int,
+        stage_name: str,
+        target_stage: str,
+        reviewer: str = "agent",
+        notes: str | None = None,
+    ) -> StubPipelineRun:
+        self.approve_calls.append({
             "run_id": run_id,
             "stage_name": stage_name,
-            "review_status": "approved",
+            "target_stage": target_stage,
             "reviewer": reviewer,
             "notes": notes,
-            "created_at": datetime.now(timezone.utc),
-        }
+        })
 
+        run = self._run_svc.runs.get(run_id)
+        if run is None:
+            raise ValueError(f"Run {run_id} not found")
+        if run.current_stage != stage_name:
+            raise ValueError(
+                f"Stage conflict: run is now in '{run.current_stage}', "
+                f"expected '{stage_name}'"
+            )
+
+        updated = run.model_copy(update={"current_stage": target_stage})
+        self._run_svc.runs[run_id] = updated
+        return updated
 
 @pytest.fixture
 def stub_run_service(monkeypatch: pytest.MonkeyPatch) -> StubRunService:
@@ -288,7 +303,7 @@ async def test_restart_run_not_found(client, stub_run_service: StubRunService):
 @pytest.fixture
 def stub_approve_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubStageReviewService]:
     run_svc = StubRunService()
-    review_svc = StubStageReviewService()
+    review_svc = StubStageReviewService(run_svc)
 
     for route in runs_router.routes:
         if route.name == "approve_script":
@@ -296,7 +311,6 @@ def stub_approve_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunServi
             monkeypatch.setitem(route.endpoint.__globals__, "stage_review_service", review_svc)
 
     return run_svc, review_svc
-
 
 def _make_run(run_id: int, stage: str = "SCRIPT_REVIEW") -> StubPipelineRun:
     now = datetime.now(timezone.utc)
@@ -331,11 +345,15 @@ async def test_approve_script_success(client, stub_approve_services):
     body = response.json()
     assert body["id"] == 10
     assert body["current_stage"] == "VISUAL_PLAN_GENERATING"
-    assert review_svc.record_approval_calls == [
-        {"run_id": 10, "stage_name": "SCRIPT_REVIEW", "reviewer": "human", "notes": "Looks good"}
+    assert review_svc.approve_calls == [
+        {
+            "run_id": 10,
+            "stage_name": "SCRIPT_REVIEW",
+            "target_stage": "VISUAL_PLAN_GENERATING",
+            "reviewer": "human",
+            "notes": "Looks good",
+        }
     ]
-    assert run_svc.advance_stage_calls == [{"run_id": 10, "target_stage": "VISUAL_PLAN_GENERATING"}]
-
 
 @pytest.mark.asyncio
 async def test_approve_script_default_reviewer(client, stub_approve_services):
@@ -348,9 +366,8 @@ async def test_approve_script_default_reviewer(client, stub_approve_services):
     )
 
     assert response.status_code == 200
-    assert review_svc.record_approval_calls[0]["reviewer"] == "agent"
-    assert review_svc.record_approval_calls[0]["notes"] is None
-
+    assert review_svc.approve_calls[0]["reviewer"] == "agent"
+    assert review_svc.approve_calls[0]["notes"] is None
 
 @pytest.mark.asyncio
 async def test_approve_script_run_not_found(client, stub_approve_services):
@@ -361,8 +378,7 @@ async def test_approve_script_run_not_found(client, stub_approve_services):
     )
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "Run not found"}
-
+    assert "not found" in response.json()["detail"].lower()
 
 @pytest.mark.asyncio
 async def test_approve_script_wrong_stage(client, stub_approve_services):
@@ -374,9 +390,8 @@ async def test_approve_script_wrong_stage(client, stub_approve_services):
         json={},
     )
 
-    assert response.status_code == 400
-    assert "expected 'SCRIPT_REVIEW'" in response.json()["detail"]
-
+    assert response.status_code == 409
+    assert "conflict" in response.json()["detail"].lower()
 
 @pytest.mark.asyncio
 async def test_approve_script_wrong_stage_generating(client, stub_approve_services):
@@ -388,5 +403,5 @@ async def test_approve_script_wrong_stage_generating(client, stub_approve_servic
         json={},
     )
 
-    assert response.status_code == 400
-    assert "SCRIPT_GENERATING" in response.json()["detail"]
+    assert response.status_code == 409
+    assert "conflict" in response.json()["detail"].lower()
