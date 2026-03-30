@@ -87,3 +87,9 @@ def test_stage_group_sets() -> None:
         RunStage.SUBTITLE_GENERATING,
         RunStage.RENDER_GENERATING,
     } == GENERATING_STAGES
+
+
+def test_run_stage_str_returns_value() -> None:
+    """Regression: str(RunStage.X) must return the raw value, not 'RunStage.X'."""
+    for stage in RunStage:
+        assert str(stage) == stage.value

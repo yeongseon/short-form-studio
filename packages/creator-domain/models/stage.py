@@ -1,15 +1,11 @@
-from enum import Enum
-from typing import TYPE_CHECKING
+try:
+    from enum import StrEnum
+except ImportError:
+    from enum import Enum
 
-if TYPE_CHECKING:
-    class StrEnum(Enum):
-        ...
-else:
-    try:
-        from enum import StrEnum
-    except ImportError:
-        StrEnum = Enum("StrEnum", {}, type=str)
-
+    class StrEnum(str, Enum):  # noqa: UP042
+        def __str__(self) -> str:
+            return self.value
 
 class RunStage(StrEnum):
     IDEA_READY = "IDEA_READY"
