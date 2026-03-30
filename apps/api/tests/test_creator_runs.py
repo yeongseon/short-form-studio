@@ -1462,3 +1462,233 @@ async def test_regenerate_scene_image_dispatch_failure(client, stub_single_scene
 
     assert response.status_code == 503
     assert "enqueue" in response.json()["detail"].lower()
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Visual asset listing tests (Issue #53)
+# ──────────────────────────────────────────────────────────────────────
+
+
+class StubVisualAsset(BaseModel):
+    id: int
+    run_id: int
+    scene_id: str
+    version: int = 1
+    asset_path: str
+    prompt_snapshot: str | None = None
+    model_used: str | None = None
+    provider_type: str | None = None
+    is_active: bool = True
+    created_at: datetime
+
+
+class StubVisualAssetService:
+    def __init__(self) -> None:
+        self.list_by_run_calls: list[int] = []
+        self.list_by_scene_calls: list[dict[str, object]] = []
+        self._assets: dict[int, list[StubVisualAsset]] = {}  # run_id -> assets
+
+    def add_asset(self, asset: StubVisualAsset) -> None:
+        self._assets.setdefault(asset.run_id, []).append(asset)
+
+    async def list_by_run(self, run_id: int) -> dict[str, list[StubVisualAsset]]:
+        self.list_by_run_calls.append(run_id)
+        assets = self._assets.get(run_id, [])
+        grouped: dict[str, list[StubVisualAsset]] = {}
+        for a in assets:
+            grouped.setdefault(a.scene_id, []).append(a)
+        return grouped
+
+    async def list_by_scene(
+        self, run_id: int, scene_id: str
+    ) -> list[StubVisualAsset]:
+        self.list_by_scene_calls.append({"run_id": run_id, "scene_id": scene_id})
+        assets = self._assets.get(run_id, [])
+        return sorted(
+            [a for a in assets if a.scene_id == scene_id],
+            key=lambda a: a.version,
+            reverse=True,
+        )
+
+
+def _make_asset(
+    asset_id: int,
+    run_id: int,
+    scene_id: str,
+    version: int = 1,
+    *,
+    is_active: bool = True,
+    prompt_snapshot: str | None = "A beautiful scene",
+    model_used: str | None = "sd15",
+    provider_type: str | None = "local-gpu",
+) -> StubVisualAsset:
+    return StubVisualAsset(
+        id=asset_id,
+        run_id=run_id,
+        scene_id=scene_id,
+        version=version,
+        asset_path=f"data/artifacts/1/{run_id}/{scene_id}_v{version}.png",
+        prompt_snapshot=prompt_snapshot,
+        model_used=model_used,
+        provider_type=provider_type,
+        is_active=is_active,
+        created_at=datetime.now(timezone.utc),
+    )
+
+
+@pytest.fixture
+def stub_listing_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubVisualAssetService]:
+    run_svc = StubRunService()
+    asset_svc = StubVisualAssetService()
+
+    for route in runs_router.routes:
+        if route.name in ("list_visual_assets_by_run", "list_visual_assets_by_scene"):
+            monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
+            monkeypatch.setitem(route.endpoint.__globals__, "visual_asset_service", asset_svc)
+
+    return run_svc, asset_svc
+
+
+@pytest.mark.asyncio
+async def test_list_visual_assets_by_run_success(client, stub_listing_services):
+    run_svc, asset_svc = stub_listing_services
+    run_svc.runs[90] = _make_run(90, "VISUAL_ASSET_REVIEW")
+
+    asset_svc.add_asset(_make_asset(1, 90, "scene-0", 1, is_active=False))
+    asset_svc.add_asset(_make_asset(2, 90, "scene-0", 2, is_active=True))
+    asset_svc.add_asset(_make_asset(3, 90, "scene-1", 1, is_active=True))
+
+    response = await client.get("/api/creator/runs/90/visual-assets")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_id"] == 90
+    assert body["total_scenes"] == 2
+    assert body["total_assets"] == 3
+    assert "scene-0" in body["scenes"]
+    assert "scene-1" in body["scenes"]
+    assert len(body["scenes"]["scene-0"]) == 2
+    assert len(body["scenes"]["scene-1"]) == 1
+    assert asset_svc.list_by_run_calls == [90]
+
+
+@pytest.mark.asyncio
+async def test_list_visual_assets_by_run_empty(client, stub_listing_services):
+    run_svc, asset_svc = stub_listing_services
+    run_svc.runs[91] = _make_run(91, "VISUAL_ASSET_REVIEW")
+
+    response = await client.get("/api/creator/runs/91/visual-assets")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_id"] == 91
+    assert body["total_scenes"] == 0
+    assert body["total_assets"] == 0
+    assert body["scenes"] == {}
+
+
+@pytest.mark.asyncio
+async def test_list_visual_assets_by_run_not_found(client, stub_listing_services):
+    response = await client.get("/api/creator/runs/999/visual-assets")
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_list_visual_assets_by_run_includes_fields(client, stub_listing_services):
+    """Verify asset serialization includes prompt_snapshot, model_used, provider_type, timestamps."""
+    run_svc, asset_svc = stub_listing_services
+    run_svc.runs[92] = _make_run(92, "VISUAL_ASSET_REVIEW")
+
+    asset_svc.add_asset(_make_asset(
+        10, 92, "scene-0", 1,
+        prompt_snapshot="A serene landscape",
+        model_used="sd15",
+        provider_type="local-gpu",
+    ))
+
+    response = await client.get("/api/creator/runs/92/visual-assets")
+
+    assert response.status_code == 200
+    body = response.json()
+    asset = body["scenes"]["scene-0"][0]
+    assert asset["prompt_snapshot"] == "A serene landscape"
+    assert asset["model_used"] == "sd15"
+    assert asset["provider_type"] == "local-gpu"
+    assert asset["is_active"] is True
+    assert "created_at" in asset
+
+
+@pytest.mark.asyncio
+async def test_list_visual_assets_by_scene_success(client, stub_listing_services):
+    run_svc, asset_svc = stub_listing_services
+    run_svc.runs[93] = _make_run(93, "VISUAL_ASSET_REVIEW")
+
+    asset_svc.add_asset(_make_asset(20, 93, "scene-sec-0", 1, is_active=False))
+    asset_svc.add_asset(_make_asset(21, 93, "scene-sec-0", 2, is_active=True))
+    asset_svc.add_asset(_make_asset(22, 93, "scene-sec-1", 1, is_active=True))  # different scene
+
+    response = await client.get("/api/creator/runs/93/visual-assets/scene-sec-0")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_id"] == 93
+    assert body["scene_id"] == "scene-sec-0"
+    assert body["total"] == 2
+    # Newest first (version 2 before version 1)
+    assert body["assets"][0]["version"] == 2
+    assert body["assets"][1]["version"] == 1
+    assert asset_svc.list_by_scene_calls == [{"run_id": 93, "scene_id": "scene-sec-0"}]
+
+
+@pytest.mark.asyncio
+async def test_list_visual_assets_by_scene_empty(client, stub_listing_services):
+    """Empty list is valid — scene may not have any generated assets yet."""
+    run_svc, asset_svc = stub_listing_services
+    run_svc.runs[94] = _make_run(94, "VISUAL_ASSET_REVIEW")
+
+    response = await client.get("/api/creator/runs/94/visual-assets/scene-sec-0")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 0
+    assert body["assets"] == []
+
+
+@pytest.mark.asyncio
+async def test_list_visual_assets_by_scene_not_found(client, stub_listing_services):
+    response = await client.get("/api/creator/runs/999/visual-assets/scene-sec-0")
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_list_visual_assets_by_scene_includes_fields(client, stub_listing_services):
+    """Verify each asset in scene listing includes all expected fields."""
+    run_svc, asset_svc = stub_listing_services
+    run_svc.runs[95] = _make_run(95, "VISUAL_ASSET_REVIEW")
+
+    asset_svc.add_asset(_make_asset(
+        30, 95, "scene-sec-0", 1,
+        prompt_snapshot="A dark forest",
+        model_used="sd15",
+        provider_type="local-gpu",
+        is_active=True,
+    ))
+
+    response = await client.get("/api/creator/runs/95/visual-assets/scene-sec-0")
+
+    assert response.status_code == 200
+    asset = response.json()["assets"][0]
+    assert asset["id"] == 30
+    assert asset["run_id"] == 95
+    assert asset["scene_id"] == "scene-sec-0"
+    assert asset["version"] == 1
+    assert asset["asset_path"] == "data/artifacts/1/95/scene-sec-0_v1.png"
+    assert asset["prompt_snapshot"] == "A dark forest"
+    assert asset["model_used"] == "sd15"
+    assert asset["provider_type"] == "local-gpu"
+    assert asset["is_active"] is True
+    assert "created_at" in asset

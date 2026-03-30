@@ -16,10 +16,12 @@ try:
     from creator_service.project_service import project_service
     from creator_service.run_service import run_service
     from creator_service.stage_review_service import stage_review_service
+    from creator_service.visual_asset_service import visual_asset_service
 except ImportError:
     from project_service import project_service
     from run_service import run_service
     from stage_review_service import stage_review_service
+    from visual_asset_service import visual_asset_service
 
 
 def dispatch_generate_script(
@@ -467,4 +469,39 @@ async def regenerate_scene_image_endpoint(
         "run_id": run_id,
         "scene_id": scene_id,
         "current_stage": run.current_stage,
+    }
+
+
+@router.get("/runs/{run_id}/visual-assets")
+async def list_visual_assets_by_run(run_id: int) -> dict[str, object]:
+    """List all visual assets for a run, grouped by scene_id."""
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    grouped = await visual_asset_service.list_by_run(run_id)
+    return {
+        "run_id": run_id,
+        "scenes": {
+            scene_id: [a.model_dump(mode="json") for a in assets]
+            for scene_id, assets in grouped.items()
+        },
+        "total_scenes": len(grouped),
+        "total_assets": sum(len(assets) for assets in grouped.values()),
+    }
+
+
+@router.get("/runs/{run_id}/visual-assets/{scene_id}")
+async def list_visual_assets_by_scene(run_id: int, scene_id: str) -> dict[str, object]:
+    """List all asset versions for a single scene, newest first."""
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    assets = await visual_asset_service.list_by_scene(run_id, scene_id)
+    return {
+        "run_id": run_id,
+        "scene_id": scene_id,
+        "assets": [a.model_dump(mode="json") for a in assets],
+        "total": len(assets),
     }
