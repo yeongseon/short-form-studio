@@ -177,7 +177,7 @@ def stub_run_service(monkeypatch: pytest.MonkeyPatch) -> StubRunService:
     service = StubRunService()
 
     for route in runs_router.routes:
-        if route.name in {"create_run", "get_run_detail", "restart_run", "approve_script", "generate_script_trigger", "list_runs_for_project"}:
+        if route.name in {"create_run", "get_run_detail", "restart_run", "approve_script", "generate_script_trigger", "generate_visual_plan_trigger", "list_runs_for_project"}:
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", service)
 
     return service
@@ -751,3 +751,193 @@ async def test_list_runs_for_project_empty(client, stub_run_service: StubRunServ
     body = response.json()
     assert body["total"] == 0
     assert body["runs"] == []
+
+
+class StubVisualPlanDispatcher:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+        self.task_id = "test-vp-task-id-456"
+
+    def __call__(
+        self, run_id: int, model_key: str, style_preset: str | None
+    ) -> str:
+        self.calls.append({
+            "run_id": run_id,
+            "model_key": model_key,
+            "style_preset": style_preset,
+        })
+        return self.task_id
+
+
+@pytest.fixture
+def stub_generate_visual_plan_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubVisualPlanDispatcher]:
+    run_svc = StubRunService()
+    dispatcher = StubVisualPlanDispatcher()
+
+    for route in runs_router.routes:
+        if route.name == "generate_visual_plan_trigger":
+            monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
+            monkeypatch.setitem(route.endpoint.__globals__, "dispatch_generate_visual_plan", dispatcher)
+
+    return run_svc, dispatcher
+
+
+@pytest.mark.asyncio
+async def test_generate_visual_plan_from_script_review(client, stub_generate_visual_plan_services):
+    run_svc, dispatcher = stub_generate_visual_plan_services
+    run_svc.runs[30] = _make_run(30, "SCRIPT_REVIEW")
+
+    response = await client.post(
+        "/api/creator/runs/30/generate-visual-plan",
+        json={"model_key": "qwen3-4b", "style_preset": "cinematic"},
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["task_id"] == "test-vp-task-id-456"
+    assert body["run_id"] == 30
+    assert body["current_stage"] == "VISUAL_PLAN_GENERATING"
+    # CAS was called for SCRIPT_REVIEW → VISUAL_PLAN_GENERATING (no restart_from)
+    cas_calls = run_svc.storage.conditional_update_calls
+    assert len(cas_calls) == 1
+    assert cas_calls[0]["run_id"] == 30
+    assert cas_calls[0]["updates"] == {"current_stage": "VISUAL_PLAN_GENERATING"}
+    assert "SCRIPT_REVIEW" in cas_calls[0]["expected_stages"]
+    assert dispatcher.calls == [{
+        "run_id": 30,
+        "model_key": "qwen3-4b",
+        "style_preset": "cinematic",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_generate_visual_plan_retry_from_generating(client, stub_generate_visual_plan_services):
+    run_svc, dispatcher = stub_generate_visual_plan_services
+    run_svc.runs[31] = _make_run(31, "VISUAL_PLAN_GENERATING")
+
+    response = await client.post(
+        "/api/creator/runs/31/generate-visual-plan",
+        json={"model_key": "qwen3-4b"},
+    )
+
+    assert response.status_code == 202
+    # CAS was called for VISUAL_PLAN_GENERATING → VISUAL_PLAN_GENERATING with restart_from
+    cas_calls = run_svc.storage.conditional_update_calls
+    assert len(cas_calls) == 1
+    assert cas_calls[0]["run_id"] == 31
+    assert cas_calls[0]["updates"] == {
+        "current_stage": "VISUAL_PLAN_GENERATING",
+        "restart_from": "VISUAL_PLAN_GENERATING",
+    }
+    assert "VISUAL_PLAN_GENERATING" in cas_calls[0]["expected_stages"]
+    assert len(dispatcher.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_visual_plan_default_model(client, stub_generate_visual_plan_services):
+    run_svc, dispatcher = stub_generate_visual_plan_services
+    run_svc.runs[32] = _make_run(32, "SCRIPT_REVIEW")
+
+    response = await client.post(
+        "/api/creator/runs/32/generate-visual-plan",
+        json={},
+    )
+
+    assert response.status_code == 202
+    assert dispatcher.calls[0]["model_key"] == "qwen3-4b"
+    assert dispatcher.calls[0]["style_preset"] is None
+
+
+@pytest.mark.asyncio
+async def test_generate_visual_plan_run_not_found(client, stub_generate_visual_plan_services):
+    _, _ = stub_generate_visual_plan_services
+    response = await client.post(
+        "/api/creator/runs/999/generate-visual-plan",
+        json={},
+    )
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_generate_visual_plan_wrong_stage(client, stub_generate_visual_plan_services):
+    run_svc, _ = stub_generate_visual_plan_services
+    run_svc.runs[33] = _make_run(33, "IDEA_READY")
+
+    response = await client.post(
+        "/api/creator/runs/33/generate-visual-plan",
+        json={},
+    )
+
+    assert response.status_code == 400
+    assert "IDEA_READY" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_generate_visual_plan_wrong_stage_visual_review(client, stub_generate_visual_plan_services):
+    run_svc, _ = stub_generate_visual_plan_services
+    run_svc.runs[34] = _make_run(34, "VISUAL_PLAN_REVIEW")
+
+    response = await client.post(
+        "/api/creator/runs/34/generate-visual-plan",
+        json={},
+    )
+
+    assert response.status_code == 400
+    assert "VISUAL_PLAN_REVIEW" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_generate_visual_plan_cas_conflict(client, stub_generate_visual_plan_services):
+    """CAS fails because stage changed between initial check and CAS."""
+    run_svc, dispatcher = stub_generate_visual_plan_services
+    run_svc.runs[35] = _make_run(35, "SCRIPT_REVIEW")
+
+    async def cas_conflict(run_id, updates, expected_stages):
+        return False, {"current_stage": "VISUAL_PLAN_GENERATING", "id": run_id}
+
+    run_svc.storage.conditional_update_run = cas_conflict
+
+    response = await client.post(
+        "/api/creator/runs/35/generate-visual-plan",
+        json={},
+    )
+
+    assert response.status_code == 409
+    assert "conflict" in response.json()["detail"].lower()
+    assert len(dispatcher.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_generate_visual_plan_dispatch_failure_rollback(client, stub_generate_visual_plan_services):
+    """Celery dispatch failure triggers rollback to original stage."""
+    run_svc, _ = stub_generate_visual_plan_services
+    run_svc.runs[36] = _make_run(36, "SCRIPT_REVIEW")
+
+    def failing_dispatcher(run_id, model_key, style_preset):
+        raise RuntimeError("Celery broker down")
+
+    from shorts_api.main import runs_router as _r
+    for route in _r.routes:
+        if route.name == "generate_visual_plan_trigger":
+            route.endpoint.__globals__["dispatch_generate_visual_plan"] = failing_dispatcher
+
+    response = await client.post(
+        "/api/creator/runs/36/generate-visual-plan",
+        json={},
+    )
+
+    assert response.status_code == 503
+    assert "enqueue" in response.json()["detail"].lower()
+
+    # Rollback: CAS was called twice — first to advance, then to rollback
+    cas_calls = run_svc.storage.conditional_update_calls
+    assert len(cas_calls) == 2
+    # Second CAS = rollback to SCRIPT_REVIEW
+    rollback = cas_calls[1]
+    assert rollback["updates"]["current_stage"] == "SCRIPT_REVIEW"
+    assert rollback["expected_stages"] == frozenset({"VISUAL_PLAN_GENERATING"})
+
+    # Verify run was actually rolled back to SCRIPT_REVIEW
+    assert run_svc.runs[36].current_stage == "SCRIPT_REVIEW"
