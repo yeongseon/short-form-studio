@@ -99,8 +99,11 @@ def generate_script(
     redis_client: Any | None = None
     lock_acquired = False
 
-    async def _check_stage_guard() -> None:
-        """Validate run stage BEFORE any provider/GPU setup."""
+    async def _run_task() -> dict[str, object]:
+        nonlocal provider_type, endpoint, gpu_lock_acquired_at, gpu_lock_released_at
+        nonlocal redis_client, lock_acquired
+
+        # 1. Stage guard — reject before any side effects.
         run = await _run_service.storage.get_run(run_id)
         if run is None:
             raise _StageGuardError(f"Run {run_id} not found")
@@ -117,29 +120,7 @@ def generate_script(
                 f"expected one of {', '.join(s.value for s in _ALLOWED_STAGES)}"
             )
 
-    async def _run_generation() -> str:
-        """Execute generation, save draft, advance stage."""
-        params = dict(entry.default_params or {})
-        generated = await provider.generate(prompt, params)
-        await _script_service.save_draft(
-            run_id=run_id,
-            source_type="generated_by_model",
-            markdown_content=generated,
-        )
-        await _run_service.storage.update_run(
-            run_id,
-            {
-                "current_stage": RunStage.SCRIPT_REVIEW.value,
-                "status": "running",
-            },
-        )
-        return generated
-
-    try:
-        # Stage guard FIRST — before any provider resolution or GPU lock.
-        # If the run is not in an allowed stage, reject immediately.
-        asyncio.run(_check_stage_guard())
-
+        # 2. Provider resolution (sync — blocks briefly, fine in Celery worker).
         registry = ProviderRegistry.create_default()
         entry = registry.resolve(model_key)
         provider = registry.get_provider(model_key)
@@ -147,6 +128,7 @@ def generate_script(
         provider_type = entry.provider_type
         endpoint = entry.endpoint
 
+        # 3. GPU lock acquisition (sync).
         if entry.requires_gpu:
             redis_client = _get_redis_client()
             if redis_client is None:
@@ -156,7 +138,21 @@ def generate_script(
             gpu_lock_acquired_at = _utc_now_iso()
 
         try:
-            asyncio.run(_run_generation())
+            # 4. Generation, save, advance stage.
+            params = dict(entry.default_params or {})
+            generated = await provider.generate(prompt, params)
+            await _script_service.save_draft(
+                run_id=run_id,
+                source_type="generated_by_model",
+                markdown_content=generated,
+            )
+            await _run_service.storage.update_run(
+                run_id,
+                {
+                    "current_stage": RunStage.SCRIPT_REVIEW.value,
+                    "status": "running",
+                },
+            )
         finally:
             if lock_acquired:
                 try:
@@ -182,11 +178,13 @@ def generate_script(
             "status": "success",
             "error": None,
         }
+
+    try:
+        return asyncio.run(_run_task())
     except _StageGuardError:
         # Validation rejection — do NOT mutate run state to FAILED.
         # A stale/duplicate task should not downgrade a run already past generation.
         raise
-
     except Exception:
         try:
             asyncio.run(
