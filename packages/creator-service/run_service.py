@@ -31,6 +31,18 @@ class RunStorageBackend(Protocol):
         """Update and return run row by id."""
         ...
 
+    async def conditional_update_run(
+        self,
+        run_id: int,
+        updates: dict[str, Any],
+        expected_stages: frozenset[str],
+    ) -> tuple[bool, dict[str, Any] | None]:
+        """Atomically update run only if current_stage is in expected_stages.
+
+        Returns (True, updated_row) on success, (False, current_row) if stage
+        doesn't match, or (False, None) if run not found.
+        """
+        ...
 
 class InMemoryRunStorage:
     def __init__(self) -> None:
@@ -63,6 +75,21 @@ class InMemoryRunStorage:
         self._rows[run_id] = row
         return dict(row)
 
+    async def conditional_update_run(
+        self,
+        run_id: int,
+        updates: dict[str, Any],
+        expected_stages: frozenset[str],
+    ) -> tuple[bool, dict[str, Any] | None]:
+        row = self._rows.get(run_id)
+        if row is None:
+            return False, None
+        if row.get("current_stage") not in expected_stages:
+            return False, dict(row)
+        row.update(updates)
+        row["updated_at"] = datetime.now(timezone.utc)
+        self._rows[run_id] = row
+        return True, dict(row)
 
 class RunService:
     def __init__(self, storage: RunStorageBackend):

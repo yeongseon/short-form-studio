@@ -48,8 +48,10 @@ logger = logging.getLogger(__name__)
 
 _ALLOWED_STAGES = frozenset({RunStage.IDEA_READY, RunStage.SCRIPT_GENERATING})
 
-# Stages where marking FAILED is safe — the run hasn't advanced past generation.
-_FAIL_SAFE_STAGES = frozenset({RunStage.IDEA_READY, RunStage.SCRIPT_GENERATING})
+# Stages where writing SCRIPT_REVIEW or FAILED is safe — the run hasn't
+# advanced past generation.  Used as the expected_stages argument to
+# conditional_update_run for atomic compare-and-set.
+_SAFE_STAGES = frozenset({RunStage.IDEA_READY.value, RunStage.SCRIPT_GENERATING.value})
 
 
 class _StageGuardError(ValueError):
@@ -149,29 +151,22 @@ def generate_script(
                 source_type="generated_by_model",
                 markdown_content=generated,
             )
-            # Conditional success transition: only advance if run is still in a
-            # generating-compatible stage. A competing task may have already
-            # advanced the run past generation.
-            current_run = await _run_service.storage.get_run(run_id)
-            if current_run is not None:
-                try:
-                    cur_stage = RunStage(current_run["current_stage"])
-                except ValueError:
-                    cur_stage = None
-                if cur_stage in _FAIL_SAFE_STAGES:
-                    await _run_service.storage.update_run(
-                        run_id,
-                        {
-                            "current_stage": RunStage.SCRIPT_REVIEW.value,
-                            "status": "running",
-                        },
-                    )
-                else:
-                    logger.info(
-                        "Run %d is in stage %s after generation -- skipping SCRIPT_REVIEW transition",
-                        run_id,
-                        current_run["current_stage"],
-                    )
+            # Atomic success transition: only advance if run is still in a
+            # generating-compatible stage. Uses compare-and-set at the storage
+            # layer — no TOCTOU gap.
+            applied, _ = await _run_service.storage.conditional_update_run(
+                run_id,
+                {
+                    "current_stage": RunStage.SCRIPT_REVIEW.value,
+                    "status": "running",
+                },
+                expected_stages=_SAFE_STAGES,
+            )
+            if not applied:
+                logger.info(
+                    "Run %d stage changed during generation -- skipping SCRIPT_REVIEW transition",
+                    run_id,
+                )
         finally:
             if lock_acquired:
                 try:
@@ -205,34 +200,24 @@ def generate_script(
         # A stale/duplicate task should not downgrade a run already past generation.
         raise
     except Exception:
-        # Only mark FAILED if the run is still in a generating-compatible stage.
-        # A competing task may have already advanced the run (e.g. to SCRIPT_REVIEW);
-        # unconditionally writing FAILED would downgrade it.
+        # Atomic conditional fail: only mark FAILED if run is still in a
+        # generating-compatible stage. Uses compare-and-set — no TOCTOU gap.
         try:
-            async def _conditional_fail() -> None:
-                run = await _run_service.storage.get_run(run_id)
-                if run is None:
-                    return
-                try:
-                    current = RunStage(run["current_stage"])
-                except ValueError:
-                    return  # Corrupted stage — don't make it worse
-                if current not in _FAIL_SAFE_STAGES:
-                    logger.info(
-                        "Run %d is in stage %s — skipping FAILED transition",
-                        run_id,
-                        current.value,
-                    )
-                    return
-                await _run_service.storage.update_run(
+            applied, _ = asyncio.run(
+                _run_service.storage.conditional_update_run(
                     run_id,
                     {
                         "current_stage": RunStage.FAILED.value,
                         "status": "failed",
                     },
+                    expected_stages=_SAFE_STAGES,
                 )
-
-            asyncio.run(_conditional_fail())
+            )
+            if not applied:
+                logger.info(
+                    "Run %d stage changed during generation -- skipping FAILED transition",
+                    run_id,
+                )
         except Exception:
             logger.exception("Failed to mark run %d as FAILED after task error", run_id)
 

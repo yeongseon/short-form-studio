@@ -48,6 +48,23 @@ class FakeStorage:
             raise self.error
         return {"id": run_id, **updates}
 
+    async def conditional_update_run(
+        self,
+        run_id: int,
+        updates: dict[str, object],
+        expected_stages: frozenset[str],
+    ) -> tuple[bool, dict[str, object] | None]:
+        row = self._runs.get(run_id)
+        if row is None:
+            return False, None
+        if row.get("current_stage") not in expected_stages:
+            return False, dict(row)
+        self.calls.append((run_id, updates))
+        if self.error is not None:
+            raise self.error
+        row.update(updates)
+        self._runs[run_id] = row
+        return True, dict(row)
 
 def _make_storage(run_id: int = 101, stage: str = "IDEA_READY", **extra: Any) -> FakeStorage:
     """Create a FakeStorage pre-populated with a single run in the given stage."""
@@ -499,12 +516,13 @@ def test_stage_guard_blocks_before_provider_resolution(monkeypatch: pytest.Monke
 
 
 class RaceConditionStorage(FakeStorage):
-    """Storage that simulates a competing task advancing the run between calls.
+    """Storage that simulates a competing task advancing the run between operations.
 
-    After `advance_after` calls to get_run for the target run_id, the run's
-    stage is changed to `advanced_stage`. This allows testing both:
-    - Success path race: advance_after=1 (guard sees IDEA_READY, success check sees advanced)
-    - Failure path race: advance_after=1 (guard sees IDEA_READY, error handler sees advanced)
+    After `advance_after` read/CAS operations on the target run_id, the run's
+    stage is changed to `advanced_stage` before the operation reads it. This
+    allows testing both:
+    - Success path race: advance_after=1 (guard sees IDEA_READY, CAS sees advanced)
+    - Failure path race: advance_after=1 (guard sees IDEA_READY, CAS sees advanced)
     """
 
     def __init__(self, run_id: int, initial_stage: str, advanced_stage: str, advance_after: int = 1) -> None:
@@ -512,14 +530,36 @@ class RaceConditionStorage(FakeStorage):
         self._target_id = run_id
         self._advanced_stage = advanced_stage
         self._advance_after = advance_after
-        self._get_count = 0
+        self._op_count = 0
+
+    def _maybe_advance(self, run_id: int) -> None:
+        """Simulate a competing task advancing the run after N operations."""
+        if run_id == self._target_id:
+            self._op_count += 1
+            if self._op_count > self._advance_after:
+                self._runs[run_id] = {"id": run_id, "current_stage": self._advanced_stage}
 
     async def get_run(self, run_id: int) -> dict[str, object] | None:
-        self._get_count += 1
-        if run_id == self._target_id and self._get_count > self._advance_after:
-            self._runs[run_id] = {"id": run_id, "current_stage": self._advanced_stage}
+        self._maybe_advance(run_id)
         return self._runs.get(run_id)
 
+    async def conditional_update_run(
+        self,
+        run_id: int,
+        updates: dict[str, object],
+        expected_stages: frozenset[str],
+    ) -> tuple[bool, dict[str, object] | None]:
+        """Atomic CAS — advance happens before the check, simulating a race."""
+        self._maybe_advance(run_id)
+        row = self._runs.get(run_id)
+        if row is None:
+            return False, None
+        if row.get("current_stage") not in expected_stages:
+            return False, dict(row)
+        self.calls.append((run_id, updates))
+        row.update(updates)
+        self._runs[run_id] = row
+        return True, dict(row)
 
 def test_conditional_fail_skips_when_run_already_advanced(monkeypatch: pytest.MonkeyPatch) -> None:
     """If a competing task advances the run to SCRIPT_REVIEW before the error handler
