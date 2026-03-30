@@ -1486,6 +1486,7 @@ class StubVisualAssetService:
     def __init__(self) -> None:
         self.list_by_run_calls: list[int] = []
         self.list_by_scene_calls: list[dict[str, object]] = []
+        self.select_active_calls: list[dict[str, object]] = []
         self._assets: dict[int, list[StubVisualAsset]] = {}  # run_id -> assets
 
     def add_asset(self, asset: StubVisualAsset) -> None:
@@ -1509,6 +1510,25 @@ class StubVisualAssetService:
             key=lambda a: a.version,
             reverse=True,
         )
+
+    async def select_active(
+        self, run_id: int, scene_id: str, asset_id: int
+    ) -> StubVisualAsset:
+        self.select_active_calls.append({
+            "run_id": run_id,
+            "scene_id": scene_id,
+            "asset_id": asset_id,
+        })
+        assets = self._assets.get(run_id, [])
+        for a in assets:
+            if a.id == asset_id:
+                if a.scene_id != scene_id:
+                    raise ValueError(
+                        f"Asset {asset_id} does not belong to run {run_id} "
+                        f"scene '{scene_id}'"
+                    )
+                return a.model_copy(update={"is_active": True})
+        raise ValueError(f"Asset {asset_id} not found")
 
 
 def _make_asset(
@@ -1692,3 +1712,104 @@ async def test_list_visual_assets_by_scene_includes_fields(client, stub_listing_
     assert asset["provider_type"] == "local-gpu"
     assert asset["is_active"] is True
     assert "created_at" in asset
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Active visual asset selection tests (Issue #54)
+# ──────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def stub_select_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubVisualAssetService]:
+    run_svc = StubRunService()
+    asset_svc = StubVisualAssetService()
+
+    for route in runs_router.routes:
+        if route.name == "select_active_asset":
+            monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
+            monkeypatch.setitem(route.endpoint.__globals__, "visual_asset_service", asset_svc)
+
+    return run_svc, asset_svc
+
+
+@pytest.mark.asyncio
+async def test_select_active_asset_success(client, stub_select_services):
+    run_svc, asset_svc = stub_select_services
+    run_svc.runs[100] = _make_run(100, "VISUAL_ASSET_REVIEW")
+
+    asset_svc.add_asset(_make_asset(40, 100, "scene-0", 1, is_active=False))
+    asset_svc.add_asset(_make_asset(41, 100, "scene-0", 2, is_active=True))
+
+    response = await client.post(
+        "/api/creator/runs/100/visual-assets/scene-0/select/40"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == 40
+    assert body["is_active"] is True
+    assert body["scene_id"] == "scene-0"
+    assert asset_svc.select_active_calls == [{"run_id": 100, "scene_id": "scene-0", "asset_id": 40}]
+
+
+@pytest.mark.asyncio
+async def test_select_active_asset_run_not_found(client, stub_select_services):
+    response = await client.post(
+        "/api/creator/runs/999/visual-assets/scene-0/select/1"
+    )
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_select_active_asset_wrong_stage(client, stub_select_services):
+    run_svc, _ = stub_select_services
+    run_svc.runs[101] = _make_run(101, "SCRIPT_REVIEW")
+
+    response = await client.post(
+        "/api/creator/runs/101/visual-assets/scene-0/select/1"
+    )
+    assert response.status_code == 400
+    assert "SCRIPT_REVIEW" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_select_active_asset_not_found(client, stub_select_services):
+    run_svc, asset_svc = stub_select_services
+    run_svc.runs[102] = _make_run(102, "VISUAL_ASSET_REVIEW")
+    # No assets added — asset 999 doesn't exist
+
+    response = await client.post(
+        "/api/creator/runs/102/visual-assets/scene-0/select/999"
+    )
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_select_active_asset_wrong_scene(client, stub_select_services):
+    run_svc, asset_svc = stub_select_services
+    run_svc.runs[103] = _make_run(103, "VISUAL_ASSET_REVIEW")
+    # Asset belongs to scene-1, not scene-0
+    asset_svc.add_asset(_make_asset(50, 103, "scene-1", 1))
+
+    response = await client.post(
+        "/api/creator/runs/103/visual-assets/scene-0/select/50"
+    )
+    # Service raises ValueError for wrong scene — mapped to 400
+    assert response.status_code == 400
+    assert "does not belong" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_select_active_asset_during_generating(client, stub_select_services):
+    """Selection is also allowed during VISUAL_ASSET_GENERATING stage."""
+    run_svc, asset_svc = stub_select_services
+    run_svc.runs[104] = _make_run(104, "VISUAL_ASSET_GENERATING")
+    asset_svc.add_asset(_make_asset(60, 104, "scene-0", 1))
+
+    response = await client.post(
+        "/api/creator/runs/104/visual-assets/scene-0/select/60"
+    )
+    assert response.status_code == 200
+    assert response.json()["id"] == 60

@@ -505,3 +505,30 @@ async def list_visual_assets_by_scene(run_id: int, scene_id: str) -> dict[str, o
         "assets": [a.model_dump(mode="json") for a in assets],
         "total": len(assets),
     }
+
+
+@router.post("/runs/{run_id}/visual-assets/{scene_id}/select/{asset_id}")
+async def select_active_asset(run_id: int, scene_id: str, asset_id: int) -> dict[str, object]:
+    """Set the given asset as active for its scene, deactivating others."""
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    # Only allow selection during asset review
+    allowed_stages = frozenset({"VISUAL_ASSET_REVIEW", "VISUAL_ASSET_GENERATING"})
+    if run.current_stage not in allowed_stages:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Run is in stage '{run.current_stage}', "
+            f"expected one of {sorted(allowed_stages)}",
+        )
+
+    try:
+        asset = await visual_asset_service.select_active(run_id, scene_id, asset_id)
+    except ValueError as exc:
+        detail = str(exc)
+        if "not found" in detail.lower():
+            raise HTTPException(status_code=404, detail=detail) from exc
+        raise HTTPException(status_code=400, detail=detail) from exc
+
+    return asset.model_dump(mode="json")
