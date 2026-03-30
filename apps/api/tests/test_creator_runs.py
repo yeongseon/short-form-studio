@@ -444,6 +444,122 @@ async def test_approve_script_wrong_stage_generating(client, stub_approve_servic
     assert "conflict" in response.json()["detail"].lower()
 
 
+# ---------------------------------------------------------------------------
+# POST /runs/{run_id}/approve-visual-plan
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def stub_approve_vp_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubStageReviewService]:
+    run_svc = StubRunService()
+    review_svc = StubStageReviewService(run_svc)
+
+    for route in runs_router.routes:
+        if route.name == "approve_visual_plan":
+            monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
+            monkeypatch.setitem(route.endpoint.__globals__, "stage_review_service", review_svc)
+
+    return run_svc, review_svc
+
+
+def _make_vp_run(run_id: int, stage: str = "VISUAL_PLAN_REVIEW") -> StubPipelineRun:
+    now = datetime.now(timezone.utc)
+    return StubPipelineRun(
+        id=run_id,
+        project_id=1,
+        current_stage=stage,
+        status="running",
+        review_stage=stage if stage == "VISUAL_PLAN_REVIEW" else None,
+        restart_from=None,
+        model_defaults=None,
+        metadata=None,
+        style_preset="default",
+        started_at=now,
+        finished_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+@pytest.mark.asyncio
+async def test_approve_visual_plan_success(client, stub_approve_vp_services):
+    run_svc, review_svc = stub_approve_vp_services
+    run_svc.runs[50] = _make_vp_run(50, "VISUAL_PLAN_REVIEW")
+
+    response = await client.post(
+        "/api/creator/runs/50/approve-visual-plan",
+        json={"reviewer": "human", "notes": "Visual plan approved"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == 50
+    assert body["current_stage"] == "VISUAL_ASSET_GENERATING"
+    assert review_svc.approve_calls == [
+        {
+            "run_id": 50,
+            "stage_name": "VISUAL_PLAN_REVIEW",
+            "target_stage": "VISUAL_ASSET_GENERATING",
+            "reviewer": "human",
+            "notes": "Visual plan approved",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_approve_visual_plan_default_reviewer(client, stub_approve_vp_services):
+    run_svc, review_svc = stub_approve_vp_services
+    run_svc.runs[51] = _make_vp_run(51, "VISUAL_PLAN_REVIEW")
+
+    response = await client.post(
+        "/api/creator/runs/51/approve-visual-plan",
+        json={},
+    )
+
+    assert response.status_code == 200
+    assert review_svc.approve_calls[0]["reviewer"] == "agent"
+    assert review_svc.approve_calls[0]["notes"] is None
+
+
+@pytest.mark.asyncio
+async def test_approve_visual_plan_run_not_found(client, stub_approve_vp_services):
+    _, _ = stub_approve_vp_services
+    response = await client.post(
+        "/api/creator/runs/999/approve-visual-plan",
+        json={},
+    )
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_approve_visual_plan_wrong_stage(client, stub_approve_vp_services):
+    run_svc, _ = stub_approve_vp_services
+    run_svc.runs[52] = _make_vp_run(52, "SCRIPT_REVIEW")
+
+    response = await client.post(
+        "/api/creator/runs/52/approve-visual-plan",
+        json={},
+    )
+
+    assert response.status_code == 409
+    assert "conflict" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_approve_visual_plan_wrong_stage_generating(client, stub_approve_vp_services):
+    run_svc, _ = stub_approve_vp_services
+    run_svc.runs[53] = _make_vp_run(53, "VISUAL_PLAN_GENERATING")
+
+    response = await client.post(
+        "/api/creator/runs/53/approve-visual-plan",
+        json={},
+    )
+
+    assert response.status_code == 409
+    assert "conflict" in response.json()["detail"].lower()
+
 class StubProject(BaseModel):
     id: int
     title: str | None = None
