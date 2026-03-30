@@ -99,9 +99,8 @@ def generate_script(
     redis_client: Any | None = None
     lock_acquired = False
 
-    async def _run_generation() -> str:
-        """Single async coroutine wrapping all async operations."""
-        # Stage guard: verify run is in an acceptable stage
+    async def _check_stage_guard() -> None:
+        """Validate run stage BEFORE any provider/GPU setup."""
         run = await _run_service.storage.get_run(run_id)
         if run is None:
             raise _StageGuardError(f"Run {run_id} not found")
@@ -118,6 +117,8 @@ def generate_script(
                 f"expected one of {', '.join(s.value for s in _ALLOWED_STAGES)}"
             )
 
+    async def _run_generation() -> str:
+        """Execute generation, save draft, advance stage."""
         params = dict(entry.default_params or {})
         generated = await provider.generate(prompt, params)
         await _script_service.save_draft(
@@ -135,6 +136,10 @@ def generate_script(
         return generated
 
     try:
+        # Stage guard FIRST — before any provider resolution or GPU lock.
+        # If the run is not in an allowed stage, reject immediately.
+        asyncio.run(_check_stage_guard())
+
         registry = ProviderRegistry.create_default()
         entry = registry.resolve(model_key)
         provider = registry.get_provider(model_key)

@@ -470,3 +470,29 @@ def test_stage_guard_invalid_stage_value(monkeypatch: pytest.MonkeyPatch) -> Non
 
     assert provider.calls == []
     assert storage.calls == []
+
+
+def test_stage_guard_blocks_before_provider_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stage guard must reject BEFORE provider resolution, so a bad model_key
+    with a wrong-stage run does NOT mark the run as FAILED."""
+    # Registry that will raise on resolve — simulates bad model_key
+    registry = FakeRegistry(
+        entry=FakeEntry(),
+        provider=FakeProvider(),
+        resolve_error=KeyError("Model not found"),
+    )
+    _patch_registry(monkeypatch, registry)
+
+    script_service = FakeScriptService()
+    # Run is already in SCRIPT_REVIEW — stale/duplicate task scenario
+    storage = _make_storage(run_id=800, stage="SCRIPT_REVIEW")
+    _patch_services(monkeypatch, script_service, storage)
+
+    # Stage guard fires first, KeyError from resolve never reached
+    with pytest.raises(ValueError, match="expected one of"):
+        _invoke_task(run_id=800, idea_brief="Stale task with bad model")
+
+    # Run state must NOT be mutated — stage guard rejected before provider setup
+    assert storage.calls == []
+    run = storage._runs[800]
+    assert run["current_stage"] == "SCRIPT_REVIEW"
