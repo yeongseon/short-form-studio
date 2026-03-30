@@ -5,7 +5,6 @@ from typing import Literal
 
 import pytest
 from pydantic import BaseModel
-
 from shorts_api.main import runs_router
 
 
@@ -87,12 +86,33 @@ class StubRunService:
         return updated
 
 
+class StubStageReviewService:
+    def __init__(self) -> None:
+        self.record_approval_calls: list[dict[str, object]] = []
+
+    async def record_approval(
+        self, run_id: int, stage_name: str, reviewer: str = "agent", notes: str | None = None
+    ) -> dict[str, object]:
+        self.record_approval_calls.append(
+            {"run_id": run_id, "stage_name": stage_name, "reviewer": reviewer, "notes": notes}
+        )
+        return {
+            "id": len(self.record_approval_calls),
+            "run_id": run_id,
+            "stage_name": stage_name,
+            "review_status": "approved",
+            "reviewer": reviewer,
+            "notes": notes,
+            "created_at": datetime.now(timezone.utc),
+        }
+
+
 @pytest.fixture
 def stub_run_service(monkeypatch: pytest.MonkeyPatch) -> StubRunService:
     service = StubRunService()
 
     for route in runs_router.routes:
-        if route.name in {"create_run", "get_run_detail", "restart_run"}:
+        if route.name in {"create_run", "get_run_detail", "restart_run", "approve_script"}:
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", service)
 
     return service
@@ -250,3 +270,110 @@ async def test_restart_run_not_found(client, stub_run_service: StubRunService):
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Run 4242 not found"}
+
+
+@pytest.fixture
+def stub_approve_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubStageReviewService]:
+    run_svc = StubRunService()
+    review_svc = StubStageReviewService()
+
+    for route in runs_router.routes:
+        if route.name == "approve_script":
+            monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
+            monkeypatch.setitem(route.endpoint.__globals__, "stage_review_service", review_svc)
+
+    return run_svc, review_svc
+
+
+def _make_run(run_id: int, stage: str = "SCRIPT_REVIEW") -> StubPipelineRun:
+    now = datetime.now(timezone.utc)
+    return StubPipelineRun(
+        id=run_id,
+        project_id=1,
+        current_stage=stage,
+        status="running",
+        review_stage=stage if stage == "SCRIPT_REVIEW" else None,
+        restart_from=None,
+        model_defaults=None,
+        metadata=None,
+        style_preset="default",
+        started_at=now,
+        finished_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+@pytest.mark.asyncio
+async def test_approve_script_success(client, stub_approve_services):
+    run_svc, review_svc = stub_approve_services
+    run_svc.runs[10] = _make_run(10, "SCRIPT_REVIEW")
+
+    response = await client.post(
+        "/api/creator/runs/10/approve-script",
+        json={"reviewer": "human", "notes": "Looks good"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == 10
+    assert body["current_stage"] == "VISUAL_PLAN_GENERATING"
+    assert review_svc.record_approval_calls == [
+        {"run_id": 10, "stage_name": "SCRIPT_REVIEW", "reviewer": "human", "notes": "Looks good"}
+    ]
+    assert run_svc.restart_run_calls == [{"run_id": 10, "from_stage": "VISUAL_PLAN_GENERATING"}]
+
+
+@pytest.mark.asyncio
+async def test_approve_script_default_reviewer(client, stub_approve_services):
+    run_svc, review_svc = stub_approve_services
+    run_svc.runs[11] = _make_run(11, "SCRIPT_REVIEW")
+
+    response = await client.post(
+        "/api/creator/runs/11/approve-script",
+        json={},
+    )
+
+    assert response.status_code == 200
+    assert review_svc.record_approval_calls[0]["reviewer"] == "agent"
+    assert review_svc.record_approval_calls[0]["notes"] is None
+
+
+@pytest.mark.asyncio
+async def test_approve_script_run_not_found(client, stub_approve_services):
+    _, _ = stub_approve_services
+    response = await client.post(
+        "/api/creator/runs/999/approve-script",
+        json={},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Run not found"}
+
+
+@pytest.mark.asyncio
+async def test_approve_script_wrong_stage(client, stub_approve_services):
+    run_svc, _ = stub_approve_services
+    run_svc.runs[12] = _make_run(12, "IDEA_READY")
+
+    response = await client.post(
+        "/api/creator/runs/12/approve-script",
+        json={},
+    )
+
+    assert response.status_code == 400
+    assert "expected 'SCRIPT_REVIEW'" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_approve_script_wrong_stage_generating(client, stub_approve_services):
+    run_svc, _ = stub_approve_services
+    run_svc.runs[13] = _make_run(13, "SCRIPT_GENERATING")
+
+    response = await client.post(
+        "/api/creator/runs/13/approve-script",
+        json={},
+    )
+
+    assert response.status_code == 400
+    assert "SCRIPT_GENERATING" in response.json()["detail"]
