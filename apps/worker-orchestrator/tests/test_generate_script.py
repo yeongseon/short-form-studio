@@ -496,3 +496,68 @@ def test_stage_guard_blocks_before_provider_resolution(monkeypatch: pytest.Monke
     assert storage.calls == []
     run = storage._runs[800]
     assert run["current_stage"] == "SCRIPT_REVIEW"
+
+
+class RaceConditionStorage(FakeStorage):
+    """Storage that simulates a competing task advancing the run between guard and error handler."""
+
+    def __init__(self, run_id: int, initial_stage: str, advanced_stage: str) -> None:
+        super().__init__(runs={run_id: {"id": run_id, "current_stage": initial_stage}})
+        self._target_id = run_id
+        self._advanced_stage = advanced_stage
+        self._get_count = 0
+
+    async def get_run(self, run_id: int) -> dict[str, object] | None:
+        self._get_count += 1
+        if run_id == self._target_id and self._get_count > 1:
+            # Second get_run call (from _conditional_fail) sees the advanced stage
+            self._runs[run_id] = {"id": run_id, "current_stage": self._advanced_stage}
+        return self._runs.get(run_id)
+
+
+def test_conditional_fail_skips_when_run_already_advanced(monkeypatch: pytest.MonkeyPatch) -> None:
+    """If a competing task advances the run to SCRIPT_REVIEW before the error handler
+    runs, the error handler must NOT overwrite it to FAILED.
+
+    Scenario: two duplicate tasks both pass the stage guard. Task A succeeds and
+    advances the run to SCRIPT_REVIEW. Task B then fails during generation. Task B's
+    error handler re-checks the stage and sees SCRIPT_REVIEW -> skips FAILED write.
+    """
+    provider = FakeProvider(error=RuntimeError("task B generation failed"))
+    entry = FakeEntry(requires_gpu=False)
+    registry = FakeRegistry(entry=entry, provider=provider)
+    _patch_registry(monkeypatch, registry)
+
+    script_service = FakeScriptService()
+    # First get_run (stage guard) returns IDEA_READY -> task passes guard.
+    # Second get_run (_conditional_fail) returns SCRIPT_REVIEW -> competing task advanced it.
+    storage = RaceConditionStorage(
+        run_id=900, initial_stage="IDEA_READY", advanced_stage="SCRIPT_REVIEW"
+    )
+    _patch_services(monkeypatch, script_service, storage)
+
+    with pytest.raises(RuntimeError, match="task B generation failed"):
+        _invoke_task(run_id=900, idea_brief="Duplicate task scenario")
+
+    # Error handler must NOT have written FAILED -- run was already advanced
+    assert storage.calls == []
+    assert storage._runs[900]["current_stage"] == "SCRIPT_REVIEW"
+
+
+def test_conditional_fail_marks_failed_when_still_in_generating_stage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When the run is still in IDEA_READY at error time, the error handler should
+    mark it as FAILED (normal failure path)."""
+    provider = FakeProvider(error=RuntimeError("generation error"))
+    entry = FakeEntry(requires_gpu=False)
+    registry = FakeRegistry(entry=entry, provider=provider)
+    _patch_registry(monkeypatch, registry)
+
+    script_service = FakeScriptService()
+    storage = _make_storage(run_id=901, stage="IDEA_READY")
+    _patch_services(monkeypatch, script_service, storage)
+
+    with pytest.raises(RuntimeError, match="generation error"):
+        _invoke_task(run_id=901, idea_brief="Normal failure")
+
+    # Run was still in IDEA_READY -> FAILED write should happen
+    assert storage.calls == [(901, {"current_stage": "FAILED", "status": "failed"})]

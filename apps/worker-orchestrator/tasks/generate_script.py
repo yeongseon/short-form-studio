@@ -48,6 +48,9 @@ logger = logging.getLogger(__name__)
 
 _ALLOWED_STAGES = frozenset({RunStage.IDEA_READY, RunStage.SCRIPT_GENERATING})
 
+# Stages where marking FAILED is safe — the run hasn't advanced past generation.
+_FAIL_SAFE_STAGES = frozenset({RunStage.IDEA_READY, RunStage.SCRIPT_GENERATING})
+
 
 class _StageGuardError(ValueError):
     """Raised when a run is not in an acceptable stage for generation.
@@ -186,16 +189,34 @@ def generate_script(
         # A stale/duplicate task should not downgrade a run already past generation.
         raise
     except Exception:
+        # Only mark FAILED if the run is still in a generating-compatible stage.
+        # A competing task may have already advanced the run (e.g. to SCRIPT_REVIEW);
+        # unconditionally writing FAILED would downgrade it.
         try:
-            asyncio.run(
-                _run_service.storage.update_run(
+            async def _conditional_fail() -> None:
+                run = await _run_service.storage.get_run(run_id)
+                if run is None:
+                    return
+                try:
+                    current = RunStage(run["current_stage"])
+                except ValueError:
+                    return  # Corrupted stage — don't make it worse
+                if current not in _FAIL_SAFE_STAGES:
+                    logger.info(
+                        "Run %d is in stage %s — skipping FAILED transition",
+                        run_id,
+                        current.value,
+                    )
+                    return
+                await _run_service.storage.update_run(
                     run_id,
                     {
                         "current_stage": RunStage.FAILED.value,
                         "status": "failed",
                     },
                 )
-            )
+
+            asyncio.run(_conditional_fail())
         except Exception:
             logger.exception("Failed to mark run %d as FAILED after task error", run_id)
 
