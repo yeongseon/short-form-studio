@@ -1,23 +1,11 @@
 """Routes for creator project management."""
-# pyright: reportMissingImports=false
 
-import os
-import sys
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
-# Add packages to path for imports
-_PACKAGES_DIR = os.path.join(os.path.dirname(__file__), "../../../../..", "packages")
-sys.path.insert(0, _PACKAGES_DIR)
-sys.path.insert(0, os.path.join(_PACKAGES_DIR, "creator-service"))
-sys.path.insert(0, os.path.join(_PACKAGES_DIR, "creator-provider"))
-
-try:
-    from creator_service.project_service import project_service
-except ImportError:
-    from project_service import project_service
+from creator_service.project_service import project_service
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 

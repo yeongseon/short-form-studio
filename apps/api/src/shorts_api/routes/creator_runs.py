@@ -1,33 +1,15 @@
 """Routes for creator run management."""
-# pyright: reportMissingImports=false
-
-import os
-import sys
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-# Add packages to path for imports
-_PACKAGES_DIR = os.path.join(os.path.dirname(__file__), "../../../../..", "packages")
-sys.path.insert(0, _PACKAGES_DIR)
-sys.path.insert(0, os.path.join(_PACKAGES_DIR, "creator-service"))
-
-try:
-    from creator_service.project_service import project_service
-    from creator_service.run_service import run_service
-    from creator_service.stage_review_service import stage_review_service
-    from creator_service.visual_asset_service import visual_asset_service
-    from creator_service.render_service import render_service
-    from creator_service.audio_service import audio_service
-    from creator_service.subtitle_service import subtitle_service
-except ImportError:
-    from project_service import project_service
-    from run_service import run_service
-    from stage_review_service import stage_review_service
-    from visual_asset_service import visual_asset_service
-    from render_service import render_service
-    from audio_service import audio_service
-    from subtitle_service import subtitle_service
+from creator_service.audio_service import audio_service
+from creator_service.project_service import project_service
+from creator_service.render_service import render_service
+from creator_service.run_service import run_service
+from creator_service.stage_review_service import stage_review_service
+from creator_service.subtitle_service import subtitle_service
+from creator_service.visual_asset_service import visual_asset_service
 
 
 def dispatch_generate_script(

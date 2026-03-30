@@ -1,43 +1,13 @@
 """Routes for creator script management."""
-# pyright: reportMissingImports=false
-
-import os
-import sys
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ValidationError
 
-# Add packages to path for imports
-_PACKAGES_DIR = os.path.join(os.path.dirname(__file__), "../../../../..", "packages")
-sys.path.insert(0, _PACKAGES_DIR)
-sys.path.insert(0, os.path.join(_PACKAGES_DIR, "creator-service"))
-sys.path.insert(0, os.path.join(_PACKAGES_DIR, "creator-provider"))
-sys.path.insert(0, os.path.join(_PACKAGES_DIR, "creator-domain"))
-
-try:
-    from creator_service.project_service import project_service
-except ImportError:
-    from project_service import project_service
-
-try:
-    from creator_service.run_service import run_service
-except ImportError:
-    from run_service import run_service
-
-try:
-    from creator_service.script_service import script_service
-except ImportError:
-    from script_service import script_service
-
-try:
-    from creator_service.markdown_parser import parse_markdown
-except ImportError:
-    from markdown_parser import parse_markdown
-
-try:
-    from creator_domain.models.script_draft import ScriptSection
-except ImportError:
-    from models.script_draft import ScriptSection
+from creator_domain.models.script_draft import ScriptSection
+from creator_service.markdown_parser import parse_markdown
+from creator_service.project_service import project_service
+from creator_service.run_service import run_service
+from creator_service.script_service import script_service
 
 router = APIRouter(prefix="/projects/{project_id}/script", tags=["script"])
 run_script_router = APIRouter(prefix="/runs/{run_id}/script", tags=["script"])
