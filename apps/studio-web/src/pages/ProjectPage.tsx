@@ -5,6 +5,7 @@
  * - PipelineStepper (header progress bar)
  * - Editor area with markdown / structured toggle (during script stages)
  * - VisualPlanEditor (during visual plan stages)
+ * - VisualAssetGrid + ProgressDialog (during visual asset stages)
  * - StageActionBar (save / approve / generate / restart)
  */
 
@@ -18,6 +19,9 @@ import StageActionBar, {
 import MarkdownScriptEditor from "../components/creator/MarkdownScriptEditor";
 import StructuredScriptEditor from "../components/creator/StructuredScriptEditor";
 import VisualPlanEditor from "../components/creator/VisualPlanEditor";
+import VisualAssetGrid from "../components/creator/VisualAssetGrid";
+import ProgressDialog from "../components/creator/ProgressDialog";
+import ModelSelector from "../components/creator/ModelSelector";
 
 const API_BASE = "/api/creator";
 
@@ -46,6 +50,9 @@ const SCRIPT_STAGES = new Set(["SCRIPT_GENERATING", "SCRIPT_REVIEW"]);
 // Visual plan stages where the editor area is relevant
 const VISUAL_PLAN_STAGES = new Set(["VISUAL_PLAN_GENERATING", "VISUAL_PLAN_REVIEW"]);
 
+// Visual asset stages
+const VISUAL_ASSET_STAGES = new Set(["VISUAL_ASSET_GENERATING", "VISUAL_ASSET_REVIEW"]);
+
 // Stages where editing is allowed (not generating)
 const EDITABLE_STAGES = new Set(["SCRIPT_REVIEW", "VISUAL_PLAN_REVIEW"]);
 
@@ -69,6 +76,16 @@ export default function ProjectPage() {
 
   // Status toast
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+
+  // Progress dialog state
+  const [progressOpen, setProgressOpen] = useState(false);
+  const [progressExpectedStage, setProgressExpectedStage] = useState("VISUAL_ASSET_GENERATING");
+
+  // Scene regeneration model override
+  const [regenModelKey, setRegenModelKey] = useState<string | null>(null);
+
+  // Asset grid refresh key — increment to force re-fetch
+  const [assetRefreshKey, setAssetRefreshKey] = useState(0);
 
   // ---- data fetching ----
 
@@ -121,7 +138,7 @@ export default function ProjectPage() {
     }
   }, []);
 
-  // ---- actions ----
+  // ---- script actions ----
 
   const handleApprove = useCallback(async () => {
     if (!run) return;
@@ -192,6 +209,8 @@ export default function ProjectPage() {
     }
   }, [run, refreshRun]);
 
+  // ---- visual plan actions ----
+
   const handleApproveVisualPlan = useCallback(async () => {
     if (!run) return;
     setApproving(true);
@@ -261,15 +280,174 @@ export default function ProjectPage() {
     }
   }, [run, refreshRun]);
 
+  // ---- visual asset actions ----
+
+  const handleGenerateAllAssets = useCallback(async () => {
+    if (!run) return;
+    setGenerating(true);
+    setStatusMessage(null);
+    try {
+      const res = await fetch(`${API_BASE}/runs/${run.id}/generate-visual-assets`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model_key: "sd15" }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail ?? `Generate assets failed (${res.status})`);
+      }
+      setStatusMessage("Visual asset generation started");
+      setProgressExpectedStage("VISUAL_ASSET_GENERATING");
+      setProgressOpen(true);
+    } catch (err) {
+      setStatusMessage(err instanceof Error ? err.message : "Generate assets failed");
+    } finally {
+      setGenerating(false);
+    }
+  }, [run]);
+
+  const handleRegenerateScene = useCallback(
+    async (sceneId: string) => {
+      if (!run) return;
+      setStatusMessage(null);
+      try {
+        const payload: Record<string, string> = {};
+        if (regenModelKey) payload.model_key = regenModelKey;
+        const res = await fetch(
+          `${API_BASE}/runs/${run.id}/visual-plan/scenes/${sceneId}/regenerate-image`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          },
+        );
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          throw new Error(body?.detail ?? `Regenerate failed (${res.status})`);
+        }
+        setStatusMessage(`Regenerating scene ${sceneId}…`);
+        // Refresh asset grid after a short delay for task to complete
+        setTimeout(() => {
+          setAssetRefreshKey((k) => k + 1);
+          if (run) refreshRun(run.id);
+        }, 3000);
+      } catch (err) {
+        setStatusMessage(err instanceof Error ? err.message : "Regenerate failed");
+      }
+    },
+    [run, regenModelKey, refreshRun],
+  );
+
+  const handleGenerateScene = useCallback(
+    async (sceneId: string) => {
+      if (!run) return;
+      setStatusMessage(null);
+      try {
+        const res = await fetch(
+          `${API_BASE}/runs/${run.id}/visual-plan/scenes/${sceneId}/generate-image`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model_key: "sd15" }),
+          },
+        );
+        if (!res.ok) {
+          const body = await res.json().catch(() => null);
+          throw new Error(body?.detail ?? `Generate scene failed (${res.status})`);
+        }
+        setStatusMessage(`Generating image for scene ${sceneId}…`);
+        setTimeout(() => {
+          setAssetRefreshKey((k) => k + 1);
+          if (run) refreshRun(run.id);
+        }, 3000);
+      } catch (err) {
+        setStatusMessage(err instanceof Error ? err.message : "Generate scene failed");
+      }
+    },
+    [run, refreshRun],
+  );
+
+  const handleApproveAssets = useCallback(async () => {
+    if (!run) return;
+    setApproving(true);
+    setStatusMessage(null);
+    try {
+      const res = await fetch(`${API_BASE}/runs/${run.id}/approve-visual-assets`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reviewer: "agent" }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail ?? `Approve failed (${res.status})`);
+      }
+      setStatusMessage("Visual assets approved");
+      await refreshRun(run.id);
+    } catch (err) {
+      setStatusMessage(err instanceof Error ? err.message : "Approve assets failed");
+    } finally {
+      setApproving(false);
+    }
+  }, [run, refreshRun]);
+
+  const handleRestartAssets = useCallback(async () => {
+    if (!run) return;
+    setRestarting(true);
+    setStatusMessage(null);
+    try {
+      const res = await fetch(`${API_BASE}/runs/${run.id}/restart`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stage: "VISUAL_ASSET_GENERATING" }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail ?? `Restart failed (${res.status})`);
+      }
+      setStatusMessage("Restarting visual asset generation…");
+      await refreshRun(run.id);
+    } catch (err) {
+      setStatusMessage(err instanceof Error ? err.message : "Restart failed");
+    } finally {
+      setRestarting(false);
+    }
+  }, [run, refreshRun]);
+
+  // ---- progress dialog callbacks ----
+
+  const handleProgressComplete = useCallback(
+    (stage: string) => {
+      setProgressOpen(false);
+      setStatusMessage(`Generation complete — now at ${stage}`);
+      if (run) {
+        refreshRun(run.id);
+        setAssetRefreshKey((k) => k + 1);
+      }
+    },
+    [run, refreshRun],
+  );
+
+  const handleProgressFailed = useCallback(
+    (_stage: string) => {
+      setProgressOpen(false);
+      setStatusMessage("Generation failed");
+      if (run) refreshRun(run.id);
+    },
+    [run, refreshRun],
+  );
+
   // ---- derived state ----
 
   const currentStage = run?.current_stage ?? "IDEA_READY";
   const isFailed = run?.status === "failed";
   const isScriptStage = SCRIPT_STAGES.has(currentStage);
   const isVisualPlanStage = VISUAL_PLAN_STAGES.has(currentStage);
+  const isVisualAssetStage = VISUAL_ASSET_STAGES.has(currentStage);
   const isEditable = EDITABLE_STAGES.has(currentStage);
   const isGenerating = currentStage === "SCRIPT_GENERATING";
   const isVPGenerating = currentStage === "VISUAL_PLAN_GENERATING";
+  const isVAGenerating = currentStage === "VISUAL_ASSET_GENERATING";
+
   // ---- action bar config ----
 
   const buildActionBar = (): {
@@ -278,6 +456,34 @@ export default function ProjectPage() {
     generate: ActionConfig;
     restart: ActionConfig;
   } => {
+    // Visual asset stages
+    if (isVisualAssetStage) {
+      return {
+        save: { visible: false },
+        approve: {
+          visible: currentStage === "VISUAL_ASSET_REVIEW",
+          disabled: approving,
+          loading: approving,
+          onClick: handleApproveAssets,
+          label: "Approve Assets",
+        },
+        generate: {
+          visible: currentStage === "VISUAL_ASSET_REVIEW",
+          disabled: generating,
+          loading: generating,
+          onClick: handleGenerateAllAssets,
+          label: "Regenerate All",
+        },
+        restart: {
+          visible: currentStage === "VISUAL_ASSET_REVIEW",
+          disabled: restarting,
+          loading: restarting,
+          onClick: handleRestartAssets,
+          label: "Restart Assets",
+        },
+      };
+    }
+
     // Visual plan stages
     if (isVisualPlanStage) {
       return {
@@ -556,6 +762,7 @@ export default function ProjectPage() {
           )}
         </div>
       )}
+
       {/* Visual plan editor area */}
       {run && isVisualPlanStage && !isVPGenerating && (
         <div style={{ marginBottom: 24 }}>
@@ -566,6 +773,136 @@ export default function ProjectPage() {
             onError={(_action, msg) => setStatusMessage(msg)}
           />
         </div>
+      )}
+
+      {/* Visual asset area */}
+      {run && isVisualAssetStage && (
+        <div data-testid="visual-asset-section" style={{ marginBottom: 24 }}>
+          {/* Asset generating indicator (inline — ProgressDialog also available) */}
+          {isVAGenerating && !progressOpen && (
+            <div
+              data-testid="va-generating-indicator"
+              style={{
+                textAlign: "center",
+                padding: 32,
+                background: "#fdf4ff",
+                borderRadius: 8,
+                border: "1px solid #e9d5ff",
+                color: "#6b21a8",
+                marginBottom: 16,
+              }}
+            >
+              <p style={{ margin: "0 0 4px", fontWeight: 600 }}>Generating Visual Assets…</p>
+              <p style={{ margin: 0, fontSize: 13 }}>
+                Image generation is in progress. This may take several minutes.
+              </p>
+            </div>
+          )}
+
+          {/* Asset grid — visible in review or generating (read-only during generation) */}
+          <VisualAssetGrid
+            key={assetRefreshKey}
+            runId={run.id}
+            apiBase={API_BASE}
+            readOnly={isVAGenerating}
+            onSelect={() => setStatusMessage("Active asset updated")}
+            onError={(_action, msg) => setStatusMessage(msg)}
+          />
+
+          {/* Scene-level regeneration controls (review stage only) */}
+          {currentStage === "VISUAL_ASSET_REVIEW" && (
+            <div
+              data-testid="scene-regen-controls"
+              style={{
+                marginTop: 16,
+                padding: 16,
+                border: "1px solid #e5e7eb",
+                borderRadius: 8,
+                background: "#f9fafb",
+              }}
+            >
+              <h4 style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 600 }}>
+                Regenerate Single Scene
+              </h4>
+
+              {/* Model override selector — image category only */}
+              <div style={{ marginBottom: 12 }}>
+                <ModelSelector
+                  categories={["image"]}
+                  apiBase={API_BASE}
+                  onSelectionChange={(_cat, modelKey) => setRegenModelKey(modelKey)}
+                />
+              </div>
+
+              {/* Scene action buttons — rendered per-scene from the asset grid data is impractical
+                  without lifting scene IDs up. Instead, provide a text input for scene ID. */}
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                <input
+                  data-testid="scene-id-input"
+                  type="text"
+                  placeholder="Scene ID (e.g. scene-0)"
+                  style={{
+                    flex: 1,
+                    padding: "6px 10px",
+                    border: "1px solid #d1d5db",
+                    borderRadius: 4,
+                    fontSize: 13,
+                  }}
+                  id="regen-scene-id"
+                />
+                <button
+                  data-testid="regen-scene-btn"
+                  onClick={() => {
+                    const input = document.getElementById("regen-scene-id") as HTMLInputElement;
+                    const sceneId = input?.value?.trim();
+                    if (sceneId) handleRegenerateScene(sceneId);
+                  }}
+                  style={{
+                    padding: "6px 16px",
+                    border: "1px solid #d1d5db",
+                    borderRadius: 4,
+                    background: "#fff",
+                    cursor: "pointer",
+                    fontSize: 13,
+                  }}
+                >
+                  Regenerate
+                </button>
+                <button
+                  data-testid="generate-scene-btn"
+                  onClick={() => {
+                    const input = document.getElementById("regen-scene-id") as HTMLInputElement;
+                    const sceneId = input?.value?.trim();
+                    if (sceneId) handleGenerateScene(sceneId);
+                  }}
+                  style={{
+                    padding: "6px 16px",
+                    border: "1px solid #d1d5db",
+                    borderRadius: 4,
+                    background: "#fff",
+                    cursor: "pointer",
+                    fontSize: 13,
+                  }}
+                >
+                  Generate New
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ProgressDialog for long-running generation */}
+      {run && (
+        <ProgressDialog
+          open={progressOpen}
+          runId={run.id}
+          expectedStage={progressExpectedStage}
+          apiBase={API_BASE}
+          onComplete={handleProgressComplete}
+          onFailed={handleProgressFailed}
+          onClose={() => setProgressOpen(false)}
+        />
       )}
 
       {/* Stage action bar */}
