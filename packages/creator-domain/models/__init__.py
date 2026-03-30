@@ -3,6 +3,15 @@ from .model_selection import ModelSelection
 from .pipeline_run import PipelineRun
 from .project import Project
 from .script_draft import ScriptDraft, ScriptSection, VisualOverride
+from .stage import (
+    GENERATING_STAGES,
+    REVIEW_STAGES,
+    TRANSITIONS,
+    RunStage,
+    advance,
+    can_transition,
+    next_stages,
+)
 from .subtitle_artifact import SubtitleArtifact
 from .video_artifact import VideoArtifact
 from .visual_asset import VisualAsset
@@ -15,6 +24,13 @@ __all__ = [
     "ScriptDraft",
     "ScriptSection",
     "VisualOverride",
+    "RunStage",
+    "TRANSITIONS",
+    "REVIEW_STAGES",
+    "GENERATING_STAGES",
+    "can_transition",
+    "next_stages",
+    "advance",
     "VisualPlan",
     "VisualScene",
     "VisualAsset",
