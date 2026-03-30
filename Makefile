@@ -18,7 +18,9 @@ format:
 	@if [ -d apps/studio-web/node_modules ]; then npm --prefix apps/studio-web run format; else echo "Skipping studio-web format (run make install first)"; fi
 
 test:
-	@echo "No tests scaffolded yet."
+	cd apps/api && python -m pytest tests/ -v
+	cd apps/worker-orchestrator && python -m pytest tests/ -v
+	@if [ -d apps/studio-web/node_modules ]; then npm --prefix apps/studio-web run test; else echo "Skipping studio-web tests (run make install first)"; fi
 
 build:
 	python3 -m compileall apps packages

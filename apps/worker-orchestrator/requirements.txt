@@ -4,4 +4,4 @@ watchfiles
 
 
 # Dev dependencies
-ruff
+ruffpytest
