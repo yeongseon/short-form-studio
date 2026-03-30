@@ -32,10 +32,17 @@ class VisualAssetStorageBackend(Protocol):
     async def save_asset(self, row: dict[str, Any]) -> dict[str, Any]:
         """Persist a visual asset row and return stored row with id assigned.
 
-        The storage backend atomically allocates the next version number
-        for the given ``(run_id, scene_id)`` pair.  Callers MUST NOT
-        include ``version`` in *row*; the returned dict MUST contain the
-        allocated ``version``.
+        The storage backend atomically:
+        1. Allocates the next version number for ``(run_id, scene_id)``.
+        2. If ``row["is_active"]`` is True, deactivates any previously-active
+           asset for the same ``(run_id, scene_id)``.
+        3. Inserts the new row.
+
+        All three steps MUST execute under a single lock/transaction so that
+        concurrent creates cannot produce two active assets for one scene.
+
+        Callers MUST NOT include ``version`` in *row*; the returned dict
+        MUST contain the allocated ``version``.
         """
         ...
 
@@ -88,6 +95,15 @@ class InMemoryVisualAssetStorage:
         key = (run_id, scene_id)
         lock = self._scene_locks.setdefault(key, asyncio.Lock())
         async with lock:
+            # Deactivate previous active if this asset should be active.
+            if row.get("is_active", False):
+                for a in self._assets:
+                    if (
+                        a["run_id"] == run_id
+                        and a["scene_id"] == scene_id
+                        and a.get("is_active", False)
+                    ):
+                        a["is_active"] = False
             # Compute next version for this scene
             scene_assets = [
                 a for a in self._assets
@@ -188,10 +204,10 @@ class VisualAssetService:
         """Create a new asset version for a scene.
 
         If *is_active* is True (default), any previously-active asset for
-        the same scene is deactivated first.
-
-        Version allocation is delegated to the storage backend to
-        guarantee atomicity.
+        the same scene is deactivated first.  Version allocation AND
+        deactivation are delegated to the storage backend as a single
+        atomic operation (under one lock) to prevent race conditions
+        between concurrent creates.
         """
         row = {
             "run_id": run_id,
@@ -202,11 +218,9 @@ class VisualAssetService:
             "provider": provider_type,  # DB column is 'provider'
             "is_active": is_active,
         }
+        # save_asset atomically: allocates version, deactivates previous
+        # active (when is_active=True), and inserts — all under one lock.
         saved = await self.storage.save_asset(row)
-
-        # If this asset should be active, deactivate others
-        if is_active:
-            await self.storage.set_active(run_id, scene_id, saved["id"])
 
         return self._row_to_asset(saved)
 

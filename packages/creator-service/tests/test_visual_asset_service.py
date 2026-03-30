@@ -348,3 +348,64 @@ def test_different_runs_have_independent_assets(service: VisualAssetService) -> 
     assert len(r2_assets) == 1
     assert r1_assets[0].version == 1
     assert r2_assets[0].version == 1
+
+
+# -- Concurrent active invariant (Oracle PR #140 feedback) ---------------------
+
+
+@pytest.mark.asyncio
+async def test_concurrent_creates_exactly_one_active() -> None:
+    """Two concurrent active creates for the same scene must leave exactly one
+    active asset, and it must be the latest version."""
+    storage = InMemoryVisualAssetStorage()
+    svc = VisualAssetService(storage)
+
+    results = await asyncio.gather(
+        svc.create_asset(run_id=1, scene_id="sc-1", asset_path="/a.png"),
+        svc.create_asset(run_id=1, scene_id="sc-1", asset_path="/b.png"),
+    )
+
+    # Both should have unique versions
+    versions = sorted(a.version for a in results)
+    assert versions == [1, 2]
+
+    # Exactly one active asset
+    all_assets = await storage.list_assets_by_scene(1, "sc-1")
+    active_assets = [a for a in all_assets if a.get("is_active", False)]
+    assert len(active_assets) == 1, f"Expected 1 active, got {len(active_assets)}"
+
+    # The active one must be the latest version
+    assert active_assets[0]["version"] == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_creates_across_instances_exactly_one_active() -> None:
+    """Two service instances sharing storage: exactly one active after concurrent creates."""
+    storage = InMemoryVisualAssetStorage()
+    svc_a = VisualAssetService(storage)
+    svc_b = VisualAssetService(storage)
+
+    await asyncio.gather(
+        svc_a.create_asset(run_id=1, scene_id="sc-1", asset_path="/a.png"),
+        svc_b.create_asset(run_id=1, scene_id="sc-1", asset_path="/b.png"),
+    )
+
+    all_assets = await storage.list_assets_by_scene(1, "sc-1")
+    active_assets = [a for a in all_assets if a.get("is_active", False)]
+    assert len(active_assets) == 1
+    assert active_assets[0]["version"] == 2
+
+
+def test_create_inactive_preserves_existing_active(service: VisualAssetService) -> None:
+    """Creating an asset with is_active=False must not deactivate the existing active asset."""
+    first = run(service.create_asset(run_id=1, scene_id="sc-1", asset_path="/v1.png", is_active=True))
+    assert first.is_active is True
+
+    second = run(service.create_asset(run_id=1, scene_id="sc-1", asset_path="/v2.png", is_active=False))
+    assert second.is_active is False
+
+    # First should still be active
+    active = run(service.get_active_asset(run_id=1, scene_id="sc-1"))
+    assert active is not None
+    assert active.id == first.id
+    assert active.is_active is True
