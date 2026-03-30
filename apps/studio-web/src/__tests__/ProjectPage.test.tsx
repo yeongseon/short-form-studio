@@ -5,7 +5,14 @@ import ProjectPage from "../pages/ProjectPage";
 
 // ---- mock data ----
 
-const MOCK_PROJECT = {
+const MOCK_PROJECT: {
+  id: number;
+  title: string | null;
+  source_type: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+} = {
   id: 7,
   title: "My Short",
   source_type: "idea",
@@ -104,6 +111,20 @@ function mockFetchProjectAndRuns(
     }
     // GET /runs/:id (for refreshRun)
     // GET /runs/:id/visual-assets
+    // GET /runs/:id/preview
+    if (url.includes("/preview")) {
+      return Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            run_id: 1,
+            current_stage: "FINAL_REVIEW",
+            video: { id: 1, path: "data/artifacts/1/render/output.mp4", render_profile: "shorts_default" },
+            audio: { id: 2, path: "data/artifacts/1/audio/audio.wav", model_used: "piper" },
+            subtitle: { id: 3, path: "data/artifacts/1/subtitles/subtitles.srt", format: "srt" },
+          }),
+      } as Response);
+    }
     if (url.includes("/visual-assets")) {
       return Promise.resolve({
         ok: true,
@@ -350,7 +371,7 @@ describe("ProjectPage", () => {
 
   // ---- Untitled project ----
   it("shows 'Untitled Project' for null title", async () => {
-    mockFetchProjectAndRuns({ ...MOCK_PROJECT, title: null }, []);
+    mockFetchProjectAndRuns({ ...MOCK_PROJECT, title: null as unknown as string }, []);
     renderPage();
     await waitFor(() => {
       expect(screen.getByText("Untitled Project")).toBeInTheDocument();
@@ -511,6 +532,38 @@ describe("ProjectPage", () => {
     restart_from: null,
   };
 
+  const MOCK_RUN_AUDIO_GENERATING = {
+    id: 1,
+    project_id: 7,
+    current_stage: "AUDIO_GENERATING",
+    status: "running",
+    restart_from: null,
+  };
+
+  const MOCK_RUN_SUBTITLE_GENERATING = {
+    id: 1,
+    project_id: 7,
+    current_stage: "SUBTITLE_GENERATING",
+    status: "running",
+    restart_from: null,
+  };
+
+  const MOCK_RUN_RENDER_GENERATING = {
+    id: 1,
+    project_id: 7,
+    current_stage: "RENDER_GENERATING",
+    status: "running",
+    restart_from: null,
+  };
+
+  const MOCK_RUN_FINAL_REVIEW = {
+    id: 1,
+    project_id: 7,
+    current_stage: "FINAL_REVIEW",
+    status: "running",
+    restart_from: null,
+  };
+
   it("shows VA generating indicator for VISUAL_ASSET_GENERATING", async () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VA_GENERATING]);
     renderPage();
@@ -642,5 +695,63 @@ describe("ProjectPage", () => {
       );
       expect(calls.some((u) => u.includes("/scenes/scene-1/generate-image"))).toBe(true);
     });
+  });
+
+  // ---- Audio / Subtitle / Render / Final Review Stages ----
+
+  it("shows audio generating indicator for AUDIO_GENERATING", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_AUDIO_GENERATING]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("audio-generating-indicator")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Generating Audio…")).toBeInTheDocument();
+  });
+
+  it("shows subtitle generating indicator for SUBTITLE_GENERATING", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_SUBTITLE_GENERATING]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("subtitle-generating-indicator")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Generating Subtitles…")).toBeInTheDocument();
+  });
+
+  it("shows render generating indicator for RENDER_GENERATING", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_RENDER_GENERATING]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("render-generating-indicator")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Rendering Video…")).toBeInTheDocument();
+  });
+
+  it("shows final review section with review link for FINAL_REVIEW", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_FINAL_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("final-review-section")).toBeInTheDocument();
+    });
+    expect(screen.getByText("🎬 Pipeline Complete")).toBeInTheDocument();
+    expect(screen.getByTestId("review-link")).toBeInTheDocument();
+    expect(screen.getByTestId("review-link").getAttribute("href")).toBe("/review/1");
+  });
+
+  it("shows Restart from Script button in FINAL_REVIEW", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_FINAL_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Restart from Script" })).toBeInTheDocument();
+    });
+  });
+
+  it("hides approve and generate buttons during AUDIO_GENERATING", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_AUDIO_GENERATING]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("audio-generating-indicator")).toBeInTheDocument();
+    });
+    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Generate" })).not.toBeInTheDocument();
   });
 });

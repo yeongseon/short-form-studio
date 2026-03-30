@@ -6,6 +6,8 @@
  * - Editor area with markdown / structured toggle (during script stages)
  * - VisualPlanEditor (during visual plan stages)
  * - VisualAssetGrid + ProgressDialog (during visual asset stages)
+ * - Audio / subtitle / render generating indicators (automatic stages)
+ * - Final review section with preview summary and review-page link
  * - StageActionBar (save / approve / generate / restart)
  */
 
@@ -53,6 +55,18 @@ const VISUAL_PLAN_STAGES = new Set(["VISUAL_PLAN_GENERATING", "VISUAL_PLAN_REVIE
 // Visual asset stages
 const VISUAL_ASSET_STAGES = new Set(["VISUAL_ASSET_GENERATING", "VISUAL_ASSET_REVIEW"]);
 
+// Audio stage
+const AUDIO_STAGES = new Set(["AUDIO_GENERATING"]);
+
+// Subtitle stage
+const SUBTITLE_STAGES = new Set(["SUBTITLE_GENERATING"]);
+
+// Render stage
+const RENDER_STAGES = new Set(["RENDER_GENERATING"]);
+
+// Final review
+const FINAL_REVIEW_STAGES = new Set(["FINAL_REVIEW"]);
+
 // Stages where editing is allowed (not generating)
 const EDITABLE_STAGES = new Set(["SCRIPT_REVIEW", "VISUAL_PLAN_REVIEW"]);
 
@@ -86,6 +100,9 @@ export default function ProjectPage() {
 
   // Asset grid refresh key — increment to force re-fetch
   const [assetRefreshKey, setAssetRefreshKey] = useState(0);
+
+  // Preview data for FINAL_REVIEW
+  const [preview, setPreview] = useState<Record<string, unknown> | null>(null);
 
   // ---- data fetching ----
 
@@ -123,6 +140,24 @@ export default function ProjectPage() {
       fetchProjectAndRun();
     }
   }, [numericProjectId, fetchProjectAndRun]);
+
+  useEffect(() => {
+    if (!run || run.current_stage !== "FINAL_REVIEW") {
+      setPreview(null);
+      return;
+    }
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/runs/${run.id}/preview`);
+        if (res.ok) {
+          const data = await res.json();
+          setPreview(data);
+        }
+      } catch {
+        // non-critical
+      }
+    })();
+  }, [run]);
 
   // ---- refresh run ----
 
@@ -413,6 +448,84 @@ export default function ProjectPage() {
     }
   }, [run, refreshRun]);
 
+  // ---- audio actions ----
+
+  const handleGenerateAudio = useCallback(async () => {
+    if (!run) return;
+    setGenerating(true);
+    setStatusMessage(null);
+    try {
+      const res = await fetch(`${API_BASE}/runs/${run.id}/generate-audio`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tts_model: "piper", voice: "default" }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail ?? `Generate audio failed (${res.status})`);
+      }
+      setStatusMessage("Audio generation started");
+      setProgressExpectedStage("AUDIO_GENERATING");
+      setProgressOpen(true);
+    } catch (err) {
+      setStatusMessage(err instanceof Error ? err.message : "Generate audio failed");
+    } finally {
+      setGenerating(false);
+    }
+  }, [run]);
+
+  // ---- subtitle actions ----
+
+  const handleGenerateSubtitles = useCallback(async () => {
+    if (!run) return;
+    setGenerating(true);
+    setStatusMessage(null);
+    try {
+      const res = await fetch(`${API_BASE}/runs/${run.id}/generate-subtitles`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ subtitle_model: "whisper", subtitle_format: "srt" }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail ?? `Generate subtitles failed (${res.status})`);
+      }
+      setStatusMessage("Subtitle generation started");
+      setProgressExpectedStage("SUBTITLE_GENERATING");
+      setProgressOpen(true);
+    } catch (err) {
+      setStatusMessage(err instanceof Error ? err.message : "Generate subtitles failed");
+    } finally {
+      setGenerating(false);
+    }
+  }, [run]);
+
+  // ---- render actions ----
+
+  const handleRender = useCallback(async () => {
+    if (!run) return;
+    setGenerating(true);
+    setStatusMessage(null);
+    try {
+      const res = await fetch(`${API_BASE}/runs/${run.id}/render`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ render_profile: "shorts_default" }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail ?? `Render failed (${res.status})`);
+      }
+      setStatusMessage("Render started");
+      setProgressExpectedStage("RENDER_GENERATING");
+      setProgressOpen(true);
+    } catch (err) {
+      setStatusMessage(err instanceof Error ? err.message : "Render failed");
+    } finally {
+      setGenerating(false);
+    }
+  }, [run]);
+
   // ---- progress dialog callbacks ----
 
   const handleProgressComplete = useCallback(
@@ -447,6 +560,19 @@ export default function ProjectPage() {
   const isGenerating = currentStage === "SCRIPT_GENERATING";
   const isVPGenerating = currentStage === "VISUAL_PLAN_GENERATING";
   const isVAGenerating = currentStage === "VISUAL_ASSET_GENERATING";
+  const isAudioStage = AUDIO_STAGES.has(currentStage);
+  const isSubtitleStage = SUBTITLE_STAGES.has(currentStage);
+  const isRenderStage = RENDER_STAGES.has(currentStage);
+  const isFinalReview = FINAL_REVIEW_STAGES.has(currentStage);
+  const previewVideo = (preview as Record<string, unknown> | null)?.video;
+  const previewVideoPath =
+    previewVideo && typeof previewVideo === "object"
+      ? (previewVideo as Record<string, unknown>).path
+      : null;
+
+  void handleGenerateAudio;
+  void handleGenerateSubtitles;
+  void handleRender;
 
   // ---- action bar config ----
 
@@ -456,6 +582,52 @@ export default function ProjectPage() {
     generate: ActionConfig;
     restart: ActionConfig;
   } => {
+    // Final review — no actions needed, just view
+    if (isFinalReview) {
+      return {
+        save: { visible: false },
+        approve: { visible: false },
+        generate: { visible: false },
+        restart: {
+          visible: true,
+          disabled: restarting,
+          loading: restarting,
+          onClick: handleRestart,
+          label: "Restart from Script",
+        },
+      };
+    }
+
+    // Render stage
+    if (isRenderStage) {
+      return {
+        save: { visible: false },
+        approve: { visible: false },
+        generate: { visible: false, onClick: handleRender },
+        restart: { visible: false },
+      };
+    }
+
+    // Subtitle stage
+    if (isSubtitleStage) {
+      return {
+        save: { visible: false },
+        approve: { visible: false },
+        generate: { visible: false, onClick: handleGenerateSubtitles },
+        restart: { visible: false },
+      };
+    }
+
+    // Audio stage
+    if (isAudioStage) {
+      return {
+        save: { visible: false },
+        approve: { visible: false },
+        generate: { visible: false, onClick: handleGenerateAudio },
+        restart: { visible: false },
+      };
+    }
+
     // Visual asset stages
     if (isVisualAssetStage) {
       return {
@@ -698,6 +870,7 @@ export default function ProjectPage() {
             }}
           >
             <button
+              type="button"
               role="tab"
               id="tab-markdown"
               aria-selected={editorMode === "markdown"}
@@ -717,6 +890,7 @@ export default function ProjectPage() {
               Markdown
             </button>
             <button
+              type="button"
               role="tab"
               id="tab-structured"
               aria-selected={editorMode === "structured"}
@@ -851,6 +1025,7 @@ export default function ProjectPage() {
                   id="regen-scene-id"
                 />
                 <button
+                  type="button"
                   data-testid="regen-scene-btn"
                   onClick={() => {
                     const input = document.getElementById("regen-scene-id") as HTMLInputElement;
@@ -869,6 +1044,7 @@ export default function ProjectPage() {
                   Regenerate
                 </button>
                 <button
+                  type="button"
                   data-testid="generate-scene-btn"
                   onClick={() => {
                     const input = document.getElementById("regen-scene-id") as HTMLInputElement;
@@ -889,6 +1065,111 @@ export default function ProjectPage() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Audio generating indicator */}
+      {run && isAudioStage && (
+        <div
+          data-testid="audio-generating-indicator"
+          style={{
+            textAlign: "center",
+            padding: 32,
+            background: "#fefce8",
+            borderRadius: 8,
+            border: "1px solid #fde68a",
+            color: "#92400e",
+            marginBottom: 24,
+          }}
+        >
+          <p style={{ margin: "0 0 4px", fontWeight: 600 }}>Generating Audio…</p>
+          <p style={{ margin: 0, fontSize: 13 }}>
+            The TTS model is generating audio narration. This may take a moment.
+          </p>
+        </div>
+      )}
+
+      {/* Subtitle generating indicator */}
+      {run && isSubtitleStage && (
+        <div
+          data-testid="subtitle-generating-indicator"
+          style={{
+            textAlign: "center",
+            padding: 32,
+            background: "#f0f9ff",
+            borderRadius: 8,
+            border: "1px solid #bae6fd",
+            color: "#075985",
+            marginBottom: 24,
+          }}
+        >
+          <p style={{ margin: "0 0 4px", fontWeight: 600 }}>Generating Subtitles…</p>
+          <p style={{ margin: 0, fontSize: 13 }}>
+            The STT model is generating subtitles from audio. This may take a moment.
+          </p>
+        </div>
+      )}
+
+      {/* Render generating indicator */}
+      {run && isRenderStage && (
+        <div
+          data-testid="render-generating-indicator"
+          style={{
+            textAlign: "center",
+            padding: 32,
+            background: "#faf5ff",
+            borderRadius: 8,
+            border: "1px solid #d8b4fe",
+            color: "#6b21a8",
+            marginBottom: 24,
+          }}
+        >
+          <p style={{ margin: "0 0 4px", fontWeight: 600 }}>Rendering Video…</p>
+          <p style={{ margin: 0, fontSize: 13 }}>
+            FFmpeg is rendering the final video. This may take several minutes.
+          </p>
+        </div>
+      )}
+
+      {/* Final review section */}
+      {run && isFinalReview && (
+        <div
+          data-testid="final-review-section"
+          style={{
+            textAlign: "center",
+            padding: 32,
+            background: "#f0fdf4",
+            borderRadius: 8,
+            border: "1px solid #bbf7d0",
+            color: "#166534",
+            marginBottom: 24,
+          }}
+        >
+          <p style={{ margin: "0 0 8px", fontWeight: 600, fontSize: 16 }}>🎬 Pipeline Complete</p>
+          <p style={{ margin: "0 0 16px", fontSize: 13 }}>
+            All stages are done. Review the final output or restart from any stage.
+          </p>
+          {typeof previewVideoPath === "string" && (
+            <p style={{ margin: "0 0 8px", fontSize: 13, color: "#374151" }}>
+              Video: {previewVideoPath}
+            </p>
+          )}
+          <Link
+            to={`/review/${run.id}`}
+            data-testid="review-link"
+            style={{
+              display: "inline-block",
+              padding: "8px 24px",
+              background: "#166534",
+              color: "#fff",
+              borderRadius: 6,
+              textDecoration: "none",
+              fontWeight: 600,
+              fontSize: 14,
+            }}
+          >
+            Open Review Page →
+          </Link>
         </div>
       )}
 
