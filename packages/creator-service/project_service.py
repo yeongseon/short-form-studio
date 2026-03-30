@@ -37,6 +37,9 @@ class ProjectStorageBackend(Protocol):
     async def fetch_latest_run_summary(self, project_id: int) -> LatestRunSummary | None:
         ...
 
+    async def count_projects(self) -> int:
+        ...
+
 
 class InMemoryProjectStorage:
     """Temporary async storage backend used before DB integration."""
@@ -79,6 +82,9 @@ class InMemoryProjectStorage:
             reverse=True,
         )
         return [dict(row) for row in ordered[offset : offset + limit]]
+
+    async def count_projects(self) -> int:
+        return len(self._projects)
 
     async def fetch_latest_run_summary(self, project_id: int) -> LatestRunSummary | None:
         runs = self._runs_by_project.get(project_id, [])
@@ -179,6 +185,9 @@ class ProjectService:
             latest_run = await self.db.fetch_latest_run_summary(row["id"])
             projects.append(ProjectWithLatestRun.model_validate({**row, "latest_run": latest_run}))
         return projects
+
+    async def count_projects(self) -> int:
+        return await self.db.count_projects()
 
 
 project_service = ProjectService()
