@@ -2,6 +2,9 @@ fastapi
 uvicorn
 celery
 redis
+alembic
+sqlalchemy
+psycopg2-binary
 
 
 # Dev dependencies
