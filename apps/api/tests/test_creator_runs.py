@@ -140,7 +140,7 @@ def stub_run_service(monkeypatch: pytest.MonkeyPatch) -> StubRunService:
     service = StubRunService()
 
     for route in runs_router.routes:
-        if route.name in {"create_run", "get_run_detail", "restart_run", "approve_script"}:
+        if route.name in {"create_run", "get_run_detail", "restart_run", "approve_script", "generate_script_trigger"}:
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", service)
 
     return service
@@ -405,3 +405,189 @@ async def test_approve_script_wrong_stage_generating(client, stub_approve_servic
 
     assert response.status_code == 409
     assert "conflict" in response.json()["detail"].lower()
+
+
+class StubProject(BaseModel):
+    id: int
+    title: str | None = None
+    source_type: str = "idea"
+    idea_brief: str | None = None
+    markdown_source: str | None = None
+    url_source: str | None = None
+    status: str = "draft"
+    created_at: datetime
+    updated_at: datetime
+
+
+class StubProjectService:
+    def __init__(self) -> None:
+        self.projects: dict[int, StubProject] = {}
+
+    async def get_project(self, project_id: int) -> StubProject | None:
+        return self.projects.get(project_id)
+
+
+class StubDispatcher:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+        self.task_id = "test-task-id-123"
+
+    def __call__(
+        self, run_id: int, idea_brief: str, model_key: str, instructions: str | None
+    ) -> str:
+        self.calls.append({
+            "run_id": run_id,
+            "idea_brief": idea_brief,
+            "model_key": model_key,
+            "instructions": instructions,
+        })
+        return self.task_id
+
+
+@pytest.fixture
+def stub_generate_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubProjectService, StubDispatcher]:
+    run_svc = StubRunService()
+    project_svc = StubProjectService()
+    dispatcher = StubDispatcher()
+
+    for route in runs_router.routes:
+        if route.name == "generate_script_trigger":
+            monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
+            monkeypatch.setitem(route.endpoint.__globals__, "project_service", project_svc)
+            monkeypatch.setitem(route.endpoint.__globals__, "dispatch_generate_script", dispatcher)
+
+    return run_svc, project_svc, dispatcher
+
+
+def _make_project(project_id: int, idea_brief: str = "Test idea") -> StubProject:
+    now = datetime.now(timezone.utc)
+    return StubProject(
+        id=project_id,
+        title="Test Project",
+        source_type="idea",
+        idea_brief=idea_brief,
+        status="draft",
+        created_at=now,
+        updated_at=now,
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_script_from_idea_ready(client, stub_generate_services):
+    run_svc, project_svc, dispatcher = stub_generate_services
+    run_svc.runs[10] = _make_run(10, "IDEA_READY")
+    project_svc.projects[1] = _make_project(1, "Create a cooking tutorial")
+
+    response = await client.post(
+        "/api/creator/runs/10/generate-script",
+        json={"model_key": "qwen3-4b", "instructions": "Focus on pasta"},
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["task_id"] == "test-task-id-123"
+    assert body["run_id"] == 10
+    assert body["current_stage"] == "SCRIPT_GENERATING"
+    assert run_svc.advance_stage_calls == [{"run_id": 10, "target_stage": "SCRIPT_GENERATING"}]
+    assert len(run_svc.restart_run_calls) == 0
+    assert dispatcher.calls == [{
+        "run_id": 10,
+        "idea_brief": "Create a cooking tutorial",
+        "model_key": "qwen3-4b",
+        "instructions": "Focus on pasta",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_generate_script_from_script_review(client, stub_generate_services):
+    run_svc, project_svc, dispatcher = stub_generate_services
+    run_svc.runs[11] = _make_run(11, "SCRIPT_REVIEW")
+    project_svc.projects[1] = _make_project(1, "Science explainer")
+
+    response = await client.post(
+        "/api/creator/runs/11/generate-script",
+        json={"model_key": "qwen3-4b"},
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["current_stage"] == "SCRIPT_GENERATING"
+    assert len(run_svc.restart_run_calls) == 1
+    assert run_svc.restart_run_calls[0] == {"run_id": 11, "from_stage": "SCRIPT_GENERATING"}
+    assert len(run_svc.advance_stage_calls) == 0
+    assert dispatcher.calls[0]["idea_brief"] == "Science explainer"
+
+
+@pytest.mark.asyncio
+async def test_generate_script_default_model(client, stub_generate_services):
+    run_svc, project_svc, dispatcher = stub_generate_services
+    run_svc.runs[12] = _make_run(12, "IDEA_READY")
+    project_svc.projects[1] = _make_project(1, "My idea")
+
+    response = await client.post(
+        "/api/creator/runs/12/generate-script",
+        json={},
+    )
+
+    assert response.status_code == 202
+    assert dispatcher.calls[0]["model_key"] == "qwen3-4b"
+    assert dispatcher.calls[0]["instructions"] is None
+
+
+@pytest.mark.asyncio
+async def test_generate_script_run_not_found(client, stub_generate_services):
+    _, _, _ = stub_generate_services
+    response = await client.post(
+        "/api/creator/runs/999/generate-script",
+        json={},
+    )
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_generate_script_wrong_stage_generating(client, stub_generate_services):
+    run_svc, _, _ = stub_generate_services
+    run_svc.runs[14] = _make_run(14, "SCRIPT_GENERATING")
+
+    response = await client.post(
+        "/api/creator/runs/14/generate-script",
+        json={},
+    )
+
+    assert response.status_code == 400
+    assert "SCRIPT_GENERATING" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_generate_script_wrong_stage_visual(client, stub_generate_services):
+    run_svc, _, _ = stub_generate_services
+    run_svc.runs[15] = _make_run(15, "VISUAL_PLAN_GENERATING")
+
+    response = await client.post(
+        "/api/creator/runs/15/generate-script",
+        json={},
+    )
+
+    assert response.status_code == 400
+    assert "VISUAL_PLAN_GENERATING" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_generate_script_idea_brief_fallback_to_title(client, stub_generate_services):
+    run_svc, project_svc, dispatcher = stub_generate_services
+    run_svc.runs[16] = _make_run(16, "IDEA_READY")
+    now = datetime.now(timezone.utc)
+    project_svc.projects[1] = StubProject(
+        id=1, title="Fallback Title", idea_brief=None,
+        created_at=now, updated_at=now,
+    )
+
+    response = await client.post(
+        "/api/creator/runs/16/generate-script",
+        json={},
+    )
+
+    assert response.status_code == 202
+    assert dispatcher.calls[0]["idea_brief"] == "Fallback Title"
