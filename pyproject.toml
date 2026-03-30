@@ -1,0 +1,20 @@
+[project]
+name = "short-form-pipeline"
+version = "0.1.0"
+description = "Scaffolded monorepo for short-form pipeline"
+readme = "README.md"
+requires-python = ">=3.12"
+
+[tool.uv.workspace]
+members = [
+  "apps/api",
+  "apps/worker-orchestrator",
+  "packages/creator-domain",
+  "packages/creator-service",
+  "packages/creator-provider",
+]
+
+[tool.basedpyright]
+typeCheckingMode = "basic"
+reportMissingTypeStubs = false
+reportUnknownMemberType = false
