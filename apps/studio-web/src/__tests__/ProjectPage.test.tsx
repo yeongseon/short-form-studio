@@ -103,6 +103,22 @@ function mockFetchProjectAndRuns(
       } as Response);
     }
     // GET /runs/:id (for refreshRun)
+    // GET /runs/:id/visual-assets
+    if (url.includes("/visual-assets")) {
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ run_id: 1, scenes: {}, total_scenes: 0, total_assets: 0 }),
+      } as Response);
+    }
+    // GET /api/creator/models
+    if (url.includes("/models")) {
+      return Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({ script_models: [], image_models: [], tts_models: [], stt_models: [] }),
+      } as Response);
+    }
+    // GET /runs/:id (for refreshRun)
     if (url.includes("/runs/")) {
       const latestRun = runs[0];
       if (latestRun) {
@@ -474,6 +490,157 @@ describe("ProjectPage", () => {
       expect(restartCall).toBeDefined();
       const body = JSON.parse(restartCall![1]!.body as string);
       expect(body.stage).toBe("VISUAL_PLAN_GENERATING");
+    });
+  });
+
+  // ---- Visual Asset Stages ----
+
+  const MOCK_RUN_VA_GENERATING = {
+    id: 1,
+    project_id: 7,
+    current_stage: "VISUAL_ASSET_GENERATING",
+    status: "running",
+    restart_from: null,
+  };
+
+  const MOCK_RUN_VA_REVIEW = {
+    id: 1,
+    project_id: 7,
+    current_stage: "VISUAL_ASSET_REVIEW",
+    status: "running",
+    restart_from: null,
+  };
+
+  it("shows VA generating indicator for VISUAL_ASSET_GENERATING", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VA_GENERATING]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("va-generating-indicator")).toBeInTheDocument();
+    });
+    expect(screen.getByText("Generating Visual Assets…")).toBeInTheDocument();
+  });
+
+  it("shows visual-asset-section for VISUAL_ASSET_REVIEW", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VA_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("visual-asset-section")).toBeInTheDocument();
+    });
+  });
+
+  it("shows scene regen controls in VISUAL_ASSET_REVIEW", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VA_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("scene-regen-controls")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("scene-id-input")).toBeInTheDocument();
+    expect(screen.getByTestId("regen-scene-btn")).toBeInTheDocument();
+    expect(screen.getByTestId("generate-scene-btn")).toBeInTheDocument();
+  });
+
+  it("hides scene regen controls during VISUAL_ASSET_GENERATING", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VA_GENERATING]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("visual-asset-section")).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("scene-regen-controls")).not.toBeInTheDocument();
+  });
+
+  it("shows Approve Assets button in VISUAL_ASSET_REVIEW", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VA_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Approve Assets" })).toBeInTheDocument();
+    });
+  });
+
+  it("calls approve-visual-assets endpoint on Approve Assets click", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VA_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Approve Assets" })).toBeInTheDocument();
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    fireEvent.click(screen.getByRole("button", { name: "Approve Assets" }));
+    await waitFor(() => {
+      const calls = fetchSpy.mock.calls.map(([url]) =>
+        typeof url === "string" ? url : (url as Request).url,
+      );
+      expect(calls.some((u) => u.includes("/approve-visual-assets"))).toBe(true);
+    });
+  });
+
+  it("calls generate-visual-assets endpoint on Regenerate All click", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VA_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Regenerate All" })).toBeInTheDocument();
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate All" }));
+    await waitFor(() => {
+      const calls = fetchSpy.mock.calls.map(([url]) =>
+        typeof url === "string" ? url : (url as Request).url,
+      );
+      expect(calls.some((u) => u.includes("/generate-visual-assets"))).toBe(true);
+    });
+  });
+
+  it("calls restart with VISUAL_ASSET_GENERATING stage on Restart Assets click", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VA_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Restart Assets" })).toBeInTheDocument();
+    });
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    fireEvent.click(screen.getByRole("button", { name: "Restart Assets" }));
+    await waitFor(() => {
+      const calls = fetchSpy.mock.calls;
+      const restartCall = calls.find(([url]) => {
+        const u = typeof url === "string" ? url : (url as Request).url;
+        return u.includes("/restart");
+      });
+      expect(restartCall).toBeDefined();
+      const body = JSON.parse(restartCall![1]!.body as string);
+      expect(body.stage).toBe("VISUAL_ASSET_GENERATING");
+    });
+  });
+
+  it("calls regenerate-image endpoint when scene regen button clicked", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VA_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("scene-regen-controls")).toBeInTheDocument();
+    });
+    const input = screen.getByTestId("scene-id-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "scene-0" } });
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    fireEvent.click(screen.getByTestId("regen-scene-btn"));
+    await waitFor(() => {
+      const calls = fetchSpy.mock.calls.map(([url]) =>
+        typeof url === "string" ? url : (url as Request).url,
+      );
+      expect(calls.some((u) => u.includes("/scenes/scene-0/regenerate-image"))).toBe(true);
+    });
+  });
+
+  it("calls generate-image endpoint when generate-scene button clicked", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VA_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("scene-regen-controls")).toBeInTheDocument();
+    });
+    const input = screen.getByTestId("scene-id-input") as HTMLInputElement;
+    fireEvent.change(input, { target: { value: "scene-1" } });
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    fireEvent.click(screen.getByTestId("generate-scene-btn"));
+    await waitFor(() => {
+      const calls = fetchSpy.mock.calls.map(([url]) =>
+        typeof url === "string" ? url : (url as Request).url,
+      );
+      expect(calls.some((u) => u.includes("/scenes/scene-1/generate-image"))).toBe(true);
     });
   });
 });
