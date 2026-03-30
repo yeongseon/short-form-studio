@@ -1,0 +1,13 @@
+[project]
+name = "creator-provider"
+version = "0.1.0"
+description = "AI model provider abstractions for short-form pipeline"
+requires-python = ">=3.10"
+dependencies = ["redis"]
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["creator_provider", "creator_provider.*"]

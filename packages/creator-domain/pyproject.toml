@@ -1,0 +1,13 @@
+[project]
+name = "creator-domain"
+version = "0.1.0"
+description = "Domain models for short-form pipeline"
+requires-python = ">=3.10"
+dependencies = ["pydantic>=2.0"]
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["creator_domain", "creator_domain.*"]

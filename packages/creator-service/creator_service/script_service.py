@@ -2,18 +2,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
-from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-_DOMAIN_DIR = str(Path(__file__).resolve().parent.parent / "creator-domain")
-if _DOMAIN_DIR not in sys.path:
-    sys.path.insert(0, _DOMAIN_DIR)
+from creator_domain.models.script_draft import ScriptDraft, ScriptSection
 
-from models.script_draft import ScriptDraft, ScriptSection  # type: ignore[reportMissingImports]
-
-from markdown_parser import parse_markdown
+from .markdown_parser import parse_markdown
 
 
 class ScriptStorageBackend(Protocol):

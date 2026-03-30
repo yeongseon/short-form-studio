@@ -1,17 +1,11 @@
 import asyncio
-import sys
-from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "creator-domain"))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from subtitle_service import (  # noqa: E402
+from creator_service.subtitle_service import (
     InMemorySubtitleStorage,
     SubtitleService,
 )
-
 
 def run(coro):
     return asyncio.run(coro)

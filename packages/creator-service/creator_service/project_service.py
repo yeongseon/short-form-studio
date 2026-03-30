@@ -7,14 +7,8 @@ the same async service-facing interface.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 
-_DOMAIN_DIR = str(Path(__file__).resolve().parent.parent / "creator-domain")
-if _DOMAIN_DIR not in sys.path:
-    sys.path.insert(0, _DOMAIN_DIR)
-
-from models.project import Project
+from creator_domain.models.project import Project
 
 from datetime import datetime, timezone
 from typing import Any, Literal, Protocol

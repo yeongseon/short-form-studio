@@ -1,10 +1,4 @@
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from markdown_parser import parse_markdown
-
+from creator_service.markdown_parser import parse_markdown
 
 def test_parse_standard_markdown_headings():
     markdown = """## hook

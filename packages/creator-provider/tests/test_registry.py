@@ -1,9 +1,6 @@
 import unittest
-from pathlib import Path
-import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from registry import ModelCatalogEntry, ProviderCategory, ProviderRegistry
+from creator_provider.registry import ModelCatalogEntry, ProviderCategory, ProviderRegistry
 
 
 class ProviderRegistryTests(unittest.TestCase):

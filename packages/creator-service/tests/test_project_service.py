@@ -1,15 +1,9 @@
 import asyncio
-import sys
-from pathlib import Path
 from typing import Any, cast
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "creator-domain"))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from project_service import InMemoryProjectStorage, ProjectService
-
+from creator_service.project_service import InMemoryProjectStorage, ProjectService
 
 def run(coro):
     return asyncio.run(coro)

@@ -1,20 +1,14 @@
 import asyncio
-import sys
-from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "creator-domain"))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from models.visual_plan import VisualScene  # type: ignore[reportMissingImports]
-from visual_plan_service import (  # noqa: E402
+from creator_domain.models.visual_plan import VisualScene
+from creator_service.visual_plan_service import (
     DataIntegrityError,
     InMemoryVisualPlanStorage,
     VersionConflictError,
     VisualPlanService,
 )
-
 
 def run(coro):
     return asyncio.run(coro)
