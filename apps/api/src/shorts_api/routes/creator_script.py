@@ -5,13 +5,14 @@ import os
 import sys
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 # Add packages to path for imports
 _PACKAGES_DIR = os.path.join(os.path.dirname(__file__), "../../../../..", "packages")
 sys.path.insert(0, _PACKAGES_DIR)
 sys.path.insert(0, os.path.join(_PACKAGES_DIR, "creator-service"))
 sys.path.insert(0, os.path.join(_PACKAGES_DIR, "creator-provider"))
+sys.path.insert(0, os.path.join(_PACKAGES_DIR, "creator-domain"))
 
 try:
     from creator_service.project_service import project_service
@@ -27,6 +28,11 @@ try:
     from creator_service.script_service import script_service
 except ImportError:
     from script_service import script_service
+
+try:
+    from creator_domain.models.script_draft import ScriptSection
+except ImportError:
+    from models.script_draft import ScriptSection
 
 router = APIRouter(prefix="/projects/{project_id}/script", tags=["script"])
 run_script_router = APIRouter(prefix="/runs/{run_id}/script", tags=["script"])
@@ -72,6 +78,10 @@ class UpdateMarkdownRequest(BaseModel):
     markdown: str
 
 
+class UpdateStructuredRequest(BaseModel):
+    sections: list[dict[str, object]]
+
+
 @run_script_router.get("/markdown")
 async def get_script_markdown(run_id: int) -> dict[str, object]:
     run = await run_service.get_run(run_id)
@@ -85,6 +95,23 @@ async def get_script_markdown(run_id: int) -> dict[str, object]:
     return {
         "run_id": run_id,
         "markdown": draft.markdown_content,
+        "version": draft.version,
+    }
+
+
+@run_script_router.get("/structured")
+async def get_script_structured(run_id: int) -> dict[str, object]:
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+    draft = await script_service.get_active_draft(run_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="No script draft found for this run")
+
+    return {
+        "run_id": run_id,
+        "sections": [s.model_dump(mode="json") for s in draft.structured_script] if draft.structured_script else [],
         "version": draft.version,
     }
 
@@ -106,6 +133,32 @@ async def update_script_markdown(run_id: int, request: UpdateMarkdownRequest) ->
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "run_id": run_id,
+        "draft": draft.model_dump(mode="json"),
+    }
+
+
+@run_script_router.put("/structured")
+async def update_script_structured(run_id: int, request: UpdateStructuredRequest) -> dict[str, object]:
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+    try:
+        sections = [ScriptSection.model_validate(section) for section in request.sections]
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    rebuilt_markdown = "\n\n".join([f"## {section.type}\n\n{section.text}" for section in sections])
+
+    draft = await script_service.save_draft(
+        run_id=run_id,
+        source_type="edited_manually",
+        markdown_content=rebuilt_markdown,
+        structured_script=sections,
+    )
 
     return {
         "run_id": run_id,
