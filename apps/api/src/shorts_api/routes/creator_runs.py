@@ -17,11 +17,17 @@ try:
     from creator_service.run_service import run_service
     from creator_service.stage_review_service import stage_review_service
     from creator_service.visual_asset_service import visual_asset_service
+    from creator_service.render_service import render_service
+    from creator_service.audio_service import audio_service
+    from creator_service.subtitle_service import subtitle_service
 except ImportError:
     from project_service import project_service
     from run_service import run_service
     from stage_review_service import stage_review_service
     from visual_asset_service import visual_asset_service
+    from render_service import render_service
+    from audio_service import audio_service
+    from subtitle_service import subtitle_service
 
 
 def dispatch_generate_script(
@@ -73,6 +79,18 @@ def dispatch_generate_subtitles(run_id: int, subtitle_model: str, subtitle_forma
     tasks = import_module("tasks.generate_subtitles")
     result = tasks.generate_subtitles.delay(run_id, subtitle_model=subtitle_model, subtitle_format=subtitle_format)
     return str(result.id)
+
+
+def dispatch_render_video(run_id: int, render_profile: str) -> str:
+    """Dispatch render_video Celery task. Returns task id.
+
+    Separated into a function so tests can monkeypatch without importing Celery.
+    """
+    from importlib import import_module
+
+    tasks = import_module("tasks.render_video")
+    result = tasks.render_video.delay(run_id, render_profile=render_profile)
+    return str(result.id)
 router = APIRouter(tags=["runs"])
 
 
@@ -113,6 +131,11 @@ class GenerateAudioRequest(BaseModel):
 class GenerateSubtitlesRequest(BaseModel):
     subtitle_model: str = "whisper-tiny"
     subtitle_format: str = "srt"
+
+
+class RenderRequest(BaseModel):
+    render_profile: str = "shorts_default"
+
 @router.post("/projects/{project_id}/runs", status_code=201)
 async def create_run(project_id: int, request: CreateRunRequest) -> dict[str, object]:
     run = await run_service.create_run(
@@ -683,4 +706,97 @@ async def generate_subtitles_trigger(run_id: int, request: GenerateSubtitlesRequ
         "task_id": task_id,
         "run_id": run_id,
         "current_stage": "SUBTITLE_GENERATING",
+    }
+
+
+@router.post("/runs/{run_id}/render", status_code=202)
+async def render_trigger(run_id: int, request: RenderRequest) -> dict[str, object]:
+    """Trigger video rendering for a run."""
+    # 1. Check run exists
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    # 2. Validate stage — SUBTITLE_GENERATING (after subtitles done) or RENDER_GENERATING (retry)
+    allowed_stages = frozenset({"SUBTITLE_GENERATING", "RENDER_GENERATING"})
+    if run.current_stage not in allowed_stages:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Run is in stage '{run.current_stage}', "
+            f"expected one of {sorted(allowed_stages)}",
+        )
+
+    # 3. Atomically advance to RENDER_GENERATING via CAS
+    updates: dict[str, object] = {"current_stage": "RENDER_GENERATING"}
+    if run.current_stage == "RENDER_GENERATING":
+        updates["restart_from"] = "RENDER_GENERATING"
+
+    ok, row = await run_service.storage.conditional_update_run(
+        run_id, updates, expected_stages=allowed_stages,
+    )
+    if not ok:
+        if row is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        raise HTTPException(
+            status_code=409,
+            detail="Stage conflict: run is now in '" + str(row.get('current_stage')) + "'",
+        )
+
+    # 4. Dispatch Celery task — if this fails, roll back stage
+    try:
+        task_id = dispatch_render_video(
+            run_id=run_id,
+            render_profile=request.render_profile,
+        )
+    except Exception:
+        # Best-effort rollback: restore original stage so run isn't stuck
+        await run_service.storage.conditional_update_run(
+            run_id,
+            {"current_stage": run.current_stage, "restart_from": run.restart_from},
+            expected_stages=frozenset({"RENDER_GENERATING"}),
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Failed to enqueue render task",
+        ) from None
+
+    return {
+        "task_id": task_id,
+        "run_id": run_id,
+        "current_stage": "RENDER_GENERATING",
+    }
+
+
+@router.get("/runs/{run_id}/preview")
+async def get_preview(run_id: int) -> dict[str, object]:
+    """Return latest video, audio, and subtitle artifact metadata for preview."""
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    video = await render_service.get_latest(run_id)
+    audio = await audio_service.get_latest(run_id)
+    subtitle = await subtitle_service.get_latest(run_id)
+
+    return {
+        "run_id": run_id,
+        "current_stage": run.current_stage,
+        "video": {
+            "id": video.id,
+            "path": video.path,
+            "render_profile": video.render_profile,
+            "created_at": str(video.created_at),
+        } if video else None,
+        "audio": {
+            "id": audio.id,
+            "path": audio.path,
+            "model_used": audio.model_used,
+            "created_at": str(audio.created_at),
+        } if audio else None,
+        "subtitle": {
+            "id": subtitle.id,
+            "path": subtitle.path,
+            "format": subtitle.format,
+            "created_at": str(subtitle.created_at),
+        } if subtitle else None,
     }
