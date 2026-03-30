@@ -32,3 +32,8 @@ Thumbs.db
 # Artifacts
 data/artifacts/**
 !data/artifacts/.gitkeep
+packages/creator-domain/creator-domain
+packages/creator-service/creator-service
+packages/creator_domain
+packages/creator_provider
+packages/creator_service
