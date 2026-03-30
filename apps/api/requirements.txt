@@ -2,3 +2,5 @@ fastapi
 uvicorn
 celery
 redis
+pytest
+httpx
