@@ -108,6 +108,9 @@ class StubProjectService:
         return ordered[offset : offset + limit]
 
 
+    async def count_projects(self) -> int:
+        return len(self._projects)
+
 @pytest.fixture
 def stub_project_service(monkeypatch: pytest.MonkeyPatch) -> StubProjectService:
     service = StubProjectService()
@@ -154,12 +157,11 @@ async def test_create_project_invalid_source_type(client):
         json={"title": "Bad", "source_type": "invalid", "idea_brief": "Bad source"},
     )
 
-    assert response.status_code == 400
-    assert "Input should be 'idea', 'markdown' or 'url'" in response.json()["detail"]
+    assert response.status_code == 422
 
 
 @pytest.mark.asyncio
-async def test_create_project_missing_required_field(client):
+async def test_create_project_missing_required_field(client, stub_project_service: StubProjectService):
     response = await client.post(
         "/api/creator/projects",
         json={"title": "Missing", "source_type": "idea"},
@@ -207,5 +209,5 @@ async def test_list_projects_with_pagination(client, stub_project_service: StubP
     assert response.status_code == 200
     body = response.json()
     assert len(body["projects"]) == 1
-    assert body["total"] == 1
+    assert body["total"] == 2  # total count, not page size
     assert stub_project_service.list_projects_calls == [(1, 1)]

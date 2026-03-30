@@ -6,7 +6,7 @@ import sys
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
 # Add packages to path for imports
 _PACKAGES_DIR = os.path.join(os.path.dirname(__file__), "../../../../..", "packages")
@@ -31,12 +31,7 @@ class CreateProjectRequest(BaseModel):
 
 
 @router.post("", status_code=201)
-async def create_project(payload: dict[str, object]) -> dict[str, object]:
-    try:
-        request = CreateProjectRequest.model_validate(payload)
-    except ValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
+async def create_project(request: CreateProjectRequest) -> dict[str, object]:
     try:
         project = await project_service.create_project(
             title=request.title,
@@ -66,7 +61,8 @@ async def list_projects(
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, object]:
     projects = await project_service.list_projects(limit=limit, offset=offset)
+    total = await project_service.count_projects()
     return {
         "projects": [project.model_dump(mode="json") for project in projects],
-        "total": len(projects),
+        "total": total,
     }
