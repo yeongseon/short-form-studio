@@ -177,7 +177,7 @@ def stub_run_service(monkeypatch: pytest.MonkeyPatch) -> StubRunService:
     service = StubRunService()
 
     for route in runs_router.routes:
-        if route.name in {"create_run", "get_run_detail", "restart_run", "approve_script", "generate_script_trigger", "generate_visual_plan_trigger", "generate_audio_trigger", "list_runs_for_project"}:
+        if route.name in {"create_run", "get_run_detail", "restart_run", "approve_script", "generate_script_trigger", "generate_visual_plan_trigger", "generate_audio_trigger", "generate_subtitles_trigger", "list_runs_for_project"}:
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", service)
 
     return service
@@ -2021,3 +2021,217 @@ async def test_generate_audio_dispatch_failure_rollback(client, stub_generate_au
 
     # Verify run was actually rolled back to VISUAL_ASSET_REVIEW
     assert run_svc.runs[116].current_stage == "VISUAL_ASSET_REVIEW"
+
+
+
+# ──────────────────────────────────────────────────────────────────────
+# POST /runs/{run_id}/generate-subtitles
+# ──────────────────────────────────────────────────────────────────────
+
+
+class StubSubtitleDispatcher:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+        self.task_id = "test-subtitle-task-id-xyz"
+
+    def __call__(self, run_id: int, subtitle_model: str, subtitle_format: str) -> str:
+        self.calls.append({
+            "run_id": run_id,
+            "subtitle_model": subtitle_model,
+            "subtitle_format": subtitle_format,
+        })
+        return self.task_id
+
+
+@pytest.fixture
+def stub_generate_subtitles_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubSubtitleDispatcher]:
+    run_svc = StubRunService()
+    dispatcher = StubSubtitleDispatcher()
+
+    for route in runs_router.routes:
+        if route.name == "generate_subtitles_trigger":
+            monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
+            monkeypatch.setitem(route.endpoint.__globals__, "dispatch_generate_subtitles", dispatcher)
+
+    return run_svc, dispatcher
+
+
+def _make_subtitle_run(run_id: int, stage: str = "AUDIO_GENERATING") -> StubPipelineRun:
+    """Helper to create a run in subtitle-relevant stage."""
+    now = datetime.now(timezone.utc)
+    return StubPipelineRun(
+        id=run_id,
+        project_id=1,
+        current_stage=stage,
+        status="running",
+        review_stage=None,
+        restart_from=None,
+        model_defaults=None,
+        metadata=None,
+        style_preset="default",
+        started_at=now,
+        finished_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+@pytest.mark.asyncio
+async def test_generate_subtitles_from_audio_generating(client, stub_generate_subtitles_services):
+    run_svc, dispatcher = stub_generate_subtitles_services
+    run_svc.runs[120] = _make_subtitle_run(120, "AUDIO_GENERATING")
+
+    response = await client.post(
+        "/api/creator/runs/120/generate-subtitles",
+        json={"subtitle_model": "whisper-tiny", "subtitle_format": "srt"},
+    )
+
+    assert response.status_code == 202
+    body = response.json()
+    assert body["task_id"] == "test-subtitle-task-id-xyz"
+    assert body["run_id"] == 120
+    assert body["current_stage"] == "SUBTITLE_GENERATING"
+    # CAS was called for AUDIO_GENERATING → SUBTITLE_GENERATING (no restart_from)
+    cas_calls = run_svc.storage.conditional_update_calls
+    assert len(cas_calls) == 1
+    assert cas_calls[0]["run_id"] == 120
+    assert cas_calls[0]["updates"] == {"current_stage": "SUBTITLE_GENERATING"}
+    assert "AUDIO_GENERATING" in cas_calls[0]["expected_stages"]
+    assert dispatcher.calls == [{
+        "run_id": 120,
+        "subtitle_model": "whisper-tiny",
+        "subtitle_format": "srt",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_generate_subtitles_retry_from_generating(client, stub_generate_subtitles_services):
+    run_svc, dispatcher = stub_generate_subtitles_services
+    run_svc.runs[121] = _make_subtitle_run(121, "SUBTITLE_GENERATING")
+
+    response = await client.post(
+        "/api/creator/runs/121/generate-subtitles",
+        json={"subtitle_model": "whisper-tiny", "subtitle_format": "srt"},
+    )
+
+    assert response.status_code == 202
+    # CAS was called for SUBTITLE_GENERATING → SUBTITLE_GENERATING with restart_from
+    cas_calls = run_svc.storage.conditional_update_calls
+    assert len(cas_calls) == 1
+    assert cas_calls[0]["run_id"] == 121
+    assert cas_calls[0]["updates"] == {
+        "current_stage": "SUBTITLE_GENERATING",
+        "restart_from": "SUBTITLE_GENERATING",
+    }
+    assert "SUBTITLE_GENERATING" in cas_calls[0]["expected_stages"]
+    assert len(dispatcher.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_generate_subtitles_default_model(client, stub_generate_subtitles_services):
+    run_svc, dispatcher = stub_generate_subtitles_services
+    run_svc.runs[122] = _make_subtitle_run(122, "AUDIO_GENERATING")
+
+    response = await client.post(
+        "/api/creator/runs/122/generate-subtitles",
+        json={},
+    )
+
+    assert response.status_code == 202
+    assert dispatcher.calls[0]["subtitle_model"] == "whisper-tiny"
+    assert dispatcher.calls[0]["subtitle_format"] == "srt"
+
+
+@pytest.mark.asyncio
+async def test_generate_subtitles_run_not_found(client, stub_generate_subtitles_services):
+    _, _ = stub_generate_subtitles_services
+    response = await client.post(
+        "/api/creator/runs/999/generate-subtitles",
+        json={},
+    )
+
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_generate_subtitles_wrong_stage(client, stub_generate_subtitles_services):
+    run_svc, _ = stub_generate_subtitles_services
+    run_svc.runs[123] = _make_subtitle_run(123, "IDEA_READY")
+
+    response = await client.post(
+        "/api/creator/runs/123/generate-subtitles",
+        json={},
+    )
+
+    assert response.status_code == 400
+    assert "IDEA_READY" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_generate_subtitles_wrong_stage_visual(client, stub_generate_subtitles_services):
+    run_svc, _ = stub_generate_subtitles_services
+    run_svc.runs[124] = _make_subtitle_run(124, "VISUAL_ASSET_REVIEW")
+
+    response = await client.post(
+        "/api/creator/runs/124/generate-subtitles",
+        json={},
+    )
+
+    assert response.status_code == 400
+    assert "VISUAL_ASSET_REVIEW" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_generate_subtitles_cas_conflict(client, stub_generate_subtitles_services):
+    """CAS fails because stage changed between initial check and CAS."""
+    run_svc, dispatcher = stub_generate_subtitles_services
+    run_svc.runs[125] = _make_subtitle_run(125, "AUDIO_GENERATING")
+
+    async def cas_conflict(run_id, updates, expected_stages):
+        return False, {"current_stage": "SUBTITLE_GENERATING", "id": run_id}
+
+    run_svc.storage.conditional_update_run = cas_conflict
+
+    response = await client.post(
+        "/api/creator/runs/125/generate-subtitles",
+        json={},
+    )
+
+    assert response.status_code == 409
+    assert "conflict" in response.json()["detail"].lower()
+    assert len(dispatcher.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_generate_subtitles_dispatch_failure_rollback(client, stub_generate_subtitles_services):
+    """Celery dispatch failure triggers rollback to original stage."""
+    run_svc, _ = stub_generate_subtitles_services
+    run_svc.runs[126] = _make_subtitle_run(126, "AUDIO_GENERATING")
+
+    def failing_dispatcher(run_id, subtitle_model, subtitle_format):
+        raise RuntimeError("Celery broker down")
+
+    from shorts_api.main import runs_router as _r
+    for route in _r.routes:
+        if route.name == "generate_subtitles_trigger":
+            route.endpoint.__globals__["dispatch_generate_subtitles"] = failing_dispatcher
+
+    response = await client.post(
+        "/api/creator/runs/126/generate-subtitles",
+        json={},
+    )
+
+    assert response.status_code == 503
+    assert "enqueue" in response.json()["detail"].lower()
+
+    # Rollback: CAS was called twice — first to advance, then to rollback
+    cas_calls = run_svc.storage.conditional_update_calls
+    assert len(cas_calls) == 2
+    # Second CAS = rollback to AUDIO_GENERATING
+    rollback = cas_calls[1]
+    assert rollback["updates"]["current_stage"] == "AUDIO_GENERATING"
+    assert rollback["expected_stages"] == frozenset({"SUBTITLE_GENERATING"})
+
+    # Verify run was actually rolled back to AUDIO_GENERATING
+    assert run_svc.runs[126].current_stage == "AUDIO_GENERATING"

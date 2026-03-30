@@ -61,6 +61,18 @@ def dispatch_generate_audio(run_id: int, tts_model: str, voice: str) -> str:
     tasks = import_module("tasks.generate_audio")
     result = tasks.generate_audio.delay(run_id, tts_model=tts_model, voice=voice)
     return str(result.id)
+
+
+def dispatch_generate_subtitles(run_id: int, subtitle_model: str, subtitle_format: str) -> str:
+    """Dispatch generate_subtitles Celery task. Returns task id.
+
+    Separated into a function so tests can monkeypatch without importing Celery.
+    """
+    from importlib import import_module
+
+    tasks = import_module("tasks.generate_subtitles")
+    result = tasks.generate_subtitles.delay(run_id, subtitle_model=subtitle_model, subtitle_format=subtitle_format)
+    return str(result.id)
 router = APIRouter(tags=["runs"])
 
 
@@ -97,6 +109,10 @@ class GenerateAudioRequest(BaseModel):
     tts_model: str = "piper"
     voice: str = "en_US-lessac-medium"
 
+
+class GenerateSubtitlesRequest(BaseModel):
+    subtitle_model: str = "whisper-tiny"
+    subtitle_format: str = "srt"
 @router.post("/projects/{project_id}/runs", status_code=201)
 async def create_run(project_id: int, request: CreateRunRequest) -> dict[str, object]:
     run = await run_service.create_run(
@@ -608,4 +624,63 @@ async def generate_audio_trigger(run_id: int, request: GenerateAudioRequest) -> 
         "task_id": task_id,
         "run_id": run_id,
         "current_stage": "AUDIO_GENERATING",
+    }
+
+
+@router.post("/runs/{run_id}/generate-subtitles", status_code=202)
+async def generate_subtitles_trigger(run_id: int, request: GenerateSubtitlesRequest) -> dict[str, object]:
+    """Trigger subtitle generation for a run."""
+    # 1. Check run exists
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    # 2. Validate stage — AUDIO_GENERATING (after audio done) or SUBTITLE_GENERATING (retry)
+    allowed_stages = frozenset({"AUDIO_GENERATING", "SUBTITLE_GENERATING"})
+    if run.current_stage not in allowed_stages:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Run is in stage '{run.current_stage}', "
+            f"expected one of {sorted(allowed_stages)}",
+        )
+
+    # 3. Atomically advance to SUBTITLE_GENERATING via CAS
+    updates: dict[str, object] = {"current_stage": "SUBTITLE_GENERATING"}
+    if run.current_stage == "SUBTITLE_GENERATING":
+        updates["restart_from"] = "SUBTITLE_GENERATING"
+
+    ok, row = await run_service.storage.conditional_update_run(
+        run_id, updates, expected_stages=allowed_stages,
+    )
+    if not ok:
+        if row is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        raise HTTPException(
+            status_code=409,
+            detail="Stage conflict: run is now in '" + str(row.get('current_stage')) + "'",
+        )
+
+    # 4. Dispatch Celery task — if this fails, roll back stage
+    try:
+        task_id = dispatch_generate_subtitles(
+            run_id=run_id,
+            subtitle_model=request.subtitle_model,
+            subtitle_format=request.subtitle_format,
+        )
+    except Exception:
+        # Best-effort rollback: restore original stage so run isn't stuck
+        await run_service.storage.conditional_update_run(
+            run_id,
+            {"current_stage": run.current_stage, "restart_from": run.restart_from},
+            expected_stages=frozenset({"SUBTITLE_GENERATING"}),
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="Failed to enqueue subtitle generation task",
+        ) from None
+
+    return {
+        "task_id": task_id,
+        "run_id": run_id,
+        "current_stage": "SUBTITLE_GENERATING",
     }
