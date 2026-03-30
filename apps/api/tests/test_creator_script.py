@@ -6,7 +6,7 @@ from typing import Literal
 import pytest
 from pydantic import BaseModel
 
-from shorts_api.main import script_router
+from shorts_api.routes.creator_script import router as script_router, run_script_router
 
 
 class StubProject(BaseModel):
@@ -78,8 +78,22 @@ class StubScriptService:
         self.save_draft_calls: list[dict[str, object]] = []
         self.raise_error_message: str | None = None
         self.next_draft_id = 1
+        self.active_drafts: dict[int, StubScriptDraft] = {}
 
-    async def save_draft(self, run_id: int, source_type: str, markdown_content: str) -> StubScriptDraft:
+    async def get_active_draft(self, run_id: int) -> StubScriptDraft | None:
+        return self.active_drafts.get(run_id)
+
+    async def save_draft(
+        self,
+        run_id: int,
+        source_type: Literal[
+            "generated_by_model",
+            "pasted_markdown",
+            "uploaded_markdown",
+            "edited_manually",
+        ],
+        markdown_content: str,
+    ) -> StubScriptDraft:
         if self.raise_error_message is not None:
             raise ValueError(self.raise_error_message)
 
@@ -90,16 +104,20 @@ class StubScriptService:
                 "markdown_content": markdown_content,
             }
         )
+        current_draft = self.active_drafts.get(run_id)
+        next_version = 1 if current_draft is None else current_draft.version + 1
+
         draft = StubScriptDraft(
             id=self.next_draft_id,
             run_id=run_id,
-            source_type="pasted_markdown",
+            source_type=source_type,
             markdown_content=markdown_content,
             structured_script=None,
-            version=1,
+            version=next_version,
             created_at=datetime.now(timezone.utc),
         )
         self.next_draft_id += 1
+        self.active_drafts[run_id] = draft
         return draft
 
 
@@ -115,6 +133,16 @@ def stub_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubProjectService, 
         monkeypatch.setitem(route.endpoint.__globals__, "script_service", script)
 
     return project, run, script
+
+
+@pytest.fixture
+def stub_run_script_services(monkeypatch: pytest.MonkeyPatch) -> StubScriptService:
+    script = StubScriptService()
+
+    for route in run_script_router.routes:
+        monkeypatch.setitem(route.endpoint.__globals__, "script_service", script)
+
+    return script
 
 
 @pytest.mark.asyncio
@@ -281,4 +309,106 @@ async def test_import_markdown_create_run_failure(client, stub_services):
 
     assert response.status_code == 400
     assert response.json() == {"detail": "Duplicate run not allowed"}
+    assert script_service.save_draft_calls == []
+
+
+@pytest.mark.asyncio
+async def test_get_script_markdown_success(client, stub_run_script_services):
+    script_service = stub_run_script_services
+    await script_service.save_draft(
+        run_id=51,
+        source_type="pasted_markdown",
+        markdown_content="# Current script\n\nLine",
+    )
+
+    response = await client.get("/api/creator/runs/51/script/markdown")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "run_id": 51,
+        "markdown": "# Current script\n\nLine",
+        "version": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_get_script_markdown_no_draft(client, stub_run_script_services):
+    _script_service = stub_run_script_services
+
+    response = await client.get("/api/creator/runs/999/script/markdown")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "No script draft found for this run"}
+
+
+@pytest.mark.asyncio
+async def test_update_script_markdown_success(client, stub_run_script_services):
+    script_service = stub_run_script_services
+    await script_service.save_draft(
+        run_id=42,
+        source_type="pasted_markdown",
+        markdown_content="# V1",
+    )
+
+    response = await client.put(
+        "/api/creator/runs/42/script/markdown",
+        json={"markdown": "# V2\n\nUpdated"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_id"] == 42
+    assert body["draft"]["source_type"] == "edited_manually"
+    assert body["draft"]["markdown_content"] == "# V2\n\nUpdated"
+    assert body["draft"]["version"] == 2
+    assert script_service.save_draft_calls[-1] == {
+        "run_id": 42,
+        "source_type": "edited_manually",
+        "markdown_content": "# V2\n\nUpdated",
+    }
+
+
+@pytest.mark.asyncio
+async def test_update_script_markdown_without_existing_draft(client, stub_run_script_services):
+    script_service = stub_run_script_services
+
+    response = await client.put(
+        "/api/creator/runs/77/script/markdown",
+        json={"markdown": "# Fresh draft"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["run_id"] == 77
+    assert body["draft"]["version"] == 1
+    assert body["draft"]["source_type"] == "edited_manually"
+    assert body["draft"]["markdown_content"] == "# Fresh draft"
+    assert script_service.active_drafts[77].version == 1
+
+
+@pytest.mark.asyncio
+async def test_update_script_markdown_empty(client, stub_run_script_services):
+    script_service = stub_run_script_services
+
+    response = await client.put(
+        "/api/creator/runs/13/script/markdown",
+        json={"markdown": ""},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "markdown content must not be empty"}
+    assert script_service.save_draft_calls == []
+
+
+@pytest.mark.asyncio
+async def test_update_script_markdown_whitespace_only(client, stub_run_script_services):
+    script_service = stub_run_script_services
+
+    response = await client.put(
+        "/api/creator/runs/13/script/markdown",
+        json={"markdown": "   \n\t  "},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {"detail": "markdown content must not be empty"}
     assert script_service.save_draft_calls == []
