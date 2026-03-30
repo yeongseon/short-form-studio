@@ -248,5 +248,5 @@ async def test_restart_run_not_found(client, stub_run_service: StubRunService):
     _ = stub_run_service
     response = await client.post("/api/creator/runs/4242/restart", json={"stage": "SCRIPT_GENERATING"})
 
-    assert response.status_code == 400
+    assert response.status_code == 404
     assert response.json() == {"detail": "Run 4242 not found"}

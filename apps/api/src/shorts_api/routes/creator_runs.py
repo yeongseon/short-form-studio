@@ -54,6 +54,9 @@ async def restart_run(run_id: int, request: RestartRunRequest) -> dict[str, obje
     try:
         run = await run_service.restart_run(run_id=run_id, from_stage=request.stage)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        detail = str(exc)
+        if "not found" in detail.lower():
+            raise HTTPException(status_code=404, detail=detail) from exc
+        raise HTTPException(status_code=400, detail=detail) from exc
 
     return run.model_dump(mode="json")
