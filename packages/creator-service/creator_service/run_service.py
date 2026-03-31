@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from creator_domain.models import ModelSelection, PipelineRun, RunStage, REVIEW_STAGES, GENERATING_STAGES, can_transition
+from creator_domain.models import ModelSelection, PipelineRun, RunStage, REVIEW_STAGES, GENERATING_STAGES, STAGE_BEFORE_GENERATING, can_transition
 
 class RunStorageBackend(Protocol):
     async def create_run(self, row: dict[str, Any]) -> dict[str, Any]:
@@ -223,7 +223,11 @@ class RunService:
         return [PipelineRun.from_row(r) for r in rows]
 
     async def stop_run(self, run_id: int) -> PipelineRun:
-        """Stop a running pipeline. Only allowed during GENERATING stages."""
+        """Stop a running pipeline. Only allowed during GENERATING stages.
+
+        Moves current_stage back to the pre-generating actionable stage so
+        any surviving worker task's CAS will fail (stage no longer in _SAFE_STAGES).
+        """
         run = await self.get_run(run_id)
         if run is None:
             raise ValueError(f"Run {run_id} not found")
@@ -239,17 +243,26 @@ class RunService:
                 f"can only stop during generating stages"
             )
 
+        # Roll back current_stage to the actionable stage before generation
+        current = RunStage(run.current_stage)
+        rollback_stage = STAGE_BEFORE_GENERATING[current]
+
         row = await self.storage.update_run(
             run_id,
             {
                 "status": "cancelled",
+                "current_stage": rollback_stage.value,
                 "active_task_id": None,
             },
         )
         return PipelineRun.from_row(row)
 
     async def resume_run(self, run_id: int) -> PipelineRun:
-        """Resume a stopped/cancelled run. Resets status to 'running'."""
+        """Resume a stopped/cancelled or failed run.
+
+        After stop, current_stage is already at an actionable stage.
+        Just resets status to 'running' so the user can re-trigger generation.
+        """
         run = await self.get_run(run_id)
         if run is None:
             raise ValueError(f"Run {run_id} not found")

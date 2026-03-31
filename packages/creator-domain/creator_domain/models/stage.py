@@ -61,6 +61,32 @@ GENERATING_STAGES: frozenset[RunStage] = frozenset(
 )
 
 
+# Maps each GENERATING stage to the actionable stage the user returns to on stop.
+
+# Used by stop_run to move current_stage out of GENERATING so worker CAS fails.
+
+# For storyboard stages (audio/subtitle/render), all roll back to
+
+# VISUAL_ASSET_REVIEW — the last user-actionable review stage.
+
+STAGE_BEFORE_GENERATING: dict[RunStage, RunStage] = {
+
+    RunStage.SCRIPT_GENERATING: RunStage.IDEA_READY,
+
+    RunStage.VISUAL_PLAN_GENERATING: RunStage.SCRIPT_REVIEW,
+
+    RunStage.VISUAL_ASSET_GENERATING: RunStage.VISUAL_PLAN_REVIEW,
+
+    RunStage.AUDIO_GENERATING: RunStage.VISUAL_ASSET_REVIEW,
+
+    RunStage.SUBTITLE_GENERATING: RunStage.VISUAL_ASSET_REVIEW,
+
+    RunStage.RENDER_GENERATING: RunStage.VISUAL_ASSET_REVIEW,
+
+}
+
+
+
 def can_transition(current: RunStage, target: RunStage) -> bool:
     return target in TRANSITIONS[current]
 

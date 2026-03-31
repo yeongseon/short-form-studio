@@ -380,9 +380,9 @@ export default function RunsPage() {
         variant="danger"
         confirmLabel="Delete"
         loading={deletingId === confirmDeleteId}
-        onConfirm={() => {
+        onConfirm={async () => {
           if (confirmDeleteId !== null) {
-            handleDeleteProject(confirmDeleteId);
+            await handleDeleteProject(confirmDeleteId);
           }
           setConfirmDeleteId(null);
         }}

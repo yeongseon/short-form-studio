@@ -294,7 +294,7 @@ async def generate_script_trigger(run_id: int, request: GenerateScriptRequest) -
 
 
     # Persist task_id for stop/revoke support
-    await run_service.storage.update_run(run_id, {"active_task_id": task_id})
+    await _append_task_id(run_id, task_id)
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -355,7 +355,7 @@ async def generate_visual_plan_trigger(run_id: int, request: GenerateVisualPlanR
 
 
     # Persist task_id for stop/revoke support
-    await run_service.storage.update_run(run_id, {"active_task_id": task_id})
+    await _append_task_id(run_id, task_id)
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -483,7 +483,7 @@ async def generate_visual_assets_trigger(
 
 
     # Persist task_id for stop/revoke support
-    await run_service.storage.update_run(run_id, {"active_task_id": task_id})
+    await _append_task_id(run_id, task_id)
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -542,7 +542,7 @@ async def generate_scene_image_endpoint(
 
 
     # Persist task_id for stop/revoke support
-    await run_service.storage.update_run(run_id, {"active_task_id": task_id})
+    await _append_task_id(run_id, task_id)
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -594,7 +594,7 @@ async def regenerate_scene_image_endpoint(
 
 
     # Persist task_id for stop/revoke support
-    await run_service.storage.update_run(run_id, {"active_task_id": task_id})
+    await _append_task_id(run_id, task_id)
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -719,7 +719,7 @@ async def generate_audio_trigger(run_id: int, request: GenerateAudioRequest) -> 
 
 
     # Persist task_id for stop/revoke support
-    await run_service.storage.update_run(run_id, {"active_task_id": task_id})
+    await _append_task_id(run_id, task_id)
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -781,7 +781,7 @@ async def generate_subtitles_trigger(run_id: int, request: GenerateSubtitlesRequ
 
 
     # Persist task_id for stop/revoke support
-    await run_service.storage.update_run(run_id, {"active_task_id": task_id})
+    await _append_task_id(run_id, task_id)
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -842,7 +842,7 @@ async def render_trigger(run_id: int, request: RenderRequest) -> dict[str, objec
 
 
     # Persist task_id for stop/revoke support
-    await run_service.storage.update_run(run_id, {"active_task_id": task_id})
+    await _append_task_id(run_id, task_id)
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -1228,16 +1228,46 @@ async def generate_all_paragraph_subtitles(
 # ---------------------------------------------------------------------------
 
 
-def _revoke_active_task(active_task_id: str | None) -> None:
-    """Revoke a Celery task if active_task_id is set."""
+import json as _json
+import os as _os
+import shutil as _shutil
+
+
+def _revoke_active_tasks(active_task_id: str | None) -> None:
+    """Revoke all Celery tasks stored in active_task_id (JSON list or legacy single ID)."""
     if not active_task_id:
         return
     try:
         from celery_app import celery_app
-        celery_app.control.revoke(active_task_id, terminate=True)
+        # Parse as JSON list; fall back to single ID for backwards compat
+        try:
+            task_ids = _json.loads(active_task_id)
+            if isinstance(task_ids, str):
+                task_ids = [task_ids]
+        except (ValueError, TypeError):
+            task_ids = [active_task_id]
+        for tid in task_ids:
+            if tid:
+                celery_app.control.revoke(tid, terminate=True)
     except Exception:
-        pass  # Best-effort: task may have already completed
+        pass  # Best-effort: tasks may have already completed
 
+
+async def _append_task_id(run_id: int, task_id: str) -> None:
+    """Append a task_id to the run's active_task_id JSON list."""
+    run = await run_service.get_run(run_id)
+    existing: list[str] = []
+    if run and run.active_task_id:
+        try:
+            parsed = _json.loads(run.active_task_id)
+            if isinstance(parsed, list):
+                existing = parsed
+            elif isinstance(parsed, str):
+                existing = [parsed]
+        except (ValueError, TypeError):
+            existing = [run.active_task_id]
+    existing.append(task_id)
+    await run_service.storage.update_run(run_id, {"active_task_id": _json.dumps(existing)})
 
 @router.post("/runs/{run_id}/stop")
 async def stop_run(run_id: int) -> dict[str, object]:
@@ -1247,7 +1277,7 @@ async def stop_run(run_id: int) -> dict[str, object]:
         raise HTTPException(status_code=404, detail="Run not found")
 
     # Revoke Celery task before updating DB
-    _revoke_active_task(run.active_task_id)
+    _revoke_active_tasks(run.active_task_id)
 
     try:
         updated = await run_service.stop_run(run_id)
@@ -1282,10 +1312,16 @@ async def delete_run(run_id: int) -> dict[str, object]:
         raise HTTPException(status_code=404, detail="Run not found")
 
     # Revoke any active task
-    _revoke_active_task(run.active_task_id)
+    _revoke_active_tasks(run.active_task_id)
 
     deleted = await run_service.delete_run(run_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Run not found")
+
+    # Best-effort artifact cleanup
+    _artifact_root = _os.getenv("ARTIFACT_ROOT", "data/artifacts")
+    run_dir = _os.path.join(_artifact_root, str(run_id))
+    if _os.path.isdir(run_dir):
+        _shutil.rmtree(run_dir, ignore_errors=True)
 
     return {"deleted": True, "run_id": run_id}

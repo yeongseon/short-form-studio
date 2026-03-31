@@ -5,6 +5,7 @@ from .project import Project
 from .script_draft import ScriptDraft, ScriptSection, VisualOverride
 from .stage import (
     GENERATING_STAGES,
+    STAGE_BEFORE_GENERATING,
     REVIEW_STAGES,
     TRANSITIONS,
     RunStage,
@@ -29,6 +30,7 @@ __all__ = [
     "TRANSITIONS",
     "REVIEW_STAGES",
     "GENERATING_STAGES",
+    "STAGE_BEFORE_GENERATING",
     "can_transition",
     "next_stages",
     "advance",

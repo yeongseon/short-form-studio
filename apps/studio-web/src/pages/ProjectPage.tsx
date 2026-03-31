@@ -1527,10 +1527,10 @@ export default function ProjectPage() {
         variant={confirmAction === "stop" ? "warning" : confirmAction === "resume" ? "info" : "danger"}
         confirmLabel={confirmAction === "stop" ? "Stop Run" : confirmAction === "resume" ? "Resume" : "Delete Forever"}
         loading={stopping || resuming || deleting}
-        onConfirm={() => {
-          if (confirmAction === "stop") handleStop();
-          else if (confirmAction === "resume") handleResume();
-          else if (confirmAction === "delete") handleDeleteProject();
+        onConfirm={async () => {
+          if (confirmAction === "stop") await handleStop();
+          else if (confirmAction === "resume") await handleResume();
+          else if (confirmAction === "delete") await handleDeleteProject();
           setConfirmAction(null);
         }}
         onCancel={() => setConfirmAction(null)}
