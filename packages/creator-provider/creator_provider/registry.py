@@ -52,7 +52,16 @@ class ProviderRegistry:
 
     @classmethod
     def create_default(cls) -> "ProviderRegistry":
+        from creator_provider.image.sd_local_provider import SDLocalProvider
+        from creator_provider.llm.ollama_provider import OllamaProvider
+        from creator_provider.stt.whisper_provider import WhisperSTTProvider
+        from creator_provider.tts.piper_tts_provider import PiperTTSProvider
+
         registry = cls()
+        registry.register_provider("ollama", OllamaProvider)
+        registry.register_provider("sd_local", SDLocalProvider)
+        registry.register_provider("piper_tts", PiperTTSProvider)
+        registry.register_provider("whisper", WhisperSTTProvider)
         registry.register_model(
             ModelCatalogEntry(
                 model_key="qwen3-4b",
@@ -75,17 +84,17 @@ class ProviderRegistry:
         )
         registry.register_model(
             ModelCatalogEntry(
-                model_key="qwen-tts",
-                provider_type="qwen_tts",
-                endpoint="http://tts-qwen3:9880",
+                model_key="piper",
+                provider_type="piper_tts",
+                endpoint="http://tts-piper:5000",
                 category=ProviderCategory.TTS,
-                requires_gpu=True,
+                requires_gpu=False,
                 is_local=True,
             )
         )
         registry.register_model(
             ModelCatalogEntry(
-                model_key="whisper-medium",
+                model_key="whisper-small",
                 provider_type="whisper",
                 endpoint="http://stt-whisper:9000",
                 category=ProviderCategory.STT,

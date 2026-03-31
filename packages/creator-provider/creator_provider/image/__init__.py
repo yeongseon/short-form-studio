@@ -1,1 +1,3 @@
-"""Placeholder for image providers."""
+from .sd_local_provider import SDLocalProvider
+
+__all__ = ["SDLocalProvider"]

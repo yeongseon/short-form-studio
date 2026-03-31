@@ -62,7 +62,7 @@ def _get_redis_client() -> Any | None:
 def generate_subtitles(
     self,
     run_id: int,
-    subtitle_model: str = "whisper-tiny",
+    subtitle_model: str = "whisper-small",
     subtitle_format: str = "srt",
 ) -> dict[str, object]:
     start_time = datetime.now(timezone.utc)
