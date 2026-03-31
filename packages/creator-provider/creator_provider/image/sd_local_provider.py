@@ -17,21 +17,21 @@ class SDLocalProvider(ImageProvider):
 
     async def generate(self, prompt: str, params: dict[str, Any] | None = None) -> ImageResult:
         merged_params: dict[str, Any] = dict(params or {})
-        width = int(merged_params.get("width", 720))
-        height = int(merged_params.get("height", 1280))
+        width = int(merged_params.get("width", 512))
+        height = int(merged_params.get("height", 768))
 
         payload: dict[str, Any] = {
             "prompt": prompt,
             "width": width,
             "height": height,
-            "steps": 20,
+            "steps": 15,
             "cfg_scale": 7,
         }
         payload.update(merged_params)
 
         url = f"{self.endpoint}/sdapi/v1/txt2img"
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            async with httpx.AsyncClient(timeout=600.0) as client:
                 response = await client.post(url, json=payload)
                 response.raise_for_status()
         except httpx.HTTPError as exc:
