@@ -236,11 +236,14 @@ export default function ReviewPage() {
       setSubtitleContent(null);
       return;
     }
+    setSubtitleContent(null); // reset before fetching
     const url = artifactUrl(preview.subtitle.path);
+    let cancelled = false;
     fetch(url)
       .then((res) => (res.ok ? res.text() : Promise.reject(res.status)))
-      .then((text) => setSubtitleContent(text))
-      .catch(() => setSubtitleContent("(Failed to load subtitle content)"));
+      .then((text) => { if (!cancelled) setSubtitleContent(text); })
+      .catch(() => { if (!cancelled) setSubtitleContent("(Failed to load subtitle content)"); });
+    return () => { cancelled = true; };
   }, [preview?.subtitle?.path]);
 
   // ---- render ----
