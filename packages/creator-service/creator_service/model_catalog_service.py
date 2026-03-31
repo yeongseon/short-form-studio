@@ -125,6 +125,7 @@ class ModelCatalogService:
             "is_local": entry.is_local,
             "requires_gpu": entry.requires_gpu,
             "status": self._HEALTH_TO_CATALOG_STATUS[health_result.status],
+            "default_params": entry.default_params or {},
         }
 
     def _format_label(self, model_key: str, is_local: bool) -> str:
