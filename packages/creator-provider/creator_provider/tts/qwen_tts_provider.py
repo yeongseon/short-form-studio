@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import struct
 import tempfile
@@ -25,7 +26,7 @@ class QwenTTSProvider(TTSProvider):
         payload: dict[str, Any] = {
             "text": text,
             "voice_id": voice,
-            "language": merged_params.get("language", "ko"),
+            "language": merged_params.get("language", os.getenv("TTS_DEFAULT_LANGUAGE", "ko")),
             "speed": merged_params.get("speed", 1.0),
         }
 

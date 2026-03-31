@@ -63,7 +63,7 @@ def generate_audio(
     self,
     run_id: int,
     tts_model: str = "qwen3-tts",
-    voice: str = "en_US-lessac-medium",
+    voice: str = "default",
 ) -> dict[str, object]:
     start_time = datetime.now(timezone.utc)
     start_iso = start_time.isoformat()

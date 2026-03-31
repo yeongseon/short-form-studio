@@ -24,7 +24,7 @@ app = FastAPI(title="short-form-pipeline API")
 cors_origins_env = os.getenv("CORS_ORIGINS")
 cors_origins = [
     origin.strip() for origin in cors_origins_env.split(",") if origin.strip()
-] if cors_origins_env else ["http://localhost:5173"]
+] if cors_origins_env else ["http://localhost:5174"]
 
 app.add_middleware(
     CORSMiddleware,
