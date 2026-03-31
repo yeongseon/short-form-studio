@@ -32,7 +32,7 @@ class QwenTTSProvider(TTSProvider):
 
         url = f"{self.endpoint}/synthesize"
         try:
-            async with httpx.AsyncClient(timeout=120.0) as client:
+            async with httpx.AsyncClient(timeout=600.0) as client:
                 response = await client.post(url, json=payload)
                 response.raise_for_status()
         except httpx.HTTPError as exc:
