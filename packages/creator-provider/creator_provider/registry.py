@@ -52,7 +52,10 @@ class ProviderRegistry:
 
     @classmethod
     def create_default(cls) -> "ProviderRegistry":
+        from creator_provider.image.dalle_provider import DalleProvider
+        from creator_provider.image.imagen_provider import ImagenProvider
         from creator_provider.image.sd_local_provider import SDLocalProvider
+        from creator_provider.image.stability_provider import StabilityProvider
         from creator_provider.llm.anthropic_provider import AnthropicProvider
         from creator_provider.llm.gemini_provider import GeminiProvider
         from creator_provider.llm.ollama_provider import OllamaProvider
@@ -68,6 +71,9 @@ class ProviderRegistry:
         registry.register_provider("openai_llm", OpenAIProvider)
         registry.register_provider("anthropic_llm", AnthropicProvider)
         registry.register_provider("gemini_llm", GeminiProvider)
+        registry.register_provider("openai_image", DalleProvider)
+        registry.register_provider("stability_image", StabilityProvider)
+        registry.register_provider("google_image", ImagenProvider)
         registry.register_model(
             ModelCatalogEntry(
                 model_key="qwen3-4b",
@@ -136,6 +142,39 @@ class ProviderRegistry:
                 category=ProviderCategory.LLM,
                 requires_gpu=False,
                 is_local=False,
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="dall-e-3",
+                provider_type="openai_image",
+                endpoint="https://api.openai.com",
+                category=ProviderCategory.IMAGE,
+                requires_gpu=False,
+                is_local=False,
+                default_params={"width": 1024, "height": 1792},
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="sd3-medium",
+                provider_type="stability_image",
+                endpoint="https://api.stability.ai",
+                category=ProviderCategory.IMAGE,
+                requires_gpu=False,
+                is_local=False,
+                default_params={"aspect_ratio": "9:16"},
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="imagen-3",
+                provider_type="google_image",
+                endpoint="https://generativelanguage.googleapis.com",
+                category=ProviderCategory.IMAGE,
+                requires_gpu=False,
+                is_local=False,
+                default_params={"width": 1024, "height": 1792},
             )
         )
         return registry
