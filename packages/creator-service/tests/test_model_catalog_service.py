@@ -21,6 +21,11 @@ def health_service() -> AsyncMock:
         "stable-diffusion": ModelStatus.UNHEALTHY,
         "tts-qwen3": ModelStatus.UNKNOWN,
         "stt-whisper": ModelStatus.HEALTHY,
+        # External providers resolve to their hostnames
+        "api.openai.com": ModelStatus.UNKNOWN,
+        "api.anthropic.com": ModelStatus.UNKNOWN,
+        "generativelanguage.googleapis.com": ModelStatus.UNKNOWN,
+        "api.stability.ai": ModelStatus.UNKNOWN,
     }
 
     async def check_model(name: str) -> ModelHealthResult:
@@ -43,29 +48,38 @@ class TestModelCatalogService:
         result = await service.list_models()
 
         assert set(result.keys()) == {"script_models", "image_models", "tts_models", "stt_models"}
-        assert len(result["script_models"]) == 1
-        assert len(result["image_models"]) == 1
-        assert len(result["tts_models"]) == 1
-        assert len(result["stt_models"]) == 1
+        assert len(result["script_models"]) == 4  # qwen3-4b, gpt-4o-mini, claude-sonnet, gemini-flash
+        assert len(result["image_models"]) == 4  # sd15, dall-e-3, sd3-medium, imagen-3
+        assert len(result["tts_models"]) == 1  # qwen3-tts (external TTS not yet on main)
+        assert len(result["stt_models"]) == 1  # whisper-small
 
-        script_model = result["script_models"][0]
-        assert script_model["key"] == "qwen3-4b"
-        assert script_model["label"] == "Qwen3 4B (Local)"
-        assert script_model["provider_type"] == "ollama"
-        assert script_model["is_local"] is True
-        assert script_model["requires_gpu"] is True
-        assert script_model["status"] == "available"
+        # Verify local models are still present and correctly labeled
+        script_keys = {m["key"] for m in result["script_models"]}
+        assert "qwen3-4b" in script_keys
+        assert "gpt-4o-mini" in script_keys
 
-        image_model = result["image_models"][0]
-        assert image_model["status"] == "unavailable"
-        assert image_model["label"] == "Stable Diffusion 1.5 (Local)"
+        local_script = next(m for m in result["script_models"] if m["key"] == "qwen3-4b")
+        assert local_script["label"] == "Qwen3 4B (Local)"
+        assert local_script["provider_type"] == "ollama"
+        assert local_script["is_local"] is True
+        assert local_script["requires_gpu"] is True
+        assert local_script["status"] == "available"
 
-        tts_model = result["tts_models"][0]
-        assert tts_model["status"] == "unknown"
-        assert tts_model["label"] == "Qwen3 TTS (Local)"
+        local_image = next(m for m in result["image_models"] if m["key"] == "sd15")
+        assert local_image["status"] == "unavailable"
+        assert local_image["label"] == "Stable Diffusion 1.5 (Local)"
+
+        local_tts = next(m for m in result["tts_models"] if m["key"] == "qwen3-tts")
+        assert local_tts["status"] == "unknown"
+        assert local_tts["label"] == "Qwen3 TTS (Local)"
 
         stt_model = result["stt_models"][0]
         assert stt_model["label"] == "Whisper Small (Local)"
+
+        # Verify remote models
+        remote_image = next(m for m in result["image_models"] if m["key"] == "dall-e-3")
+        assert remote_image["label"] == "DALL-E 3 (Remote)"
+        assert remote_image["is_local"] is False
 
     @pytest.mark.asyncio
     async def test_list_models_filters_script_category(self, registry, health_service: AsyncMock):
@@ -73,8 +87,9 @@ class TestModelCatalogService:
 
         result = await service.list_models(category="script")
 
-        assert len(result["script_models"]) == 1
-        assert result["script_models"][0]["key"] == "qwen3-4b"
+        assert len(result["script_models"]) == 4
+        script_keys = {m["key"] for m in result["script_models"]}
+        assert "qwen3-4b" in script_keys
         assert result["image_models"] == []
         assert result["tts_models"] == []
         assert result["stt_models"] == []
@@ -85,8 +100,10 @@ class TestModelCatalogService:
 
         result = await service.list_models(category="image")
 
-        assert len(result["image_models"]) == 1
-        assert result["image_models"][0]["key"] == "sd15"
+        assert len(result["image_models"]) == 4
+        image_keys = {m["key"] for m in result["image_models"]}
+        assert "sd15" in image_keys
+        assert "dall-e-3" in image_keys
         assert result["script_models"] == []
         assert result["tts_models"] == []
         assert result["stt_models"] == []
@@ -99,20 +116,24 @@ class TestModelCatalogService:
 
         assert set(result.keys()) == {"providers", "gpu_lock"}
         assert isinstance(result["providers"], list)
-        assert len(result["providers"]) == 4
+
+        # Providers are deduplicated by (provider_type, endpoint).
+        # Count the actual unique (provider_type, endpoint) pairs from the registry.
+        entries = registry.list_models()
+        unique_providers = {(e.provider_type, e.endpoint) for e in entries}
+        assert len(result["providers"]) == len(unique_providers)
 
         provider = result["providers"][0]
         assert set(provider.keys()) == {"name", "endpoint", "healthy", "loaded_model", "gpu_locked"}
         assert provider["loaded_model"] is None
         assert provider["gpu_locked"] is False
 
-        # Provider names should match health service keys (Docker hostnames),
-        # not provider_type values from registry
+        # Verify local providers are present
         provider_names = {p["name"] for p in result["providers"]}
-        assert provider_names == {"ollama", "stable-diffusion", "tts-qwen3", "stt-whisper"}
-        assert set(provider.keys()) == {"name", "endpoint", "healthy", "loaded_model", "gpu_locked"}
-        assert provider["loaded_model"] is None
-        assert provider["gpu_locked"] is False
+        assert "ollama" in provider_names
+        assert "stable-diffusion" in provider_names
+        assert "tts-qwen3" in provider_names
+        assert "stt-whisper" in provider_names
 
         assert result["gpu_lock"] == {
             "active": False,
@@ -147,5 +168,11 @@ class TestModelCatalogService:
         await service.list_models()
 
         called_keys = {call.args[0] for call in health_service.check_model.call_args_list}
-        expected_keys = {"ollama", "stable-diffusion", "tts-qwen3", "stt-whisper"}
+        # Local providers use Docker hostnames, remote providers use API hostnames
+        expected_keys = {
+            "ollama", "stable-diffusion", "tts-qwen3", "stt-whisper",
+            "api.openai.com", "api.anthropic.com",
+            "generativelanguage.googleapis.com",
+            "api.stability.ai",
+        }
         assert called_keys == expected_keys
