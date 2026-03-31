@@ -42,6 +42,8 @@ class ModelCatalogService:
         "sd15": "Stable Diffusion 1.5",
         "sd-2.1": "Stable Diffusion 2.1",
         "qwen3-tts": "Qwen3 TTS",
+        "elevenlabs-multilingual-v2": "ElevenLabs Multilingual v2",
+        "openai-tts-1": "OpenAI TTS-1",
         "whisper-small": "Whisper Small",
         "gpt-4o-mini": "GPT-4o Mini",
         "claude-sonnet-4-20250514": "Claude Sonnet",
