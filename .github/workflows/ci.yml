@@ -19,6 +19,11 @@ jobs:
           node-version: "20"
       - name: Install Python dependencies
         run: python3 -m pip install -r apps/api/requirements.txt -r apps/worker-orchestrator/requirements.txt
+      - name: Install packages in editable mode
+        run: |
+          pip install -e packages/creator-domain
+          pip install -e packages/creator-provider
+          pip install -e packages/creator-service
       - name: Install Node dependencies
         run: npm --prefix apps/studio-web install
       - name: Lint Python
@@ -40,8 +45,18 @@ jobs:
           node-version: "20"
       - name: Install Python dependencies
         run: python3 -m pip install -r apps/api/requirements.txt -r apps/worker-orchestrator/requirements.txt
+      - name: Install packages in editable mode
+        run: |
+          pip install -e packages/creator-domain
+          pip install -e packages/creator-provider
+          pip install -e packages/creator-service
       - name: Install Node dependencies
         run: npm --prefix apps/studio-web install
+      - name: Test Packages
+        run: |
+          python3 -m pytest packages/creator-domain/tests/ -v
+          python3 -m pytest packages/creator-provider/tests/ -v
+          python3 -m pytest packages/creator-service/tests/ -v
       - name: Test API
         run: cd apps/api && python3 -m pytest tests/ -v
       - name: Test Worker

@@ -1,8 +1,12 @@
 """Model health check service for monitoring model serving containers."""
 
+import asyncio
 from dataclasses import dataclass
 from enum import Enum
 import os
+import time
+
+import httpx
 
 
 class ModelStatus(Enum):
@@ -60,16 +64,29 @@ class ModelHealthService:
         
         health_path = self.health_paths.get(model_name, "/")
         url = f"{endpoint}{health_path}"
-        
-        # TODO: Implement actual HTTP call using httpx
-        # In production: async with httpx.AsyncClient() as client: ...
-        # For now, return placeholder result
-        return ModelHealthResult(
-            model_name=model_name,
-            endpoint=endpoint,
-            status=ModelStatus.UNKNOWN,
-            error="Health check not yet implemented"
-        )
+
+        start = time.perf_counter()
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(url)
+                response.raise_for_status()
+
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            return ModelHealthResult(
+                model_name=model_name,
+                endpoint=endpoint,
+                status=ModelStatus.HEALTHY,
+                response_time_ms=elapsed_ms,
+            )
+        except httpx.HTTPError as exc:
+            elapsed_ms = (time.perf_counter() - start) * 1000
+            return ModelHealthResult(
+                model_name=model_name,
+                endpoint=endpoint,
+                status=ModelStatus.UNHEALTHY,
+                response_time_ms=elapsed_ms,
+                error=str(exc),
+            )
 
     async def check_all(self) -> list[ModelHealthResult]:
         """Check health of all model containers.
@@ -77,8 +94,6 @@ class ModelHealthService:
         Returns:
             List of ModelHealthResult for each model container
         """
-        results = []
-        for name in self.endpoints:
-            result = await self.check_model(name)
-            results.append(result)
-        return results
+        return await asyncio.gather(
+            *(self.check_model(name) for name in self.endpoints)
+        )

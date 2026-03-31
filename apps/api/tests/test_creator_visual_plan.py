@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 import pytest
-from models.visual_plan import VisualScene
+from creator_domain.models import VisualScene
 from pydantic import BaseModel
 from shorts_api.main import visual_plan_router
 
@@ -82,7 +82,7 @@ class StubVisualPlanService:
             raise ValueError(f"No active visual plan for run {run_id}")
 
         if expected_version is not None and active.version != expected_version:
-            from visual_plan_service import VersionConflictError
+            from creator_service.visual_plan_service import VersionConflictError
             raise VersionConflictError(run_id, expected_version, active.version)
 
         _patchable = {"prompt", "prompt_edited", "prompt_source", "style_tags", "mood", "composition"}
@@ -117,22 +117,24 @@ def _make_run(run_id: int, stage: str = "VISUAL_PLAN_REVIEW") -> StubPipelineRun
     )
 
 
-def _make_scene(scene_id: str = "scene-1", index: int = 0) -> dict[str, Any]:
-    return {
-        "scene_id": scene_id,
-        "section_id": "sec-1",
-        "scene_index": index,
-        "section_type": "narration",
-        "original_text": "Sample narration text",
-        "prompt": "A person explaining something",
-        "prompt_edited": False,
-        "prompt_source": "auto_generated",
-        "style_tags": ["cinematic"],
-        "mood": "neutral",
-        "composition": "medium-shot",
-        "generation_status": "pending",
-        "latest_asset_id": None,
-    }
+def _make_scene(scene_id: str = "scene-1", index: int = 0) -> VisualScene:
+    return VisualScene.model_validate(
+        {
+            "scene_id": scene_id,
+            "section_id": "sec-1",
+            "scene_index": index,
+            "section_type": "narration",
+            "original_text": "Sample narration text",
+            "prompt": "A person explaining something",
+            "prompt_edited": False,
+            "prompt_source": "auto_generated",
+            "style_tags": ["cinematic"],
+            "mood": "neutral",
+            "composition": "medium-shot",
+            "generation_status": "pending",
+            "latest_asset_id": None,
+        }
+    )
 
 
 @pytest.fixture
@@ -233,7 +235,7 @@ async def test_replace_visual_plan_success(client, stub_visual_plan_services):
     scene = _make_scene("scene-new")
     response = await client.put(
         "/api/creator/runs/20/visual-plan",
-        json={"scenes": [scene]},
+        json={"scenes": [scene.model_dump(mode="json")]},
     )
 
     assert response.status_code == 200
@@ -257,12 +259,12 @@ async def test_replace_visual_plan_version_increment(client, stub_visual_plan_se
 
     await client.put(
         "/api/creator/runs/21/visual-plan",
-        json={"scenes": [scene1]},
+        json={"scenes": [scene1.model_dump(mode="json")]},
     )
 
     response = await client.put(
         "/api/creator/runs/21/visual-plan",
-        json={"scenes": [scene2]},
+        json={"scenes": [scene2.model_dump(mode="json")]},
     )
 
     assert response.status_code == 200
@@ -278,7 +280,7 @@ async def test_replace_visual_plan_run_not_found(client, stub_visual_plan_servic
     scene = _make_scene()
     response = await client.put(
         "/api/creator/runs/999/visual-plan",
-        json={"scenes": [scene]},
+        json={"scenes": [scene.model_dump(mode="json")]},
     )
 
     assert response.status_code == 404
@@ -326,7 +328,7 @@ async def test_replace_visual_plan_multiple_scenes(client, stub_visual_plan_serv
     scenes = [_make_scene(f"scene-{i}", i) for i in range(3)]
     response = await client.put(
         "/api/creator/runs/24/visual-plan",
-        json={"scenes": scenes},
+        json={"scenes": [scene.model_dump(mode="json") for scene in scenes]},
     )
 
     assert response.status_code == 200

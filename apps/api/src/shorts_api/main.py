@@ -1,9 +1,12 @@
 """FastAPI entrypoint for shorts_api."""
-import os
 import logging
+import os
+import time
 
-from fastapi import FastAPI
+from creator_service.model_health_service import ModelHealthService
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.staticfiles import StaticFiles
 from creator_service.logging_config import setup_json_logging
 from shorts_api.routes.creator_models import router as models_router
@@ -31,6 +34,37 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    start = time.perf_counter()
+    status_code = 500
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        return response
+    finally:
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        logger.info(
+            "%s %s %d %.1fms",
+            request.method,
+            request.url.path,
+            status_code,
+            elapsed_ms,
+        )
+
+
+model_health = ModelHealthService()
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
+
 app.include_router(models_router, prefix="/api/creator")
 app.include_router(projects_router, prefix="/api/creator")
 app.include_router(runs_router, prefix="/api/creator")
@@ -40,8 +74,21 @@ app.include_router(visual_plan_router, prefix="/api/creator")
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health() -> dict[str, object]:
+    results = await model_health.check_all()
+    all_healthy = all(r.status.value == "healthy" for r in results)
+    return {
+        "status": "ok" if all_healthy else "degraded",
+        "models": {
+            r.model_name: {
+                "status": r.status.value,
+                "endpoint": r.endpoint,
+                "response_time_ms": r.response_time_ms,
+                "error": r.error,
+            }
+            for r in results
+        },
+    }
 
 
 app.mount(
