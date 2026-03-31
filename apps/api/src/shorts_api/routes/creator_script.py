@@ -72,6 +72,27 @@ async def get_script_markdown(run_id: int) -> dict[str, object]:
     }
 
 
+@run_script_router.get("")
+async def get_script(run_id: int) -> dict[str, object]:
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+
+    draft = await script_service.get_active_draft(run_id)
+    if draft is None:
+        raise HTTPException(status_code=404, detail="No script draft found for this run")
+
+    return {
+        "run_id": run_id,
+        "script": draft.markdown_content,
+        "structured_script": [
+            section.model_dump(mode="json")
+            for section in (draft.structured_script or [])
+        ],
+        "version": draft.version,
+    }
+
+
 @run_script_router.get("/structured")
 async def get_script_structured(run_id: int) -> dict[str, object]:
     run = await run_service.get_run(run_id)
