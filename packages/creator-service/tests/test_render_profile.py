@@ -120,7 +120,7 @@ class TestFFmpegService(unittest.TestCase):
         self.assertIn(self.profile.audio_codec.value, cmd)
 
     def test_build_command_with_subtitles(self):
-        """Test build_command includes subtitle filter."""
+        """Test build_command includes subtitle filter inside filter_complex."""
         input_data = RenderInput(
             image_paths=[Path("/tmp/img1.png")],
             audio_path=None,
@@ -128,15 +128,17 @@ class TestFFmpegService(unittest.TestCase):
             scene_durations=[5.0]
         )
         output_path = Path("/tmp/output.mp4")
-        
+
         cmd = self.service.build_command(input_data, output_path)
-        
-        # Verify subtitle filter is present
-        self.assertIn("-vf", cmd)
-        # Find the -vf value
-        vf_idx = cmd.index("-vf")
-        vf_filter = cmd[vf_idx + 1]
-        self.assertIn("subtitles", vf_filter)
+
+        # Subtitle filter must be inside -filter_complex, NOT a separate -vf
+        self.assertNotIn("-vf", cmd)
+        fc_idx = cmd.index("-filter_complex")
+        fc_value = cmd[fc_idx + 1]
+        self.assertIn("subtitles", fc_value)
+        # Intermediate label [vcat] feeds into subtitle filter → [vout]
+        self.assertIn("[vcat]", fc_value)
+        self.assertIn("[vout]", fc_value)
 
     def test_custom_profile(self):
         """Test FFmpegService with custom profile."""
@@ -209,6 +211,67 @@ class TestFFmpegService(unittest.TestCase):
             self.service.render(input_data, output_path)
         
         self.assertIn("FFmpeg render failed", str(cm.exception))
+
+    def test_build_command_without_subtitles_no_vcat(self):
+        """Without subtitles, concat goes directly to [vout] (no [vcat])."""
+        input_data = RenderInput(
+            image_paths=[Path("/tmp/img1.png"), Path("/tmp/img2.png")],
+            audio_path=None,
+            subtitle_path=None,
+            scene_durations=[3.0, 4.0]
+        )
+        output_path = Path("/tmp/output.mp4")
+
+        cmd = self.service.build_command(input_data, output_path)
+
+        self.assertNotIn("-vf", cmd)
+        fc_idx = cmd.index("-filter_complex")
+        fc_value = cmd[fc_idx + 1]
+        self.assertNotIn("[vcat]", fc_value)
+        self.assertIn("[vout]", fc_value)
+        self.assertNotIn("subtitles", fc_value)
+
+    def test_build_command_subtitle_path_escaping(self):
+        """Special characters in subtitle path are escaped for FFmpeg."""
+        input_data = RenderInput(
+            image_paths=[Path("/tmp/img1.png")],
+            audio_path=None,
+            subtitle_path=Path("/data/project:1/subs file.srt"),
+            scene_durations=[5.0]
+        )
+        output_path = Path("/tmp/output.mp4")
+
+        cmd = self.service.build_command(input_data, output_path)
+
+        fc_idx = cmd.index("-filter_complex")
+        fc_value = cmd[fc_idx + 1]
+        # Colon must be escaped
+        self.assertIn("\\:", fc_value)
+        # Original un-escaped colon should not appear in the subtitle part
+        self.assertNotIn("project:1", fc_value)
+
+    def test_build_command_with_audio_and_subtitles(self):
+        """Audio + subtitles: single filter_complex, correct stream mapping."""
+        input_data = RenderInput(
+            image_paths=[Path("/tmp/img1.png"), Path("/tmp/img2.png")],
+            audio_path=Path("/tmp/audio.wav"),
+            subtitle_path=Path("/tmp/subs.srt"),
+            scene_durations=[3.0, 4.0]
+        )
+        output_path = Path("/tmp/output.mp4")
+
+        cmd = self.service.build_command(input_data, output_path)
+
+        # No separate -vf
+        self.assertNotIn("-vf", cmd)
+        # filter_complex has both concat and subtitles
+        fc_idx = cmd.index("-filter_complex")
+        fc_value = cmd[fc_idx + 1]
+        self.assertIn("subtitles", fc_value)
+        self.assertIn("[vcat]", fc_value)
+        self.assertIn("[vout]", fc_value)
+        # Audio stream mapped
+        self.assertIn("-c:a", cmd)
 
 
 if __name__ == "__main__":
