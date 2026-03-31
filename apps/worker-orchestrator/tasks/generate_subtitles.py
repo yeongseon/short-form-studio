@@ -136,9 +136,9 @@ def generate_subtitles(
             gpu_lock_acquired_at = _utc_now_iso()
 
         subtitle_path = f"{_ARTIFACT_ROOT}/{run_id}/subtitles/subtitles.{subtitle_format}"
-        os.makedirs(os.path.dirname(subtitle_path), exist_ok=True)
 
         try:
+            os.makedirs(os.path.dirname(subtitle_path), exist_ok=True)
             # 6. Generate subtitles via provider.
             params = dict(entry.default_params or {})
             params["format"] = subtitle_format

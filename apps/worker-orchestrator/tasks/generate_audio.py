@@ -131,9 +131,9 @@ def generate_audio(
             gpu_lock_acquired_at = _utc_now_iso()
 
         audio_path = f"{_ARTIFACT_ROOT}/{run_id}/audio/audio.wav"
-        os.makedirs(os.path.dirname(audio_path), exist_ok=True)
 
         try:
+            os.makedirs(os.path.dirname(audio_path), exist_ok=True)
             # 5. Generate audio via provider.
             params = dict(entry.default_params or {})
             params["output_path"] = audio_path
