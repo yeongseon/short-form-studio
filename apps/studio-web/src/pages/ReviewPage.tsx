@@ -17,6 +17,12 @@ import PipelineStepper from "../components/creator/PipelineStepper";
 
 const API_BASE = "/api/creator";
 
+/** Convert API artifact path → browser-accessible URL via Vite proxy. */
+function artifactUrl(path: string): string {
+  const match = path.match(/data\/artifacts\/(.*)/);
+  return match ? `/artifacts/${match[1]}` : `/artifacts/${path}`;
+}
+
 // --------------- types ---------------
 
 interface RunDetail {
@@ -141,7 +147,7 @@ const previewBoxStyle: React.CSSProperties = {
   background: "#f9fafb",
   borderRadius: 6,
   fontSize: 13,
-  fontFamily: "monospace",
+  fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", "SF Mono", monospace',
   whiteSpace: "pre-wrap",
   overflowX: "auto",
   maxHeight: 300,
@@ -161,6 +167,7 @@ export default function ReviewPage() {
   const [assets, setAssets] = useState<Record<string, { asset_path: string; model_used: string; is_active: boolean }[]>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [subtitleContent, setSubtitleContent] = useState<string | null>(null);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -222,6 +229,22 @@ export default function ReviewPage() {
       fetchAll();
     }
   }, [numericRunId, fetchAll]);
+
+  // Fetch subtitle content when preview is available
+  useEffect(() => {
+    if (!preview?.subtitle?.path) {
+      setSubtitleContent(null);
+      return;
+    }
+    setSubtitleContent(null); // reset before fetching
+    const url = artifactUrl(preview.subtitle.path);
+    let cancelled = false;
+    fetch(url)
+      .then((res) => (res.ok ? res.text() : Promise.reject(res.status)))
+      .then((text) => { if (!cancelled) setSubtitleContent(text); })
+      .catch(() => { if (!cancelled) setSubtitleContent("(Failed to load subtitle content)"); });
+    return () => { cancelled = true; };
+  }, [preview?.subtitle?.path]);
 
   // ---- render ----
 
@@ -353,30 +376,48 @@ export default function ReviewPage() {
             <h3 style={sectionTitle}>Visual Assets</h3>
             <Link to={editUrl} style={editLinkStyle}>Edit in Project &rarr;</Link>
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             {Object.entries(assets).map(([sceneId, sceneAssets]) => (
               <div key={sceneId}>
-                <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 4 }}>{sceneId}</div>
-                {sceneAssets.map((asset, idx) => (
-                  <div
-                    key={idx}
-                    style={{
-                      padding: 8,
-                      background: asset.is_active ? "#f0fdf4" : "#f9fafb",
-                      borderRadius: 4,
-                      border: asset.is_active ? "1px solid #bbf7d0" : "1px solid #e5e7eb",
-                      marginBottom: 4,
-                    }}
-                  >
-                    <span style={{ fontSize: 13 }}>{asset.asset_path}</span>
-                    <span style={metaStyle}> &middot; Model: {asset.model_used}</span>
-                    {asset.is_active && (
-                      <span style={{ fontSize: 11, color: "#166534", fontWeight: 600, marginLeft: 8 }}>
-                        ACTIVE
-                      </span>
-                    )}
-                  </div>
-                ))}
+                <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 8 }}>{sceneId}</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 8 }}>
+                  {sceneAssets.map((asset, idx) => (
+                    <div
+                      key={idx}
+                      style={{
+                        background: asset.is_active ? "#f0fdf4" : "#f9fafb",
+                        borderRadius: 6,
+                        border: asset.is_active ? "1px solid #bbf7d0" : "1px solid #e5e7eb",
+                        overflow: "hidden",
+                      }}
+                    >
+                      <img
+                        src={artifactUrl(asset.asset_path)}
+                        alt={`${sceneId} asset ${idx + 1}`}
+                        style={{
+                          width: "100%",
+                          aspectRatio: "9 / 16",
+                          objectFit: "cover",
+                          display: "block",
+                          background: "#e5e7eb",
+                        }}
+                      />
+                      <div style={{ padding: "6px 8px" }}>
+                        <div style={{ fontSize: 11, color: "#374151", wordBreak: "break-all" }}>
+                          {asset.asset_path.split("/").pop()}
+                        </div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 4, marginTop: 2 }}>
+                          <span style={metaStyle}>Model: {asset.model_used}</span>
+                          {asset.is_active && (
+                            <span style={{ fontSize: 10, color: "#166534", fontWeight: 600, background: "#dcfce7", padding: "1px 5px", borderRadius: 3 }}>
+                              ACTIVE
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
               </div>
             ))}
           </div>
@@ -390,10 +431,14 @@ export default function ReviewPage() {
             <h3 style={sectionTitle}>Audio</h3>
             <Link to={editUrl} style={editLinkStyle}>Edit in Project &rarr;</Link>
           </div>
+          <audio
+            controls
+            style={{ width: "100%", marginBottom: 8, borderRadius: 6 }}
+            src={artifactUrl(preview.audio.path)}
+          />
           <div style={{ fontSize: 13 }}>
-            <div><strong>Path:</strong> {preview.audio.path}</div>
             <div><strong>Model:</strong> {preview.audio.model_used}</div>
-            <div style={metaStyle}>Created: {preview.audio.created_at}</div>
+            <div style={metaStyle}>Created: {new Date(preview.audio.created_at).toLocaleString()}</div>
           </div>
         </div>
       )}
@@ -405,10 +450,16 @@ export default function ReviewPage() {
             <h3 style={sectionTitle}>Subtitles</h3>
             <Link to={editUrl} style={editLinkStyle}>Edit in Project &rarr;</Link>
           </div>
-          <div style={{ fontSize: 13 }}>
-            <div><strong>Path:</strong> {preview.subtitle.path}</div>
+          {subtitleContent !== null ? (
+            <div style={previewBoxStyle}>{subtitleContent}</div>
+          ) : (
+            <div style={{ fontSize: 13, color: "#6b7280", fontStyle: "italic" }}>
+              Loading subtitle content…
+            </div>
+          )}
+          <div style={{ fontSize: 13, marginTop: 8 }}>
             <div><strong>Format:</strong> {preview.subtitle.format}</div>
-            <div style={metaStyle}>Created: {preview.subtitle.created_at}</div>
+            <div style={metaStyle}>Created: {new Date(preview.subtitle.created_at).toLocaleString()}</div>
           </div>
         </div>
       )}
@@ -420,10 +471,20 @@ export default function ReviewPage() {
             <h3 style={sectionTitle}>Rendered Video</h3>
             <Link to={editUrl} style={editLinkStyle}>Edit in Project &rarr;</Link>
           </div>
+          <video
+            controls
+            style={{
+              width: "100%",
+              maxHeight: 640,
+              borderRadius: 6,
+              background: "#000",
+              marginBottom: 8,
+            }}
+            src={artifactUrl(preview.video.path)}
+          />
           <div style={{ fontSize: 13 }}>
-            <div><strong>Path:</strong> {preview.video.path}</div>
             <div><strong>Profile:</strong> {preview.video.render_profile ?? "default"}</div>
-            <div style={metaStyle}>Created: {preview.video.created_at}</div>
+            <div style={metaStyle}>Created: {new Date(preview.video.created_at).toLocaleString()}</div>
           </div>
         </div>
       )}
