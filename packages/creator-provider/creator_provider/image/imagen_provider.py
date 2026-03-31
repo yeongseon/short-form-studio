@@ -10,6 +10,34 @@ import httpx
 from creator_provider.api_keys import resolve_api_key
 from creator_provider.base import ImageProvider, ImageResult
 
+# Map common width x height to Imagen API aspectRatio values.
+_ASPECT_RATIOS: dict[tuple[int, int], str] = {
+    (1024, 1792): "9:16",
+    (1792, 1024): "16:9",
+    (1024, 1024): "1:1",
+    (768, 1024): "3:4",
+    (1024, 768): "4:3",
+}
+
+
+def _resolve_aspect_ratio(width: int, height: int) -> str:
+    """Derive the closest Imagen API aspectRatio string from width/height."""
+    key = (width, height)
+    if key in _ASPECT_RATIOS:
+        return _ASPECT_RATIOS[key]
+    # Fallback: compute ratio and pick the closest standard option.
+    ratio = width / height
+    if ratio < 0.65:
+        return "9:16"
+    elif ratio < 0.85:
+        return "3:4"
+    elif ratio < 1.18:
+        return "1:1"
+    elif ratio < 1.45:
+        return "4:3"
+    else:
+        return "16:9"
+
 
 class ImagenProvider(ImageProvider):
     def __init__(self, endpoint: str, model_key: str):
@@ -21,6 +49,7 @@ class ImagenProvider(ImageProvider):
         merged = dict(params or {})
         width = int(merged.get("width", 1024))
         height = int(merged.get("height", 1792))
+        aspect_ratio = merged.get("aspect_ratio", _resolve_aspect_ratio(width, height))
         timeout = float(merged.get("timeout", 120.0))
 
         url = (
@@ -31,6 +60,7 @@ class ImagenProvider(ImageProvider):
             "prompt": prompt,
             "config": {
                 "numberOfImages": 1,
+                "aspectRatio": aspect_ratio,
             },
         }
         headers = {"Content-Type": "application/json"}
