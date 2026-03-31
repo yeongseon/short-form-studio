@@ -292,6 +292,9 @@ async def generate_script_trigger(run_id: int, request: GenerateScriptRequest) -
             detail="Failed to enqueue script generation task",
         ) from None
 
+
+    # Persist task_id for stop/revoke support
+    await run_service.storage.update_run(run_id, {"active_task_id": task_id})
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -350,6 +353,9 @@ async def generate_visual_plan_trigger(run_id: int, request: GenerateVisualPlanR
             detail="Failed to enqueue visual plan generation task",
         ) from None
 
+
+    # Persist task_id for stop/revoke support
+    await run_service.storage.update_run(run_id, {"active_task_id": task_id})
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -475,6 +481,9 @@ async def generate_visual_assets_trigger(
             detail="Failed to enqueue image generation task",
         ) from None
 
+
+    # Persist task_id for stop/revoke support
+    await run_service.storage.update_run(run_id, {"active_task_id": task_id})
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -531,6 +540,9 @@ async def generate_scene_image_endpoint(
             detail="Failed to enqueue image generation task",
         ) from None
 
+
+    # Persist task_id for stop/revoke support
+    await run_service.storage.update_run(run_id, {"active_task_id": task_id})
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -580,6 +592,9 @@ async def regenerate_scene_image_endpoint(
             detail="Failed to enqueue image generation task",
         ) from None
 
+
+    # Persist task_id for stop/revoke support
+    await run_service.storage.update_run(run_id, {"active_task_id": task_id})
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -702,6 +717,9 @@ async def generate_audio_trigger(run_id: int, request: GenerateAudioRequest) -> 
             detail="Failed to enqueue audio generation task",
         ) from None
 
+
+    # Persist task_id for stop/revoke support
+    await run_service.storage.update_run(run_id, {"active_task_id": task_id})
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -761,6 +779,9 @@ async def generate_subtitles_trigger(run_id: int, request: GenerateSubtitlesRequ
             detail="Failed to enqueue subtitle generation task",
         ) from None
 
+
+    # Persist task_id for stop/revoke support
+    await run_service.storage.update_run(run_id, {"active_task_id": task_id})
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -819,6 +840,9 @@ async def render_trigger(run_id: int, request: RenderRequest) -> dict[str, objec
             detail="Failed to enqueue render task",
         ) from None
 
+
+    # Persist task_id for stop/revoke support
+    await run_service.storage.update_run(run_id, {"active_task_id": task_id})
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -1197,3 +1221,71 @@ async def generate_all_paragraph_subtitles(
         "tasks": task_ids,
         "total": len(task_ids),
     }
+
+
+# ---------------------------------------------------------------------------
+# Run lifecycle management (Phase 10 — Stop / Resume / Delete)
+# ---------------------------------------------------------------------------
+
+
+def _revoke_active_task(active_task_id: str | None) -> None:
+    """Revoke a Celery task if active_task_id is set."""
+    if not active_task_id:
+        return
+    try:
+        from celery_app import celery_app
+        celery_app.control.revoke(active_task_id, terminate=True)
+    except Exception:
+        pass  # Best-effort: task may have already completed
+
+
+@router.post("/runs/{run_id}/stop")
+async def stop_run(run_id: int) -> dict[str, object]:
+    """Stop a running pipeline. Revokes the active Celery task."""
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    # Revoke Celery task before updating DB
+    _revoke_active_task(run.active_task_id)
+
+    try:
+        updated = await run_service.stop_run(run_id)
+    except ValueError as exc:
+        detail = str(exc)
+        if "not found" in detail.lower():
+            raise HTTPException(status_code=404, detail=detail) from exc
+        raise HTTPException(status_code=400, detail=detail) from exc
+
+    return updated.model_dump(mode="json")
+
+
+@router.post("/runs/{run_id}/resume")
+async def resume_run(run_id: int) -> dict[str, object]:
+    """Resume a stopped/cancelled/failed run."""
+    try:
+        updated = await run_service.resume_run(run_id)
+    except ValueError as exc:
+        detail = str(exc)
+        if "not found" in detail.lower():
+            raise HTTPException(status_code=404, detail=detail) from exc
+        raise HTTPException(status_code=400, detail=detail) from exc
+
+    return updated.model_dump(mode="json")
+
+
+@router.delete("/runs/{run_id}")
+async def delete_run(run_id: int) -> dict[str, object]:
+    """Delete a run. Revokes active task first if running."""
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    # Revoke any active task
+    _revoke_active_task(run.active_task_id)
+
+    deleted = await run_service.delete_run(run_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    return {"deleted": True, "run_id": run_id}

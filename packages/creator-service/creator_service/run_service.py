@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from creator_domain.models import ModelSelection, PipelineRun, RunStage, REVIEW_STAGES, can_transition
+from creator_domain.models import ModelSelection, PipelineRun, RunStage, REVIEW_STAGES, GENERATING_STAGES, can_transition
 
 class RunStorageBackend(Protocol):
     async def create_run(self, row: dict[str, Any]) -> dict[str, Any]:
@@ -34,6 +34,14 @@ class RunStorageBackend(Protocol):
 
     async def list_runs_by_project(self, project_id: int) -> list[dict[str, Any]]:
         """Return all run rows for a given project, newest first."""
+        ...
+
+    async def delete_run(self, run_id: int) -> bool:
+        """Delete a run by id. Returns True if deleted."""
+        ...
+
+    async def delete_runs_by_project(self, project_id: int) -> int:
+        """Delete all runs for a project. Returns count of deleted rows."""
         ...
 
 class InMemoryRunStorage:
@@ -90,6 +98,18 @@ class InMemoryRunStorage:
         ]
         rows.sort(key=lambda r: r.get("id", 0), reverse=True)
         return rows
+
+    async def delete_run(self, run_id: int) -> bool:
+        if run_id in self._rows:
+            del self._rows[run_id]
+            return True
+        return False
+
+    async def delete_runs_by_project(self, project_id: int) -> int:
+        to_delete = [rid for rid, r in self._rows.items() if r.get("project_id") == project_id]
+        for rid in to_delete:
+            del self._rows[rid]
+        return len(to_delete)
 
 class RunService:
     def __init__(self, storage: RunStorageBackend):
@@ -201,6 +221,54 @@ class RunService:
         """Return all runs for a project, newest first."""
         rows = await self.storage.list_runs_by_project(project_id)
         return [PipelineRun.from_row(r) for r in rows]
+
+    async def stop_run(self, run_id: int) -> PipelineRun:
+        """Stop a running pipeline. Only allowed during GENERATING stages."""
+        run = await self.get_run(run_id)
+        if run is None:
+            raise ValueError(f"Run {run_id} not found")
+
+        if run.status == "cancelled":
+            raise ValueError(f"Run {run_id} is already stopped")
+
+        # Only allow stopping during generating stages
+        generating_stage_values = frozenset(s.value for s in GENERATING_STAGES)
+        if run.current_stage not in generating_stage_values:
+            raise ValueError(
+                f"Run {run_id} is in stage '{run.current_stage}', "
+                f"can only stop during generating stages"
+            )
+
+        row = await self.storage.update_run(
+            run_id,
+            {
+                "status": "cancelled",
+                "active_task_id": None,
+            },
+        )
+        return PipelineRun.from_row(row)
+
+    async def resume_run(self, run_id: int) -> PipelineRun:
+        """Resume a stopped/cancelled run. Resets status to 'running'."""
+        run = await self.get_run(run_id)
+        if run is None:
+            raise ValueError(f"Run {run_id} not found")
+
+        if run.status not in ("cancelled", "failed"):
+            raise ValueError(
+                f"Run {run_id} has status '{run.status}', "
+                f"can only resume cancelled or failed runs"
+            )
+
+        row = await self.storage.update_run(
+            run_id,
+            {"status": "running"},
+        )
+        return PipelineRun.from_row(row)
+
+    async def delete_run(self, run_id: int) -> bool:
+        """Delete a run and return True if deleted."""
+        return await self.storage.delete_run(run_id)
 
 
 def _create_storage() -> RunStorageBackend:
