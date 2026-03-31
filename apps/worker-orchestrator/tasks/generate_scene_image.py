@@ -40,10 +40,10 @@ _ALLOWED_STAGES = frozenset({RunStage.VISUAL_PLAN_REVIEW, RunStage.VISUAL_ASSET_
 
 # Stages where writing VISUAL_ASSET_REVIEW or FAILED is safe — the run
 # hasn't advanced past image generation.
-_SAFE_STAGES = frozenset({RunStage.VISUAL_PLAN_REVIEW.value, RunStage.VISUAL_ASSET_GENERATING.value})
+_SAFE_STAGES = frozenset({RunStage.VISUAL_PLAN_REVIEW, RunStage.VISUAL_ASSET_GENERATING})
 
 # Base directory for artifact storage (relative to project root).
-_ARTIFACTS_BASE = os.getenv("ARTIFACTS_BASE", "data/artifacts")
+_ARTIFACTS_BASE = os.getenv("ARTIFACT_ROOT", "data/artifacts")
 
 
 class _StageGuardError(ValueError):
@@ -113,7 +113,7 @@ def generate_scene_image(
         if current not in _ALLOWED_STAGES:
             raise _StageGuardError(
                 f"Run {run_id} is in stage {current.value}, "
-                f"expected one of {', '.join(s.value for s in _ALLOWED_STAGES)}"
+                f"expected one of {', '.join(s for s in _ALLOWED_STAGES)}"
             )
 
         # 2. Fetch active visual plan.
@@ -252,7 +252,7 @@ def generate_scene_image(
                 applied, _ = await _run_service.storage.conditional_update_run(
                     run_id,
                     {
-                        "current_stage": RunStage.FAILED.value,
+                        "current_stage": RunStage.FAILED,
                         "status": "failed",
                     },
                     expected_stages=_SAFE_STAGES,
@@ -271,7 +271,7 @@ def generate_scene_image(
             applied, _ = await _run_service.storage.conditional_update_run(
                 run_id,
                 {
-                    "current_stage": RunStage.VISUAL_ASSET_REVIEW.value,
+                    "current_stage": RunStage.VISUAL_ASSET_REVIEW,
                     "status": "running",
                 },
                 expected_stages=_SAFE_STAGES,
@@ -314,7 +314,7 @@ def generate_scene_image(
                 _run_service.storage.conditional_update_run(
                     run_id,
                     {
-                        "current_stage": RunStage.FAILED.value,
+                        "current_stage": RunStage.FAILED,
                         "status": "failed",
                     },
                     expected_stages=_SAFE_STAGES,

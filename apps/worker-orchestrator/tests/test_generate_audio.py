@@ -1,0 +1,353 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+from tasks import generate_audio as generate_audio_module
+
+
+@dataclass
+class FakeEntry:
+    provider_type: str = "piper"
+    endpoint: str = "http://piper:5000"
+    requires_gpu: bool = True
+    default_params: dict[str, object] | None = None
+
+
+class FakeProvider:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.error = error
+        self.calls: list[tuple[str, str, dict[str, object] | None]] = []
+
+    async def generate(
+        self,
+        text: str,
+        voice: str = "default",
+        params: dict[str, object] | None = None,
+    ) -> None:
+        self.calls.append((text, voice, params))
+        if self.error is not None:
+            raise self.error
+
+
+class FakeStorage:
+    def __init__(self, runs: dict[int, dict[str, object]] | None = None) -> None:
+        self._runs: dict[int, dict[str, object]] = runs or {}
+        self.calls: list[tuple[int, dict[str, object]]] = []
+        self.cas_calls: list[tuple[int, dict[str, object], frozenset[str]]] = []
+
+    async def get_run(self, run_id: int) -> dict[str, object] | None:
+        return self._runs.get(run_id)
+
+    async def conditional_update_run(
+        self,
+        run_id: int,
+        updates: dict[str, object],
+        expected_stages: frozenset[str],
+    ) -> tuple[bool, dict[str, object] | None]:
+        self.cas_calls.append((run_id, updates, expected_stages))
+        row = self._runs.get(run_id)
+        if row is None:
+            return False, None
+        if row.get("current_stage") not in expected_stages:
+            return False, dict(row)
+        self.calls.append((run_id, updates))
+        row.update(updates)
+        self._runs[run_id] = row
+        return True, dict(row)
+
+
+def _make_storage(run_id: int = 101, stage: str = "VISUAL_ASSET_REVIEW") -> FakeStorage:
+    run_row: dict[str, object] = {"id": run_id, "current_stage": stage}
+    return FakeStorage(runs={run_id: run_row})
+
+
+@dataclass
+class FakeSection:
+    text: str = "Section text"
+    display_text: str | None = None
+
+
+@dataclass
+class FakeScriptDraft:
+    markdown_content: str | None = None
+    structured_script: list[FakeSection] | None = None
+
+
+class FakeScriptService:
+    def __init__(self, draft: FakeScriptDraft | None = None) -> None:
+        self.draft = draft
+
+    async def get_active_draft(self, _run_id: int) -> FakeScriptDraft | None:
+        return self.draft
+
+
+@dataclass
+class FakeAudioArtifact:
+    id: int
+    path: str
+
+
+class FakeAudioService:
+    def __init__(self, artifact_id: int = 1) -> None:
+        self.artifact_id = artifact_id
+        self.calls: list[dict[str, object]] = []
+
+    async def create_artifact(
+        self,
+        run_id: int,
+        path: str,
+        *,
+        model_used: str | None = None,
+        provider_type: str | None = None,
+        voice: str | None = None,
+    ) -> FakeAudioArtifact:
+        call_data = {
+            "run_id": run_id,
+            "path": path,
+            "model_used": model_used,
+            "provider_type": provider_type,
+            "voice": voice,
+        }
+        self.calls.append(call_data)
+        return FakeAudioArtifact(id=self.artifact_id, path=path)
+
+
+class FakeRegistry:
+    def __init__(self, entry: FakeEntry, provider: FakeProvider) -> None:
+        self.entry = entry
+        self.provider = provider
+
+    def resolve(self, _model_key: str) -> FakeEntry:
+        return self.entry
+
+    def get_provider(self, _model_key: str) -> FakeProvider:
+        return self.provider
+
+
+def _patch_registry(monkeypatch: pytest.MonkeyPatch, registry: FakeRegistry) -> None:
+    class _ProviderRegistry:
+        @staticmethod
+        def create_default() -> FakeRegistry:
+            return registry
+
+    monkeypatch.setattr(generate_audio_module, "ProviderRegistry", _ProviderRegistry)
+
+
+def _patch_redis(monkeypatch: pytest.MonkeyPatch, redis_client: object) -> None:
+    redis_stub = SimpleNamespace(Redis=SimpleNamespace(from_url=lambda _: redis_client))
+    monkeypatch.setattr(generate_audio_module, "redis", redis_stub)
+
+
+def _patch_services(
+    monkeypatch: pytest.MonkeyPatch,
+    script_service: FakeScriptService,
+    audio_service: FakeAudioService,
+    storage: FakeStorage,
+) -> None:
+    monkeypatch.setattr(generate_audio_module, "_script_service", script_service)
+    monkeypatch.setattr(generate_audio_module, "_audio_service", audio_service)
+    monkeypatch.setattr(generate_audio_module, "_run_service", SimpleNamespace(storage=storage))
+
+
+def _invoke_task(**kwargs: Any) -> dict[str, object]:
+    task = generate_audio_module.generate_audio
+    run_callable = getattr(task, "run", task)
+    return run_callable(**kwargs)
+
+
+def test_generate_audio_success(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = FakeProvider()
+    entry = FakeEntry(requires_gpu=False, default_params={"temperature": 0.2})
+    _patch_registry(monkeypatch, FakeRegistry(entry=entry, provider=provider))
+
+    script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Hello world script"))
+    audio_service = FakeAudioService(artifact_id=33)
+    storage = _make_storage(run_id=101, stage="VISUAL_ASSET_REVIEW")
+    _patch_services(monkeypatch, script_service, audio_service, storage)
+
+    result = _invoke_task(run_id=101, tts_model="piper", voice="en_US-lessac-medium")
+
+    assert result["status"] == "success"
+    assert result["audio_artifact_id"] == 33
+    assert result["provider_type"] == "piper"
+    assert result["endpoint"] == "http://piper:5000"
+    assert result["audio_path"] == "data/artifacts/101/audio/audio.wav"
+
+    assert provider.calls == [
+        (
+            "Hello world script",
+            "en_US-lessac-medium",
+            {
+                "temperature": 0.2,
+                "output_path": "data/artifacts/101/audio/audio.wav",
+            },
+        )
+    ]
+    params = provider.calls[0][2]
+    assert params is not None
+    assert "voice" not in params
+
+    assert audio_service.calls == [
+        {
+            "run_id": 101,
+            "path": "data/artifacts/101/audio/audio.wav",
+            "model_used": "piper",
+            "provider_type": "piper",
+            "voice": "en_US-lessac-medium",
+        }
+    ]
+    assert storage.calls == [(101, {"current_stage": "SUBTITLE_GENERATING", "status": "running"})]
+    assert storage.cas_calls[0][2] == frozenset({"VISUAL_ASSET_REVIEW", "AUDIO_GENERATING"})
+
+
+def test_generate_audio_run_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = FakeProvider()
+    _patch_registry(monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider))
+
+    script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Any"))
+    audio_service = FakeAudioService()
+    storage = FakeStorage()
+    _patch_services(monkeypatch, script_service, audio_service, storage)
+
+    with pytest.raises(ValueError, match="Run 999 not found"):
+        _invoke_task(run_id=999)
+
+    assert provider.calls == []
+    assert storage.calls == []
+    assert audio_service.calls == []
+
+
+def test_generate_audio_wrong_stage(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = FakeProvider()
+    _patch_registry(monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider))
+
+    script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Any"))
+    audio_service = FakeAudioService()
+    storage = _make_storage(run_id=102, stage="SCRIPT_REVIEW")
+    _patch_services(monkeypatch, script_service, audio_service, storage)
+
+    with pytest.raises(ValueError, match="expected one of"):
+        _invoke_task(run_id=102)
+
+    assert provider.calls == []
+    assert storage.calls == []
+    assert audio_service.calls == []
+
+
+def test_generate_audio_no_script(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = FakeProvider()
+    _patch_registry(monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider))
+
+    script_service = FakeScriptService(draft=None)
+    audio_service = FakeAudioService()
+    storage = _make_storage(run_id=103, stage="VISUAL_ASSET_REVIEW")
+    _patch_services(monkeypatch, script_service, audio_service, storage)
+
+    with pytest.raises(ValueError, match="No script draft found"):
+        _invoke_task(run_id=103)
+
+    assert provider.calls == []
+    assert storage.calls == []
+    assert audio_service.calls == []
+
+
+def test_generate_audio_provider_failure_marks_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = FakeProvider(error=RuntimeError("audio provider failed"))
+    _patch_registry(monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider))
+
+    script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Some script"))
+    audio_service = FakeAudioService()
+    storage = _make_storage(run_id=104, stage="VISUAL_ASSET_REVIEW")
+    _patch_services(monkeypatch, script_service, audio_service, storage)
+
+    with pytest.raises(RuntimeError, match="audio provider failed"):
+        _invoke_task(run_id=104)
+
+    assert audio_service.calls == []
+    assert storage.calls == [(104, {"current_stage": "FAILED", "status": "failed"})]
+    assert storage.cas_calls[0][2] == frozenset({"VISUAL_ASSET_REVIEW", "AUDIO_GENERATING"})
+
+
+def test_generate_audio_with_gpu_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = FakeProvider()
+    entry = FakeEntry(requires_gpu=True)
+    _patch_registry(monkeypatch, FakeRegistry(entry=entry, provider=provider))
+
+    redis_client = object()
+    _patch_redis(monkeypatch, redis_client)
+
+    lock_calls: list[str] = []
+    release_calls: list[str] = []
+    monkeypatch.setattr(generate_audio_module, "acquire_gpu_lock", lambda _, task_id: lock_calls.append(task_id))
+    monkeypatch.setattr(generate_audio_module, "release_gpu_lock", lambda _, task_id: release_calls.append(task_id))
+
+    script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Lock script"))
+    audio_service = FakeAudioService(artifact_id=61)
+    storage = _make_storage(run_id=105, stage="VISUAL_ASSET_REVIEW")
+    _patch_services(monkeypatch, script_service, audio_service, storage)
+
+    result = _invoke_task(run_id=105)
+
+    assert result["status"] == "success"
+    assert result["gpu_lock_acquired_at"] is not None
+    assert result["gpu_lock_released_at"] is not None
+    assert lock_calls == ["run-105"]
+    assert release_calls == ["run-105"]
+
+
+def test_generate_audio_without_gpu_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = FakeProvider()
+    entry = FakeEntry(requires_gpu=False)
+    _patch_registry(monkeypatch, FakeRegistry(entry=entry, provider=provider))
+
+    monkeypatch.setattr(generate_audio_module, "acquire_gpu_lock", lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")))
+    monkeypatch.setattr(generate_audio_module, "release_gpu_lock", lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")))
+
+    script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="No lock script"))
+    audio_service = FakeAudioService(artifact_id=71)
+    storage = _make_storage(run_id=106, stage="AUDIO_GENERATING")
+    _patch_services(monkeypatch, script_service, audio_service, storage)
+
+    result = _invoke_task(run_id=106, voice="custom-voice")
+
+    assert result["status"] == "success"
+    assert result["gpu_lock_acquired_at"] is None
+    assert result["gpu_lock_released_at"] is None
+    assert provider.calls[0][1] == "custom-voice"
+
+
+class _CASSkipStorage(FakeStorage):
+    async def conditional_update_run(
+        self,
+        run_id: int,
+        updates: dict[str, object],
+        expected_stages: frozenset[str],
+    ) -> tuple[bool, dict[str, object] | None]:
+        self.cas_calls.append((run_id, updates, expected_stages))
+        row = self._runs.get(run_id)
+        return False, dict(row) if row else None
+
+
+def test_generate_audio_cas_skip_on_stage_change(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = FakeProvider()
+    _patch_registry(monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider))
+
+    script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Narration text"))
+    audio_service = FakeAudioService(artifact_id=50)
+
+    run_row: dict[str, object] = {"id": 107, "current_stage": "VISUAL_ASSET_REVIEW"}
+    storage = _CASSkipStorage(runs={107: run_row})
+    _patch_services(monkeypatch, script_service, audio_service, storage)
+
+    result = _invoke_task(run_id=107)
+
+    assert result["status"] == "success"
+    assert result["audio_artifact_id"] == 50
+    assert len(provider.calls) == 1
+    assert len(audio_service.calls) == 1
+    assert len(storage.cas_calls) == 1
+    assert storage.cas_calls[0][1] == {"current_stage": "SUBTITLE_GENERATING", "status": "running"}
+    assert storage.calls == []

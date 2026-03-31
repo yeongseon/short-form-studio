@@ -21,8 +21,8 @@ class FakeProvider:
         self.error = error
         self.calls: list[tuple[str, dict[str, object] | None]] = []
 
-    async def generate(self, script_text: str, params: dict[str, object] | None = None) -> None:
-        self.calls.append((script_text, params))
+    async def transcribe(self, audio_path: str, params: dict[str, object] | None = None) -> None:
+        self.calls.append((audio_path, params))
         if self.error is not None:
             raise self.error
 
@@ -182,7 +182,7 @@ def test_generate_subtitles_success(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(generate_subtitles_module, "release_gpu_lock", lambda _, task_id: release_calls.append(task_id))
 
     script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Hello world script"))
-    audio_service = FakeAudioService(artifact=None)
+    audio_service = FakeAudioService(artifact=FakeAudioArtifact(path="data/artifacts/101/audio/audio.wav"))
     subtitle_service = FakeSubtitleService(artifact_id=33)
     storage = _make_storage(run_id=101, stage="AUDIO_GENERATING")
     _patch_services(monkeypatch, script_service, audio_service, subtitle_service, storage)
@@ -196,14 +196,14 @@ def test_generate_subtitles_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result["gpu_lock_acquired_at"] is not None
     assert result["gpu_lock_released_at"] is not None
     assert result["subtitle_path"] == "data/artifacts/101/subtitles/subtitles.srt"
-    assert result["audio_path"] is None
+    assert result["audio_path"] == "data/artifacts/101/audio/audio.wav"
 
     assert lock_calls == ["run-101"]
     assert release_calls == ["run-101"]
 
     assert provider.calls == [
         (
-            "Hello world script",
+            "data/artifacts/101/audio/audio.wav",
             {
                 "temperature": 0.1,
                 "format": "srt",
@@ -283,7 +283,7 @@ def test_generate_subtitles_provider_failure_marks_failed(monkeypatch: pytest.Mo
     _patch_registry(monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider))
 
     script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Some script"))
-    audio_service = FakeAudioService(artifact=None)
+    audio_service = FakeAudioService(artifact=FakeAudioArtifact(path="data/artifacts/104/audio/audio.wav"))
     subtitle_service = FakeSubtitleService()
     storage = _make_storage(run_id=104, stage="AUDIO_GENERATING")
     _patch_services(monkeypatch, script_service, audio_service, subtitle_service, storage)
@@ -310,9 +310,9 @@ def test_generate_subtitles_with_audio_path(monkeypatch: pytest.MonkeyPatch) -> 
 
     assert result["status"] == "success"
     assert result["audio_path"] == "data/artifacts/105/audio/audio.wav"
+    assert provider.calls[0][0] == "data/artifacts/105/audio/audio.wav"
     params = provider.calls[0][1]
     assert params is not None
-    assert params["audio_path"] == "data/artifacts/105/audio/audio.wav"
     assert params["format"] == "vtt"
     assert params["output_path"] == "data/artifacts/105/subtitles/subtitles.vtt"
 
@@ -327,15 +327,12 @@ def test_generate_subtitles_without_audio(monkeypatch: pytest.MonkeyPatch) -> No
     storage = _make_storage(run_id=106, stage="SUBTITLE_GENERATING")
     _patch_services(monkeypatch, script_service, audio_service, subtitle_service, storage)
 
-    result = _invoke_task(run_id=106)
+    with pytest.raises(RuntimeError, match="No audio artifact found for run 106; cannot transcribe"):
+        _invoke_task(run_id=106)
 
-    assert result["status"] == "success"
-    assert result["audio_path"] is None
-    params = provider.calls[0][1]
-    assert params is not None
-    assert "audio_path" not in params
-    assert params["format"] == "srt"
-    assert params["output_path"] == "data/artifacts/106/subtitles/subtitles.srt"
+    assert provider.calls == []
+    assert subtitle_service.calls == []
+    assert storage.calls == [(106, {"current_stage": "FAILED", "status": "failed"})]
 
 
 class _CASSkipStorage(FakeStorage):
@@ -365,7 +362,7 @@ def test_generate_subtitles_cas_skip_on_stage_change(monkeypatch: pytest.MonkeyP
     _patch_registry(monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider))
 
     script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Narration text"))
-    audio_service = FakeAudioService(artifact=None)
+    audio_service = FakeAudioService(artifact=FakeAudioArtifact(path="data/artifacts/107/audio/audio.wav"))
     subtitle_service = FakeSubtitleService(artifact_id=50)
 
     # Storage starts at AUDIO_GENERATING (passes stage guard) but CAS always rejects.

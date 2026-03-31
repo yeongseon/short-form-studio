@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
@@ -24,14 +26,15 @@ from creator_service.visual_asset_service import visual_asset_service as _visual
 logger = logging.getLogger(__name__)
 
 _ALLOWED_STAGES = frozenset({RunStage.RENDER_GENERATING})
-_SAFE_STAGES = frozenset({RunStage.RENDER_GENERATING.value})
+_SAFE_STAGES = frozenset({RunStage.RENDER_GENERATING})
+_ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
 
 
 class _StageGuardError(ValueError):
     pass
 
 # Map profile name → RenderProfile constructor
-_PROFILE_REGISTRY: dict[str, object] = {
+_PROFILE_REGISTRY: dict[str, Callable[[], RenderProfile]] = {
     "shorts_default": RenderProfile.default,
     "high_quality": RenderProfile.high_quality,
     "fast_preview": RenderProfile.fast_preview,
@@ -69,7 +72,7 @@ def render_video(
         if current not in _ALLOWED_STAGES:
             raise _StageGuardError(
                 f"Run {run_id} is in stage {current.value}, "
-                f"expected one of {', '.join(s.value for s in _ALLOWED_STAGES)}"
+                f"expected one of {', '.join(s for s in _ALLOWED_STAGES)}"
             )
 
         manifest = await _render_service.build_render_manifest(
@@ -98,7 +101,7 @@ def render_video(
             scene_durations=scene_durations,
         )
 
-        output_path = f"data/artifacts/{run_id}/render/output.mp4"
+        output_path = f"{_ARTIFACT_ROOT}/{run_id}/render/output.mp4"
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         resolved_profile = _resolve_profile(render_profile)
         ffmpeg = FFmpegService(profile=resolved_profile)
@@ -113,7 +116,7 @@ def render_video(
         applied, _ = await _run_service.storage.conditional_update_run(
             run_id,
             {
-                "current_stage": RunStage.FINAL_REVIEW.value,
+                "current_stage": RunStage.FINAL_REVIEW,
                 "status": "running",
             },
             expected_stages=_SAFE_STAGES,
@@ -152,7 +155,7 @@ def render_video(
                 _run_service.storage.conditional_update_run(
                     run_id,
                     {
-                        "current_stage": RunStage.FAILED.value,
+                        "current_stage": RunStage.FAILED,
                         "status": "failed",
                     },
                     expected_stages=_SAFE_STAGES,
