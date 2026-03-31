@@ -484,7 +484,7 @@ export default function ProjectPage() {
       const res = await fetch(`${API_BASE}/runs/${run.id}/generate-subtitles`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ subtitle_model: "whisper", subtitle_format: "srt" }),
+        body: JSON.stringify({ subtitle_model: "whisper-small", subtitle_format: "srt" }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => null);

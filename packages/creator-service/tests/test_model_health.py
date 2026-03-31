@@ -22,13 +22,13 @@ class TestModelHealthService:
         assert health_service.endpoints is not None
         assert "ollama" in health_service.endpoints
         assert "stable-diffusion" in health_service.endpoints
-        assert "tts-qwen3" in health_service.endpoints
+        assert "tts-piper" in health_service.endpoints
         assert "stt-whisper" in health_service.endpoints
         
         # Verify default URLs
         assert health_service.endpoints["ollama"] == "http://ollama:11434"
         assert health_service.endpoints["stable-diffusion"] == "http://stable-diffusion:7860"
-        assert health_service.endpoints["tts-qwen3"] == "http://tts-qwen3:9880"
+        assert health_service.endpoints["tts-piper"] == "http://tts-piper:5000"
         assert health_service.endpoints["stt-whisper"] == "http://stt-whisper:9000"
 
     def test_initialization_with_env_variables(self, monkeypatch):
@@ -68,7 +68,7 @@ class TestModelHealthService:
         assert len(results) == 4
         
         model_names = {result.model_name for result in results}
-        expected_models = {"ollama", "stable-diffusion", "tts-qwen3", "stt-whisper"}
+        expected_models = {"ollama", "stable-diffusion", "tts-piper", "stt-whisper"}
         assert model_names == expected_models
 
     @pytest.mark.asyncio
@@ -87,12 +87,13 @@ class TestModelHealthService:
         assert health_service.health_paths is not None
         assert "ollama" in health_service.health_paths
         assert "stable-diffusion" in health_service.health_paths
-        assert "tts-qwen3" in health_service.health_paths
+        assert "tts-piper" in health_service.health_paths
         assert "stt-whisper" in health_service.health_paths
         
         # Verify health paths
         assert health_service.health_paths["ollama"] == "/api/tags"
         assert health_service.health_paths["stable-diffusion"] == "/sdapi/v1/options"
+        assert health_service.health_paths["tts-piper"] == "/api/health"
 
     def test_model_status_enum_values(self):
         """Test ModelStatus enum has expected values."""

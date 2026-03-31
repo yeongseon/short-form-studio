@@ -259,7 +259,7 @@ def test_metadata_preservation(service: SubtitleService) -> None:
             run_id=1,
             path="/subtitle.srt",
             format="vtt",
-            model_used="whisper-medium",
+            model_used="whisper-small",
             provider_type="openai",
         )
     )

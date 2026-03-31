@@ -2083,7 +2083,7 @@ async def test_generate_subtitles_from_audio_generating(client, stub_generate_su
 
     response = await client.post(
         "/api/creator/runs/120/generate-subtitles",
-        json={"subtitle_model": "whisper-tiny", "subtitle_format": "srt"},
+        json={"subtitle_model": "whisper-small", "subtitle_format": "srt"},
     )
 
     assert response.status_code == 202
@@ -2099,7 +2099,7 @@ async def test_generate_subtitles_from_audio_generating(client, stub_generate_su
     assert "AUDIO_GENERATING" in cas_calls[0]["expected_stages"]
     assert dispatcher.calls == [{
         "run_id": 120,
-        "subtitle_model": "whisper-tiny",
+        "subtitle_model": "whisper-small",
         "subtitle_format": "srt",
     }]
 
@@ -2111,7 +2111,7 @@ async def test_generate_subtitles_retry_from_generating(client, stub_generate_su
 
     response = await client.post(
         "/api/creator/runs/121/generate-subtitles",
-        json={"subtitle_model": "whisper-tiny", "subtitle_format": "srt"},
+        json={"subtitle_model": "whisper-small", "subtitle_format": "srt"},
     )
 
     assert response.status_code == 202
@@ -2138,7 +2138,7 @@ async def test_generate_subtitles_default_model(client, stub_generate_subtitles_
     )
 
     assert response.status_code == 202
-    assert dispatcher.calls[0]["subtitle_model"] == "whisper-tiny"
+    assert dispatcher.calls[0]["subtitle_model"] == "whisper-small"
     assert dispatcher.calls[0]["subtitle_format"] == "srt"
 
 

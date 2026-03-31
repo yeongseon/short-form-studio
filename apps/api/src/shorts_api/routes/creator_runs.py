@@ -109,7 +109,7 @@ class GenerateAudioRequest(BaseModel):
 
 
 class GenerateSubtitlesRequest(BaseModel):
-    subtitle_model: str = "whisper-tiny"
+    subtitle_model: str = "whisper-small"
     subtitle_format: str = "srt"
 
 
