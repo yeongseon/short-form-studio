@@ -88,3 +88,17 @@ def test_run_stage_str_returns_value() -> None:
     """Regression: str(RunStage.X) must return the raw value, not 'RunStage.X'."""
     for stage in RunStage:
         assert str(stage) == stage.value
+
+
+def test_failed_can_restart_to_any_generating_stage() -> None:
+    """FAILED runs can be restarted to any generating stage."""
+    for stage in GENERATING_STAGES:
+        assert can_transition(RunStage.FAILED, stage)
+
+
+def test_failed_cannot_restart_to_non_generating_stages() -> None:
+    """FAILED runs cannot transition to review, published, or idea stages."""
+    non_generating = {RunStage.IDEA_READY, RunStage.PUBLISHED, RunStage.FAILED}
+    non_generating |= REVIEW_STAGES
+    for stage in non_generating:
+        assert not can_transition(RunStage.FAILED, stage)
