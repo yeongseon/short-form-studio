@@ -21,14 +21,14 @@ class ProviderRegistryTests(unittest.TestCase):
             ),
             ModelCatalogEntry(
                 model_key="test-tts",
-                provider_type="piper_tts",
-                endpoint="http://tts-piper:5000",
+                provider_type="qwen_tts",
+                endpoint="http://tts-qwen3:8100",
                 category=ProviderCategory.TTS,
             ),
             ModelCatalogEntry(
                 model_key="test-stt",
                 provider_type="whisper",
-                endpoint="http://stt-whisper:9000",
+                endpoint="http://stt-whisper:8200",
                 category=ProviderCategory.STT,
             ),
         ]
@@ -73,7 +73,7 @@ class ProviderRegistryTests(unittest.TestCase):
         self.assertEqual(len(registry.list_models()), 4)
         self.assertEqual(registry.resolve("qwen3-4b").category, ProviderCategory.LLM)
         self.assertEqual(registry.resolve("sd15").category, ProviderCategory.IMAGE)
-        self.assertEqual(registry.resolve("piper").category, ProviderCategory.TTS)
+        self.assertEqual(registry.resolve("qwen3-tts").category, ProviderCategory.TTS)
         self.assertEqual(registry.resolve("whisper-small").category, ProviderCategory.STT)
 
     def test_get_provider_raises_key_error_for_unregistered_provider_type(self) -> None:

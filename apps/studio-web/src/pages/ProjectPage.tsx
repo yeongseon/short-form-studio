@@ -458,7 +458,7 @@ export default function ProjectPage() {
       const res = await fetch(`${API_BASE}/runs/${run.id}/generate-audio`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tts_model: "piper", voice: "default" }),
+        body: JSON.stringify({ tts_model: "qwen3-tts", voice: "default" }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => null);

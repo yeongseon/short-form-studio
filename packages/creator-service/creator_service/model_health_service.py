@@ -34,14 +34,14 @@ class ModelHealthService:
         self.endpoints = {
             "ollama": os.getenv("OLLAMA_BASE_URL", "http://ollama:11434"),
             "stable-diffusion": os.getenv("STABLE_DIFFUSION_BASE_URL", "http://stable-diffusion:7860"),
-            "tts-piper": os.getenv("TTS_PIPER_BASE_URL", "http://tts-piper:5000"),
-            "stt-whisper": os.getenv("STT_WHISPER_BASE_URL", "http://stt-whisper:9000"),
+            "tts-qwen3": os.getenv("TTS_QWEN3_BASE_URL", "http://tts-qwen3:8100"),
+            "stt-whisper": os.getenv("STT_WHISPER_BASE_URL", "http://stt-whisper:8200"),
         }
         self.health_paths = {
             "ollama": "/api/tags",
             "stable-diffusion": "/sdapi/v1/options",
-            "tts-piper": "/api/health",
-            "stt-whisper": "/",  # placeholder — update when STT health endpoint is known
+            "tts-qwen3": "/health",
+            "stt-whisper": "/health",
         }
 
     async def check_model(self, model_name: str) -> ModelHealthResult:

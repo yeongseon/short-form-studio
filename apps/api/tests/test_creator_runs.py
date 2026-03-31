@@ -1869,7 +1869,7 @@ async def test_generate_audio_from_visual_asset_review(client, stub_generate_aud
 
     response = await client.post(
         "/api/creator/runs/110/generate-audio",
-        json={"tts_model": "piper", "voice": "en_US-lessac-medium"},
+        json={"tts_model": "qwen3-tts", "voice": "en_US-lessac-medium"},
     )
 
     assert response.status_code == 202
@@ -1885,7 +1885,7 @@ async def test_generate_audio_from_visual_asset_review(client, stub_generate_aud
     assert "VISUAL_ASSET_REVIEW" in cas_calls[0]["expected_stages"]
     assert dispatcher.calls == [{
         "run_id": 110,
-        "tts_model": "piper",
+        "tts_model": "qwen3-tts",
         "voice": "en_US-lessac-medium",
     }]
 
@@ -1897,7 +1897,7 @@ async def test_generate_audio_retry_from_generating(client, stub_generate_audio_
 
     response = await client.post(
         "/api/creator/runs/111/generate-audio",
-        json={"tts_model": "piper", "voice": "en_US-lessac-medium"},
+        json={"tts_model": "qwen3-tts", "voice": "en_US-lessac-medium"},
     )
 
     assert response.status_code == 202
@@ -1924,7 +1924,7 @@ async def test_generate_audio_default_model(client, stub_generate_audio_services
     )
 
     assert response.status_code == 202
-    assert dispatcher.calls[0]["tts_model"] == "piper"
+    assert dispatcher.calls[0]["tts_model"] == "qwen3-tts"
     assert dispatcher.calls[0]["voice"] == "en_US-lessac-medium"
 
 
@@ -2482,7 +2482,7 @@ def stub_preview_services(monkeypatch: pytest.MonkeyPatch):
         StubVideoArtifact(1, "data/artifacts/200/render/output.mp4", "shorts_default", now)
     )
     audio_svc = StubPreviewAudioService(
-        StubAudioArtifact(2, "data/artifacts/200/audio/audio.wav", "piper", now)
+        StubAudioArtifact(2, "data/artifacts/200/audio/audio.wav", "qwen3-tts", now)
     )
     subtitle_svc = StubPreviewSubtitleService(
         StubSubtitleArtifact(3, "data/artifacts/200/subtitles/subtitles.srt", "srt", now)
@@ -2532,7 +2532,7 @@ async def test_preview_full_artifacts(client, stub_preview_services):
     assert body["video"]["path"] == "data/artifacts/200/render/output.mp4"
     assert body["video"]["render_profile"] == "shorts_default"
     assert body["audio"]["id"] == 2
-    assert body["audio"]["model_used"] == "piper"
+    assert body["audio"]["model_used"] == "qwen3-tts"
     assert body["subtitle"]["id"] == 3
     assert body["subtitle"]["format"] == "srt"
 

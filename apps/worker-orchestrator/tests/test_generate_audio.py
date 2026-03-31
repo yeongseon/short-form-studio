@@ -10,8 +10,8 @@ from tasks import generate_audio as generate_audio_module
 
 @dataclass
 class FakeEntry:
-    provider_type: str = "piper"
-    endpoint: str = "http://piper:5000"
+    provider_type: str = "qwen_tts"
+    endpoint: str = "http://tts-qwen3:8100"
     requires_gpu: bool = True
     default_params: dict[str, object] | None = None
 
@@ -168,12 +168,12 @@ def test_generate_audio_success(monkeypatch: pytest.MonkeyPatch) -> None:
     storage = _make_storage(run_id=101, stage="VISUAL_ASSET_REVIEW")
     _patch_services(monkeypatch, script_service, audio_service, storage)
 
-    result = _invoke_task(run_id=101, tts_model="piper", voice="en_US-lessac-medium")
+    result = _invoke_task(run_id=101, tts_model="qwen3-tts", voice="en_US-lessac-medium")
 
     assert result["status"] == "success"
     assert result["audio_artifact_id"] == 33
-    assert result["provider_type"] == "piper"
-    assert result["endpoint"] == "http://piper:5000"
+    assert result["provider_type"] == "qwen_tts"
+    assert result["endpoint"] == "http://tts-qwen3:8100"
     assert result["audio_path"] == "data/artifacts/101/audio/audio.wav"
 
     assert provider.calls == [
@@ -194,8 +194,8 @@ def test_generate_audio_success(monkeypatch: pytest.MonkeyPatch) -> None:
         {
             "run_id": 101,
             "path": "data/artifacts/101/audio/audio.wav",
-            "model_used": "piper",
-            "provider_type": "piper",
+            "model_used": "qwen3-tts",
+            "provider_type": "qwen_tts",
             "voice": "en_US-lessac-medium",
         }
     ]

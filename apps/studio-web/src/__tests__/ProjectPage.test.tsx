@@ -120,7 +120,7 @@ function mockFetchProjectAndRuns(
             run_id: 1,
             current_stage: "FINAL_REVIEW",
             video: { id: 1, path: "data/artifacts/1/render/output.mp4", render_profile: "shorts_default" },
-            audio: { id: 2, path: "data/artifacts/1/audio/audio.wav", model_used: "piper" },
+            audio: { id: 2, path: "data/artifacts/1/audio/audio.wav", model_used: "qwen3-tts" },
             subtitle: { id: 3, path: "data/artifacts/1/subtitles/subtitles.srt", format: "srt" },
           }),
       } as Response);

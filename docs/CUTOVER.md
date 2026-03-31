@@ -37,7 +37,7 @@ Operator-facing guide for deploying and verifying the short-form-pipeline system
    | `OLLAMA_BASE_URL` | Yes | Default: `http://ollama:11434` |
    | `OLLAMA_DEFAULT_MODEL` | Yes | Default: `qwen3:4b` |
    | `STABLE_DIFFUSION_BASE_URL` | Yes | Default: `http://stable-diffusion:7860` |
-   | `TTS_PIPER_BASE_URL` | Yes | Default: `http://tts-piper:5000` |
+| `TTS_QWEN3_BASE_URL` | Yes | Default: `http://tts-qwen3:8100` |
    | `STT_WHISPER_BASE_URL` | Yes | Default: `http://stt-whisper:9000` |
    | `GPU_LOCK_KEY` | Yes | Default: `gpu:lock` |
    | `GPU_LOCK_TIMEOUT_SECONDS` | Yes | Default: `600` |
@@ -52,7 +52,7 @@ Operator-facing guide for deploying and verifying the short-form-pipeline system
    docker images | grep shorts-automation
    # Expected:
    #   shorts-automation-stable-diffusion
-   #   shorts-automation-tts-piper
+#   shorts-automation-tts-qwen3
    #   shorts-automation-stt-whisper
    ```
 
@@ -105,7 +105,7 @@ docker compose exec ollama ollama pull qwen3:4b
 ### Step 5: Start AI Services
 
 ```bash
-docker compose up -d stable-diffusion tts-piper stt-whisper
+docker compose up -d stable-diffusion tts-qwen3 stt-whisper
 ```
 
 > **Note:** AI services require the NVIDIA GPU. Only one model runs inference at a time (GPU lock via Redis).

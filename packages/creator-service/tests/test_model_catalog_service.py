@@ -1,3 +1,5 @@
+# pyright: reportMissingImports=false
+
 from unittest.mock import AsyncMock
 
 import pytest
@@ -17,7 +19,7 @@ def health_service() -> AsyncMock:
     status_by_provider = {
         "ollama": ModelStatus.HEALTHY,
         "stable-diffusion": ModelStatus.UNHEALTHY,
-        "tts-piper": ModelStatus.UNKNOWN,
+        "tts-qwen3": ModelStatus.UNKNOWN,
         "stt-whisper": ModelStatus.HEALTHY,
     }
 
@@ -60,7 +62,7 @@ class TestModelCatalogService:
 
         tts_model = result["tts_models"][0]
         assert tts_model["status"] == "unknown"
-        assert tts_model["label"] == "Piper TTS (Local)"
+        assert tts_model["label"] == "Qwen3 TTS (Local)"
 
         stt_model = result["stt_models"][0]
         assert stt_model["label"] == "Whisper Small (Local)"
@@ -107,7 +109,7 @@ class TestModelCatalogService:
         # Provider names should match health service keys (Docker hostnames),
         # not provider_type values from registry
         provider_names = {p["name"] for p in result["providers"]}
-        assert provider_names == {"ollama", "stable-diffusion", "tts-piper", "stt-whisper"}
+        assert provider_names == {"ollama", "stable-diffusion", "tts-qwen3", "stt-whisper"}
         assert set(provider.keys()) == {"name", "endpoint", "healthy", "loaded_model", "gpu_locked"}
         assert provider["loaded_model"] is None
         assert provider["gpu_locked"] is False
@@ -145,5 +147,5 @@ class TestModelCatalogService:
         await service.list_models()
 
         called_keys = {call.args[0] for call in health_service.check_model.call_args_list}
-        expected_keys = {"ollama", "stable-diffusion", "tts-piper", "stt-whisper"}
+        expected_keys = {"ollama", "stable-diffusion", "tts-qwen3", "stt-whisper"}
         assert called_keys == expected_keys

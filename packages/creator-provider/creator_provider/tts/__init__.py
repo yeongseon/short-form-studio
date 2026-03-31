@@ -1,3 +1,3 @@
-from .piper_tts_provider import PiperTTSProvider
+from .qwen_tts_provider import QwenTTSProvider
 
-__all__ = ["PiperTTSProvider"]
+__all__ = ["QwenTTSProvider"]
