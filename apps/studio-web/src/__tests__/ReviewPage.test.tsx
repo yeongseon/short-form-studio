@@ -181,9 +181,11 @@ describe("ReviewPage", () => {
     expect(screen.getByTestId("review-subtitle-section")).toBeTruthy();
     expect(screen.getByText("srt")).toBeTruthy();
 
-    // Video section
+    // Video section — video is now rendered as <video> element, no path text
     expect(screen.getByTestId("review-video-section")).toBeTruthy();
-    expect(screen.getByText(/output\.mp4/)).toBeTruthy();
+    const videoEl = screen.getByTestId("review-video-section").querySelector("video");
+    expect(videoEl).toBeTruthy();
+    expect(videoEl?.getAttribute("src")).toContain("output.mp4");
     expect(screen.getByText("shorts_default")).toBeTruthy();
   });
 
