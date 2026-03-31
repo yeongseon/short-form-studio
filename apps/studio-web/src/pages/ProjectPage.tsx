@@ -24,6 +24,7 @@ import VisualPlanEditor from "../components/creator/VisualPlanEditor";
 import VisualAssetGrid from "../components/creator/VisualAssetGrid";
 import ProgressDialog from "../components/creator/ProgressDialog";
 import ModelSelector from "../components/creator/ModelSelector";
+import StoryboardView from "../components/creator/StoryboardView";
 
 const API_BASE = "/api/creator";
 
@@ -66,6 +67,9 @@ const RENDER_STAGES = new Set(["RENDER_GENERATING"]);
 
 // Final review
 const FINAL_REVIEW_STAGES = new Set(["FINAL_REVIEW"]);
+
+// Storyboard stages — show unified storyboard view instead of separate indicators
+const STORYBOARD_STAGES = new Set(["AUDIO_GENERATING", "SUBTITLE_GENERATING", "RENDER_GENERATING", "FINAL_REVIEW"]);
 
 // Stages where editing is allowed (not generating)
 const EDITABLE_STAGES = new Set(["SCRIPT_REVIEW", "VISUAL_PLAN_REVIEW"]);
@@ -589,6 +593,7 @@ export default function ProjectPage() {
   const isSubtitleStage = SUBTITLE_STAGES.has(currentStage);
   const isRenderStage = RENDER_STAGES.has(currentStage);
   const isFinalReview = FINAL_REVIEW_STAGES.has(currentStage);
+  const isStoryboardStage = STORYBOARD_STAGES.has(currentStage);
   const previewVideo = (preview as Record<string, unknown> | null)?.video;
   const previewVideoPath =
     previewVideo && typeof previewVideo === "object"
@@ -623,33 +628,42 @@ export default function ProjectPage() {
       };
     }
 
-    // Render stage
+    // Storyboard stages — audio/subtitle generation is handled by StoryboardView
+    // Only show render button and restart in the action bar
+    if (isAudioStage || isSubtitleStage) {
+      return {
+        save: { visible: false },
+        approve: { visible: false },
+        generate: {
+          visible: true,
+          disabled: generating,
+          loading: generating,
+          onClick: handleRender,
+          label: "Render Video",
+        },
+        restart: {
+          visible: true,
+          disabled: restarting,
+          loading: restarting,
+          onClick: handleRestart,
+          label: "Restart from Script",
+        },
+      };
+    }
+
+    // Render stage — rendering in progress, show restart only
     if (isRenderStage) {
       return {
         save: { visible: false },
         approve: { visible: false },
-        generate: { visible: false, onClick: handleRender },
-        restart: { visible: false },
-      };
-    }
-
-    // Subtitle stage
-    if (isSubtitleStage) {
-      return {
-        save: { visible: false },
-        approve: { visible: false },
-        generate: { visible: false, onClick: handleGenerateSubtitles },
-        restart: { visible: false },
-      };
-    }
-
-    // Audio stage
-    if (isAudioStage) {
-      return {
-        save: { visible: false },
-        approve: { visible: false },
-        generate: { visible: false, onClick: handleGenerateAudio },
-        restart: { visible: false },
+        generate: { visible: false },
+        restart: {
+          visible: true,
+          disabled: restarting,
+          loading: restarting,
+          onClick: handleRestart,
+          label: "Restart from Script",
+        },
       };
     }
 
@@ -1287,108 +1301,61 @@ export default function ProjectPage() {
         </div>
       )}
 
-      {/* Audio generating indicator */}
-      {run && isAudioStage && (
-        <div
-          data-testid="audio-generating-indicator"
-          style={{
-            textAlign: "center",
-            padding: 32,
-            background: "#fefce8",
-            borderRadius: 8,
-            border: "1px solid #fde68a",
-            color: "#92400e",
-            marginBottom: 24,
-          }}
-        >
-          <p style={{ margin: "0 0 4px", fontWeight: 600 }}>Generating Audio…</p>
-          <p style={{ margin: 0, fontSize: 13 }}>
-            The TTS model is generating audio narration. This may take a moment.
-          </p>
-        </div>
-      )}
-
-      {/* Subtitle generating indicator */}
-      {run && isSubtitleStage && (
-        <div
-          data-testid="subtitle-generating-indicator"
-          style={{
-            textAlign: "center",
-            padding: 32,
-            background: "#f0f9ff",
-            borderRadius: 8,
-            border: "1px solid #bae6fd",
-            color: "#075985",
-            marginBottom: 24,
-          }}
-        >
-          <p style={{ margin: "0 0 4px", fontWeight: 600 }}>Generating Subtitles…</p>
-          <p style={{ margin: 0, fontSize: 13 }}>
-            The STT model is generating subtitles from audio. This may take a moment.
-          </p>
-        </div>
-      )}
-
-      {/* Render generating indicator */}
-      {run && isRenderStage && (
-        <div
-          data-testid="render-generating-indicator"
-          style={{
-            textAlign: "center",
-            padding: 32,
-            background: "#faf5ff",
-            borderRadius: 8,
-            border: "1px solid #d8b4fe",
-            color: "#6b21a8",
-            marginBottom: 24,
-          }}
-        >
-          <p style={{ margin: "0 0 4px", fontWeight: 600 }}>Rendering Video…</p>
-          <p style={{ margin: 0, fontSize: 13 }}>
-            FFmpeg is rendering the final video. This may take several minutes.
-          </p>
-        </div>
-      )}
-
-      {/* Final review section */}
-      {run && isFinalReview && (
-        <div
-          data-testid="final-review-section"
-          style={{
-            textAlign: "center",
-            padding: 32,
-            background: "#f0fdf4",
-            borderRadius: 8,
-            border: "1px solid #bbf7d0",
-            color: "#166534",
-            marginBottom: 24,
-          }}
-        >
-          <p style={{ margin: "0 0 8px", fontWeight: 600, fontSize: 16 }}>🎬 Pipeline Complete</p>
-          <p style={{ margin: "0 0 16px", fontSize: 13 }}>
-            All stages are done. Review the final output or restart from any stage.
-          </p>
-          {typeof previewVideoPath === "string" && (
-            <p style={{ margin: "0 0 8px", fontSize: 13, color: "#374151" }}>
-              Video: {previewVideoPath}
-            </p>
-          )}
-          <Link
-            to={`/review/${run.id}`}
-            data-testid="review-link"
-            style={{
-              display: "inline-block",
-              padding: "8px 24px",
-              background: "#166534",
-              color: "#fff",
-              borderRadius: 6,
-              textDecoration: "none",
-              fontWeight: 600,
-              fontSize: 14,
+      {/* Unified Storyboard view — replaces separate audio/subtitle/render indicators */}
+      {run && isStoryboardStage && (
+        <div style={{ marginBottom: 24 }}>
+          <StoryboardView
+            runId={run.id}
+            readOnly={isRenderStage}
+            onStatusMessage={setStatusMessage}
+            onRenderReady={() => {
+              if (run) refreshRun(run.id);
             }}
-          >
-            Open Review Page →
-          </Link>
+          />
+
+          {/* Final review extras — review link + video path */}
+          {isFinalReview && (
+            <div
+              data-testid="final-review-section"
+              style={{
+                textAlign: "center",
+                padding: 24,
+                marginTop: 16,
+                background: "#f0fdf4",
+                borderRadius: 8,
+                border: "1px solid #bbf7d0",
+                color: "#166534",
+              }}
+            >
+              <p style={{ margin: "0 0 8px", fontWeight: 600, fontSize: 16 }}>
+                Pipeline Complete
+              </p>
+              <p style={{ margin: "0 0 16px", fontSize: 13 }}>
+                All stages are done. Review the final output or restart from any stage.
+              </p>
+              {typeof previewVideoPath === "string" && (
+                <p style={{ margin: "0 0 8px", fontSize: 13, color: "#374151" }}>
+                  Video: {previewVideoPath}
+                </p>
+              )}
+              <Link
+                to={`/review/${run.id}`}
+                data-testid="review-link"
+                style={{
+                  display: "inline-block",
+                  padding: "8px 24px",
+                  background: "#166534",
+                  color: "#fff",
+                  borderRadius: 6,
+                  textDecoration: "none",
+                  fontWeight: 600,
+                  fontSize: 14,
+                }}
+              >
+                Open Review Page →
+              </Link>
+            </div>
+          )}
         </div>
       )}
 

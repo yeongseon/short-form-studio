@@ -16,6 +16,7 @@ from .subtitle_artifact import SubtitleArtifact
 from .video_artifact import VideoArtifact
 from .visual_asset import VisualAsset
 from .visual_plan import VisualPlan, VisualScene
+from .storyboard import ParagraphStatus, StaleFlags, StoryboardParagraph, StoryboardResponse
 
 __all__ = [
     "Project",
@@ -37,4 +38,8 @@ __all__ = [
     "AudioArtifact",
     "SubtitleArtifact",
     "VideoArtifact",
+    "ParagraphStatus",
+    "StaleFlags",
+    "StoryboardParagraph",
+    "StoryboardResponse",
 ]

@@ -67,3 +67,38 @@ class PostgresAudioStorage:
             """,
             run_id,
         )
+
+    async def get_by_section(self, run_id: int, section_id: str) -> dict[str, Any] | None:
+        return await fetch_one(
+            """
+            SELECT *
+            FROM creator_artifacts
+            WHERE run_id = $1 AND scene_id = $2 AND artifact_type = 'audio'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            run_id,
+            section_id,
+        )
+
+    async def list_by_run_sections(self, run_id: int) -> list[dict[str, Any]]:
+        return await fetch_all(
+            """
+            SELECT *
+            FROM creator_artifacts
+            WHERE run_id = $1 AND scene_id IS NOT NULL AND artifact_type = 'audio'
+            ORDER BY scene_id, created_at DESC
+            """,
+            run_id,
+        )
+
+    async def delete_by_section(self, run_id: int, section_id: str) -> None:
+        await fetch_one(
+            """
+            DELETE FROM creator_artifacts
+            WHERE run_id = $1 AND scene_id = $2 AND artifact_type = 'audio'
+            RETURNING id
+            """,
+            run_id,
+            section_id,
+        )

@@ -10,6 +10,7 @@ class AudioArtifact(BaseModel):
     id: int
     run_id: int
     path: str
+    section_id: str | None = None
     model_used: str | None = None
     provider_type: str | None = None
     voice: str | None = None
@@ -38,7 +39,12 @@ class AudioArtifact(BaseModel):
             mapped.setdefault("provider_type", meta.get("provider_type"))
             mapped.setdefault("voice", meta.get("voice"))
         # Discard DB-only columns not in this domain model
-        for key in ("artifact_type", "scene_id", "file_size_bytes", "mime_type", "updated_at"):
+        # Map scene_id to section_id for per-paragraph support
+        if "scene_id" in mapped and "section_id" not in mapped:
+            mapped["section_id"] = mapped.pop("scene_id")
+        else:
+            mapped.pop("scene_id", None)
+        for key in ("artifact_type", "file_size_bytes", "mime_type", "updated_at"):
             mapped.pop(key, None)
         return cls.model_validate(mapped)
 

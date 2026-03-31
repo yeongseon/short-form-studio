@@ -42,6 +42,18 @@ class AudioStorageBackend(Protocol):
     async def get_latest_by_run(self, run_id: int) -> dict[str, Any] | None:
         """Fetch the most recent artifact for a run."""
         ...
+    async def get_by_section(self, run_id: int, section_id: str) -> dict[str, Any] | None:
+        """Fetch the latest artifact for a run+section."""
+        ...
+
+    async def list_by_run_sections(self, run_id: int) -> list[dict[str, Any]]:
+        """List all section-level artifacts for a run."""
+        ...
+
+    async def delete_by_section(self, run_id: int, section_id: str) -> None:
+        """Delete artifacts for a run+section."""
+        ...
+
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +95,27 @@ class InMemoryAudioStorage:
     async def get_latest_by_run(self, run_id: int) -> dict[str, Any] | None:
         artifacts = await self.list_by_run(run_id)
         return artifacts[0] if artifacts else None
+
+    async def get_by_section(self, run_id: int, section_id: str) -> dict[str, Any] | None:
+        run_artifacts = [
+            a for a in self._artifacts
+            if a["run_id"] == run_id and a.get("scene_id") == section_id
+        ]
+        if not run_artifacts:
+            return None
+        return dict(sorted(run_artifacts, key=lambda x: x["created_at"], reverse=True)[0])
+
+    async def list_by_run_sections(self, run_id: int) -> list[dict[str, Any]]:
+        return [
+            dict(a) for a in self._artifacts
+            if a["run_id"] == run_id and a.get("scene_id") is not None
+        ]
+
+    async def delete_by_section(self, run_id: int, section_id: str) -> None:
+        self._artifacts = [
+            a for a in self._artifacts
+            if not (a["run_id"] == run_id and a.get("scene_id") == section_id)
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +181,51 @@ class AudioService:
             return None
         return self._row_to_artifact(row)
 
+    # -- Per-paragraph methods ------------------------------------------------
+
+    async def create_paragraph_artifact(
+        self,
+        run_id: int,
+        section_id: str,
+        path: str,
+        *,
+        model_used: str | None = None,
+        provider_type: str | None = None,
+        voice: str | None = None,
+    ) -> AudioArtifact:
+        """Create an audio artifact for a specific paragraph/section."""
+        metadata: dict[str, object] = {}
+        if model_used is not None:
+            metadata["model_used"] = model_used
+        if provider_type is not None:
+            metadata["provider_type"] = provider_type
+        if voice is not None:
+            metadata["voice"] = voice
+
+        row: dict[str, object] = {
+            "run_id": run_id,
+            "scene_id": section_id,
+            "file_path": path,
+            "metadata_json": metadata,
+        }
+        saved = await self.storage.save_artifact(row)
+        return self._row_to_artifact(saved)
+
+    async def get_paragraph_audio(self, run_id: int, section_id: str) -> AudioArtifact | None:
+        """Get the latest audio artifact for a specific paragraph."""
+        row = await self.storage.get_by_section(run_id, section_id)
+        if row is None:
+            return None
+        return self._row_to_artifact(row)
+
+    async def list_paragraph_audio(self, run_id: int) -> list[AudioArtifact]:
+        """List all section-level audio artifacts for a run."""
+        rows = await self.storage.list_by_run_sections(run_id)
+        return [self._row_to_artifact(r) for r in rows]
+
+    async def delete_paragraph_audio(self, run_id: int, section_id: str) -> None:
+        """Delete audio artifacts for a specific paragraph (invalidation)."""
+        await self.storage.delete_by_section(run_id, section_id)
     # -- Internal -----------------------------------------------------------
 
     @staticmethod

@@ -94,6 +94,39 @@ function mockFetchAll(
       if (!opts.preview) return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({}) } as Response);
       return Promise.resolve({ ok: true, json: () => Promise.resolve(opts.preview) } as Response);
     }
+    // GET /runs/:id/storyboard
+    if (url.includes("/storyboard")) {
+      return Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            run_id: run?.id ?? 0,
+            paragraphs: [
+              {
+                section_id: "sec-0",
+                order: 0,
+                text: "A calm morning in Tokyo.",
+                display_text: null,
+                image_prompt: "panoramic tokyo",
+                image_url: null,
+                audio_url: "data/artifacts/10/audio/sec-0.wav",
+                audio_duration: 5.2,
+                subtitles_url: "data/artifacts/10/subtitles/sec-0.srt",
+                subtitle_entries: [{ index: 1, start: "00:00:00,000", end: "00:00:05,200", text: "A calm morning in Tokyo." }],
+                status: "ready",
+                stale_flags: null,
+                scene_id: "scene-0",
+                image_asset_id: null,
+                audio_artifact_id: 2,
+                subtitle_artifact_id: 3,
+              },
+            ],
+            render_ready: true,
+            total_paragraphs: 1,
+            ready_paragraphs: 1,
+          }),
+      } as Response);
+    }
     // GET /runs/:id/visual-assets
     if (url.includes("/visual-assets")) {
       if (!opts.assets) return Promise.resolve({ ok: true, json: () => Promise.resolve({ run_id: run?.id ?? 0, scenes: {}, total_scenes: 0, total_assets: 0 }) } as Response);
@@ -173,14 +206,8 @@ describe("ReviewPage", () => {
     expect(screen.getByTestId("review-assets-section")).toBeTruthy();
     expect(screen.getByText(/scene-0\.png/)).toBeTruthy();
 
-    // Audio section
-    expect(screen.getByTestId("review-audio-section")).toBeTruthy();
-    expect(screen.getByText("qwen3-tts")).toBeTruthy();
-
-    // Subtitle section
-    expect(screen.getByTestId("review-subtitle-section")).toBeTruthy();
-    expect(screen.getByText("srt")).toBeTruthy();
-
+    // Storyboard section (replaces audio + subtitle sections)
+    expect(screen.getByTestId("review-storyboard-section")).toBeTruthy();
     // Video section — video is now rendered as <video> element, no path text
     expect(screen.getByTestId("review-video-section")).toBeTruthy();
     const videoEl = screen.getByTestId("review-video-section").querySelector("video");
@@ -244,14 +271,13 @@ describe("ReviewPage", () => {
     });
   });
 
-  it("shows model metadata in audio section", async () => {
+  it("shows storyboard section when preview has audio data", async () => {
     mockFetchAll(MOCK_RUN_FINAL_REVIEW, { preview: MOCK_PREVIEW });
     renderPage();
 
     await waitFor(() => {
-      expect(screen.getByTestId("review-audio-section")).toBeTruthy();
+      expect(screen.getByTestId("review-storyboard-section")).toBeTruthy();
     });
-    expect(screen.getByText("qwen3-tts")).toBeTruthy();
   });
 
   it("handles wrapped visual-assets response with scenes field (regression)", async () => {
