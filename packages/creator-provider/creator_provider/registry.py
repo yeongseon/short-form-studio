@@ -53,7 +53,10 @@ class ProviderRegistry:
     @classmethod
     def create_default(cls) -> "ProviderRegistry":
         from creator_provider.image.sd_local_provider import SDLocalProvider
+        from creator_provider.llm.anthropic_provider import AnthropicProvider
+        from creator_provider.llm.gemini_provider import GeminiProvider
         from creator_provider.llm.ollama_provider import OllamaProvider
+        from creator_provider.llm.openai_provider import OpenAIProvider
         from creator_provider.stt.whisper_provider import WhisperSTTProvider
         from creator_provider.tts.qwen_tts_provider import QwenTTSProvider
 
@@ -62,6 +65,9 @@ class ProviderRegistry:
         registry.register_provider("sd_local", SDLocalProvider)
         registry.register_provider("qwen_tts", QwenTTSProvider)
         registry.register_provider("whisper", WhisperSTTProvider)
+        registry.register_provider("openai_llm", OpenAIProvider)
+        registry.register_provider("anthropic_llm", AnthropicProvider)
+        registry.register_provider("gemini_llm", GeminiProvider)
         registry.register_model(
             ModelCatalogEntry(
                 model_key="qwen3-4b",
@@ -100,6 +106,36 @@ class ProviderRegistry:
                 category=ProviderCategory.STT,
                 requires_gpu=True,
                 is_local=True,
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="gpt-4o-mini",
+                provider_type="openai_llm",
+                endpoint="https://api.openai.com",
+                category=ProviderCategory.LLM,
+                requires_gpu=False,
+                is_local=False,
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="claude-sonnet-4-20250514",
+                provider_type="anthropic_llm",
+                endpoint="https://api.anthropic.com",
+                category=ProviderCategory.LLM,
+                requires_gpu=False,
+                is_local=False,
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="gemini-2.0-flash",
+                provider_type="gemini_llm",
+                endpoint="https://generativelanguage.googleapis.com",
+                category=ProviderCategory.LLM,
+                requires_gpu=False,
+                is_local=False,
             )
         )
         return registry

@@ -44,6 +44,8 @@ class ModelCatalogService:
         "qwen3-tts": "Qwen3 TTS",
         "whisper-small": "Whisper Small",
         "gpt-4o-mini": "GPT-4o Mini",
+        "claude-sonnet-4-20250514": "Claude Sonnet",
+        "gemini-2.0-flash": "Gemini 2.0 Flash",
         "llama-3.1-8b": "Llama 3.1 8B",
     }
 
