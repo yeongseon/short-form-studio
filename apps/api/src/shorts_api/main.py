@@ -7,7 +7,6 @@ from creator_service.model_health_service import ModelHealthService
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.staticfiles import StaticFiles
 from creator_service.logging_config import setup_json_logging
 from shorts_api.routes.creator_models import router as models_router
@@ -36,31 +35,34 @@ app.add_middleware(
 )
 
 
-class RequestLoggingMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        start = time.perf_counter()
+
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    start = time.perf_counter()
+    status_code = 500
+    try:
         response = await call_next(request)
+        status_code = response.status_code
+        return response
+    finally:
         elapsed_ms = (time.perf_counter() - start) * 1000
         logger.info(
             "%s %s %d %.1fms",
             request.method,
             request.url.path,
-            response.status_code,
+            status_code,
             elapsed_ms,
         )
-        return response
 
 
-app.add_middleware(RequestLoggingMiddleware)
 model_health = ModelHealthService()
-
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
     logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
     return JSONResponse(
         status_code=500,
-        content={"detail": "Internal server error", "type": type(exc).__name__},
+        content={"detail": "Internal server error"},
     )
 
 app.include_router(models_router, prefix="/api/creator")
