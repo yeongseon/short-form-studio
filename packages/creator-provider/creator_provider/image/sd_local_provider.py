@@ -17,9 +17,13 @@ class SDLocalProvider(ImageProvider):
         "sharp focus, professional, 8k uhd"
     )
 
-    # Keys that are internal to the pipeline and should NOT be sent to
-    # the AUTOMATIC1111 /sdapi/v1/txt2img endpoint.
-    _INTERNAL_KEYS = frozenset({"output_path", "width", "height"})
+    # Only these keys from caller-provided params are forwarded to the
+    # AUTOMATIC1111 /sdapi/v1/txt2img endpoint.  This allowlist prevents
+    # injection of dangerous keys like `prompt`, `alwayson_scripts`,
+    # `script_args`, or `override_settings`.
+    _ALLOWED_API_KEYS = frozenset({
+        "steps", "cfg_scale", "sampler_name", "negative_prompt", "seed",
+    })
 
     def __init__(self, endpoint: str, model_key: str):
         self.endpoint = endpoint.rstrip("/")
@@ -46,12 +50,12 @@ class SDLocalProvider(ImageProvider):
             "sampler_name": "DPM++ 2M Karras",
         }
 
-        # Merge caller-provided params (from registry defaults + per-request
-        # overrides).  Strip internal keys that the SD API doesn't understand.
-        api_params = {
-            k: v for k, v in merged_params.items() if k not in self._INTERNAL_KEYS
-        }
-        payload.update(api_params)
+        # Merge caller-provided params — only allowlisted keys are forwarded
+        # to AUTOMATIC1111.  This blocks injection of `prompt`,
+        # `alwayson_scripts`, `override_settings`, etc.
+        for key in self._ALLOWED_API_KEYS:
+            if key in merged_params:
+                payload[key] = merged_params[key]
 
         url = f"{self.endpoint}/sdapi/v1/txt2img"
         try:
