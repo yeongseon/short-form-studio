@@ -5,7 +5,10 @@ const CREATOR_LINKS = [
   { to: "/runs", label: "Projects" },
 ];
 
-const OPS_LINKS = [{ to: "/ops", label: "Ops" }];
+const OPS_LINKS = [
+  { to: "/ops", label: "Ops" },
+  { to: "/settings", label: "Settings" },
+];
 
 export default function AppShell() {
   const location = useLocation();
@@ -20,6 +23,7 @@ export default function AppShell() {
       );
     }
     if (path === "/ops") return location.pathname.startsWith("/ops");
+    if (path === "/settings") return location.pathname === "/settings";
     return false;
   };
 
