@@ -18,3 +18,8 @@ members = [
 typeCheckingMode = "basic"
 reportMissingTypeStubs = false
 reportUnknownMemberType = false
+extraPaths = [
+  "packages/creator-domain",
+  "packages/creator-service",
+  "packages/creator-provider",
+]

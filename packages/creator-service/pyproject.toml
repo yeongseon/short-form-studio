@@ -3,7 +3,7 @@ name = "creator-service"
 version = "0.1.0"
 description = "Service layer for short-form pipeline"
 requires-python = ">=3.10"
-dependencies = ["creator-domain>=0.1.0", "pydantic>=2.0"]
+dependencies = ["creator-domain>=0.1.0", "pydantic>=2.0", "asyncpg>=0.29.0"]
 
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
@@ -11,3 +11,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["creator_service", "creator_service.*"]
+
+[tool.basedpyright]
+typeCheckingMode = "basic"
+reportMissingTypeStubs = false
+reportUnknownMemberType = false
+extraPaths = ["../creator-domain"]

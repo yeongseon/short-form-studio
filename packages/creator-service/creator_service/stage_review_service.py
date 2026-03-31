@@ -156,10 +156,10 @@ class StageReviewService:
             }
         )
 
-        # 5. Build domain model from the CAS result
-        from run_service import PipelineRun  # noqa: E402 — avoid circular at module level
-
-        return PipelineRun.from_row(row)
+        updated_run = await run_service.get_run(run_id)
+        if updated_run is None:
+            raise ValueError(f"Run {run_id} not found")
+        return updated_run
 
     async def get_latest_review(
         self, run_id: int, stage_name: str
@@ -168,4 +168,14 @@ class StageReviewService:
         return await self.storage.get_latest_review(run_id, stage_name)
 
 
-stage_review_service = StageReviewService(InMemoryStageReviewStorage())
+def _create_storage() -> StageReviewStorageBackend:
+    import os
+
+    if os.getenv("DATABASE_URL"):
+        from .postgres_stage_review_storage import PostgresStageReviewStorage
+
+        return PostgresStageReviewStorage()
+    return InMemoryStageReviewStorage()
+
+
+stage_review_service = StageReviewService(_create_storage())

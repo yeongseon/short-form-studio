@@ -246,7 +246,9 @@ class VisualAssetService:
 
         # Re-fetch to get updated is_active state
         updated = await self.storage.get_asset(asset_id)
-        return self._row_to_asset(updated)  # type: ignore[arg-type]
+        if updated is None:
+            raise ValueError(f"Asset {asset_id} not found")
+        return self._row_to_asset(updated)
 
     # -- Reads --------------------------------------------------------------
 
@@ -297,4 +299,14 @@ class VisualAssetService:
         return VisualAsset.from_row(row)
 
 
-visual_asset_service = VisualAssetService()
+def _create_storage() -> VisualAssetStorageBackend:
+    import os
+
+    if os.getenv("DATABASE_URL"):
+        from .postgres_visual_asset_storage import PostgresVisualAssetStorage
+
+        return PostgresVisualAssetStorage()
+    return InMemoryVisualAssetStorage()
+
+
+visual_asset_service = VisualAssetService(_create_storage())

@@ -10,7 +10,6 @@ VisualAssetService and ScriptService.
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
@@ -237,4 +236,14 @@ class RenderService:
         return VideoArtifact.from_row(row)
 
 
-render_service = RenderService()
+def _create_storage() -> RenderStorageBackend:
+    import os
+
+    if os.getenv("DATABASE_URL"):
+        from .postgres_render_storage import PostgresRenderStorage
+
+        return PostgresRenderStorage()
+    return InMemoryRenderStorage()
+
+
+render_service = RenderService(_create_storage())
