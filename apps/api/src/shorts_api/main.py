@@ -13,6 +13,7 @@ from shorts_api.routes.creator_models import router as models_router
 from shorts_api.routes.creator_projects import router as projects_router
 from shorts_api.routes.creator_runs import router as runs_router
 from shorts_api.routes.creator_script import router as script_router, run_script_router
+from shorts_api.routes.creator_settings import router as settings_router
 from shorts_api.routes.creator_visual_plan import router as visual_plan_router
 
 # Configure structured JSON logging
@@ -58,7 +59,7 @@ async def request_logging_middleware(request: Request, call_next):
 model_health = ModelHealthService()
 
 @app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+async def global_exception_handler(request: Request, _exc: Exception) -> JSONResponse:
     logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
     return JSONResponse(
         status_code=500,
@@ -71,6 +72,7 @@ app.include_router(runs_router, prefix="/api/creator")
 app.include_router(script_router, prefix="/api/creator")
 app.include_router(run_script_router, prefix="/api/creator")
 app.include_router(visual_plan_router, prefix="/api/creator")
+app.include_router(settings_router, prefix="/api/creator")
 
 
 @app.get("/health")

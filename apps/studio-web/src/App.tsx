@@ -7,6 +7,7 @@ import OpsPage from "./pages/OpsPage";
 import ProjectPage from "./pages/ProjectPage";
 import ReviewPage from "./pages/ReviewPage";
 import RunsPage from "./pages/RunsPage";
+import SettingsPage from "./pages/SettingsPage";
 
 export default function App() {
   return (
@@ -22,6 +23,7 @@ export default function App() {
           <Route path="/ops/library" element={<LibraryPage />} />
 
           <Route path="/ops" element={<OpsPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
 
           <Route path="*" element={<Navigate replace to="/create" />} />
         </Route>

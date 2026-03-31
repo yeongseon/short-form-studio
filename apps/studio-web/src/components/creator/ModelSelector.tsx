@@ -18,6 +18,13 @@ interface ModelsResponse {
   stt_models: ModelEntry[];
 }
 
+interface ApiKeyStatus {
+  provider: string;
+  label: string;
+  configured: boolean;
+  masked: string;
+}
+
 /** Category metadata for rendering. */
 interface CategoryMeta {
   responseKey: keyof ModelsResponse;
@@ -32,6 +39,17 @@ const CATEGORY_MAP: Record<string, CategoryMeta> = {
 };
 
 const ALL_CATEGORIES = Object.keys(CATEGORY_MAP);
+
+const PROVIDER_TYPE_MAP: Record<string, string> = {
+  openai_llm: "openai",
+  openai_image: "openai",
+  openai_tts: "openai",
+  anthropic_llm: "anthropic",
+  gemini_llm: "google",
+  google_image: "google",
+  stability_image: "stability",
+  elevenlabs_tts: "elevenlabs",
+};
 
 export interface ModelSelectorProps {
   /** Explicit selection map: category → model key. Enables controlled mode. */
@@ -60,12 +78,17 @@ export default function ModelSelector({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [localSelection, setLocalSelection] = useState<Record<string, string>>({});
+  const [defaultsVersion, setDefaultsVersion] = useState(0);
+  const [configuredProviders, setConfiguredProviders] = useState<Record<string, boolean>>({});
 
   const visibleCategories = categories ?? ALL_CATEGORIES;
 
   // Stable ref for onSelectionChange to avoid effect re-fires when callback identity changes
   const onChangeRef = useRef(onSelectionChange);
   onChangeRef.current = onSelectionChange;
+
+  const localSelectionRef = useRef(localSelection);
+  localSelectionRef.current = localSelection;
 
   // Ref to stage newly-computed defaults for notification in a follow-up effect.
   // Keeping notification out of the setLocalSelection updater keeps it pure.
@@ -79,13 +102,30 @@ export default function ModelSelector({
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(`${apiBase}/api/creator/models`);
-        if (!res.ok) {
-          throw new Error(`Failed to fetch models: ${res.status}`);
+        const [modelsRes, apiKeysRes] = await Promise.all([
+          fetch(`${apiBase}/api/creator/models`),
+          fetch(`${apiBase}/api/creator/settings/api-keys`),
+        ]);
+
+        if (!modelsRes.ok) {
+          throw new Error(`Failed to fetch models: ${modelsRes.status}`);
         }
-        const json: ModelsResponse = await res.json();
+        const json: ModelsResponse = await modelsRes.json();
+
+        let providerStatus: Record<string, boolean> = {};
+        if (apiKeysRes.ok) {
+          const apiKeysJson = await apiKeysRes.json();
+          if (Array.isArray(apiKeysJson)) {
+            providerStatus = (apiKeysJson as ApiKeyStatus[]).reduce<Record<string, boolean>>((acc, item) => {
+              acc[item.provider] = item.configured;
+              return acc;
+            }, {});
+          }
+        }
+
         if (!cancelled) {
           setData(json);
+          setConfiguredProviders(providerStatus);
         }
       } catch (err) {
         if (!cancelled) {
@@ -115,38 +155,35 @@ export default function ModelSelector({
     if (!data || selectedModels) return;
 
     const cats = categoriesKey.split(",");
-    setLocalSelection((prev) => {
-      const next = { ...prev };
-      const newDefaults: Array<[string, string]> = [];
+    const prev = localSelectionRef.current;
+    const next = { ...prev };
+    const newDefaults: Array<[string, string]> = [];
 
-      for (const cat of cats) {
-        // Skip categories that already have a selection whose model still exists
-        if (next[cat]) {
-          const meta = CATEGORY_MAP[cat];
-          if (meta) {
-            const models = data[meta.responseKey];
-            const stillExists = models.some((m) => m.key === next[cat]);
-            if (stillExists) continue;
-          }
-        }
-
+    for (const cat of cats) {
+      if (next[cat]) {
         const meta = CATEGORY_MAP[cat];
-        if (!meta) continue;
-        const models = data[meta.responseKey];
-        const firstAvailable = models.find((m) => m.status === "available") ?? models[0];
-        if (firstAvailable) {
-          next[cat] = firstAvailable.key;
-          newDefaults.push([cat, firstAvailable.key]);
+        if (meta) {
+          const models = data[meta.responseKey];
+          const stillExists = models.some((m) => m.key === next[cat]);
+          if (stillExists) continue;
         }
       }
 
-      // If nothing changed, return prev to avoid unnecessary re-render
-      if (newDefaults.length === 0) return prev;
+      const meta = CATEGORY_MAP[cat];
+      if (!meta) continue;
+      const models = data[meta.responseKey];
+      const firstAvailable = models.find((m) => m.status === "available") ?? models[0];
+      if (firstAvailable) {
+        next[cat] = firstAvailable.key;
+        newDefaults.push([cat, firstAvailable.key]);
+      }
+    }
 
-      // Stage defaults for notification in Effect 3
+    if (newDefaults.length > 0) {
       pendingDefaultsRef.current = newDefaults;
-      return next;
-    });
+      setLocalSelection(next);
+      setDefaultsVersion((prevVersion) => prevVersion + 1);
+    }
   }, [data, categoriesKey, selectedModels]);
 
   // Effect 3: Notify parent of newly-computed defaults after state has settled.
@@ -162,7 +199,7 @@ export default function ModelSelector({
         cb(cat, key);
       }
     }
-  }, [localSelection]);
+  }, [defaultsVersion]);
 
   const handleSelect = useCallback(
     (category: string, modelKey: string) => {
@@ -193,7 +230,7 @@ export default function ModelSelector({
       {visibleCategories.map((cat) => {
         const meta = CATEGORY_MAP[cat];
         if (!meta) return null;
-        const models = data[meta.responseKey];
+        const models = [...data[meta.responseKey]].sort((a, b) => Number(a.is_local) === Number(b.is_local) ? 0 : (a.is_local ? -1 : 1));
         const groupName = `model-${cat}`;
 
         return (
@@ -206,6 +243,8 @@ export default function ModelSelector({
                 {models.map((model) => {
                   const isSelected = activeSelection[cat] === model.key;
                   const inputId = `${groupName}-${model.key}`;
+                  const mappedProvider = PROVIDER_TYPE_MAP[model.provider_type];
+                  const needsApiKeyWarning = !model.is_local && Boolean(mappedProvider) && !configuredProviders[mappedProvider];
                   return (
                     <label
                       key={model.key}
@@ -235,9 +274,18 @@ export default function ModelSelector({
                       <span style={STATUS_STYLES[model.status] ?? STATUS_STYLES.unknown}>
                         {model.status}
                       </span>
-                      {model.is_local && (
-                        <span style={{ fontSize: 10, color: "#666", background: "#eee", borderRadius: 3, padding: "1px 4px" }}>
-                          local
+                      {model.is_local ? (
+                        <span style={{ fontSize: 10, color: "#1f2937", background: "#e5e7eb", borderRadius: 3, padding: "1px 4px" }}>
+                          Local
+                        </span>
+                      ) : (
+                        <span style={{ fontSize: 10, color: "#1d4ed8", background: "#dbeafe", borderRadius: 3, padding: "1px 4px" }}>
+                          Remote
+                        </span>
+                      )}
+                      {needsApiKeyWarning && (
+                        <span style={{ fontSize: 11, color: "#c2410c", fontWeight: 500 }}>
+                          ⚠ API key required
                         </span>
                       )}
                     </label>
