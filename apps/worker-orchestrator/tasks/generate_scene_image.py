@@ -182,15 +182,15 @@ def generate_scene_image(
                 try:
                     # Generate image via provider.
                     params = dict(entry.default_params or {})
+                    # Direct provider to write to the artifact directory
+                    # instead of a temp file.
+                    target_path = str(asset_dir / f"{target_scene.scene_id}.png")
+                    params["output_path"] = target_path
                     image_result = await provider.generate(effective_prompt, params)
 
-                    # Determine asset path — provider returns image_path,
-                    # or we construct one.
-                    if hasattr(image_result, "image_path") and image_result.image_path:
-                        asset_path = image_result.image_path
-                    else:
-                        # Fallback: store in our artifacts directory.
-                        asset_path = str(asset_dir / f"{target_scene.scene_id}.png")
+                    # Use the artifact path — guaranteed to be in our
+                    # persistent storage, not a temp directory.
+                    asset_path = target_path
 
                     # Save as visual asset via service.
                     asset = await _visual_asset_service.create_asset(
