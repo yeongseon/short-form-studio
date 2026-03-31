@@ -84,8 +84,8 @@ async def get_script(run_id: int) -> dict[str, object]:
 
     return {
         "run_id": run_id,
-        "markdown": draft.markdown_content,
-        "structured_sections": [
+        "script": draft.markdown_content,
+        "structured_script": [
             section.model_dump(mode="json")
             for section in (draft.structured_script or [])
         ],
