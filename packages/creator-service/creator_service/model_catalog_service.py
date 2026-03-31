@@ -46,6 +46,9 @@ class ModelCatalogService:
         "gpt-4o-mini": "GPT-4o Mini",
         "claude-sonnet-4-20250514": "Claude Sonnet",
         "gemini-2.0-flash": "Gemini 2.0 Flash",
+        "dall-e-3": "DALL-E 3",
+        "sd3-medium": "Stability SD3",
+        "imagen-3": "Imagen 3",
         "llama-3.1-8b": "Llama 3.1 8B",
     }
 
