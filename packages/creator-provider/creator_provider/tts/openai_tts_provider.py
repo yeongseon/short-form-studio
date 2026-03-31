@@ -1,0 +1,81 @@
+from __future__ import annotations
+
+from pathlib import Path
+import tempfile
+from typing import Any
+
+import httpx
+
+from creator_provider.api_keys import resolve_api_key
+from creator_provider.base import AudioResult, TTSProvider
+
+
+class OpenAITTSProvider(TTSProvider):
+    def __init__(self, endpoint: str, model_key: str):
+        self.endpoint: str = endpoint.rstrip("/")
+        self.model_key: str = model_key
+        api_key = resolve_api_key("openai")
+        if api_key is None:
+            raise ValueError("API key for 'openai' not configured")
+        self.api_key: str = api_key
+
+    async def generate(
+        self,
+        text: str,
+        voice: str = "default",
+        params: dict[str, Any] | None = None,
+    ) -> AudioResult:
+        merged_params = dict(params or {})
+        voice_name = voice if voice != "default" else merged_params.get("voice", "alloy")
+        model = merged_params.get("model", "tts-1")
+        response_format = merged_params.get("response_format", "mp3")
+        speed = merged_params.get("speed", 1.0)
+        timeout = float(merged_params.get("timeout", 120.0))
+
+        url = f"{self.endpoint}/v1/audio/speech"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": model,
+            "input": text,
+            "voice": voice_name,
+            "response_format": response_format,
+            "speed": speed,
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(url, json=payload, headers=headers)
+                response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"OpenAI TTS API request failed: {exc}") from exc
+
+        audio_bytes = response.content
+        if not audio_bytes:
+            raise RuntimeError("OpenAI TTS API returned empty response")
+
+        output_path_str = merged_params.get("output_path")
+        if output_path_str:
+            output_path = Path(str(output_path_str))
+        else:
+            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+                output_path = Path(tmp.name)
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_bytes(audio_bytes)
+
+        duration = _estimate_mp3_duration(audio_bytes)
+        return AudioResult(
+            audio_path=str(output_path),
+            duration_seconds=duration,
+            model_key=self.model_key,
+        )
+
+
+def _estimate_mp3_duration(audio_bytes: bytes) -> float:
+    if len(audio_bytes) < 100:
+        return 0.0
+    bytes_per_second = 128 * 1000 / 8
+    return float(len(audio_bytes)) / float(bytes_per_second)

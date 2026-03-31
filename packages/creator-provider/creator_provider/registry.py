@@ -61,12 +61,16 @@ class ProviderRegistry:
         from creator_provider.llm.ollama_provider import OllamaProvider
         from creator_provider.llm.openai_provider import OpenAIProvider
         from creator_provider.stt.whisper_provider import WhisperSTTProvider
+        from creator_provider.tts.elevenlabs_provider import ElevenLabsProvider
+        from creator_provider.tts.openai_tts_provider import OpenAITTSProvider
         from creator_provider.tts.qwen_tts_provider import QwenTTSProvider
 
         registry = cls()
         registry.register_provider("ollama", OllamaProvider)
         registry.register_provider("sd_local", SDLocalProvider)
         registry.register_provider("qwen_tts", QwenTTSProvider)
+        registry.register_provider("elevenlabs_tts", ElevenLabsProvider)
+        registry.register_provider("openai_tts", OpenAITTSProvider)
         registry.register_provider("whisper", WhisperSTTProvider)
         registry.register_provider("openai_llm", OpenAIProvider)
         registry.register_provider("anthropic_llm", AnthropicProvider)
@@ -102,6 +106,27 @@ class ProviderRegistry:
                 category=ProviderCategory.TTS,
                 requires_gpu=True,
                 is_local=True,
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="elevenlabs-multilingual-v2",
+                provider_type="elevenlabs_tts",
+                endpoint="https://api.elevenlabs.io",
+                category=ProviderCategory.TTS,
+                requires_gpu=False,
+                is_local=False,
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="openai-tts-1",
+                provider_type="openai_tts",
+                endpoint="https://api.openai.com",
+                category=ProviderCategory.TTS,
+                requires_gpu=False,
+                is_local=False,
+                default_params={"voice": "alloy"},
             )
         )
         registry.register_model(
