@@ -41,8 +41,8 @@ class ModelCatalogService:
         "qwen3-8b": "Qwen3 8B",
         "sd15": "Stable Diffusion 1.5",
         "sd-2.1": "Stable Diffusion 2.1",
-        "qwen-tts": "Qwen TTS",
-        "whisper-medium": "Whisper Medium",
+        "piper": "Piper TTS",
+        "whisper-small": "Whisper Small",
         "gpt-4o-mini": "GPT-4o Mini",
         "llama-3.1-8b": "Llama 3.1 8B",
     }

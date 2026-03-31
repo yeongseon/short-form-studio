@@ -120,20 +120,12 @@ services:
       start_period: 30s
     restart: unless-stopped
 
-  tts-qwen3:
-    image: shorts-automation-tts-qwen3:latest
+  tts-piper:
+    image: shorts-automation-tts-piper:latest
     ports:
-      - "9880:9880"
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-    # TODO: replace placeholder when tts-qwen3 health endpoint is finalized.
+      - "5000:5000"
     healthcheck:
-      test: ["CMD", "true"]
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
       interval: 30s
       timeout: 10s
       retries: 5

@@ -34,18 +34,18 @@ class StubModelCatalogService:
             ],
             "tts_models": [
                 {
-                    "key": "qwen-tts",
-                    "label": "Qwen TTS (Local)",
-                    "provider_type": "qwen_tts",
+                    "key": "piper",
+                    "label": "Piper TTS (Local)",
+                    "provider_type": "piper_tts",
                     "is_local": True,
-                    "requires_gpu": True,
+                    "requires_gpu": False,
                     "status": "available",
                 }
             ],
             "stt_models": [
                 {
-                    "key": "whisper-medium",
-                    "label": "Whisper Medium (Local)",
+                    "key": "whisper-small",
+                    "label": "Whisper Small (Local)",
                     "provider_type": "whisper",
                     "is_local": True,
                     "requires_gpu": True,
