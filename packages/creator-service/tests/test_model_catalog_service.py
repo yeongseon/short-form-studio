@@ -26,6 +26,7 @@ def health_service() -> AsyncMock:
         "api.anthropic.com": ModelStatus.UNKNOWN,
         "generativelanguage.googleapis.com": ModelStatus.UNKNOWN,
         "api.stability.ai": ModelStatus.UNKNOWN,
+        "api.elevenlabs.io": ModelStatus.UNKNOWN,
     }
 
     async def check_model(name: str) -> ModelHealthResult:
@@ -50,7 +51,7 @@ class TestModelCatalogService:
         assert set(result.keys()) == {"script_models", "image_models", "tts_models", "stt_models"}
         assert len(result["script_models"]) == 4  # qwen3-4b, gpt-4o-mini, claude-sonnet, gemini-flash
         assert len(result["image_models"]) == 4  # sd15, dall-e-3, sd3-medium, imagen-3
-        assert len(result["tts_models"]) == 1  # qwen3-tts (external TTS not yet on main)
+        assert len(result["tts_models"]) == 3  # qwen3-tts, elevenlabs, openai-tts
         assert len(result["stt_models"]) == 1  # whisper-small
 
         # Verify local models are still present and correctly labeled
@@ -80,6 +81,10 @@ class TestModelCatalogService:
         remote_image = next(m for m in result["image_models"] if m["key"] == "dall-e-3")
         assert remote_image["label"] == "DALL-E 3 (Remote)"
         assert remote_image["is_local"] is False
+
+        remote_tts = next(m for m in result["tts_models"] if m["key"] == "elevenlabs-multilingual-v2")
+        assert remote_tts["label"] == "ElevenLabs Multilingual v2 (Remote)"
+        assert remote_tts["is_local"] is False
 
     @pytest.mark.asyncio
     async def test_list_models_filters_script_category(self, registry, health_service: AsyncMock):
@@ -173,6 +178,6 @@ class TestModelCatalogService:
             "ollama", "stable-diffusion", "tts-qwen3", "stt-whisper",
             "api.openai.com", "api.anthropic.com",
             "generativelanguage.googleapis.com",
-            "api.stability.ai",
+            "api.stability.ai", "api.elevenlabs.io",
         }
         assert called_keys == expected_keys
