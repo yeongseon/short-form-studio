@@ -1,7 +1,7 @@
 """Celery task for run-level subtitle generation via subtitle providers.
 
 Consumes an approved script draft AND optionally audio artifact timing data
-and generates a single subtitle artifact for the run (SRT format).
+and generates a single subtitle artifact for the run (SRT/VTT format).
 
 Key design decisions:
 - Subtitle generation is all-or-nothing for a run (no partial scene-level success).
@@ -34,10 +34,11 @@ from creator_service.subtitle_service import subtitle_service as _subtitle_servi
 logger = logging.getLogger(__name__)
 
 _ALLOWED_STAGES = frozenset({RunStage.AUDIO_GENERATING, RunStage.SUBTITLE_GENERATING})
+_ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
 
 # Stages where writing RENDER_GENERATING or FAILED is safe — the run
 # hasn't advanced past subtitle generation.
-_SAFE_STAGES = frozenset({RunStage.AUDIO_GENERATING.value, RunStage.SUBTITLE_GENERATING.value})
+_SAFE_STAGES = frozenset({RunStage.AUDIO_GENERATING, RunStage.SUBTITLE_GENERATING})
 
 
 class _StageGuardError(ValueError):
@@ -94,7 +95,7 @@ def generate_subtitles(
         if current not in _ALLOWED_STAGES:
             raise _StageGuardError(
                 f"Run {run_id} is in stage {current.value}, "
-                f"expected one of {', '.join(s.value for s in _ALLOWED_STAGES)}"
+                f"expected one of {', '.join(s for s in _ALLOWED_STAGES)}"
             )
 
         # 2. Fetch approved script draft.
@@ -134,16 +135,17 @@ def generate_subtitles(
             lock_acquired = True
             gpu_lock_acquired_at = _utc_now_iso()
 
-        subtitle_path = f"data/artifacts/{run_id}/subtitles/subtitles.{subtitle_format}"
+        subtitle_path = f"{_ARTIFACT_ROOT}/{run_id}/subtitles/subtitles.{subtitle_format}"
 
         try:
+            os.makedirs(os.path.dirname(subtitle_path), exist_ok=True)
             # 6. Generate subtitles via provider.
             params = dict(entry.default_params or {})
             params["format"] = subtitle_format
             params["output_path"] = subtitle_path
-            if audio_path:
-                params["audio_path"] = audio_path
-            await provider.generate(script_text, params)
+            if not audio_path:
+                raise RuntimeError(f"No audio artifact found for run {run_id}; cannot transcribe")
+            await provider.transcribe(audio_path, params=params)
 
             # 7. Save subtitle artifact via service.
             artifact = await _subtitle_service.create_artifact(
@@ -158,7 +160,7 @@ def generate_subtitles(
             applied, _ = await _run_service.storage.conditional_update_run(
                 run_id,
                 {
-                    "current_stage": RunStage.RENDER_GENERATING.value,
+                    "current_stage": RunStage.RENDER_GENERATING,
                     "status": "running",
                 },
                 expected_stages=_SAFE_STAGES,
@@ -209,7 +211,7 @@ def generate_subtitles(
                 _run_service.storage.conditional_update_run(
                     run_id,
                     {
-                        "current_stage": RunStage.FAILED.value,
+                        "current_stage": RunStage.FAILED,
                         "status": "failed",
                     },
                     expected_stages=_SAFE_STAGES,

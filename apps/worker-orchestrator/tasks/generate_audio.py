@@ -33,10 +33,11 @@ from creator_service.script_service import script_service as _script_service
 logger = logging.getLogger(__name__)
 
 _ALLOWED_STAGES = frozenset({RunStage.VISUAL_ASSET_REVIEW, RunStage.AUDIO_GENERATING})
+_ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
 
 # Stages where writing SUBTITLE_GENERATING or FAILED is safe — the run
 # hasn't advanced past audio generation.
-_SAFE_STAGES = frozenset({RunStage.VISUAL_ASSET_REVIEW.value, RunStage.AUDIO_GENERATING.value})
+_SAFE_STAGES = frozenset({RunStage.VISUAL_ASSET_REVIEW, RunStage.AUDIO_GENERATING})
 
 
 class _StageGuardError(ValueError):
@@ -93,7 +94,7 @@ def generate_audio(
         if current not in _ALLOWED_STAGES:
             raise _StageGuardError(
                 f"Run {run_id} is in stage {current.value}, "
-                f"expected one of {', '.join(s.value for s in _ALLOWED_STAGES)}"
+                f"expected one of {', '.join(s for s in _ALLOWED_STAGES)}"
             )
 
         # 2. Fetch approved script draft.
@@ -129,14 +130,14 @@ def generate_audio(
             lock_acquired = True
             gpu_lock_acquired_at = _utc_now_iso()
 
-        audio_path = f"data/artifacts/{run_id}/audio/audio.wav"
+        audio_path = f"{_ARTIFACT_ROOT}/{run_id}/audio/audio.wav"
 
         try:
+            os.makedirs(os.path.dirname(audio_path), exist_ok=True)
             # 5. Generate audio via provider.
             params = dict(entry.default_params or {})
-            params["voice"] = voice
             params["output_path"] = audio_path
-            await provider.generate(script_text, params)
+            await provider.generate(script_text, voice=voice, params=params)
 
             # 6. Save audio artifact via service.
             artifact = await _audio_service.create_artifact(
@@ -151,7 +152,7 @@ def generate_audio(
             applied, _ = await _run_service.storage.conditional_update_run(
                 run_id,
                 {
-                    "current_stage": RunStage.SUBTITLE_GENERATING.value,
+                    "current_stage": RunStage.SUBTITLE_GENERATING,
                     "status": "running",
                 },
                 expected_stages=_SAFE_STAGES,
@@ -201,7 +202,7 @@ def generate_audio(
                 _run_service.storage.conditional_update_run(
                     run_id,
                     {
-                        "current_stage": RunStage.FAILED.value,
+                        "current_stage": RunStage.FAILED,
                         "status": "failed",
                     },
                     expected_stages=_SAFE_STAGES,
