@@ -203,4 +203,14 @@ class RunService:
         return [PipelineRun.from_row(r) for r in rows]
 
 
-run_service = RunService(InMemoryRunStorage())
+def _create_storage() -> RunStorageBackend:
+    import os
+
+    if os.getenv("DATABASE_URL"):
+        from .postgres_run_storage import PostgresRunStorage
+
+        return PostgresRunStorage()
+    return InMemoryRunStorage()
+
+
+run_service = RunService(_create_storage())

@@ -156,4 +156,14 @@ class AudioService:
         return AudioArtifact.from_row(row)
 
 
-audio_service = AudioService()
+def _create_storage() -> AudioStorageBackend:
+    import os
+
+    if os.getenv("DATABASE_URL"):
+        from .postgres_audio_storage import PostgresAudioStorage
+
+        return PostgresAudioStorage()
+    return InMemoryAudioStorage()
+
+
+audio_service = AudioService(_create_storage())

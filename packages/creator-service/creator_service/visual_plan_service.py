@@ -267,4 +267,14 @@ class VisualPlanService:
         )
 
 
-visual_plan_service = VisualPlanService()
+def _create_storage() -> VisualPlanStorageBackend:
+    import os
+
+    if os.getenv("DATABASE_URL"):
+        from .postgres_visual_plan_storage import PostgresVisualPlanStorage
+
+        return PostgresVisualPlanStorage()
+    return InMemoryVisualPlanStorage()
+
+
+visual_plan_service = VisualPlanService(_create_storage())

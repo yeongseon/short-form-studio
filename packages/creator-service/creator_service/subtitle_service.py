@@ -156,4 +156,14 @@ class SubtitleService:
         return SubtitleArtifact.from_row(row)
 
 
-subtitle_service = SubtitleService()
+def _create_storage() -> SubtitleStorageBackend:
+    import os
+
+    if os.getenv("DATABASE_URL"):
+        from .postgres_subtitle_storage import PostgresSubtitleStorage
+
+        return PostgresSubtitleStorage()
+    return InMemorySubtitleStorage()
+
+
+subtitle_service = SubtitleService(_create_storage())

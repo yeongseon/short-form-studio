@@ -152,4 +152,14 @@ class ScriptService:
         )
 
 
-script_service = ScriptService()
+def _create_storage() -> ScriptStorageBackend:
+    import os
+
+    if os.getenv("DATABASE_URL"):
+        from .postgres_script_storage import PostgresScriptStorage
+
+        return PostgresScriptStorage()
+    return InMemoryScriptStorage()
+
+
+script_service = ScriptService(_create_storage())

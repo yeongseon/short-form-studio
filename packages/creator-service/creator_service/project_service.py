@@ -184,4 +184,14 @@ class ProjectService:
         return await self.db.count_projects()
 
 
-project_service = ProjectService()
+def _create_storage() -> ProjectStorageBackend:
+    import os
+
+    if os.getenv("DATABASE_URL"):
+        from .postgres_project_storage import PostgresProjectStorage
+
+        return PostgresProjectStorage()
+    return InMemoryProjectStorage()
+
+
+project_service = ProjectService(_create_storage())
