@@ -38,6 +38,7 @@ services:
       - "8000:8000"
     volumes:
       - ./apps/api/src:/app/src
+      - ./data/artifacts:/app/data/artifacts
     env_file:
       - .env
     depends_on:
