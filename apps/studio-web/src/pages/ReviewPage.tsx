@@ -14,6 +14,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
 
 import PipelineStepper from "../components/creator/PipelineStepper";
+import StoryboardView from "../components/creator/StoryboardView";
 
 const API_BASE = "/api/creator";
 
@@ -167,7 +168,6 @@ export default function ReviewPage() {
   const [assets, setAssets] = useState<Record<string, { asset_path: string; model_used: string; is_active: boolean }[]>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [subtitleContent, setSubtitleContent] = useState<string | null>(null);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -230,21 +230,6 @@ export default function ReviewPage() {
     }
   }, [numericRunId, fetchAll]);
 
-  // Fetch subtitle content when preview is available
-  useEffect(() => {
-    if (!preview?.subtitle?.path) {
-      setSubtitleContent(null);
-      return;
-    }
-    setSubtitleContent(null); // reset before fetching
-    const url = artifactUrl(preview.subtitle.path);
-    let cancelled = false;
-    fetch(url)
-      .then((res) => (res.ok ? res.text() : Promise.reject(res.status)))
-      .then((text) => { if (!cancelled) setSubtitleContent(text); })
-      .catch(() => { if (!cancelled) setSubtitleContent("(Failed to load subtitle content)"); });
-    return () => { cancelled = true; };
-  }, [preview?.subtitle?.path]);
 
   // ---- render ----
 
@@ -424,43 +409,17 @@ export default function ReviewPage() {
         </div>
       )}
 
-      {/* Audio section */}
-      {preview?.audio && (
-        <div style={cardStyle} data-testid="review-audio-section">
+      {/* Unified Storyboard — per-paragraph audio + subtitles (read-only) */}
+      {POST_AUDIO_STAGES.has(stage) && (
+        <div style={cardStyle} data-testid="review-storyboard-section">
           <div style={headerStyle}>
-            <h3 style={sectionTitle}>Audio</h3>
+            <h3 style={sectionTitle}>Storyboard (Audio &amp; Subtitles)</h3>
             <Link to={editUrl} style={editLinkStyle}>Edit in Project &rarr;</Link>
           </div>
-          <audio
-            controls
-            style={{ width: "100%", marginBottom: 8, borderRadius: 6 }}
-            src={artifactUrl(preview.audio.path)}
+          <StoryboardView
+            runId={run.id}
+            readOnly={true}
           />
-          <div style={{ fontSize: 13 }}>
-            <div><strong>Model:</strong> {preview.audio.model_used}</div>
-            <div style={metaStyle}>Created: {new Date(preview.audio.created_at).toLocaleString()}</div>
-          </div>
-        </div>
-      )}
-
-      {/* Subtitle section */}
-      {preview?.subtitle && (
-        <div style={cardStyle} data-testid="review-subtitle-section">
-          <div style={headerStyle}>
-            <h3 style={sectionTitle}>Subtitles</h3>
-            <Link to={editUrl} style={editLinkStyle}>Edit in Project &rarr;</Link>
-          </div>
-          {subtitleContent !== null ? (
-            <div style={previewBoxStyle}>{subtitleContent}</div>
-          ) : (
-            <div style={{ fontSize: 13, color: "#6b7280", fontStyle: "italic" }}>
-              Loading subtitle content…
-            </div>
-          )}
-          <div style={{ fontSize: 13, marginTop: 8 }}>
-            <div><strong>Format:</strong> {preview.subtitle.format}</div>
-            <div style={metaStyle}>Created: {new Date(preview.subtitle.created_at).toLocaleString()}</div>
-          </div>
         </div>
       )}
 

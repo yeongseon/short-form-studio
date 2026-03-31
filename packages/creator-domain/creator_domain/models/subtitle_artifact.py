@@ -11,6 +11,7 @@ class SubtitleArtifact(BaseModel):
     id: int
     run_id: int
     path: str
+    section_id: str | None = None
     format: Literal["srt", "vtt"] = "srt"
     created_at: datetime
 
@@ -35,7 +36,12 @@ class SubtitleArtifact(BaseModel):
             meta = json.loads(raw_meta) if isinstance(raw_meta, str) else raw_meta
             mapped.setdefault("format", meta.get("format"))
         # Discard DB-only columns not in this domain model
-        for key in ("artifact_type", "scene_id", "file_size_bytes", "mime_type", "updated_at"):
+        # Map scene_id to section_id for per-paragraph support
+        if "scene_id" in mapped and "section_id" not in mapped:
+            mapped["section_id"] = mapped.pop("scene_id")
+        else:
+            mapped.pop("scene_id", None)
+        for key in ("artifact_type", "file_size_bytes", "mime_type", "updated_at"):
             mapped.pop(key, None)
         return cls.model_validate(mapped)
 

@@ -2,6 +2,9 @@
 
 Consumes active visual assets and optional audio/subtitle artifacts,
 renders a single MP4 output for the run, and stores it as a video artifact.
+
+Phase 9: Supports per-paragraph audio/subtitle concatenation when available.
+Falls back to run-level audio/subtitles if per-paragraph artifacts don't exist.
 """
 
 from __future__ import annotations
@@ -11,7 +14,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
@@ -22,6 +25,7 @@ from creator_service.render_service import render_service as _render_service
 from creator_service.run_service import run_service as _run_service
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
 from creator_service.visual_asset_service import visual_asset_service as _visual_asset_service
+from creator_service.script_service import script_service as _script_service
 
 logger = logging.getLogger(__name__)
 
@@ -89,10 +93,105 @@ def render_video(
         profile_data = manifest["render_profile"]
         scene_count = len(manifest["scenes"])
         image_paths = [Path(scene["asset_path"]) for scene in manifest["scenes"]]
-        audio_path = Path(manifest["audio_path"]) if manifest["audio_path"] else None
-        subtitle_path = Path(manifest["subtitle_path"]) if manifest["subtitle_path"] else None
-        scene_duration = profile_data["max_duration_seconds"] / scene_count
-        scene_durations = [scene_duration] * scene_count
+
+        resolved_profile = _resolve_profile(render_profile)
+        ffmpeg = FFmpegService(profile=resolved_profile)
+
+        # --- Per-paragraph audio/subtitle assembly (Phase 9) -----------------
+        # Try per-paragraph artifacts first; fall back to run-level.
+        paragraph_audio = await _audio_service.list_paragraph_audio(run_id)
+        paragraph_subtitles = await _subtitle_service.list_paragraph_subtitles(run_id)
+
+        audio_path: Path | None = None
+        subtitle_path: Path | None = None
+        scene_durations: list[float]
+
+        if paragraph_audio:
+            # Build section_id -> audio mapping
+            audio_by_section: dict[str, Any] = {}
+            for a in paragraph_audio:
+                if a.section_id and a.section_id not in audio_by_section:
+                    audio_by_section[a.section_id] = a
+
+            # Get section order from script
+            draft = await _script_service.get_active_draft(run_id)
+            if draft and draft.structured_script:
+                ordered_sections = [s.section_id for s in draft.structured_script]
+            else:
+                ordered_sections = sorted(audio_by_section.keys())
+
+            # Collect audio files and durations in section order
+            ordered_audio_paths: list[str] = []
+            ordered_durations: list[float] = []
+            for sid in ordered_sections:
+                art = audio_by_section.get(sid)
+                if art:
+                    ordered_audio_paths.append(art.path)
+                    try:
+                        dur = ffmpeg.get_audio_duration(art.path)
+                    except Exception:
+                        logger.warning(
+                            "Failed to probe duration for %s, using 5.0s fallback",
+                            art.path,
+                        )
+                        dur = 5.0
+                    ordered_durations.append(dur)
+
+            if ordered_audio_paths:
+                # Concatenate per-paragraph audio into a single file
+                concat_path = f"{_ARTIFACT_ROOT}/{run_id}/render/audio_concat.wav"
+                ffmpeg.concatenate_audio(ordered_audio_paths, concat_path)
+                audio_path = Path(concat_path)
+
+                # Use actual per-paragraph durations for scene timing
+                scene_durations = ordered_durations[:scene_count]
+                # If fewer durations than scenes, pad with equal split of remaining time
+                if len(scene_durations) < scene_count:
+                    total_known = sum(scene_durations)
+                    remaining = max(0.0, profile_data["max_duration_seconds"] - total_known)
+                    missing = scene_count - len(scene_durations)
+                    pad_dur = remaining / missing if missing > 0 else 5.0
+                    scene_durations.extend([pad_dur] * missing)
+            else:
+                # No matched audio — fall back to equal split
+                scene_duration = profile_data["max_duration_seconds"] / scene_count
+                scene_durations = [scene_duration] * scene_count
+
+            # Merge per-paragraph subtitles if available
+            if paragraph_subtitles:
+                sub_by_section: dict[str, Any] = {}
+                for s in paragraph_subtitles:
+                    if s.section_id and s.section_id not in sub_by_section:
+                        sub_by_section[s.section_id] = s
+
+                ordered_sub_paths: list[str] = []
+                ordered_sub_durations: list[float] = []
+                for sid in ordered_sections:
+                    sub = sub_by_section.get(sid)
+                    if sub:
+                        ordered_sub_paths.append(sub.path)
+                        # Use same duration as audio
+                        art = audio_by_section.get(sid)
+                        ordered_sub_durations.append(
+                            ordered_durations[ordered_sections.index(sid)]
+                            if sid in audio_by_section and ordered_durations
+                            else 5.0
+                        )
+
+                if ordered_sub_paths:
+                    merged_sub_path = f"{_ARTIFACT_ROOT}/{run_id}/render/subtitles_merged.srt"
+                    ffmpeg.merge_subtitles(
+                        ordered_sub_paths, ordered_sub_durations, merged_sub_path
+                    )
+                    subtitle_path = Path(merged_sub_path)
+        else:
+            # No per-paragraph audio — fall back to run-level artifacts
+            run_audio_path = manifest["audio_path"]
+            audio_path = Path(run_audio_path) if run_audio_path else None
+            run_sub_path = manifest["subtitle_path"]
+            subtitle_path = Path(run_sub_path) if run_sub_path else None
+            scene_duration = profile_data["max_duration_seconds"] / scene_count
+            scene_durations = [scene_duration] * scene_count
 
         render_input = RenderInput(
             image_paths=image_paths,

@@ -122,3 +122,126 @@ class FFmpegService:
         if result.returncode != 0:
             raise RuntimeError(f"FFmpeg render failed: {result.stderr}")
         return output_path
+
+    # -- Per-paragraph helper methods -----------------------------------------
+
+    def get_audio_duration(self, audio_path: str) -> float:
+        """Probe audio file duration in seconds using ffprobe."""
+        cmd = [
+            "ffprobe",
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            audio_path,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            raise RuntimeError(f"ffprobe failed for {audio_path}: {result.stderr}")
+        return float(result.stdout.strip())
+
+    def concatenate_audio(self, audio_paths: list[str], output_path: str) -> Path:
+        """Concatenate multiple audio files using FFmpeg concat demuxer.
+
+        Creates a temporary concat list file, runs FFmpeg, and returns the
+        output path.  The caller is responsible for ensuring input files exist.
+        """
+        import tempfile
+
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+
+        # Build concat list file
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False
+        ) as f:
+            for p in audio_paths:
+                # FFmpeg concat requires single-quoted paths with inner quotes escaped
+                escaped = p.replace("'", "'\\''")
+                f.write(f"file '{escaped}'\n")
+            concat_list = f.name
+
+        try:
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", concat_list,
+                "-c", "copy",
+                str(out),
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if result.returncode != 0:
+                raise RuntimeError(f"FFmpeg concat failed: {result.stderr}")
+        finally:
+            Path(concat_list).unlink(missing_ok=True)
+
+        return out
+
+    def merge_subtitles(
+        self,
+        subtitle_paths: list[str],
+        durations: list[float],
+        output_path: str,
+    ) -> Path:
+        """Merge multiple SRT files into one, adjusting timestamps.
+
+        Each subtitle file's timestamps are offset by the cumulative duration
+        of all preceding paragraphs.  This produces a single SRT file suitable
+        for rendering onto the concatenated audio track.
+        """
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+
+        merged_entries: list[str] = []
+        entry_index = 1
+        cumulative_offset = 0.0
+
+        for srt_path, dur in zip(subtitle_paths, durations):
+            path = Path(srt_path)
+            if not path.exists():
+                cumulative_offset += dur
+                continue
+
+            content = path.read_text(encoding="utf-8")
+            blocks = content.strip().split("\n\n")
+
+            for block in blocks:
+                lines = block.strip().split("\n")
+                if len(lines) < 3:
+                    continue  # skip malformed blocks
+
+                # Parse timestamp line: "00:00:01,000 --> 00:00:03,500"
+                ts_line = lines[1]
+                parts = ts_line.split(" --> ")
+                if len(parts) != 2:
+                    continue
+
+                start = _parse_srt_ts(parts[0].strip()) + cumulative_offset
+                end = _parse_srt_ts(parts[1].strip()) + cumulative_offset
+                text = "\n".join(lines[2:])
+
+                merged_entries.append(
+                    f"{entry_index}\n{_format_srt_ts(start)} --> {_format_srt_ts(end)}\n{text}"
+                )
+                entry_index += 1
+
+            cumulative_offset += dur
+
+        out.write_text("\n\n".join(merged_entries) + "\n", encoding="utf-8")
+        return out
+
+
+def _parse_srt_ts(ts: str) -> float:
+    """Parse SRT timestamp 'HH:MM:SS,mmm' to seconds."""
+    ts = ts.replace(",", ".")
+    parts = ts.split(":")
+    return float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+
+
+def _format_srt_ts(seconds: float) -> str:
+    """Format seconds as SRT timestamp 'HH:MM:SS,mmm'."""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = seconds % 60
+    ms = int((s - int(s)) * 1000)
+    return f"{h:02d}:{m:02d}:{int(s):02d},{ms:03d}"
