@@ -105,11 +105,11 @@ class TestModelHealthService:
 
     @pytest.mark.asyncio
     async def test_check_all_returns_results_for_all_models(self, health_service):
-        """Test check_all returns results for all 4 models."""
+        """Test check_all returns results for local and remote providers."""
         async def mock_check_model(model_name: str) -> ModelHealthResult:
             return ModelHealthResult(
                 model_name=model_name,
-                endpoint=health_service.endpoints[model_name],
+                endpoint=health_service.endpoints.get(model_name, model_name),
                 status=ModelStatus.HEALTHY,
                 response_time_ms=1.0,
             )
@@ -118,10 +118,20 @@ class TestModelHealthService:
             results = await health_service.check_all()
         
         assert isinstance(results, list)
-        assert len(results) == 4
+        assert len(results) == 9
         
         model_names = {result.model_name for result in results}
-        expected_models = {"ollama", "stable-diffusion", "tts-qwen3", "stt-whisper"}
+        expected_models = {
+            "ollama",
+            "stable-diffusion",
+            "tts-qwen3",
+            "stt-whisper",
+            "api.openai.com",
+            "api.anthropic.com",
+            "generativelanguage.googleapis.com",
+            "api.stability.ai",
+            "api.elevenlabs.io",
+        }
         assert model_names == expected_models
 
     @pytest.mark.asyncio
@@ -130,7 +140,7 @@ class TestModelHealthService:
         async def mock_check_model(model_name: str) -> ModelHealthResult:
             return ModelHealthResult(
                 model_name=model_name,
-                endpoint=health_service.endpoints[model_name],
+                endpoint=health_service.endpoints.get(model_name, model_name),
                 status=ModelStatus.HEALTHY,
                 response_time_ms=1.0,
             )

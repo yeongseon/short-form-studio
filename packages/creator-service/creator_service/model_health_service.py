@@ -9,6 +9,15 @@ import time
 import httpx
 
 
+_REMOTE_PROVIDERS: dict[str, str] = {
+    "api.openai.com": "OPENAI_API_KEY",
+    "api.anthropic.com": "ANTHROPIC_API_KEY",
+    "generativelanguage.googleapis.com": "GOOGLE_API_KEY",
+    "api.stability.ai": "STABILITY_API_KEY",
+    "api.elevenlabs.io": "ELEVENLABS_API_KEY",
+}
+
+
 class ModelStatus(Enum):
     """Status of a model container."""
     HEALTHY = "healthy"
@@ -27,7 +36,7 @@ class ModelHealthResult:
 
 
 class ModelHealthService:
-    """Check health of model serving containers."""
+    """Check health of local and remote model providers."""
     
     def __init__(self):
         """Initialize health service with model endpoints from environment variables."""
@@ -45,7 +54,7 @@ class ModelHealthService:
         }
 
     async def check_model(self, model_name: str) -> ModelHealthResult:
-        """Check health of a single model container.
+        """Check health of a single model provider.
         
         Args:
             model_name: Name of the model to check
@@ -54,12 +63,28 @@ class ModelHealthService:
             ModelHealthResult with health status and metadata
         """
         endpoint = self.endpoints.get(model_name)
-        if not endpoint:
+        if endpoint is None:
+            api_key_env = _REMOTE_PROVIDERS.get(model_name)
+            if api_key_env is None:
+                return ModelHealthResult(
+                    model_name=model_name,
+                    endpoint="unknown",
+                    status=ModelStatus.UNKNOWN,
+                    error="Unknown model",
+                )
+
+            if os.getenv(api_key_env, "").strip():
+                return ModelHealthResult(
+                    model_name=model_name,
+                    endpoint=model_name,
+                    status=ModelStatus.HEALTHY,
+                )
+
             return ModelHealthResult(
                 model_name=model_name,
-                endpoint="unknown",
-                status=ModelStatus.UNKNOWN,
-                error="Unknown model"
+                endpoint=model_name,
+                status=ModelStatus.UNHEALTHY,
+                error="API key not configured",
             )
         
         health_path = self.health_paths.get(model_name, "/")
@@ -89,11 +114,10 @@ class ModelHealthService:
             )
 
     async def check_all(self) -> list[ModelHealthResult]:
-        """Check health of all model containers.
+        """Check health of all model providers.
         
         Returns:
             List of ModelHealthResult for each model container
         """
-        return await asyncio.gather(
-            *(self.check_model(name) for name in self.endpoints)
-        )
+        provider_names = [*self.endpoints, *_REMOTE_PROVIDERS]
+        return await asyncio.gather(*(self.check_model(name) for name in provider_names))

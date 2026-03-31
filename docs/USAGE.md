@@ -8,8 +8,9 @@
 4. [파이프라인 단계](#파이프라인-단계)
 5. [리뷰 및 승인](#리뷰-및-승인)
 6. [모델 설정](#모델-설정)
-7. [생성된 파일 위치](#생성된-파일-위치)
-8. [제한 사항](#제한-사항)
+7. [외부 API 프로바이더 설정](#외부-api-프로바이더-설정)
+8. [생성된 파일 위치](#생성된-파일-위치)
+9. [제한 사항](#제한-사항)
 
 ---
 
@@ -194,7 +195,54 @@ IDEA_READY → SCRIPT_GENERATING → SCRIPT_REVIEW
 ### 모델 선택
 
 프로젝트 생성 시 **"Model Defaults"** 섹션에서 카테고리별 모델을 선택할 수 있습니다.
-현재는 로컬 모델만 지원하며, 외부 API 제공자(OpenAI, Claude, Gemini 등) 지원이 예정되어 있습니다.
+로컬 모델과 외부 API 프로바이더 모두 지원합니다. 자세한 설정은 [외부 API 프로바이더 설정](#외부-api-프로바이더-설정) 섹션을 참고하세요.
+
+## 외부 API 프로바이더 설정
+
+로컬 모델 외에 외부 API를 사용하여 더 높은 품질의 결과물을 생성할 수 있습니다.
+
+### 지원 프로바이더
+
+| 카테고리 | 프로바이더 | 모델 | 환경 변수 |
+|----------|-----------|------|-----------|
+| **LLM** | OpenAI | GPT-4o Mini | `OPENAI_API_KEY` |
+| **LLM** | Anthropic | Claude Sonnet | `ANTHROPIC_API_KEY` |
+| **LLM** | Google | Gemini 2.0 Flash | `GOOGLE_API_KEY` |
+| **이미지** | OpenAI | DALL-E 3 | `OPENAI_API_KEY` |
+| **이미지** | Stability AI | SD3 Medium | `STABILITY_API_KEY` |
+| **이미지** | Google | Imagen 3 | `GOOGLE_API_KEY` |
+| **TTS** | ElevenLabs | Multilingual v2 | `ELEVENLABS_API_KEY` |
+| **TTS** | OpenAI | TTS-1 | `OPENAI_API_KEY` |
+
+### API 키 설정 방법
+
+#### 방법 1: Settings 페이지 (권장)
+
+1. Studio Web UI에서 **Settings** 페이지로 이동합니다
+2. 원하는 프로바이더의 API 키를 입력합니다
+3. **Save** 클릭으로 저장합니다
+
+#### 방법 2: .env 파일 직접 편집
+
+`.env` 파일에 API 키를 추가합니다:
+
+```bash
+OPENAI_API_KEY=sk-your-openai-key
+ANTHROPIC_API_KEY=sk-ant-your-anthropic-key
+GOOGLE_API_KEY=your-google-api-key
+STABILITY_API_KEY=sk-your-stability-key
+ELEVENLABS_API_KEY=your-elevenlabs-key
+```
+
+> ⚠️ API 키를 설정한 후 워커를 재시작해야 합니다: `docker compose restart worker`
+
+### 모델 선택
+
+프로젝트 생성 시 **Model Defaults** 섹션에서 로컬 모델과 원격 모델을 선택할 수 있습니다.
+- **Local**: GPU 서비스 필요, 무료, 느림
+- **Remote**: API 키 필요, 유료, 빠르고 고품질
+
+원격 모델 옆에 ⚠️ 아이콘이 표시되면 해당 프로바이더의 API 키가 설정되지 않은 것입니다.
 
 ---
 
