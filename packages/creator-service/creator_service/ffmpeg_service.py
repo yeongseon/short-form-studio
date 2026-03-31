@@ -16,8 +16,9 @@ class RenderInput:
 def _escape_subtitle_path(path: Path) -> str:
     """Escape special characters in subtitle path for FFmpeg filter syntax.
 
-    FFmpeg filter strings treat ':', "'", '\\', and ';' as syntax characters.
-    They must be escaped with a backslash so the path is interpreted literally.
+    FFmpeg filter strings treat ``\\``, ``:``, ``'``, ``;``, ``,``, ``[``,
+    and ``]`` as syntax characters.  They must be escaped with a backslash so
+    the path is interpreted literally.
     """
     s = str(path)
     # Order matters: escape backslashes first, then the rest.
@@ -25,6 +26,9 @@ def _escape_subtitle_path(path: Path) -> str:
     s = s.replace(":", "\\:")
     s = s.replace("'", "\\'")
     s = s.replace(";", "\\;")
+    s = s.replace(",", "\\,")
+    s = s.replace("[", "\\[")
+    s = s.replace("]", "\\]")
     return s
 
 

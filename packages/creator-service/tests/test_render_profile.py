@@ -236,7 +236,7 @@ class TestFFmpegService(unittest.TestCase):
         input_data = RenderInput(
             image_paths=[Path("/tmp/img1.png")],
             audio_path=None,
-            subtitle_path=Path("/data/project:1/subs file.srt"),
+            subtitle_path=Path("/data/project:1/subs,file[0].srt"),
             scene_durations=[5.0]
         )
         output_path = Path("/tmp/output.mp4")
@@ -249,6 +249,13 @@ class TestFFmpegService(unittest.TestCase):
         self.assertIn("\\:", fc_value)
         # Original un-escaped colon should not appear in the subtitle part
         self.assertNotIn("project:1", fc_value)
+        # Comma must be escaped
+        self.assertIn("\\,", fc_value)
+        self.assertNotIn("subs,file", fc_value)
+        # Square brackets must be escaped
+        self.assertIn("\\[", fc_value)
+        self.assertIn("\\]", fc_value)
+        self.assertNotIn("[0]", fc_value)
 
     def test_build_command_with_audio_and_subtitles(self):
         """Audio + subtitles: single filter_complex, correct stream mapping."""
