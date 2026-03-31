@@ -1,5 +1,8 @@
 """Unit tests for model health service."""
 
+from unittest.mock import AsyncMock, patch
+
+import httpx
 import pytest
 from creator_service.model_health_service import (
     ModelHealthService,
@@ -42,13 +45,54 @@ class TestModelHealthService:
         assert service.endpoints["stable-diffusion"] == "http://custom-sd:7860"
 
     @pytest.mark.asyncio
-    async def test_check_model_returns_result_with_correct_model_name(self, health_service):
-        """Test check_model returns result with correct model_name."""
-        result = await health_service.check_model("ollama")
-        
+    async def test_check_model_returns_healthy_on_2xx_response(self, health_service):
+        response = httpx.Response(200, request=httpx.Request("GET", "http://ollama:11434/api/tags"))
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=response)
+        mock_context = AsyncMock()
+        mock_context.__aenter__.return_value = mock_client
+
+        with patch("creator_service.model_health_service.httpx.AsyncClient", return_value=mock_context):
+            result = await health_service.check_model("ollama")
+
         assert isinstance(result, ModelHealthResult)
         assert result.model_name == "ollama"
         assert result.endpoint == "http://ollama:11434"
+        assert result.status == ModelStatus.HEALTHY
+        assert result.response_time_ms is not None
+        assert result.error is None
+
+    @pytest.mark.asyncio
+    async def test_check_model_returns_unhealthy_on_connect_error(self, health_service):
+        request = httpx.Request("GET", "http://ollama:11434/api/tags")
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=httpx.ConnectError("Connection failed", request=request))
+        mock_context = AsyncMock()
+        mock_context.__aenter__.return_value = mock_client
+
+        with patch("creator_service.model_health_service.httpx.AsyncClient", return_value=mock_context):
+            result = await health_service.check_model("ollama")
+
+        assert result.model_name == "ollama"
+        assert result.endpoint == "http://ollama:11434"
+        assert result.status == ModelStatus.UNHEALTHY
+        assert result.error is not None
+
+    @pytest.mark.asyncio
+    async def test_check_model_returns_unhealthy_on_timeout(self, health_service):
+        request = httpx.Request("GET", "http://ollama:11434/api/tags")
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=httpx.ReadTimeout("Request timed out", request=request))
+        mock_context = AsyncMock()
+        mock_context.__aenter__.return_value = mock_client
+
+        with patch("creator_service.model_health_service.httpx.AsyncClient", return_value=mock_context):
+            result = await health_service.check_model("ollama")
+
+        assert result.model_name == "ollama"
+        assert result.endpoint == "http://ollama:11434"
+        assert result.status == ModelStatus.UNHEALTHY
+        assert result.error is not None
 
     @pytest.mark.asyncio
     async def test_check_model_returns_unknown_for_invalid_model(self, health_service):
@@ -62,7 +106,16 @@ class TestModelHealthService:
     @pytest.mark.asyncio
     async def test_check_all_returns_results_for_all_models(self, health_service):
         """Test check_all returns results for all 4 models."""
-        results = await health_service.check_all()
+        async def mock_check_model(model_name: str) -> ModelHealthResult:
+            return ModelHealthResult(
+                model_name=model_name,
+                endpoint=health_service.endpoints[model_name],
+                status=ModelStatus.HEALTHY,
+                response_time_ms=1.0,
+            )
+
+        with patch.object(health_service, "check_model", side_effect=mock_check_model):
+            results = await health_service.check_all()
         
         assert isinstance(results, list)
         assert len(results) == 4
@@ -74,7 +127,16 @@ class TestModelHealthService:
     @pytest.mark.asyncio
     async def test_check_all_returns_model_health_results(self, health_service):
         """Test check_all returns ModelHealthResult instances."""
-        results = await health_service.check_all()
+        async def mock_check_model(model_name: str) -> ModelHealthResult:
+            return ModelHealthResult(
+                model_name=model_name,
+                endpoint=health_service.endpoints[model_name],
+                status=ModelStatus.HEALTHY,
+                response_time_ms=1.0,
+            )
+
+        with patch.object(health_service, "check_model", side_effect=mock_check_model):
+            results = await health_service.check_all()
         
         for result in results:
             assert isinstance(result, ModelHealthResult)
