@@ -1,8 +1,8 @@
 """Routes for creator run management."""
-from typing import Any
+from typing import Any, Annotated
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 from creator_service.audio_service import audio_service
 from creator_service.project_service import project_service
 from creator_service.render_service import render_service
@@ -355,9 +355,43 @@ async def generate_visual_plan_trigger(run_id: int, request: GenerateVisualPlanR
     }
 
 
+
+# ---------------------------------------------------------------------------
+# Typed model for image tuning parameters.  Only safe AUTOMATIC1111 payload
+# keys are accepted; extra keys are rejected by Pydantic (`extra="forbid"`).
+# ---------------------------------------------------------------------------
+
+_VALID_SAMPLERS = frozenset({
+    "Euler a", "Euler", "LMS", "Heun", "DPM2", "DPM2 a",
+    "DPM++ 2S a", "DPM++ 2M", "DPM++ SDE", "DPM++ 2M Karras",
+    "DPM++ SDE Karras", "DPM++ 2M SDE Karras",
+})
+
+
+class ImageTuningParams(BaseModel):
+    """Validated image generation parameters.
+
+    Only exposes safe AUTOMATIC1111 knobs.  `extra='forbid'` ensures callers
+    cannot inject dangerous keys (e.g. `prompt`, `alwayson_scripts`).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    steps: Annotated[int, Field(ge=10, le=50, description="Denoising steps")] = 25
+    cfg_scale: Annotated[int | float, Field(ge=1, le=20, description="CFG scale")] = 7
+    sampler_name: Annotated[
+        str,
+        Field(max_length=40, description="Sampler algorithm"),
+    ] = "DPM++ 2M Karras"
+    negative_prompt: Annotated[
+        str,
+        Field(max_length=1000, description="Negative prompt"),
+    ] = ""
+
+
 class GenerateVisualAssetsRequest(BaseModel):
     model_key: str = "sd15"
-    image_params: dict[str, Any] | None = None
+    image_params: ImageTuningParams | None = None
 
 def dispatch_generate_scene_image(
     run_id: int,
@@ -425,7 +459,7 @@ async def generate_visual_assets_trigger(
             scene_id=None,  # all scenes
             prompt_override=None,
             is_active=True,
-            image_params=request.image_params,
+            image_params=request.image_params.model_dump() if request.image_params else None,
         )
     except Exception:
         # Best-effort rollback: restore original stage so run isn't stuck
@@ -449,11 +483,11 @@ async def generate_visual_assets_trigger(
 class RegenerateSceneImageRequest(BaseModel):
     model_key: str = "sd15"
     prompt_override: str | None = None
-    image_params: dict[str, Any] | None = None
+    image_params: ImageTuningParams | None = None
 
 class GenerateSceneImageRequest(BaseModel):
     model_key: str = "sd15"
-    image_params: dict[str, Any] | None = None
+    image_params: ImageTuningParams | None = None
 
 
 @router.post(
@@ -487,7 +521,7 @@ async def generate_scene_image_endpoint(
             scene_id=scene_id,
             prompt_override=None,
             is_active=True,
-            image_params=effective_request.image_params,
+            image_params=effective_request.image_params.model_dump() if effective_request.image_params else None,
         )
     except Exception:
         raise HTTPException(
@@ -536,7 +570,7 @@ async def regenerate_scene_image_endpoint(
             scene_id=scene_id,
             prompt_override=request.prompt_override,
             is_active=False,  # regenerated assets are inactive until selected
-            image_params=request.image_params,
+            image_params=request.image_params.model_dump() if request.image_params else None,
         )
     except Exception:
         raise HTTPException(
