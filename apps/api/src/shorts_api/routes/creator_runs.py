@@ -109,8 +109,8 @@ class GenerateVisualPlanRequest(BaseModel):
 
 
 class GenerateAudioRequest(BaseModel):
-    tts_model: str = "piper"
-    voice: str = "en_US-lessac-medium"
+    tts_model: str = "qwen3-tts"
+    voice: str = "default"
 
 
 class GenerateSubtitlesRequest(BaseModel):

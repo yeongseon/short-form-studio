@@ -11,7 +11,7 @@ from tasks import generate_subtitles as generate_subtitles_module
 @dataclass
 class FakeEntry:
     provider_type: str = "faster-whisper"
-    endpoint: str = "http://whisper:9000"
+    endpoint: str = "http://whisper:8200"
     requires_gpu: bool = True
     default_params: dict[str, object] | None = None
 
@@ -192,7 +192,7 @@ def test_generate_subtitles_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result["status"] == "success"
     assert result["subtitle_artifact_id"] == 33
     assert result["provider_type"] == "faster-whisper"
-    assert result["endpoint"] == "http://whisper:9000"
+    assert result["endpoint"] == "http://whisper:8200"
     assert result["gpu_lock_acquired_at"] is not None
     assert result["gpu_lock_released_at"] is not None
     assert result["subtitle_path"] == "data/artifacts/101/subtitles/subtitles.srt"

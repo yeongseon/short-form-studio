@@ -54,7 +54,7 @@ const MOCK_PREVIEW = {
   audio: {
     id: 2,
     path: "data/artifacts/10/audio/audio.wav",
-    model_used: "piper",
+    model_used: "qwen3-tts",
     created_at: "2026-03-31T09:00:00Z",
   },
   subtitle: {
@@ -175,7 +175,7 @@ describe("ReviewPage", () => {
 
     // Audio section
     expect(screen.getByTestId("review-audio-section")).toBeTruthy();
-    expect(screen.getByText("piper")).toBeTruthy();
+    expect(screen.getByText("qwen3-tts")).toBeTruthy();
 
     // Subtitle section
     expect(screen.getByTestId("review-subtitle-section")).toBeTruthy();
@@ -249,6 +249,6 @@ describe("ReviewPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("review-audio-section")).toBeTruthy();
     });
-    expect(screen.getByText("piper")).toBeTruthy();
+    expect(screen.getByText("qwen3-tts")).toBeTruthy();
   });
 });

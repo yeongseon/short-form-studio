@@ -12,7 +12,7 @@ const MOCK_RESPONSE = {
     { key: "sd15", label: "Stable Diffusion 1.5 (Local)", provider_type: "stable-diffusion", is_local: true, requires_gpu: true, status: "available" as const },
   ],
   tts_models: [
-    { key: "piper", label: "Piper TTS (Local)", provider_type: "piper_tts", is_local: true, requires_gpu: false, status: "unknown" as const },
+    { key: "qwen3-tts", label: "Qwen3 TTS (Local)", provider_type: "qwen_tts", is_local: true, requires_gpu: true, status: "unknown" as const },
   ],
   stt_models: [],
 };
@@ -55,7 +55,7 @@ describe("ModelSelector", () => {
     expect(screen.getByText("Qwen3 4B (Local)")).toBeTruthy();
     expect(screen.getByText("GPT-4o Mini (Remote)")).toBeTruthy();
     expect(screen.getByText("Stable Diffusion 1.5 (Local)")).toBeTruthy();
-    expect(screen.getByText("Piper TTS (Local)")).toBeTruthy();
+    expect(screen.getByText("Qwen3 TTS (Local)")).toBeTruthy();
   });
 
   it("calls onSelectionChange when model selected via radio", async () => {
@@ -106,7 +106,7 @@ describe("ModelSelector", () => {
     // Parent should have been notified of default selections
     expect(onChange).toHaveBeenCalledWith("script", "qwen3-4b");
     expect(onChange).toHaveBeenCalledWith("image", "sd15");
-    expect(onChange).toHaveBeenCalledWith("tts", "piper");
+    expect(onChange).toHaveBeenCalledWith("tts", "qwen3-tts");
   });
 
   it("respects controlled mode with selectedModels prop", async () => {
@@ -282,7 +282,7 @@ describe("ModelSelector", () => {
     expect(imageCalls.length).toBe(1);
 
     const ttsCalls = onChange.mock.calls.filter(
-      ([cat, key]: [string, string]) => cat === "tts" && key === "piper",
+      ([cat, key]: [string, string]) => cat === "tts" && key === "qwen3-tts",
     );
     expect(ttsCalls.length).toBe(1);
   });

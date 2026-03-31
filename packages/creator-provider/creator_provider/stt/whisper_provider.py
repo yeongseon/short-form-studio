@@ -31,7 +31,7 @@ class WhisperSTTProvider(STTProvider):
                 form_fields[key] = value
 
         source_path = Path(audio_path)
-        url = f"{self.endpoint}/api/transcribe"
+        url = f"{self.endpoint}/transcribe"
         try:
             with source_path.open("rb") as audio_file:
                 files = {

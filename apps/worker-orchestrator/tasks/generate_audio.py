@@ -62,8 +62,8 @@ def _get_redis_client() -> Any | None:
 def generate_audio(
     self,
     run_id: int,
-    tts_model: str = "piper",
-    voice: str = "en_US-lessac-medium",
+    tts_model: str = "qwen3-tts",
+    voice: str = "default",
 ) -> dict[str, object]:
     start_time = datetime.now(timezone.utc)
     start_iso = start_time.isoformat()

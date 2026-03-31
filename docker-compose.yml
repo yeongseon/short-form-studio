@@ -72,7 +72,7 @@ services:
       dockerfile: apps/studio-web/Dockerfile
       target: dev
     ports:
-      - "5173:5173"
+      - "5174:5173"
     volumes:
       - ./apps/studio-web/src:/app/src
       - ./apps/studio-web/index.html:/app/index.html
@@ -95,7 +95,7 @@ services:
               count: all
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      test: ["CMD", "ollama", "list"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -114,19 +114,26 @@ services:
               count: all
               capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:7860/sdapi/v1/options"]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:7860/sdapi/v1/sd-models')\" || exit 1"]
       interval: 30s
-      timeout: 10s
+      timeout: 30s
       retries: 5
-      start_period: 30s
+      start_period: 120s
     restart: unless-stopped
 
-  tts-piper:
-    image: shorts-automation-tts-piper:latest
+  tts-qwen3:
+    image: shorts-automation-tts-qwen3:latest
     ports:
-      - "5000:5000"
+      - "8100:8100"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8100/health')\" || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -136,7 +143,7 @@ services:
   stt-whisper:
     image: shorts-automation-stt-whisper:latest
     ports:
-      - "9000:9000"
+      - "9000:8200"
     deploy:
       resources:
         reservations:
@@ -144,9 +151,8 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    # TODO: replace placeholder when stt-whisper health endpoint is finalized.
     healthcheck:
-      test: ["CMD", "true"]
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8200/health')\" || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5

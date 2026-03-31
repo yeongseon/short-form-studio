@@ -34,11 +34,11 @@ class StubModelCatalogService:
             ],
             "tts_models": [
                 {
-                    "key": "piper",
-                    "label": "Piper TTS (Local)",
-                    "provider_type": "piper_tts",
+                    "key": "qwen3-tts",
+                    "label": "Qwen3 TTS (Local)",
+                    "provider_type": "qwen_tts",
                     "is_local": True,
-                    "requires_gpu": False,
+                    "requires_gpu": True,
                     "status": "available",
                 }
             ],
