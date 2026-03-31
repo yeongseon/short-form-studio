@@ -70,6 +70,21 @@ const FINAL_REVIEW_STAGES = new Set(["FINAL_REVIEW"]);
 // Stages where editing is allowed (not generating)
 const EDITABLE_STAGES = new Set(["SCRIPT_REVIEW", "VISUAL_PLAN_REVIEW"]);
 
+// SD quality presets for image generation tuning
+const SD_QUALITY_PRESETS: Record<
+  string,
+  { steps: number; cfg_scale: number; sampler_name: string; label: string; description: string }
+> = {
+  fast: { steps: 15, cfg_scale: 5, sampler_name: "Euler a", label: "⚡ Fast Preview", description: "Quick preview, lower quality (15 steps)" },
+  balanced: { steps: 25, cfg_scale: 7, sampler_name: "DPM++ 2M Karras", label: "⚖️ Balanced", description: "Good quality/speed balance (25 steps)" },
+  high: { steps: 40, cfg_scale: 8, sampler_name: "DPM++ 2M Karras", label: "✨ High Quality", description: "Best quality, slower (40 steps)" },
+};
+
+const SD_SAMPLERS = [
+  "DPM++ 2M Karras", "DPM++ SDE Karras", "DPM++ 2M SDE Karras",
+  "DPM++ 2M", "DPM++ SDE", "DPM++ 2S a Karras",
+  "Euler a", "Euler", "DDIM", "UniPC", "LMS Karras", "Heun",
+];
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const numericProjectId = Number(projectId);
@@ -98,6 +113,16 @@ export default function ProjectPage() {
   // Scene regeneration model override
   const [regenModelKey, setRegenModelKey] = useState<string | null>(null);
 
+  // SD image tuning parameters
+  const [imageParams, setImageParams] = useState({
+    steps: 25,
+    sampler_name: "DPM++ 2M Karras",
+    negative_prompt:
+      "low quality, worst quality, blurry, out of focus, ugly, deformed, disfigured, watermark, text, signature, poorly drawn, bad anatomy, extra limbs",
+    cfg_scale: 7,
+  });
+  const [activePreset, setActivePreset] = useState<string>("balanced");
+  const [tuningOpen, setTuningOpen] = useState(true);
   // Asset grid refresh key — increment to force re-fetch
   const [assetRefreshKey, setAssetRefreshKey] = useState(0);
 
@@ -325,7 +350,7 @@ export default function ProjectPage() {
       const res = await fetch(`${API_BASE}/runs/${run.id}/generate-visual-assets`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model_key: "sd15" }),
+        body: JSON.stringify({ model_key: "sd15", image_params: imageParams }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
@@ -339,14 +364,14 @@ export default function ProjectPage() {
     } finally {
       setGenerating(false);
     }
-  }, [run]);
+  }, [run, imageParams]);
 
   const handleRegenerateScene = useCallback(
     async (sceneId: string) => {
       if (!run) return;
       setStatusMessage(null);
       try {
-        const payload: Record<string, string> = {};
+        const payload: Record<string, unknown> = { image_params: imageParams };
         if (regenModelKey) payload.model_key = regenModelKey;
         const res = await fetch(
           `${API_BASE}/runs/${run.id}/visual-plan/scenes/${sceneId}/regenerate-image`,
@@ -370,7 +395,7 @@ export default function ProjectPage() {
         setStatusMessage(err instanceof Error ? err.message : "Regenerate failed");
       }
     },
-    [run, regenModelKey, refreshRun],
+    [run, regenModelKey, imageParams, refreshRun],
   );
 
   const handleGenerateScene = useCallback(
@@ -383,7 +408,7 @@ export default function ProjectPage() {
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ model_key: "sd15" }),
+            body: JSON.stringify({ model_key: "sd15", image_params: imageParams }),
           },
         );
         if (!res.ok) {
@@ -399,7 +424,7 @@ export default function ProjectPage() {
         setStatusMessage(err instanceof Error ? err.message : "Generate scene failed");
       }
     },
-    [run, refreshRun],
+    [run, imageParams, refreshRun],
   );
 
   const handleApproveAssets = useCallback(async () => {
@@ -1006,6 +1031,200 @@ export default function ProjectPage() {
                   apiBase={API_BASE}
                   onSelectionChange={(_cat, modelKey) => setRegenModelKey(modelKey)}
                 />
+              </div>
+
+              {/* Image quality tuning controls */}
+              <div
+                data-testid="image-tuning-panel"
+                style={{
+                  marginBottom: 16,
+                  border: "1px solid #e5e7eb",
+                  borderRadius: 8,
+                  background: "#fff",
+                  overflow: "hidden",
+                }}
+              >
+                {/* Panel header — toggle */}
+                <button
+                  type="button"
+                  data-testid="tuning-toggle"
+                  onClick={() => setTuningOpen((v) => !v)}
+                  style={{
+                    width: "100%",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    padding: "10px 14px",
+                    background: "#faf5ff",
+                    border: "none",
+                    borderBottom: tuningOpen ? "1px solid #e5e7eb" : "none",
+                    cursor: "pointer",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    color: "#6b21a8",
+                  }}
+                >
+                  <span>🎨 Image Quality Settings</span>
+                  <span style={{ fontSize: 11 }}>{tuningOpen ? "▲" : "▼"}</span>
+                </button>
+
+                {tuningOpen && (
+                  <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 14 }}>
+                    {/* Quality presets */}
+                    <div>
+                      <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>
+                        Quality Preset
+                      </label>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        {Object.entries(SD_QUALITY_PRESETS).map(([key, preset]) => (
+                          <button
+                            type="button"
+                            key={key}
+                            data-testid={`preset-${key}`}
+                            title={preset.description}
+                            onClick={() => {
+                              setActivePreset(key);
+                              setImageParams((p) => ({
+                                ...p,
+                                steps: preset.steps,
+                                cfg_scale: preset.cfg_scale,
+                                sampler_name: preset.sampler_name,
+                              }));
+                            }}
+                            style={{
+                              flex: 1,
+                              padding: "6px 8px",
+                              fontSize: 12,
+                              fontWeight: activePreset === key ? 600 : 400,
+                              border: activePreset === key ? "2px solid #7c3aed" : "1px solid #d1d5db",
+                              borderRadius: 6,
+                              background: activePreset === key ? "#ede9fe" : "#fff",
+                              color: activePreset === key ? "#6b21a8" : "#374151",
+                              cursor: "pointer",
+                              transition: "all 0.15s",
+                            }}
+                          >
+                            {preset.label}
+                          </button>
+                        ))}
+                      </div>
+                      <p style={{ margin: "4px 0 0", fontSize: 11, color: "#9ca3af" }}>
+                        {SD_QUALITY_PRESETS[activePreset]?.description}
+                      </p>
+                    </div>
+
+                    {/* Steps slider */}
+                    <div>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                        <label style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>
+                          Steps
+                        </label>
+                        <span style={{ fontSize: 12, color: "#6b21a8", fontWeight: 600 }}>{imageParams.steps}</span>
+                      </div>
+                      <input
+                        data-testid="steps-slider"
+                        type="range"
+                        min={15}
+                        max={50}
+                        value={imageParams.steps}
+                        onChange={(e) => {
+                          setActivePreset("");
+                          setImageParams((p) => ({ ...p, steps: Number(e.target.value) }));
+                        }}
+                        style={{ width: "100%", accentColor: "#7c3aed" }}
+                      />
+                      <p style={{ margin: "2px 0 0", fontSize: 11, color: "#9ca3af" }}>
+                        More steps = higher quality but slower. 20-30 is usually optimal.
+                      </p>
+                    </div>
+
+                    {/* CFG Scale slider */}
+                    <div>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+                        <label style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>
+                          CFG Scale (Prompt Adherence)
+                        </label>
+                        <span style={{ fontSize: 12, color: "#6b21a8", fontWeight: 600 }}>{imageParams.cfg_scale}</span>
+                      </div>
+                      <input
+                        data-testid="cfg-slider"
+                        type="range"
+                        min={1}
+                        max={20}
+                        value={imageParams.cfg_scale}
+                        onChange={(e) => {
+                          setActivePreset("");
+                          setImageParams((p) => ({ ...p, cfg_scale: Number(e.target.value) }));
+                        }}
+                        style={{ width: "100%", accentColor: "#7c3aed" }}
+                      />
+                      <p style={{ margin: "2px 0 0", fontSize: 11, color: "#9ca3af" }}>
+                        How closely to follow the prompt. 5-9 works well; too high can look harsh.
+                      </p>
+                    </div>
+
+                    {/* Sampler dropdown */}
+                    <div>
+                      <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>
+                        Sampler
+                      </label>
+                      <select
+                        data-testid="sampler-select"
+                        value={imageParams.sampler_name}
+                        onChange={(e) => {
+                          setActivePreset("");
+                          setImageParams((p) => ({ ...p, sampler_name: e.target.value }));
+                        }}
+                        style={{
+                          width: "100%",
+                          padding: "6px 10px",
+                          border: "1px solid #d1d5db",
+                          borderRadius: 4,
+                          fontSize: 13,
+                          background: "#fff",
+                          color: "#374151",
+                        }}
+                      >
+                        {SD_SAMPLERS.map((s) => (
+                          <option key={s} value={s}>{s}</option>
+                        ))}
+                      </select>
+                      <p style={{ margin: "2px 0 0", fontSize: 11, color: "#9ca3af" }}>
+                        DPM++ 2M Karras gives best quality for SD 1.5. Euler a is fastest.
+                      </p>
+                    </div>
+
+                    {/* Negative prompt */}
+                    <div>
+                      <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>
+                        Negative Prompt
+                      </label>
+                      <textarea
+                        data-testid="negative-prompt"
+                        rows={3}
+                        value={imageParams.negative_prompt}
+                        onChange={(e) => {
+                          setActivePreset("");
+                          setImageParams((p) => ({ ...p, negative_prompt: e.target.value }));
+                        }}
+                        style={{
+                          width: "100%",
+                          padding: "6px 10px",
+                          border: "1px solid #d1d5db",
+                          borderRadius: 4,
+                          fontSize: 12,
+                          fontFamily: "inherit",
+                          resize: "vertical",
+                          color: "#374151",
+                          boxSizing: "border-box",
+                        }}
+                      />
+                      <p style={{ margin: "2px 0 0", fontSize: 11, color: "#9ca3af" }}>
+                        Describe what you do NOT want in the image. Helps avoid common SD artifacts.
+                      </p>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Scene action buttons — rendered per-scene from the asset grid data is impractical

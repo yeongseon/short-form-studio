@@ -96,6 +96,16 @@ class ProviderRegistry:
                 category=ProviderCategory.IMAGE,
                 requires_gpu=True,
                 is_local=True,
+                default_params={
+                    "steps": 25,
+                    "cfg_scale": 7,
+                    "sampler_name": "DPM++ 2M Karras",
+                    "negative_prompt": (
+                        "low quality, worst quality, blurry, out of focus, "
+                        "ugly, deformed, disfigured, watermark, text, "
+                        "signature, poorly drawn, bad anatomy, extra limbs"
+                    ),
+                },
             )
         )
         registry.register_model(

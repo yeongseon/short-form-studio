@@ -1,4 +1,6 @@
 """Routes for creator run management."""
+from typing import Any
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from creator_service.audio_service import audio_service
@@ -355,10 +357,15 @@ async def generate_visual_plan_trigger(run_id: int, request: GenerateVisualPlanR
 
 class GenerateVisualAssetsRequest(BaseModel):
     model_key: str = "sd15"
-
+    image_params: dict[str, Any] | None = None
 
 def dispatch_generate_scene_image(
-    run_id: int, model_key: str, scene_id: str | None, prompt_override: str | None, is_active: bool
+    run_id: int,
+    model_key: str,
+    scene_id: str | None,
+    prompt_override: str | None,
+    is_active: bool,
+    image_params: dict[str, Any] | None = None,
 ) -> str:
     """Dispatch generate_scene_image Celery task. Returns task id.
 
@@ -370,6 +377,7 @@ def dispatch_generate_scene_image(
     result = tasks.generate_scene_image.delay(
         run_id, scene_id=scene_id, model_key=model_key,
         prompt_override=prompt_override, is_active=is_active,
+        image_params=image_params,
     )
     return str(result.id)
 
@@ -417,6 +425,7 @@ async def generate_visual_assets_trigger(
             scene_id=None,  # all scenes
             prompt_override=None,
             is_active=True,
+            image_params=request.image_params,
         )
     except Exception:
         # Best-effort rollback: restore original stage so run isn't stuck
@@ -440,6 +449,11 @@ async def generate_visual_assets_trigger(
 class RegenerateSceneImageRequest(BaseModel):
     model_key: str = "sd15"
     prompt_override: str | None = None
+    image_params: dict[str, Any] | None = None
+
+class GenerateSceneImageRequest(BaseModel):
+    model_key: str = "sd15"
+    image_params: dict[str, Any] | None = None
 
 
 @router.post(
@@ -447,9 +461,10 @@ class RegenerateSceneImageRequest(BaseModel):
     status_code=202,
 )
 async def generate_scene_image_endpoint(
-    run_id: int, scene_id: str
+    run_id: int, scene_id: str, request: GenerateSceneImageRequest | None = None
 ) -> dict[str, object]:
     """Generate an image for a single scene that hasn't been generated yet."""
+    effective_request = request or GenerateSceneImageRequest()
     # 1. Check run exists
     run = await run_service.get_run(run_id)
     if run is None:
@@ -468,10 +483,11 @@ async def generate_scene_image_endpoint(
     try:
         task_id = dispatch_generate_scene_image(
             run_id=run_id,
-            model_key="sd15",
+            model_key=effective_request.model_key,
             scene_id=scene_id,
             prompt_override=None,
             is_active=True,
+            image_params=effective_request.image_params,
         )
     except Exception:
         raise HTTPException(
@@ -485,7 +501,6 @@ async def generate_scene_image_endpoint(
         "scene_id": scene_id,
         "current_stage": run.current_stage,
     }
-
 
 @router.post(
     "/runs/{run_id}/visual-plan/scenes/{scene_id}/regenerate-image",
@@ -521,6 +536,7 @@ async def regenerate_scene_image_endpoint(
             scene_id=scene_id,
             prompt_override=request.prompt_override,
             is_active=False,  # regenerated assets are inactive until selected
+            image_params=request.image_params,
         )
     except Exception:
         raise HTTPException(

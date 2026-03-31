@@ -77,6 +77,7 @@ def generate_scene_image(
     model_key: str = "sd15",
     prompt_override: str | None = None,
     is_active: bool = True,
+    image_params: dict[str, Any] | None = None,
 ) -> dict[str, object]:
     """Generate image(s) for visual plan scenes.
 
@@ -88,6 +89,9 @@ def generate_scene_image(
         prompt_override: If provided, overrides the scene prompt for a
                          single-scene generation. Ignored for all-scene mode.
         is_active: Whether new assets are marked active (default: True).
+        image_params: Optional dict of per-request image generation params
+                      (steps, sampler_name, negative_prompt, cfg_scale, etc.).
+                      Merged on top of registry default_params.
     """
     start_time = datetime.now(timezone.utc)
     start_iso = start_time.isoformat()
@@ -182,6 +186,9 @@ def generate_scene_image(
                 try:
                     # Generate image via provider.
                     params = dict(entry.default_params or {})
+                    # Merge per-request tuning overrides on top of registry defaults.
+                    if image_params:
+                        params.update(image_params)
                     # Direct provider to write to the artifact directory
                     # instead of a temp file.
                     target_path = str(asset_dir / f"{target_scene.scene_id}.png")
