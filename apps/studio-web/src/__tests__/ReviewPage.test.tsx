@@ -96,8 +96,8 @@ function mockFetchAll(
     }
     // GET /runs/:id/visual-assets
     if (url.includes("/visual-assets")) {
-      if (!opts.assets) return Promise.resolve({ ok: true, json: () => Promise.resolve({}) } as Response);
-      return Promise.resolve({ ok: true, json: () => Promise.resolve(opts.assets) } as Response);
+      if (!opts.assets) return Promise.resolve({ ok: true, json: () => Promise.resolve({ run_id: run?.id ?? 0, scenes: {}, total_scenes: 0, total_assets: 0 }) } as Response);
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ run_id: run?.id ?? 0, scenes: opts.assets, total_scenes: Object.keys(opts.assets).length, total_assets: Object.values(opts.assets).flat().length }) } as Response);
     }
     // GET /runs/:id/visual-plan
     if (url.includes("/visual-plan")) {
@@ -250,5 +250,25 @@ describe("ReviewPage", () => {
       expect(screen.getByTestId("review-audio-section")).toBeTruthy();
     });
     expect(screen.getByText("qwen3-tts")).toBeTruthy();
+  });
+
+  it("handles wrapped visual-assets response with scenes field (regression)", async () => {
+    // The /visual-assets endpoint returns { run_id, scenes, total_scenes, total_assets }
+    // NOT a raw Record<string, Asset[]>. Verify ReviewPage correctly extracts .scenes.
+    mockFetchAll(MOCK_RUN_FINAL_REVIEW, {
+      script: MOCK_SCRIPT,
+      scenes: MOCK_SCENES,
+      assets: MOCK_ASSETS,
+      preview: MOCK_PREVIEW,
+    });
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByTestId("review-assets-section")).toBeTruthy();
+    });
+
+    // Assets from wrapped response should render correctly
+    expect(screen.getByText(/scene-0\.png/)).toBeTruthy();
+    expect(screen.getByText(/scene-1\.png/)).toBeTruthy();
   });
 });

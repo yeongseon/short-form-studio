@@ -199,7 +199,7 @@ export default function ReviewPage() {
         const assetsRes = await fetch(`${API_BASE}/runs/${numericRunId}/visual-assets`);
         if (assetsRes.ok) {
           const assetsData = await assetsRes.json();
-          setAssets(assetsData.scenes ?? assetsData);
+          setAssets(assetsData.scenes ?? {});
         }
       }
 
