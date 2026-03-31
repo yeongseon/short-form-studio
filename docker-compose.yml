@@ -42,6 +42,7 @@ services:
       - ./apps/worker-orchestrator/celery_app.py:/app/celery_app.py
       - ./packages/creator-service/creator_service:/usr/local/lib/python3.12/site-packages/creator_service
       - ./packages/creator-provider/creator_provider:/usr/local/lib/python3.12/site-packages/creator_provider
+      - ./packages/creator-domain/creator_domain:/usr/local/lib/python3.12/site-packages/creator_domain
       - ./data/artifacts:/app/data/artifacts
     env_file:
       - .env
@@ -59,11 +60,13 @@ services:
       context: .
       dockerfile: apps/worker-orchestrator/Dockerfile
       target: dev
+    command: ["sh", "-c", "watchfiles --filter python 'celery -A celery_app.celery_app worker --loglevel=info --pool=solo' /app/tasks /app/celery_app.py"]
     volumes:
       - ./apps/worker-orchestrator/tasks:/app/tasks
       - ./apps/worker-orchestrator/celery_app.py:/app/celery_app.py
       - ./packages/creator-service/creator_service:/usr/local/lib/python3.12/site-packages/creator_service
       - ./packages/creator-provider/creator_provider:/usr/local/lib/python3.12/site-packages/creator_provider
+      - ./packages/creator-domain/creator_domain:/usr/local/lib/python3.12/site-packages/creator_domain
       - ./data/artifacts:/app/data/artifacts
     env_file:
       - .env
@@ -112,6 +115,7 @@ services:
 
   stable-diffusion:
     image: shorts-automation-stable-diffusion:latest
+    command: ["python", "launch.py", "--api", "--nowebui", "--listen", "--port", "7860", "--medvram", "--xformers", "--no-half", "--no-half-vae", "--skip-torch-cuda-test", "--skip-version-check", "--skip-python-version-check", "--skip-install"]
     ports:
       - "7860:7860"
     deploy:
