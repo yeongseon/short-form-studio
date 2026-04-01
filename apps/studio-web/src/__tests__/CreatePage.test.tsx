@@ -141,6 +141,15 @@ describe("CreatePage", () => {
     expect(select.value).toBe("cinematic");
   });
 
+  it("render profile select works", () => {
+    renderCreatePage();
+    const select = screen.getByLabelText(/Render Profile/) as HTMLSelectElement;
+    expect(select.value).toBe("shorts_default");
+
+    fireEvent.change(select, { target: { value: "high_quality" } });
+    expect(select.value).toBe("high_quality");
+  });
+
   it("has submit button", () => {
     renderCreatePage();
     expect(screen.getByRole("button", { name: "Create Project" })).toBeTruthy();
@@ -260,6 +269,7 @@ describe("CreatePage", () => {
     fireEvent.change(screen.getByLabelText(/Idea Brief/), { target: { value: "Brief" } });
     fireEvent.change(screen.getByLabelText(/Content Goal/), { target: { value: "educational" } });
     fireEvent.change(screen.getByLabelText(/Target Duration/), { target: { value: "90" } });
+    fireEvent.change(screen.getByLabelText(/Render Profile/), { target: { value: "high_quality" } });
 
     fireEvent.click(screen.getByRole("button", { name: "Create Project" }));
 
@@ -275,6 +285,7 @@ describe("CreatePage", () => {
     expect(runBody.metadata.content_goal).toBe("educational");
     expect(runBody.metadata.target_duration).toBe(90);
     expect(runBody.style_preset).toBe("default");
+    expect(runBody.model_defaults.render_profile).toBe("high_quality");
   });
 
   it("shows error when project creation fails", async () => {

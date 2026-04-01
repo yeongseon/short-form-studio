@@ -17,6 +17,8 @@ class StubProject(BaseModel):
 class StubPipelineRun(BaseModel):
     id: int
     project_id: int
+    current_stage: str = "IDEA_READY"
+    status: str = "pending"
 
 
 class StubScriptDraft(BaseModel):
@@ -56,6 +58,8 @@ class StubRunService:
         model_defaults: dict[str, str] | None,
         style_preset: str,
         metadata: dict[str, object] | None = None,
+        current_stage: str = "IDEA_READY",
+        status: str = "pending",
     ) -> StubPipelineRun:
         if self.raise_error_message is not None:
             raise ValueError(self.raise_error_message)
@@ -66,9 +70,16 @@ class StubRunService:
                 "model_defaults": model_defaults,
                 "style_preset": style_preset,
                 "metadata": metadata,
+                "current_stage": current_stage,
+                "status": status,
             }
         )
-        run = StubPipelineRun(id=self.next_run_id, project_id=project_id)
+        run = StubPipelineRun(
+            id=self.next_run_id,
+            project_id=project_id,
+            current_stage=current_stage,
+            status=status,
+        )
         self.next_run_id += 1
         return run
 
@@ -181,6 +192,8 @@ async def test_import_markdown_success(client, stub_services):
             "model_defaults": None,
             "style_preset": "default",
             "metadata": None,
+            "current_stage": "SCRIPT_REVIEW",
+            "status": "running",
         }
     ]
     assert script_service.save_draft_calls == [
@@ -252,6 +265,8 @@ async def test_import_markdown_with_model_defaults(client, stub_services):
             },
             "style_preset": "cinematic",
             "metadata": None,
+            "current_stage": "SCRIPT_REVIEW",
+            "status": "running",
         }
     ]
 
@@ -288,6 +303,8 @@ async def test_import_markdown_service_error(client, stub_services):
             "model_defaults": None,
             "style_preset": "default",
             "metadata": None,
+            "current_stage": "SCRIPT_REVIEW",
+            "status": "running",
         }
     ]
 

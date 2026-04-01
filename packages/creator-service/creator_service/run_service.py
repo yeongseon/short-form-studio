@@ -181,7 +181,14 @@ class RunService:
         model_defaults: dict[str, Any] | Any | None,
         style_preset: str,
         metadata: dict[str, Any] | None = None,
+        current_stage: str = RunStage.IDEA_READY.value,
+        status: str = "pending",
     ) -> PipelineRun:
+        try:
+            normalized_stage = RunStage(current_stage).value
+        except ValueError as exc:
+            raise ValueError(f"Invalid stage '{current_stage}'") from exc
+
         model_defaults_payload: str | None = None
         if model_defaults is not None:
             model_dump = getattr(model_defaults, "model_dump", None)
@@ -197,8 +204,8 @@ class RunService:
         row = await self.storage.create_run(
             {
                 "project_id": project_id,
-                "current_stage": RunStage.IDEA_READY.value,
-                "status": "pending",
+                "current_stage": normalized_stage,
+                "status": status,
                 "review_stage": None,
                 "restart_from": None,
                 "model_defaults_json": model_defaults_payload,

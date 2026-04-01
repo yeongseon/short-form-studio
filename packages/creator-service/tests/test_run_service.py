@@ -45,6 +45,23 @@ def test_create_run_stores_metadata_in_metadata_json() -> None:
     assert row["metadata_json"] == json.dumps(metadata)
 
 
+def test_create_run_allows_custom_stage_and_status() -> None:
+    service = RunService(InMemoryRunStorage())
+
+    run = asyncio.run(
+        service.create_run(
+            project_id=15,
+            model_defaults=None,
+            style_preset="default",
+            current_stage=RunStage.SCRIPT_REVIEW.value,
+            status="running",
+        )
+    )
+
+    assert run.current_stage == RunStage.SCRIPT_REVIEW.value
+    assert run.status == "running"
+
+
 def test_get_run_returns_none_for_missing() -> None:
     service = RunService(InMemoryRunStorage())
 

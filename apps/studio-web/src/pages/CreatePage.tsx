@@ -11,6 +11,11 @@ interface MarkdownFormState {
 }
 
 const API_BASE = "/api/creator";
+const RENDER_PROFILE_OPTIONS = [
+  { value: "shorts_default", label: "Shorts Default" },
+  { value: "high_quality", label: "High Quality" },
+  { value: "fast_preview", label: "Fast Preview" },
+];
 const MARKDOWN_TEMPLATE = `## Hook
 
 여러분, AI가 60초 만에 영상을 만들어준다면 믿으시겠어요?
@@ -74,6 +79,10 @@ export default function CreatePage() {
       }
     };
     reader.readAsText(file);
+  }, []);
+
+  const handleRenderProfileChange = useCallback((renderProfile: string) => {
+    setModelDefaults((prev) => ({ ...prev, render_profile: renderProfile }));
   }, []);
 
   const handleIdeaSubmit = useCallback(
@@ -306,6 +315,23 @@ export default function CreatePage() {
       <div style={{ marginTop: 24, padding: 16, background: "#f9f9f9", borderRadius: 8, border: "1px solid #eee" }}>
         <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 12 }}>Model Defaults</h2>
         <ModelSelector categories={activeTab === "idea" ? ["script", "image"] : ["image"]} onSelectionChange={handleModelChange} />
+        <div style={{ marginTop: 12 }}>
+          <label htmlFor="render-profile" style={{ display: "block", fontWeight: 600, marginBottom: 4, fontSize: 13 }}>
+            Render Profile
+          </label>
+          <select
+            id="render-profile"
+            value={modelDefaults.render_profile ?? "shorts_default"}
+            onChange={(e) => handleRenderProfileChange(e.target.value)}
+            style={{ padding: "8px 12px", border: "1px solid #ccc", borderRadius: 4, fontSize: 14 }}
+          >
+            {RENDER_PROFILE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {/* Shared: Style Preset */}

@@ -108,6 +108,12 @@ const SD_SAMPLERS = [
   "DPM++ 2M", "DPM++ SDE", "DPM++ 2S a Karras",
   "Euler a", "Euler", "DDIM", "UniPC", "LMS Karras", "Heun",
 ];
+
+const RENDER_PROFILE_OPTIONS = [
+  { value: "shorts_default", label: "Shorts Default" },
+  { value: "high_quality", label: "High Quality" },
+  { value: "fast_preview", label: "Fast Preview" },
+];
 // --------------- Visual Plan Setup Cards ---------------
 
 interface ScriptSection {
@@ -956,7 +962,22 @@ export default function ProjectPage() {
 
     // Storyboard stages — audio/subtitle generation is handled by StoryboardView
     // Only show render button and restart in the action bar
-    if (isAudioStage || isSubtitleStage) {
+    if (isAudioStage) {
+      return {
+        save: { visible: false },
+        approve: { visible: false },
+        generate: { visible: false },
+        restart: {
+          visible: true,
+          disabled: restarting,
+          loading: restarting,
+          onClick: handleRestart,
+          label: "Restart from Script",
+        },
+      };
+    }
+
+    if (isSubtitleStage) {
       return {
         save: { visible: false },
         approve: { visible: false },
@@ -1151,6 +1172,10 @@ export default function ProjectPage() {
   }
 
   const actions = buildActionBar();
+  const showGoBack =
+    Boolean(run) &&
+    Boolean(STAGE_BACK_LABELS[currentStage]) &&
+    !(currentStage === "SCRIPT_REVIEW" && project.source_type !== "idea");
 
   return (
     <div style={{ maxWidth: 960, margin: "0 auto", padding: 24 }}>
@@ -1750,6 +1775,26 @@ export default function ProjectPage() {
                 apiBase=""
                 onSelectionChange={handleModelChange}
               />
+              <div style={{ marginTop: 12 }}>
+                <label
+                  htmlFor="project-render-profile"
+                  style={{ display: "block", fontWeight: 600, marginBottom: 4, fontSize: 13 }}
+                >
+                  Render Profile
+                </label>
+                <select
+                  id="project-render-profile"
+                  value={modelSelection.render_profile || "shorts_default"}
+                  onChange={(e) => handleModelChange("render", e.target.value)}
+                  style={{ padding: "8px 12px", border: "1px solid #ccc", borderRadius: 4, fontSize: 14 }}
+                >
+                  {RENDER_PROFILE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           )}
           <StoryboardView
@@ -1823,7 +1868,7 @@ export default function ProjectPage() {
       )}
 
       {/* Back navigation button */}
-      {run && STAGE_BACK_LABELS[currentStage] && (
+      {showGoBack && (
         <div style={{ display: "flex", justifyContent: "flex-start", padding: "8px 16px" }}>
           <button
             type="button"

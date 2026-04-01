@@ -746,8 +746,8 @@ describe("ProjectPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("storyboard-view")).toBeInTheDocument();
     });
-    // Render Video and Restart from Script buttons should be in action bar
-    expect(screen.getByRole("button", { name: "Render Video" })).toBeInTheDocument();
+    // Render should not be offered before subtitle stage
+    expect(screen.queryByRole("button", { name: "Render Video" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Restart from Script" })).toBeInTheDocument();
   });
 
@@ -757,6 +757,8 @@ describe("ProjectPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("storyboard-view")).toBeInTheDocument();
     });
+    expect(screen.getByRole("button", { name: "Render Video" })).toBeInTheDocument();
+    expect(screen.getByLabelText(/Render Profile/)).toBeInTheDocument();
   });
 
   it("shows storyboard view for RENDER_GENERATING", async () => {
@@ -796,5 +798,35 @@ describe("ProjectPage", () => {
       expect(screen.getByTestId("storyboard-view")).toBeInTheDocument();
     });
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+  });
+
+  it("hides idea-only go-back action for markdown-source script review", async () => {
+    mockFetchProjectAndRuns({ ...MOCK_PROJECT, source_type: "markdown" }, [MOCK_RUN_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Approve Script" })).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("go-back-btn")).not.toBeInTheDocument();
+  });
+
+  it("uses selected render profile when rendering from subtitle stage", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_SUBTITLE_GENERATING]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Render Video" })).toBeInTheDocument();
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    fireEvent.change(screen.getByLabelText(/Render Profile/), { target: { value: "high_quality" } });
+    fireEvent.click(screen.getByRole("button", { name: "Render Video" }));
+
+    await waitFor(() => {
+      const renderCall = fetchSpy.mock.calls.find(([url]) =>
+        (typeof url === "string" ? url : (url as Request).url).includes("/render")
+      );
+      expect(renderCall).toBeTruthy();
+      const body = JSON.parse((renderCall![1] as RequestInit).body as string);
+      expect(body.render_profile).toBe("high_quality");
+    });
   });
 });

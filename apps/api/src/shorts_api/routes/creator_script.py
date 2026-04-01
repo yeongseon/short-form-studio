@@ -1,6 +1,7 @@
 """Routes for creator script management."""
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ValidationError
+from creator_domain.models import RunStage
 from creator_domain.models.script_draft import ScriptSection
 from creator_service.markdown_parser import parse_markdown
 from creator_service.project_service import project_service
@@ -31,6 +32,8 @@ async def import_markdown(project_id: int, request: ImportMarkdownRequest) -> di
             project_id=project_id,
             model_defaults=request.model_defaults,
             style_preset=request.style_preset,
+            current_stage=RunStage.SCRIPT_REVIEW.value,
+            status="running",
         )
         draft = await script_service.save_draft(
             run_id=run.id,
