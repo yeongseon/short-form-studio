@@ -11,7 +11,7 @@
  * - StageActionBar (save / approve / generate / restart)
  */
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 
 import PipelineStepper from "../components/creator/PipelineStepper";
@@ -243,15 +243,28 @@ export default function ProjectPage() {
     }
   }, [run?.model_defaults]);
 
-  // Build selectedModels map for controlled ModelSelector (category → model key)
-  const selectedModelsMap = useMemo(() => {
-    const map: Record<string, string> = {};
-    if (modelSelection.script_model) map.script = modelSelection.script_model;
-    if (modelSelection.image_model) map.image = modelSelection.image_model;
-    if (modelSelection.tts_model) map.tts = modelSelection.tts_model;
-    if (modelSelection.subtitle_model) map.stt = modelSelection.subtitle_model;
-    return Object.keys(map).length > 0 ? map : undefined;
-  }, [modelSelection]);
+  // Build a selectedModels map scoped to specific categories.
+  // Returns undefined when none of the requested categories have persisted values,
+  // so ModelSelector stays uncontrolled and can compute its own defaults.
+  const buildSelectedModels = useCallback(
+    (categories: string[]): Record<string, string> | undefined => {
+      const FIELD_TO_CAT: Record<string, string> = {
+        script_model: "script",
+        image_model: "image",
+        tts_model: "tts",
+        subtitle_model: "stt",
+      };
+      const catSet = new Set(categories);
+      const map: Record<string, string> = {};
+      for (const [field, cat] of Object.entries(FIELD_TO_CAT)) {
+        if (catSet.has(cat) && modelSelection[field as keyof ModelDefaults]) {
+          map[cat] = modelSelection[field as keyof ModelDefaults]!;
+        }
+      }
+      return Object.keys(map).length > 0 ? map : undefined;
+    },
+    [modelSelection],
+  );
 
   // Persist model selection to backend
   const handleModelChange = useCallback(
@@ -1521,7 +1534,7 @@ export default function ProjectPage() {
             <div style={{ marginBottom: 12 }}>
               <ModelSelector
                 categories={["tts", "stt"]}
-                selectedModels={selectedModelsMap}
+                selectedModels={buildSelectedModels(["tts", "stt"])}
                 apiBase=""
                 onSelectionChange={handleModelChange}
               />
@@ -1627,7 +1640,7 @@ export default function ProjectPage() {
         <div style={{ padding: "8px 16px" }}>
           <ModelSelector
             categories={["script"]}
-            selectedModels={selectedModelsMap}
+            selectedModels={buildSelectedModels(["script"])}
             apiBase=""
             onSelectionChange={handleModelChange}
           />
@@ -1637,7 +1650,7 @@ export default function ProjectPage() {
         <div style={{ padding: "8px 16px" }}>
           <ModelSelector
             categories={["script"]}
-            selectedModels={selectedModelsMap}
+            selectedModels={buildSelectedModels(["script"])}
             apiBase=""
             onSelectionChange={handleModelChange}
           />
@@ -1647,7 +1660,7 @@ export default function ProjectPage() {
         <div style={{ padding: "8px 16px" }}>
           <ModelSelector
             categories={["image"]}
-            selectedModels={selectedModelsMap}
+            selectedModels={buildSelectedModels(["image"])}
             apiBase=""
             onSelectionChange={handleModelChange}
           />
