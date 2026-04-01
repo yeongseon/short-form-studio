@@ -1419,16 +1419,16 @@ export default function ProjectPage() {
             </h3>
             <p style={{ margin: 0, fontSize: 13, color: "#4b5563", lineHeight: 1.5 }}>
               Review the paragraph-to-image mapping below. Each paragraph in your script will
-              generate one image. Select your preferred image model, then click
+              generate one image. Select the script model that will draft the visual plan, then click
               <strong> Generate Visual Plan</strong> to proceed.
             </p>
           </div>
 
-          {/* Image model selector */}
+          {/* Script model selector for visual-plan drafting */}
           <div style={{ marginBottom: 16 }}>
             <ModelSelector
-              categories={["image"]}
-              selectedModels={buildSelectedModels(["image"])}
+              categories={["script"]}
+              selectedModels={buildSelectedModels(["script"])}
               apiBase=""
               onSelectionChange={handleModelChange}
             />
@@ -1914,6 +1914,16 @@ export default function ProjectPage() {
         </div>
       )}
       {run && currentStage === "VISUAL_PLAN_REVIEW" && (
+        <div style={{ padding: "8px 16px" }}>
+          <ModelSelector
+            categories={["script"]}
+            selectedModels={buildSelectedModels(["script"])}
+            apiBase=""
+            onSelectionChange={handleModelChange}
+          />
+        </div>
+      )}
+      {run && currentStage === "VISUAL_ASSET_REVIEW" && (
         <div style={{ padding: "8px 16px" }}>
           <ModelSelector
             categories={["image"]}

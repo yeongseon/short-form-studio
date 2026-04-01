@@ -478,6 +478,7 @@ describe("ProjectPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("visual-plan-editor")).toBeInTheDocument();
     });
+    expect(screen.getByText("Script Model")).toBeInTheDocument();
     // Approve and Regenerate Plan visible
     expect(screen.getByRole("button", { name: "Approve Visual Plan" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Regenerate Plan" })).toBeInTheDocument();
@@ -511,6 +512,8 @@ describe("ProjectPage", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Generate Visual Plan" })).toBeInTheDocument();
     });
+    expect(screen.getByText("Script Model")).toBeInTheDocument();
+    expect(screen.queryByText("Image Model")).not.toBeInTheDocument();
   });
 
   it("calls generate-visual-plan endpoint from VISUAL_PLAN_SETUP", async () => {
@@ -620,6 +623,7 @@ describe("ProjectPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("visual-asset-section")).toBeInTheDocument();
     });
+    expect(screen.getAllByText("Image Model").length).toBeGreaterThan(0);
   });
 
   it("shows scene regen controls in VISUAL_ASSET_REVIEW", async () => {
