@@ -68,7 +68,7 @@ class FakeStorage:
         return True, dict(row)
 
 
-def _make_storage(run_id: int = 101, stage: str = "SCRIPT_REVIEW", **extra: Any) -> FakeStorage:
+def _make_storage(run_id: int = 101, stage: str = "VISUAL_PLAN_GENERATING", **extra: Any) -> FakeStorage:
     """Create a FakeStorage pre-populated with a single run in the given stage."""
     run_row: dict[str, object] = {"id": run_id, "current_stage": stage, **extra}
     return FakeStorage(runs={run_id: run_row})
@@ -203,7 +203,7 @@ def test_happy_path_local_model_with_gpu_lock(monkeypatch: pytest.MonkeyPatch) -
 
     script_service = FakeScriptService(draft=FakeScriptDraft(structured_script=sections))
     visual_plan_service = FakeVisualPlanService()
-    storage = _make_storage(run_id=101, stage="SCRIPT_REVIEW")
+    storage = _make_storage(run_id=101, stage="VISUAL_PLAN_GENERATING")
     _patch_services(monkeypatch, script_service, visual_plan_service, storage)
 
     result = _invoke_task(run_id=101, model_key="qwen3-4b")
@@ -234,7 +234,7 @@ def test_happy_path_external_model_without_gpu_lock(monkeypatch: pytest.MonkeyPa
 
     script_service = FakeScriptService(draft=FakeScriptDraft(structured_script=sections))
     visual_plan_service = FakeVisualPlanService()
-    storage = _make_storage(run_id=102, stage="SCRIPT_REVIEW")
+    storage = _make_storage(run_id=102, stage="VISUAL_PLAN_GENERATING")
     _patch_services(monkeypatch, script_service, visual_plan_service, storage)
 
     result = _invoke_task(run_id=102, model_key="gpt-4.1")
@@ -260,7 +260,7 @@ def test_happy_path_multi_section_script(monkeypatch: pytest.MonkeyPatch) -> Non
 
     script_service = FakeScriptService(draft=FakeScriptDraft(structured_script=sections))
     visual_plan_service = FakeVisualPlanService()
-    storage = _make_storage(run_id=103, stage="SCRIPT_REVIEW")
+    storage = _make_storage(run_id=103, stage="VISUAL_PLAN_GENERATING")
     _patch_services(monkeypatch, script_service, visual_plan_service, storage)
 
     result = _invoke_task(run_id=103)
@@ -286,7 +286,7 @@ def test_happy_path_markdown_fallback_single_section(monkeypatch: pytest.MonkeyP
 
     script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="# My Script\nSome content"))
     visual_plan_service = FakeVisualPlanService()
-    storage = _make_storage(run_id=104, stage="SCRIPT_REVIEW")
+    storage = _make_storage(run_id=104, stage="VISUAL_PLAN_GENERATING")
     _patch_services(monkeypatch, script_service, visual_plan_service, storage)
 
     result = _invoke_task(run_id=104)
@@ -306,7 +306,7 @@ def test_style_preset_passed_to_system_prompt(monkeypatch: pytest.MonkeyPatch) -
 
     script_service = FakeScriptService(draft=FakeScriptDraft(structured_script=sections))
     visual_plan_service = FakeVisualPlanService()
-    storage = _make_storage(run_id=105, stage="SCRIPT_REVIEW")
+    storage = _make_storage(run_id=105, stage="VISUAL_PLAN_GENERATING")
     _patch_services(monkeypatch, script_service, visual_plan_service, storage)
 
     result = _invoke_task(run_id=105, style_preset="anime")
@@ -332,7 +332,7 @@ def test_provider_resolution_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     sections = [FakeSection()]
     script_service = FakeScriptService(draft=FakeScriptDraft(structured_script=sections))
     visual_plan_service = FakeVisualPlanService()
-    storage = _make_storage(run_id=201, stage="SCRIPT_REVIEW")
+    storage = _make_storage(run_id=201, stage="VISUAL_PLAN_GENERATING")
     _patch_services(monkeypatch, script_service, visual_plan_service, storage)
 
     with pytest.raises(KeyError, match="Model not found"):
@@ -351,7 +351,7 @@ def test_llm_generation_failure_sets_failed_stage(monkeypatch: pytest.MonkeyPatc
     sections = [FakeSection()]
     script_service = FakeScriptService(draft=FakeScriptDraft(structured_script=sections))
     visual_plan_service = FakeVisualPlanService()
-    storage = _make_storage(run_id=202, stage="SCRIPT_REVIEW")
+    storage = _make_storage(run_id=202, stage="VISUAL_PLAN_GENERATING")
     _patch_services(monkeypatch, script_service, visual_plan_service, storage)
 
     with pytest.raises(RuntimeError, match="generation failed"):
@@ -380,7 +380,7 @@ def test_gpu_lock_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     sections = [FakeSection()]
     script_service = FakeScriptService(draft=FakeScriptDraft(structured_script=sections))
     visual_plan_service = FakeVisualPlanService()
-    storage = _make_storage(run_id=203, stage="SCRIPT_REVIEW")
+    storage = _make_storage(run_id=203, stage="VISUAL_PLAN_GENERATING")
     _patch_services(monkeypatch, script_service, visual_plan_service, storage)
 
     with pytest.raises(TimeoutError, match="lock timeout"):
@@ -406,7 +406,7 @@ def test_releases_gpu_lock_when_llm_fails(monkeypatch: pytest.MonkeyPatch) -> No
     sections = [FakeSection()]
     script_service = FakeScriptService(draft=FakeScriptDraft(structured_script=sections))
     visual_plan_service = FakeVisualPlanService()
-    storage = _make_storage(run_id=204, stage="SCRIPT_REVIEW")
+    storage = _make_storage(run_id=204, stage="VISUAL_PLAN_GENERATING")
     _patch_services(monkeypatch, script_service, visual_plan_service, storage)
 
     with pytest.raises(RuntimeError, match="provider exploded"):
@@ -426,7 +426,7 @@ def test_visual_plan_save_failure(monkeypatch: pytest.MonkeyPatch) -> None:
 
     script_service = FakeScriptService(draft=FakeScriptDraft(structured_script=sections))
     visual_plan_service = FakeVisualPlanService(error=RuntimeError("save failed"))
-    storage = _make_storage(run_id=205, stage="SCRIPT_REVIEW")
+    storage = _make_storage(run_id=205, stage="VISUAL_PLAN_GENERATING")
     _patch_services(monkeypatch, script_service, visual_plan_service, storage)
 
     with pytest.raises(RuntimeError, match="save failed"):
@@ -441,7 +441,7 @@ def test_visual_plan_save_failure(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_stage_guard_rejects_wrong_stage(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Task must refuse to run when the run is NOT in SCRIPT_REVIEW or VISUAL_PLAN_GENERATING."""
+    """Task must refuse to run when the run is NOT in VISUAL_PLAN_SETUP or VISUAL_PLAN_GENERATING."""
     provider = FakeProvider(result="Should not be called")
     entry = FakeEntry(requires_gpu=False)
     registry = FakeRegistry(entry=entry, provider=provider)
@@ -508,7 +508,7 @@ def test_stage_guard_no_script_draft(monkeypatch: pytest.MonkeyPatch) -> None:
 
     script_service = FakeScriptService(draft=None)
     visual_plan_service = FakeVisualPlanService()
-    storage = _make_storage(run_id=303, stage="SCRIPT_REVIEW")
+    storage = _make_storage(run_id=303, stage="VISUAL_PLAN_GENERATING")
     _patch_services(monkeypatch, script_service, visual_plan_service, storage)
 
     with pytest.raises(ValueError, match="No script draft found"):
@@ -527,7 +527,7 @@ def test_stage_guard_empty_script_content(monkeypatch: pytest.MonkeyPatch) -> No
 
     script_service = FakeScriptService(draft=FakeScriptDraft())  # no structured_script, no markdown
     visual_plan_service = FakeVisualPlanService()
-    storage = _make_storage(run_id=304, stage="SCRIPT_REVIEW")
+    storage = _make_storage(run_id=304, stage="VISUAL_PLAN_GENERATING")
     _patch_services(monkeypatch, script_service, visual_plan_service, storage)
 
     with pytest.raises(ValueError, match="has no content"):
@@ -594,7 +594,7 @@ def test_failure_propagates_to_celery(monkeypatch: pytest.MonkeyPatch) -> None:
 
     script_service = FakeScriptService(draft=FakeScriptDraft(structured_script=sections))
     visual_plan_service = FakeVisualPlanService()
-    storage = _make_storage(run_id=401, stage="SCRIPT_REVIEW")
+    storage = _make_storage(run_id=401, stage="VISUAL_PLAN_GENERATING")
     _patch_services(monkeypatch, script_service, visual_plan_service, storage)
 
     with pytest.raises(RuntimeError, match="LLM exploded"):
@@ -623,7 +623,7 @@ def test_release_gpu_lock_failure_still_propagates_original_error(monkeypatch: p
 
     script_service = FakeScriptService(draft=FakeScriptDraft(structured_script=sections))
     visual_plan_service = FakeVisualPlanService()
-    storage = _make_storage(run_id=402, stage="SCRIPT_REVIEW")
+    storage = _make_storage(run_id=402, stage="VISUAL_PLAN_GENERATING")
     _patch_services(monkeypatch, script_service, visual_plan_service, storage)
 
     with pytest.raises(RuntimeError, match="generation boom"):
@@ -640,7 +640,7 @@ def test_update_run_failure_in_error_path_still_re_raises_original(monkeypatch: 
 
     script_service = FakeScriptService(draft=FakeScriptDraft(structured_script=sections))
     visual_plan_service = FakeVisualPlanService()
-    storage = _make_storage(run_id=403, stage="SCRIPT_REVIEW")
+    storage = _make_storage(run_id=403, stage="VISUAL_PLAN_GENERATING")
     storage.error = ConnectionError("DB down")
     _patch_services(monkeypatch, script_service, visual_plan_service, storage)
 
@@ -703,7 +703,7 @@ def test_conditional_fail_skips_when_run_already_advanced(monkeypatch: pytest.Mo
     script_service = FakeScriptService(draft=FakeScriptDraft(structured_script=sections))
     visual_plan_service = FakeVisualPlanService()
     storage = RaceConditionStorage(
-        run_id=501, initial_stage="SCRIPT_REVIEW", advanced_stage="VISUAL_PLAN_REVIEW"
+        run_id=501, initial_stage="VISUAL_PLAN_SETUP", advanced_stage="VISUAL_PLAN_REVIEW"
     )
     _patch_services(monkeypatch, script_service, visual_plan_service, storage)
 
@@ -727,7 +727,7 @@ def test_success_transition_skips_when_run_already_advanced(monkeypatch: pytest.
     script_service = FakeScriptService(draft=FakeScriptDraft(structured_script=sections))
     visual_plan_service = FakeVisualPlanService()
     storage = RaceConditionStorage(
-        run_id=502, initial_stage="SCRIPT_REVIEW", advanced_stage="VISUAL_ASSET_GENERATING"
+        run_id=502, initial_stage="VISUAL_PLAN_SETUP", advanced_stage="VISUAL_ASSET_GENERATING"
     )
     _patch_services(monkeypatch, script_service, visual_plan_service, storage)
 

@@ -381,12 +381,12 @@ async def test_approve_script_success(client, stub_approve_services):
     assert response.status_code == 200
     body = response.json()
     assert body["id"] == 10
-    assert body["current_stage"] == "VISUAL_PLAN_GENERATING"
+    assert body["current_stage"] == "VISUAL_PLAN_SETUP"
     assert review_svc.approve_calls == [
         {
             "run_id": 10,
             "stage_name": "SCRIPT_REVIEW",
-            "target_stage": "VISUAL_PLAN_GENERATING",
+            "target_stage": "VISUAL_PLAN_SETUP",
             "reviewer": "human",
             "notes": "Looks good",
         }
@@ -675,7 +675,7 @@ async def test_generate_script_from_script_review(client, stub_generate_services
         "current_stage": "SCRIPT_GENERATING",
         "restart_from": "SCRIPT_GENERATING",
     }
-    assert "SCRIPT_REVIEW" in cas_calls[0]["expected_stages"]
+    assert "VISUAL_PLAN_SETUP" in cas_calls[0]["expected_stages"]
     assert dispatcher.calls[0]["idea_brief"] == "Science explainer"
 
 
@@ -899,9 +899,9 @@ def stub_generate_visual_plan_services(monkeypatch: pytest.MonkeyPatch) -> tuple
 
 
 @pytest.mark.asyncio
-async def test_generate_visual_plan_from_script_review(client, stub_generate_visual_plan_services):
+async def test_generate_visual_plan_from_visual_plan_setup(client, stub_generate_visual_plan_services):
     run_svc, dispatcher = stub_generate_visual_plan_services
-    run_svc.runs[30] = _make_run(30, "SCRIPT_REVIEW")
+    run_svc.runs[30] = _make_run(30, "VISUAL_PLAN_SETUP")
 
     response = await client.post(
         "/api/creator/runs/30/generate-visual-plan",
@@ -913,12 +913,12 @@ async def test_generate_visual_plan_from_script_review(client, stub_generate_vis
     assert body["task_id"] == "test-vp-task-id-456"
     assert body["run_id"] == 30
     assert body["current_stage"] == "VISUAL_PLAN_GENERATING"
-    # CAS was called for SCRIPT_REVIEW → VISUAL_PLAN_GENERATING (no restart_from)
+    # CAS was called for VISUAL_PLAN_SETUP → VISUAL_PLAN_GENERATING (no restart_from)
     cas_calls = run_svc.storage.conditional_update_calls
     assert len(cas_calls) == 1
     assert cas_calls[0]["run_id"] == 30
     assert cas_calls[0]["updates"] == {"current_stage": "VISUAL_PLAN_GENERATING"}
-    assert "SCRIPT_REVIEW" in cas_calls[0]["expected_stages"]
+    assert "VISUAL_PLAN_SETUP" in cas_calls[0]["expected_stages"]
     assert dispatcher.calls == [{
         "run_id": 30,
         "model_key": "qwen3-4b",

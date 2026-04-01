@@ -37,6 +37,14 @@ const MOCK_RUN_REVIEW = {
   restart_from: null,
 };
 
+const MOCK_RUN_VP_SETUP = {
+  id: 1,
+  project_id: 7,
+  current_stage: "VISUAL_PLAN_SETUP",
+  status: "running",
+  restart_from: null,
+};
+
 const MOCK_RUN_GENERATING = {
   id: 1,
   project_id: 7,
@@ -276,10 +284,9 @@ describe("ProjectPage", () => {
     // Editor tabs
     expect(screen.getByRole("tab", { name: "Markdown" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Structured" })).toBeInTheDocument();
-    // Approve + Regenerate Script + Generate Visual Plan visible
+    // Approve + Regenerate Script  visible
     expect(screen.getByRole("button", { name: "Approve Script" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Regenerate Script" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Generate Visual Plan" })).toBeInTheDocument();
   });
 
   it("switches between markdown and structured tabs", async () => {
@@ -497,16 +504,16 @@ describe("ProjectPage", () => {
     });
   });
 
-  it("shows Generate Visual Plan button in SCRIPT_REVIEW", async () => {
-    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
+  it("shows Generate Visual Plan button in VISUAL_PLAN_SETUP", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VP_SETUP]);
     renderPage();
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Generate Visual Plan" })).toBeInTheDocument();
     });
   });
 
-  it("calls generate-visual-plan endpoint from SCRIPT_REVIEW", async () => {
-    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
+  it("calls generate-visual-plan endpoint from VISUAL_PLAN_SETUP", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VP_SETUP]);
     renderPage();
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Generate Visual Plan" })).toBeInTheDocument();
