@@ -12,7 +12,7 @@
  */
 
 import { useState, useEffect, useCallback } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useNavigate } from "react-router-dom";
 
 import PipelineStepper from "../components/creator/PipelineStepper";
 import StageActionBar, {
@@ -25,6 +25,7 @@ import VisualAssetGrid from "../components/creator/VisualAssetGrid";
 import ProgressDialog from "../components/creator/ProgressDialog";
 import ModelSelector from "../components/creator/ModelSelector";
 import StoryboardView from "../components/creator/StoryboardView";
+import ConfirmDialog from "../components/creator/ConfirmDialog";
 
 const API_BASE = "/api/creator";
 
@@ -92,6 +93,7 @@ const SD_SAMPLERS = [
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const numericProjectId = Number(projectId);
+  const navigate = useNavigate();
 
   // Data state
   const [project, setProject] = useState<ProjectDetail | null>(null);
@@ -106,6 +108,12 @@ export default function ProjectPage() {
   const [approving, setApproving] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [restarting, setRestarting] = useState(false);
+
+  // Stop / Resume / Delete states
+  const [stopping, setStopping] = useState(false);
+  const [resuming, setResuming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<"stop" | "resume" | "delete" | null>(null);
 
   // Status toast
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -578,6 +586,63 @@ export default function ProjectPage() {
     [run, refreshRun],
   );
 
+  // ---- stop / resume / delete actions ----
+
+  const handleStop = useCallback(async () => {
+    if (!run) return;
+    setStopping(true);
+    setStatusMessage(null);
+    try {
+      const res = await fetch(`${API_BASE}/runs/${run.id}/stop`, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail ?? `Stop failed (${res.status})`);
+      }
+      setStatusMessage("Run stopped");
+      await refreshRun(run.id);
+    } catch (err) {
+      setStatusMessage(err instanceof Error ? err.message : "Stop failed");
+    } finally {
+      setStopping(false);
+    }
+  }, [run, refreshRun]);
+
+  const handleResume = useCallback(async () => {
+    if (!run) return;
+    setResuming(true);
+    setStatusMessage(null);
+    try {
+      const res = await fetch(`${API_BASE}/runs/${run.id}/resume`, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail ?? `Resume failed (${res.status})`);
+      }
+      setStatusMessage("Run resumed");
+      await refreshRun(run.id);
+    } catch (err) {
+      setStatusMessage(err instanceof Error ? err.message : "Resume failed");
+    } finally {
+      setResuming(false);
+    }
+  }, [run, refreshRun]);
+
+  const handleDeleteProject = useCallback(async () => {
+    setDeleting(true);
+    setStatusMessage(null);
+    try {
+      const res = await fetch(`${API_BASE}/projects/${numericProjectId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail ?? `Delete failed (${res.status})`);
+      }
+      navigate("/runs");
+    } catch (err) {
+      setStatusMessage(err instanceof Error ? err.message : "Delete failed");
+    } finally {
+      setDeleting(false);
+    }
+  }, [numericProjectId, navigate]);
+
   // ---- derived state ----
 
   const currentStage = run?.current_stage ?? "IDEA_READY";
@@ -823,6 +888,65 @@ export default function ProjectPage() {
         <span style={{ fontSize: 12, color: "#6b7280" }}>
           Source: {project.source_type} · Status: {project.status}
         </span>
+
+        {/* Stop / Resume / Delete actions */}
+        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+          {run && run.status === "running" && (
+            <button
+              type="button"
+              onClick={() => setConfirmAction("stop")}
+              disabled={stopping}
+              style={{
+                padding: "6px 14px",
+                border: "1px solid #dc2626",
+                borderRadius: 6,
+                background: "#fff",
+                color: "#dc2626",
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: stopping ? "not-allowed" : "pointer",
+              }}
+            >
+              {stopping ? "Stopping…" : "⏹ Stop"}
+            </button>
+          )}
+          {run && (run.status === "cancelled" || run.status === "failed" || run.status === "paused") && (
+            <button
+              type="button"
+              onClick={() => setConfirmAction("resume")}
+              disabled={resuming}
+              style={{
+                padding: "6px 14px",
+                border: "1px solid #16a34a",
+                borderRadius: 6,
+                background: "#fff",
+                color: "#16a34a",
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: resuming ? "not-allowed" : "pointer",
+              }}
+            >
+              {resuming ? "Resuming…" : "▶ Resume"}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => setConfirmAction("delete")}
+            disabled={deleting}
+            style={{
+              padding: "6px 14px",
+              border: "1px solid #dc2626",
+              borderRadius: 6,
+              background: "#fff",
+              color: "#dc2626",
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: deleting ? "not-allowed" : "pointer",
+            }}
+          >
+            {deleting ? "Deleting…" : "🗑 Delete Project"}
+          </button>
+        </div>
       </div>
 
       {/* Pipeline stepper */}
@@ -1382,6 +1506,35 @@ export default function ProjectPage() {
           statusMessage={statusMessage ?? undefined}
         />
       )}
+
+      {/* Confirm dialog for stop / resume / delete */}
+      <ConfirmDialog
+        open={confirmAction !== null}
+        title={
+          confirmAction === "stop"
+            ? "Stop Run?"
+            : confirmAction === "resume"
+              ? "Resume Run?"
+              : "Delete Project?"
+        }
+        message={
+          confirmAction === "stop"
+            ? "This will cancel the current generation task and stop the pipeline run."
+            : confirmAction === "resume"
+              ? "This will resume the stopped/failed run from where it left off."
+              : "This will permanently delete the project and all its runs, assets, and generated content. This action cannot be undone."
+        }
+        variant={confirmAction === "stop" ? "warning" : confirmAction === "resume" ? "info" : "danger"}
+        confirmLabel={confirmAction === "stop" ? "Stop Run" : confirmAction === "resume" ? "Resume" : "Delete Forever"}
+        loading={stopping || resuming || deleting}
+        onConfirm={async () => {
+          if (confirmAction === "stop") await handleStop();
+          else if (confirmAction === "resume") await handleResume();
+          else if (confirmAction === "delete") await handleDeleteProject();
+          setConfirmAction(null);
+        }}
+        onCancel={() => setConfirmAction(null)}
+      />
     </div>
   );
 }

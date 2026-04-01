@@ -4,6 +4,7 @@ from typing import Literal
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from creator_service.project_service import project_service
+from creator_service.run_service import run_service
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -52,3 +53,31 @@ async def list_projects(
         "projects": [project.model_dump(mode="json") for project in projects],
         "total": total,
     }
+
+
+@router.delete("/{project_id}")
+async def delete_project(project_id: int) -> dict[str, object]:
+    """Delete a project and all associated runs (FK cascade)."""
+    # First stop any active tasks on runs belonging to this project
+    runs = await run_service.list_runs_by_project(project_id)
+    for r in runs:
+        if r.active_task_id:
+            from shorts_api.routes.creator_runs import _revoke_active_tasks
+            _revoke_active_tasks(r.active_task_id)
+
+    # Collect run IDs for artifact cleanup before DB cascade deletes them
+    run_ids = [r.id for r in runs]
+
+    deleted = await project_service.delete_project(project_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Best-effort artifact cleanup for all runs
+    import os, shutil
+    artifact_root = os.getenv("ARTIFACT_ROOT", "data/artifacts")
+    for rid in run_ids:
+        run_dir = os.path.join(artifact_root, str(rid))
+        if os.path.isdir(run_dir):
+            shutil.rmtree(run_dir, ignore_errors=True)
+
+    return {"deleted": True, "project_id": project_id}

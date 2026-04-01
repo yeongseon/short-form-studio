@@ -15,6 +15,7 @@ _UPDATABLE_COLUMNS = {
     "style_preset",
     "started_at",
     "finished_at",
+    "active_task_id",
 }
 
 
@@ -115,3 +116,19 @@ class PostgresRunStorage:
             "SELECT * FROM creator_runs WHERE project_id = $1 ORDER BY id DESC",
             project_id,
         )
+
+    async def delete_run(self, run_id: int) -> bool:
+        """Delete a run by id. Returns True if deleted."""
+        result = await fetch_one(
+            "DELETE FROM creator_runs WHERE id = $1 RETURNING id",
+            run_id,
+        )
+        return result is not None
+
+    async def delete_runs_by_project(self, project_id: int) -> int:
+        """Delete all runs for a project. Returns count of deleted rows."""
+        rows = await fetch_all(
+            "DELETE FROM creator_runs WHERE project_id = $1 RETURNING id",
+            project_id,
+        )
+        return len(rows)

@@ -34,6 +34,10 @@ class ProjectStorageBackend(Protocol):
     async def count_projects(self) -> int:
         ...
 
+    async def delete_project(self, project_id: int) -> bool:
+        """Delete a project by id. Returns True if deleted."""
+        ...
+
 
 class InMemoryProjectStorage:
     """Temporary async storage backend used before DB integration."""
@@ -80,6 +84,13 @@ class InMemoryProjectStorage:
     async def count_projects(self) -> int:
         return len(self._projects)
 
+    async def delete_project(self, project_id: int) -> bool:
+        if project_id in self._projects:
+            del self._projects[project_id]
+            # Also remove associated runs
+            self._runs_by_project.pop(project_id, None)
+            return True
+        return False
     async def fetch_latest_run_summary(self, project_id: int) -> LatestRunSummary | None:
         runs = self._runs_by_project.get(project_id, [])
         if not runs:
@@ -183,6 +194,9 @@ class ProjectService:
     async def count_projects(self) -> int:
         return await self.db.count_projects()
 
+    async def delete_project(self, project_id: int) -> bool:
+        """Delete a project. FK cascade handles associated runs."""
+        return await self.db.delete_project(project_id)
 
 def _create_storage() -> ProjectStorageBackend:
     import os

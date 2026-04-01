@@ -292,6 +292,9 @@ async def generate_script_trigger(run_id: int, request: GenerateScriptRequest) -
             detail="Failed to enqueue script generation task",
         ) from None
 
+
+    # Persist task_id for stop/revoke support
+    await _append_task_id(run_id, task_id)
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -350,6 +353,9 @@ async def generate_visual_plan_trigger(run_id: int, request: GenerateVisualPlanR
             detail="Failed to enqueue visual plan generation task",
         ) from None
 
+
+    # Persist task_id for stop/revoke support
+    await _append_task_id(run_id, task_id)
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -475,6 +481,9 @@ async def generate_visual_assets_trigger(
             detail="Failed to enqueue image generation task",
         ) from None
 
+
+    # Persist task_id for stop/revoke support
+    await _append_task_id(run_id, task_id)
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -531,6 +540,9 @@ async def generate_scene_image_endpoint(
             detail="Failed to enqueue image generation task",
         ) from None
 
+
+    # Persist task_id for stop/revoke support
+    await _append_task_id(run_id, task_id)
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -580,6 +592,9 @@ async def regenerate_scene_image_endpoint(
             detail="Failed to enqueue image generation task",
         ) from None
 
+
+    # Persist task_id for stop/revoke support
+    await _append_task_id(run_id, task_id)
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -702,6 +717,9 @@ async def generate_audio_trigger(run_id: int, request: GenerateAudioRequest) -> 
             detail="Failed to enqueue audio generation task",
         ) from None
 
+
+    # Persist task_id for stop/revoke support
+    await _append_task_id(run_id, task_id)
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -761,6 +779,9 @@ async def generate_subtitles_trigger(run_id: int, request: GenerateSubtitlesRequ
             detail="Failed to enqueue subtitle generation task",
         ) from None
 
+
+    # Persist task_id for stop/revoke support
+    await _append_task_id(run_id, task_id)
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -819,6 +840,9 @@ async def render_trigger(run_id: int, request: RenderRequest) -> dict[str, objec
             detail="Failed to enqueue render task",
         ) from None
 
+
+    # Persist task_id for stop/revoke support
+    await _append_task_id(run_id, task_id)
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -1197,3 +1221,107 @@ async def generate_all_paragraph_subtitles(
         "tasks": task_ids,
         "total": len(task_ids),
     }
+
+
+# ---------------------------------------------------------------------------
+# Run lifecycle management (Phase 10 — Stop / Resume / Delete)
+# ---------------------------------------------------------------------------
+
+
+import json as _json
+import os as _os
+import shutil as _shutil
+
+
+def _revoke_active_tasks(active_task_id: str | None) -> None:
+    """Revoke all Celery tasks stored in active_task_id (JSON list or legacy single ID)."""
+    if not active_task_id:
+        return
+    try:
+        from celery_app import celery_app
+        # Parse as JSON list; fall back to single ID for backwards compat
+        try:
+            task_ids = _json.loads(active_task_id)
+            if isinstance(task_ids, str):
+                task_ids = [task_ids]
+        except (ValueError, TypeError):
+            task_ids = [active_task_id]
+        for tid in task_ids:
+            if tid:
+                celery_app.control.revoke(tid, terminate=True)
+    except Exception:
+        pass  # Best-effort: tasks may have already completed
+
+
+async def _append_task_id(run_id: int, task_id: str) -> None:
+    """Atomically append a task_id to the run's active_task_id JSON list.
+
+    Uses a single UPDATE with jsonb to avoid read-modify-write races when
+    multiple scene-image tasks are dispatched concurrently.
+    """
+    from creator_service.db import execute
+
+    await execute(
+        "UPDATE creator_runs "
+        "SET active_task_id = (COALESCE(active_task_id::jsonb, '[]'::jsonb) || to_jsonb($2::text))::text "
+        "WHERE id = $1",
+        run_id,
+        task_id,
+    )
+
+@router.post("/runs/{run_id}/stop")
+async def stop_run(run_id: int) -> dict[str, object]:
+    """Stop a running pipeline. Revokes the active Celery task."""
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    # Revoke Celery task before updating DB
+    _revoke_active_tasks(run.active_task_id)
+
+    try:
+        updated = await run_service.stop_run(run_id)
+    except ValueError as exc:
+        detail = str(exc)
+        if "not found" in detail.lower():
+            raise HTTPException(status_code=404, detail=detail) from exc
+        raise HTTPException(status_code=400, detail=detail) from exc
+
+    return updated.model_dump(mode="json")
+
+
+@router.post("/runs/{run_id}/resume")
+async def resume_run(run_id: int) -> dict[str, object]:
+    """Resume a stopped/cancelled/failed run."""
+    try:
+        updated = await run_service.resume_run(run_id)
+    except ValueError as exc:
+        detail = str(exc)
+        if "not found" in detail.lower():
+            raise HTTPException(status_code=404, detail=detail) from exc
+        raise HTTPException(status_code=400, detail=detail) from exc
+
+    return updated.model_dump(mode="json")
+
+
+@router.delete("/runs/{run_id}")
+async def delete_run(run_id: int) -> dict[str, object]:
+    """Delete a run. Revokes active task first if running."""
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    # Revoke any active task
+    _revoke_active_tasks(run.active_task_id)
+
+    deleted = await run_service.delete_run(run_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    # Best-effort artifact cleanup
+    _artifact_root = _os.getenv("ARTIFACT_ROOT", "data/artifacts")
+    run_dir = _os.path.join(_artifact_root, str(run_id))
+    if _os.path.isdir(run_dir):
+        _shutil.rmtree(run_dir, ignore_errors=True)
+
+    return {"deleted": True, "run_id": run_id}

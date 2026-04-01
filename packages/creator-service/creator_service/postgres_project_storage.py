@@ -70,3 +70,14 @@ class PostgresProjectStorage:
             "current_stage": row["current_stage"],
             "status": row["status"],
         }
+
+    async def delete_project(self, project_id: int) -> bool:
+        """Delete a project by id. Returns True if deleted.
+
+        Runs are cascade-deleted by FK constraint.
+        """
+        result = await fetch_one(
+            "DELETE FROM creator_projects WHERE id = $1 RETURNING id",
+            project_id,
+        )
+        return result is not None

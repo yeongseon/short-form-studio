@@ -27,7 +27,7 @@ _ALLOWED_STAGES = frozenset({RunStage.IDEA_READY, RunStage.SCRIPT_GENERATING})
 # Stages where writing SCRIPT_REVIEW or FAILED is safe — the run hasn't
 # advanced past generation.  Used as the expected_stages argument to
 # conditional_update_run for atomic compare-and-set.
-_SAFE_STAGES = frozenset({RunStage.IDEA_READY.value, RunStage.SCRIPT_GENERATING.value})
+_SAFE_STAGES = frozenset({RunStage.SCRIPT_GENERATING.value})
 
 
 class _StageGuardError(ValueError):

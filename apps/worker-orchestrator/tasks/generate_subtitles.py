@@ -38,7 +38,7 @@ _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
 
 # Stages where writing RENDER_GENERATING or FAILED is safe — the run
 # hasn't advanced past subtitle generation.
-_SAFE_STAGES = frozenset({RunStage.AUDIO_GENERATING, RunStage.SUBTITLE_GENERATING})
+_SAFE_STAGES = frozenset({RunStage.SUBTITLE_GENERATING})
 
 
 class _StageGuardError(ValueError):

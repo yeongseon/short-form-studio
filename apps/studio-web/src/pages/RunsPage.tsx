@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 
+import ConfirmDialog from "../components/creator/ConfirmDialog";
+
 const API_BASE = "/api/creator";
 
 interface ProjectSummary {
@@ -54,6 +56,10 @@ export default function RunsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Delete state
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+
   const fetchProjects = useCallback(async (pageOffset: number) => {
     setLoading(true);
     setError(null);
@@ -74,6 +80,23 @@ export default function RunsPage() {
       setLoading(false);
     }
   }, []);
+
+
+  const handleDeleteProject = useCallback(async (projectId: number) => {
+    setDeletingId(projectId);
+    try {
+      const res = await fetch(`${API_BASE}/projects/${projectId}`, { method: "DELETE" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail ?? `Delete failed (${res.status})`);
+      }
+      fetchProjects(offset);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Delete failed");
+    } finally {
+      setDeletingId(null);
+    }
+  }, [fetchProjects, offset]);
 
   useEffect(() => {
     fetchProjects(offset);
@@ -218,6 +241,8 @@ export default function RunsPage() {
                 <th style={{ padding: "8px 12px", fontWeight: 600, color: "#374151" }}>
                   Created
                 </th>
+                <th style={{ padding: "8px 12px", fontWeight: 600, color: "#374151", width: 80 }}>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -269,6 +294,23 @@ export default function RunsPage() {
                     </td>
                     <td style={{ padding: "10px 12px", color: "#6b7280" }}>
                       {formatDate(proj.created_at)}
+                    </td>
+                    <td style={{ padding: "10px 12px" }}>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(proj.id); }}
+                        style={{
+                          padding: "4px 8px",
+                          border: "none",
+                          background: "transparent",
+                          color: "#dc2626",
+                          fontSize: 12,
+                          cursor: "pointer",
+                          fontWeight: 500,
+                        }}
+                      >
+                        Delete
+                      </button>
                     </td>
                   </tr>
                 );
@@ -329,6 +371,23 @@ export default function RunsPage() {
           )}
         </>
       )}
+
+      {/* Delete confirmation dialog */}
+      <ConfirmDialog
+        open={confirmDeleteId !== null}
+        title="Delete Project?"
+        message="This will permanently delete the project and all its data. This action cannot be undone."
+        variant="danger"
+        confirmLabel="Delete"
+        loading={deletingId === confirmDeleteId}
+        onConfirm={async () => {
+          if (confirmDeleteId !== null) {
+            await handleDeleteProject(confirmDeleteId);
+          }
+          setConfirmDeleteId(null);
+        }}
+        onCancel={() => setConfirmDeleteId(null)}
+      />
     </div>
   );
 }
