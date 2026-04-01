@@ -305,7 +305,7 @@ export default function CreatePage() {
       {/* Shared: Model Defaults */}
       <div style={{ marginTop: 24, padding: 16, background: "#f9f9f9", borderRadius: 8, border: "1px solid #eee" }}>
         <h2 style={{ fontSize: 16, fontWeight: 600, marginBottom: 12 }}>Model Defaults</h2>
-        <ModelSelector categories={["script", "image"]} onSelectionChange={handleModelChange} />
+        <ModelSelector categories={activeTab === "idea" ? ["script", "image"] : ["image"]} onSelectionChange={handleModelChange} />
       </div>
 
       {/* Shared: Style Preset */}

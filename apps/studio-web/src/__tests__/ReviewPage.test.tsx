@@ -69,7 +69,7 @@ const MOCK_PREVIEW = {
 
 function renderPage(runId = "10") {
   return render(
-    <MemoryRouter initialEntries={[`/review/${runId}`]}>
+    <MemoryRouter initialEntries={[`/review/${runId}`]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <Routes>
         <Route path="/review/:runId" element={<ReviewPage />} />
       </Routes>

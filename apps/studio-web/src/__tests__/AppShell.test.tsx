@@ -6,7 +6,7 @@ import AppShell from "../components/layout/AppShell";
 
 function renderWithRoute(path: string) {
   return render(
-    <MemoryRouter initialEntries={[path]}>
+    <MemoryRouter initialEntries={[path]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <Routes>
         <Route element={<AppShell />}>
           <Route path="/create" element={<div>CreatePage</div>} />
@@ -85,7 +85,7 @@ describe("AppShell", () => {
 
   it("redirects unknown routes to /create", () => {
     render(
-      <MemoryRouter initialEntries={["/unknown-page"]}>
+      <MemoryRouter initialEntries={["/unknown-page"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Routes>
           <Route element={<AppShell />}>
             <Route path="/create" element={<div>CreatePage</div>} />
@@ -99,7 +99,7 @@ describe("AppShell", () => {
 
   it("redirects root / to /create", () => {
     render(
-      <MemoryRouter initialEntries={["/"]}>
+      <MemoryRouter initialEntries={["/"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Routes>
           <Route element={<AppShell />}>
             <Route path="/create" element={<div>CreatePage</div>} />
@@ -113,7 +113,7 @@ describe("AppShell", () => {
 
   it("deep links to /ops still work after redirect setup", () => {
     render(
-      <MemoryRouter initialEntries={["/ops"]}>
+      <MemoryRouter initialEntries={["/ops"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Routes>
           <Route element={<AppShell />}>
             <Route path="/create" element={<div>CreatePage</div>} />
@@ -128,7 +128,7 @@ describe("AppShell", () => {
 
   it("deep links to /runs still work after redirect setup", () => {
     render(
-      <MemoryRouter initialEntries={["/runs"]}>
+      <MemoryRouter initialEntries={["/runs"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Routes>
           <Route element={<AppShell />}>
             <Route path="/create" element={<div>CreatePage</div>} />
@@ -143,7 +143,7 @@ describe("AppShell", () => {
 
   it("redirects legacy /library to /ops/library", () => {
     render(
-      <MemoryRouter initialEntries={["/library"]}>
+      <MemoryRouter initialEntries={["/library"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Routes>
           <Route element={<AppShell />}>
             <Route path="/create" element={<div>CreatePage</div>} />
@@ -159,7 +159,7 @@ describe("AppShell", () => {
 
   it("renders LibraryPage at /ops/library directly", () => {
     render(
-      <MemoryRouter initialEntries={["/ops/library"]}>
+      <MemoryRouter initialEntries={["/ops/library"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Routes>
           <Route element={<AppShell />}>
             <Route path="/create" element={<div>CreatePage</div>} />

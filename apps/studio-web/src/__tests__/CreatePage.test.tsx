@@ -51,7 +51,7 @@ function mockFetchFullFlow() {
 
 function renderCreatePage() {
   return render(
-    <MemoryRouter>
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <CreatePage />
     </MemoryRouter>,
   );
@@ -169,6 +169,16 @@ describe("CreatePage", () => {
     // Should NOT show TTS or STT
     expect(screen.queryByText("TTS Model")).toBeNull();
     expect(screen.queryByText("STT Model")).toBeNull();
+  });
+
+  it("shows only image model on markdown tab", async () => {
+    renderCreatePage();
+    fireEvent.click(screen.getByRole("tab", { name: "Start from Markdown" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("model-selector")).toBeTruthy();
+    });
+    expect(screen.getByText("Image Model")).toBeTruthy();
+    expect(screen.queryByText("Script Model")).toBeNull();
   });
 
   it("has proper tablist and tabpanel roles", () => {
@@ -408,6 +418,9 @@ describe("CreatePage", () => {
   it("does not submit markdown when content is empty", async () => {
     mockFetchFullFlow();
     renderCreatePage();
+    await waitFor(() => {
+      expect(screen.getByTestId("model-selector")).toBeTruthy();
+    });
     fireEvent.click(screen.getByRole("tab", { name: "Start from Markdown" }));
 
     // Leave markdown content empty, just set title
@@ -416,9 +429,9 @@ describe("CreatePage", () => {
     fireEvent.change(screen.getByLabelText(/Markdown Content/), { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: "Create Project" }));
 
-    // Should NOT navigate since markdown is empty
-    await new Promise((r) => setTimeout(r, 100));
-    expect(mockNavigate).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(mockNavigate).not.toHaveBeenCalled();
+    });
   });
 
   it("shows error when import-markdown fails", async () => {

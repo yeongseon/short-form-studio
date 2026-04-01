@@ -79,7 +79,7 @@ vi.mock("react-router-dom", async () => {
 
 function renderPage(projectId = "7") {
   return render(
-    <MemoryRouter initialEntries={[`/projects/${projectId}`]}>
+    <MemoryRouter initialEntries={[`/projects/${projectId}`]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <Routes>
         <Route path="/projects/:projectId" element={<ProjectPage />} />
       </Routes>
@@ -228,7 +228,7 @@ describe("ProjectPage", () => {
   // ---- Invalid project ID ----
   it("shows invalid ID message for non-numeric id", () => {
     render(
-      <MemoryRouter initialEntries={["/projects/abc"]}>
+      <MemoryRouter initialEntries={["/projects/abc"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Routes>
           <Route path="/projects/:projectId" element={<ProjectPage />} />
         </Routes>
