@@ -4,6 +4,7 @@ from typing import Any, cast
 import pytest
 
 from creator_service.project_service import InMemoryProjectStorage, ProjectService
+from creator_service.run_service import InMemoryRunStorage, RunService
 
 def run(coro):
     return asyncio.run(coro)
@@ -121,6 +122,51 @@ def test_get_and_list_include_latest_run_summary(
         "current_stage": "script_review",
         "status": "paused",
     }
+
+
+def test_get_and_list_include_latest_run_summary_from_run_service(
+    service: ProjectService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project = run(service.create_project(title="With Real Run", source_type="idea", idea_brief="test idea"))
+
+    run_service = RunService(InMemoryRunStorage())
+    first = run(
+        run_service.create_run(
+            project_id=project.id,
+            model_defaults=None,
+            style_preset="default",
+        )
+    )
+    second = run(
+        run_service.create_run(
+            project_id=project.id,
+            model_defaults=None,
+            style_preset="default",
+        )
+    )
+
+    run(run_service.advance_stage(second.id, "SCRIPT_GENERATING"))
+
+    import creator_service.run_service as run_service_module
+
+    monkeypatch.setattr(run_service_module, "run_service", run_service)
+
+    detailed = run(service.get_project(project.id))
+    listed = run(service.list_projects())
+
+    assert detailed is not None
+    assert detailed.model_dump()["latest_run"] == {
+        "run_id": second.id,
+        "current_stage": "SCRIPT_GENERATING",
+        "status": "pending",
+    }
+    assert listed[0].model_dump()["latest_run"] == {
+        "run_id": second.id,
+        "current_stage": "SCRIPT_GENERATING",
+        "status": "pending",
+    }
+    assert first.id != second.id
 
 
 def test_create_project_with_markdown_missing_source_raises_value_error(service: ProjectService) -> None:

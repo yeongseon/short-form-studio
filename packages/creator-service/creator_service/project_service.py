@@ -93,13 +93,30 @@ class InMemoryProjectStorage:
         return False
     async def fetch_latest_run_summary(self, project_id: int) -> LatestRunSummary | None:
         runs = self._runs_by_project.get(project_id, [])
-        if not runs:
+        if runs:
+            latest = max(runs, key=lambda run: run["id"])
+            return {
+                "run_id": latest["id"],
+                "current_stage": latest["current_stage"],
+                "status": latest["status"],
+            }
+
+        # In real local/dev flow, runs are created through RunService, not via
+        # this storage's insert_run helper. Fall back to the shared in-memory
+        # run service so latest_run stays accurate outside Postgres mode.
+        try:
+            from creator_service.run_service import run_service
+
+            persisted_runs = await run_service.list_runs_by_project(project_id)
+        except Exception:
             return None
-        latest = max(runs, key=lambda run: run["id"])
+        if not persisted_runs:
+            return None
+        latest_run = persisted_runs[0]
         return {
-            "run_id": latest["id"],
-            "current_stage": latest["current_stage"],
-            "status": latest["status"],
+            "run_id": latest_run.id,
+            "current_stage": latest_run.current_stage,
+            "status": latest_run.status,
         }
 
     async def insert_run(

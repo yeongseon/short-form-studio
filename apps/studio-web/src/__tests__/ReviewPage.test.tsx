@@ -160,7 +160,7 @@ beforeEach(() => {
 
 describe("ReviewPage", () => {
   it("shows loading state initially", () => {
-    mockFetchAll(MOCK_RUN_FINAL_REVIEW);
+    vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise(() => {}));
     renderPage();
     expect(screen.getByRole("status")).toHaveTextContent("Loading review");
   });

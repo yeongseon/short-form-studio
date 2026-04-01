@@ -213,13 +213,28 @@ class StubStageReviewService:
         self._run_svc.runs[run_id] = updated
         return updated
 
+
+class StubProjectLookupService:
+    def __init__(self, existing_project_ids: set[int] | None = None) -> None:
+        self.existing_project_ids = existing_project_ids or {7, 8}
+        self.get_project_calls: list[int] = []
+
+    async def get_project(self, project_id: int) -> object | None:
+        self.get_project_calls.append(project_id)
+        if project_id in self.existing_project_ids:
+            return {"id": project_id}
+        return None
+
 @pytest.fixture
 def stub_run_service(monkeypatch: pytest.MonkeyPatch) -> StubRunService:
     service = StubRunService()
+    project_lookup = StubProjectLookupService()
 
     for route in runs_router.routes:
         if route.name in {"create_run", "get_run_detail", "restart_run", "approve_script", "generate_script_trigger", "generate_visual_plan_trigger", "generate_audio_trigger", "generate_subtitles_trigger", "list_runs_for_project"}:
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", service)
+        if route.name == "create_run":
+            monkeypatch.setitem(route.endpoint.__globals__, "project_service", project_lookup)
 
     return service
 
@@ -268,6 +283,18 @@ async def test_create_run_minimal(client, stub_run_service: StubRunService):
     assert body["model_defaults"] is None
     assert body["metadata"] is None
     assert body["style_preset"] == "default"
+
+
+@pytest.mark.asyncio
+async def test_create_run_project_not_found(client, stub_run_service: StubRunService):
+    _ = stub_run_service
+    response = await client.post(
+        "/api/creator/projects/999/runs",
+        json={"style_preset": "default"},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Project not found"}
 
 
 @pytest.mark.asyncio

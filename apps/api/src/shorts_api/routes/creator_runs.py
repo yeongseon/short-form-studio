@@ -135,6 +135,10 @@ class UpdateModelDefaultsRequest(BaseModel):
 
 @router.post("/projects/{project_id}/runs", status_code=201)
 async def create_run(project_id: int, request: CreateRunRequest) -> dict[str, object]:
+    project = await project_service.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
     run = await run_service.create_run(
         project_id=project_id,
         model_defaults=request.model_defaults,

@@ -152,7 +152,15 @@ class TestModelCatalogService:
 
         result = await service.list_models()
 
-        required_fields = {"key", "label", "provider_type", "is_local", "requires_gpu", "status"}
+        required_fields = {
+            "key",
+            "label",
+            "provider_type",
+            "is_local",
+            "requires_gpu",
+            "status",
+            "default_params",
+        }
         all_entries = (
             result["script_models"]
             + result["image_models"]

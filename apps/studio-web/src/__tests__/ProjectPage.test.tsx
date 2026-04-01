@@ -302,10 +302,11 @@ describe("ProjectPage", () => {
 
     // Switch to structured
     fireEvent.click(screen.getByRole("tab", { name: "Structured" }));
-
-    const stTab = screen.getByRole("tab", { name: "Structured" });
-    expect(stTab.getAttribute("aria-selected")).toBe("true");
-    expect(mdTab.getAttribute("aria-selected")).toBe("false");
+    await waitFor(() => {
+      const stTab = screen.getByRole("tab", { name: "Structured" });
+      expect(stTab.getAttribute("aria-selected")).toBe("true");
+      expect(mdTab.getAttribute("aria-selected")).toBe("false");
+    });
   });
 
   // ---- SCRIPT_GENERATING state ----

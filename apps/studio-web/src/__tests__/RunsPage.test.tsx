@@ -276,7 +276,7 @@ describe("RunsPage", () => {
 
   // --- Header ---
   it("renders page heading", async () => {
-    mockFetchOk([]);
+    vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise(() => {}));
     renderPage();
     expect(screen.getByRole("heading", { name: "Projects" })).toBeInTheDocument();
   });
