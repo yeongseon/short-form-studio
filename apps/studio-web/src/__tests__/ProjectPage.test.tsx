@@ -327,9 +327,9 @@ describe("ProjectPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("generating-indicator")).toBeInTheDocument();
     });
-    expect(screen.getByText("Generating Script…")).toBeInTheDocument();
-    // Editor tabs should NOT be visible during generation
-    expect(screen.queryByRole("tab", { name: "Markdown" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Generating Script/i)).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Markdown" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Structured" })).toBeInTheDocument();
   });
 
   // ---- Approve action ----
@@ -478,9 +478,8 @@ describe("ProjectPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("vp-generating-indicator")).toBeInTheDocument();
     });
-    expect(screen.getByText("Generating Visual Plan\u2026")).toBeInTheDocument();
-    // Script editor tabs should NOT be visible
-    expect(screen.queryByRole("tab", { name: "Markdown" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Generating Visual Plan/i)).toBeInTheDocument();
+    expect(screen.getByText("Visual Plan Setup")).toBeInTheDocument();
   });
 
   it("shows VisualPlanEditor and action buttons for VISUAL_PLAN_REVIEW", async () => {

@@ -1289,51 +1289,25 @@ export default function ProjectPage() {
         </div>
       )}
 
-      {/* Generating indicator */}
-      {run && isGenerating && (
-        <div
-          data-testid="generating-indicator"
-          style={{
-            textAlign: "center",
-            padding: 32,
-            background: "#eff6ff",
-            borderRadius: 8,
-            border: "1px solid #bfdbfe",
-            color: "#1e40af",
-            marginBottom: 24,
-          }}
-        >
-          <p style={{ margin: "0 0 4px", fontWeight: 600 }}>Generating Script…</p>
-          <p style={{ margin: 0, fontSize: 13 }}>
-            The AI model is writing your script. This may take a moment.
-          </p>
-        </div>
-      )}
-
-      {/* Visual plan generating indicator */}
-      {run && isVPGenerating && (
-        <div
-          data-testid="vp-generating-indicator"
-          style={{
-            textAlign: "center",
-            padding: 32,
-            background: "#f0fdf4",
-            borderRadius: 8,
-            border: "1px solid #bbf7d0",
-            color: "#166534",
-            marginBottom: 24,
-          }}
-        >
-          <p style={{ margin: "0 0 4px", fontWeight: 600 }}>Generating Visual Plan…</p>
-          <p style={{ margin: 0, fontSize: 13 }}>
-            The AI model is creating scene descriptions. This may take a moment.
-          </p>
-        </div>
-      )}
-
       {/* Script editor area */}
-      {run && isScriptStage && !isGenerating && (
+      {run && isScriptStage && (
         <div style={{ marginBottom: 24 }}>
+          {isGenerating && (
+            <div
+              data-testid="generating-indicator"
+              style={{
+                padding: "10px 14px",
+                background: "#eff6ff",
+                borderRadius: 8,
+                border: "1px solid #bfdbfe",
+                color: "#1e40af",
+                marginBottom: 12,
+                fontSize: 13,
+              }}
+            >
+              Generating Script… Current draft will update automatically.
+            </div>
+          )}
           {/* Editor mode toggle */}
           <div
             role="tablist"
@@ -1392,6 +1366,8 @@ export default function ProjectPage() {
               <MarkdownScriptEditor
                 runId={run.id}
                 readOnly={!isEditable}
+                pollIntervalMs={isGenerating ? 3000 : undefined}
+                suppressMissingDraftError={isGenerating}
                 onSuccess={() => setStatusMessage("Script saved")}
                 onError={(_action, msg) => setStatusMessage(msg)}
               />
@@ -1404,6 +1380,8 @@ export default function ProjectPage() {
               <StructuredScriptEditor
                 runId={run.id}
                 readOnly={!isEditable}
+                pollIntervalMs={isGenerating ? 3000 : undefined}
+                suppressMissingDraftError={isGenerating}
                 onSuccess={() => setStatusMessage("Script saved")}
                 onError={(_action, msg) => setStatusMessage(msg)}
               />
@@ -1413,8 +1391,24 @@ export default function ProjectPage() {
       )}
 
       {/* Visual plan setup — paragraph→image mapping before generation */}
-      {run && isVPSetup && (
+      {run && (isVPSetup || (isVPGenerating && !run.restart_from)) && (
         <div style={{ marginBottom: 24 }}>
+          {isVPGenerating && (
+            <div
+              data-testid="vp-generating-indicator"
+              style={{
+                padding: "10px 14px",
+                background: "#f0fdf4",
+                borderRadius: 8,
+                border: "1px solid #bbf7d0",
+                color: "#166534",
+                marginBottom: 12,
+                fontSize: 13,
+              }}
+            >
+              Generating Visual Plan… Scene prompts will appear here automatically.
+            </div>
+          )}
           <div
             style={{
               padding: "16px 20px",
@@ -1450,11 +1444,29 @@ export default function ProjectPage() {
       )}
 
       {/* Visual plan editor area */}
-      {run && isVisualPlanStage && !isVPGenerating && !isVPSetup && (
+      {run && isVisualPlanStage && !(isVPSetup || (isVPGenerating && !run.restart_from)) && (
         <div style={{ marginBottom: 24 }}>
+          {isVPGenerating && (
+            <div
+              data-testid="vp-generating-indicator"
+              style={{
+                padding: "10px 14px",
+                background: "#f0fdf4",
+                borderRadius: 8,
+                border: "1px solid #bbf7d0",
+                color: "#166534",
+                marginBottom: 12,
+                fontSize: 13,
+              }}
+            >
+              Regenerating Visual Plan… Existing prompts stay visible until the new plan is ready.
+            </div>
+          )}
           <VisualPlanEditor
             runId={run.id}
             readOnly={currentStage !== "VISUAL_PLAN_REVIEW"}
+            pollIntervalMs={isVPGenerating ? 3000 : undefined}
+            suppressMissingPlanError={isVPGenerating}
             onSuccess={() => setStatusMessage("Visual plan saved")}
             onError={(_action, msg) => setStatusMessage(msg)}
           />
@@ -1810,6 +1822,7 @@ export default function ProjectPage() {
           <StoryboardView
             runId={run.id}
             readOnly={isRenderStage}
+            currentStage={currentStage}
             onStatusMessage={setStatusMessage}
             onRenderReady={() => {
               if (run) refreshRun(run.id);

@@ -33,6 +33,9 @@ export interface StructuredScriptEditorProps {
   onSuccess?: (data: Record<string, unknown>) => void;
   onError?: (action: "load" | "save", message: string) => void;
   readOnly?: boolean;
+  pollIntervalMs?: number;
+  suppressMissingDraftError?: boolean;
+  pendingMessage?: string;
 }
 
 // --------------- helpers ---------------
@@ -244,6 +247,9 @@ export default function StructuredScriptEditor({
   onSuccess,
   onError,
   readOnly = false,
+  pollIntervalMs,
+  suppressMissingDraftError = false,
+  pendingMessage = "Waiting for generated sections…",
 }: StructuredScriptEditorProps) {
   const [sections, setSections] = useState<SectionData[]>([]);
   const [savedSections, setSavedSections] = useState<SectionData[]>([]);
@@ -251,41 +257,66 @@ export default function StructuredScriptEditor({
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingDraft, setPendingDraft] = useState(false);
 
   const isDirty = !deepEqual(sections, savedSections);
 
   // Load sections
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      setLoading(true);
+  const load = useCallback(
+    async (showLoading: boolean) => {
+      if (showLoading) setLoading(true);
       setError(null);
       try {
         const res = await fetch(`${apiBase}/runs/${runId}/script/structured`);
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
-          throw new Error(body.detail ?? `Failed to load (${res.status})`);
+          const detail = body.detail ?? `Failed to load (${res.status})`;
+          if (
+            suppressMissingDraftError &&
+            typeof detail === "string" &&
+            detail.toLowerCase().includes("no script draft")
+          ) {
+            setSections([]);
+            setSavedSections([]);
+            setVersion(null);
+            setPendingDraft(true);
+            return;
+          }
+          throw new Error(detail);
         }
         const data = await res.json();
         const loaded = (data.sections ?? []) as SectionData[];
-        if (!cancelled) {
-          setSections(loaded);
-          setSavedSections(loaded);
-          setVersion(data.version ?? null);
-        }
+        setSections(loaded);
+        setSavedSections(loaded);
+        setVersion(data.version ?? null);
+        setPendingDraft(false);
       } catch (err) {
-        if (!cancelled) {
-          const msg = err instanceof Error ? err.message : "Failed to load sections";
-          setError(msg);
-          onError?.("load", msg);
-        }
+        const msg = err instanceof Error ? err.message : "Failed to load sections";
+        setError(msg);
+        onError?.("load", msg);
       } finally {
-        if (!cancelled) setLoading(false);
+        if (showLoading) setLoading(false);
       }
-    }
-    load();
+    },
+    [apiBase, runId, suppressMissingDraftError, onError],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      await load(true);
+      if (cancelled) return;
+    })();
     return () => { cancelled = true; };
-  }, [apiBase, runId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [load]);
+
+  useEffect(() => {
+    if (!pollIntervalMs) return;
+    const timer = setInterval(() => {
+      void load(false);
+    }, pollIntervalMs);
+    return () => clearInterval(timer);
+  }, [pollIntervalMs, load]);
 
   // Field change
   const handleChange = useCallback(
@@ -378,6 +409,22 @@ export default function StructuredScriptEditor({
           }}
         >
           {error}
+        </div>
+      )}
+
+      {pendingDraft && !error && (
+        <div
+          data-testid="structured-pending"
+          style={{
+            padding: "8px 12px",
+            marginBottom: 12,
+            backgroundColor: "#eff6ff",
+            color: "#1e40af",
+            borderRadius: 4,
+            fontSize: 13,
+          }}
+        >
+          {pendingMessage}
         </div>
       )}
 
