@@ -412,6 +412,8 @@ describe("CreatePage", () => {
 
     // Leave markdown content empty, just set title
     fireEvent.change(screen.getByLabelText(/^Title/), { target: { value: "My Project" } });
+    // Clear pre-filled template to test empty submission
+    fireEvent.change(screen.getByLabelText(/Markdown Content/), { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: "Create Project" }));
 
     // Should NOT navigate since markdown is empty
