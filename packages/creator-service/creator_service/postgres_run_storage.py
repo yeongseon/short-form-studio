@@ -111,6 +111,18 @@ class PostgresRunStorage:
             return False, None
         return False, current
 
+    async def merge_model_defaults(self, run_id: int, updates_json: str) -> dict[str, Any]:
+        """Atomically merge JSON updates into model_defaults_json using PostgreSQL jsonb."""
+        row = await fetch_one(
+            "UPDATE creator_runs "
+            "SET model_defaults_json = (COALESCE(model_defaults_json, '{}')::jsonb || $2::jsonb)::text "
+            "WHERE id = $1 RETURNING *",
+            run_id,
+            updates_json,
+        )
+        if row is None:
+            raise ValueError(f"Run {run_id} not found")
+        return row
     async def list_runs_by_project(self, project_id: int) -> list[dict[str, Any]]:
         return await fetch_all(
             "SELECT * FROM creator_runs WHERE project_id = $1 ORDER BY id DESC",

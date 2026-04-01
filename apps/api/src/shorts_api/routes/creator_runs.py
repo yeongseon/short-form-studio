@@ -125,6 +125,14 @@ class GenerateSubtitlesRequest(BaseModel):
 class RenderRequest(BaseModel):
     render_profile: str = "shorts_default"
 
+
+class UpdateModelDefaultsRequest(BaseModel):
+    script_model: str | None = None
+    image_model: str | None = None
+    tts_model: str | None = None
+    subtitle_model: str | None = None
+    render_profile: str | None = None
+
 @router.post("/projects/{project_id}/runs", status_code=201)
 async def create_run(project_id: int, request: CreateRunRequest) -> dict[str, object]:
     run = await run_service.create_run(
@@ -1263,7 +1271,15 @@ async def _append_task_id(run_id: int, task_id: str) -> None:
 
     await execute(
         "UPDATE creator_runs "
-        "SET active_task_id = (COALESCE(active_task_id::jsonb, '[]'::jsonb) || to_jsonb($2::text))::text "
+        "SET active_task_id = ("
+        "  COALESCE("
+        "    CASE WHEN active_task_id IS NOT NULL "
+        "         AND left(active_task_id, 1) = '[' "
+        "    THEN active_task_id::jsonb "
+        "    ELSE '[]'::jsonb "
+        "    END, '[]'::jsonb"
+        "  ) || to_jsonb($2::text)"
+        ")::text "
         "WHERE id = $1",
         run_id,
         task_id,
@@ -1302,6 +1318,32 @@ async def resume_run(run_id: int) -> dict[str, object]:
         raise HTTPException(status_code=400, detail=detail) from exc
 
     return updated.model_dump(mode="json")
+
+
+@router.post("/runs/{run_id}/go-back")
+async def go_back(run_id: int) -> dict[str, object]:
+    try:
+        run = await run_service.go_back(run_id)
+        return run.model_dump(mode="json")
+    except ValueError as exc:
+        detail = str(exc)
+        if "not found" in detail.lower():
+            raise HTTPException(status_code=404, detail=detail) from exc
+        raise HTTPException(status_code=400, detail=detail) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.patch("/runs/{run_id}/model-defaults")
+async def update_model_defaults(run_id: int, request: UpdateModelDefaultsRequest) -> dict[str, object]:
+    updates = {k: v for k, v in request.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No model defaults to update")
+    try:
+        run = await run_service.update_model_defaults(run_id, updates)
+        return run.model_dump(mode="json")
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.delete("/runs/{run_id}")

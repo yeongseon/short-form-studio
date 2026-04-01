@@ -38,12 +38,21 @@ interface ProjectDetail {
   status: string;
 }
 
+interface ModelDefaults {
+  script_model?: string;
+  image_model?: string;
+  tts_model?: string;
+  subtitle_model?: string;
+  render_profile?: string;
+}
+
 interface RunDetail {
   id: number;
   project_id: number;
   current_stage: string;
   status: string;
   restart_from: string | null;
+  model_defaults: ModelDefaults | null;
 }
 
 type EditorMode = "markdown" | "structured";
@@ -74,6 +83,14 @@ const STORYBOARD_STAGES = new Set(["AUDIO_GENERATING", "SUBTITLE_GENERATING", "R
 
 // Stages where editing is allowed (not generating)
 const EDITABLE_STAGES = new Set(["SCRIPT_REVIEW", "VISUAL_PLAN_REVIEW"]);
+
+// Back navigation labels per review stage
+const STAGE_BACK_LABELS: Record<string, string> = {
+  SCRIPT_REVIEW: "\u2190 Back to Idea",
+  VISUAL_PLAN_REVIEW: "\u2190 Back to Script Review",
+  VISUAL_ASSET_REVIEW: "\u2190 Back to Visual Plan",
+  FINAL_REVIEW: "\u2190 Back to Visual Assets",
+};
 
 // SD quality presets for image generation tuning
 const SD_QUALITY_PRESETS: Record<
@@ -140,6 +157,10 @@ export default function ProjectPage() {
 
   // Preview data for FINAL_REVIEW
   const [preview, setPreview] = useState<Record<string, unknown> | null>(null);
+
+  // Per-stage model selection (persisted to backend via model_defaults)
+  const [modelSelection, setModelSelection] = useState<ModelDefaults>({});
+  const [goingBack, setGoingBack] = useState(false);
 
   // ---- data fetching ----
 
@@ -210,6 +231,90 @@ export default function ProjectPage() {
     }
   }, []);
 
+  // Initialize model selection from run.model_defaults on load
+  useEffect(() => {
+    if (run?.model_defaults) {
+      setModelSelection((prev) => {
+        // Only set if we don't have local selections yet
+        const hasLocal = Object.keys(prev).length > 0;
+        if (hasLocal) return prev;
+        return { ...run.model_defaults } as ModelDefaults;
+      });
+    }
+  }, [run?.model_defaults]);
+
+  // Build a selectedModels map scoped to specific categories.
+  // Returns undefined when none of the requested categories have persisted values,
+  // so ModelSelector stays uncontrolled and can compute its own defaults.
+  const buildSelectedModels = useCallback(
+    (categories: string[]): Record<string, string> | undefined => {
+      const FIELD_TO_CAT: Record<string, string> = {
+        script_model: "script",
+        image_model: "image",
+        tts_model: "tts",
+        subtitle_model: "stt",
+      };
+      const catSet = new Set(categories);
+      const map: Record<string, string> = {};
+      for (const [field, cat] of Object.entries(FIELD_TO_CAT)) {
+        if (catSet.has(cat) && modelSelection[field as keyof ModelDefaults]) {
+          map[cat] = modelSelection[field as keyof ModelDefaults]!;
+        }
+      }
+      return Object.keys(map).length > 0 ? map : undefined;
+    },
+    [modelSelection],
+  );
+
+  // Persist model selection to backend
+  const handleModelChange = useCallback(
+    (category: string, modelKey: string) => {
+      // Map ModelSelector category → ModelDefaults field
+      const fieldMap: Record<string, keyof ModelDefaults> = {
+        script: "script_model",
+        image: "image_model",
+        tts: "tts_model",
+        stt: "subtitle_model",
+        render: "render_profile",
+      };
+      const field = fieldMap[category];
+      if (!field) return;
+      setModelSelection((prev) => ({ ...prev, [field]: modelKey }));
+      // Fire-and-forget persist to backend
+      if (run) {
+        fetch(`${API_BASE}/runs/${run.id}/model-defaults`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ [field]: modelKey }),
+        }).catch(() => { /* non-critical */ });
+      }
+    },
+    [run],
+  );
+
+  // ---- go-back navigation ----
+
+  const handleGoBack = useCallback(async () => {
+    if (!run) return;
+    setGoingBack(true);
+    setStatusMessage(null);
+    try {
+      const res = await fetch(`${API_BASE}/runs/${run.id}/go-back`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail ?? `Go back failed (${res.status})`);
+      }
+      setStatusMessage("Navigated back");
+      await refreshRun(run.id);
+    } catch (err) {
+      setStatusMessage(err instanceof Error ? err.message : "Go back failed");
+    } finally {
+      setGoingBack(false);
+    }
+  }, [run, refreshRun]);
+
   // ---- script actions ----
 
   const handleApprove = useCallback(async () => {
@@ -243,7 +348,7 @@ export default function ProjectPage() {
       const res = await fetch(`${API_BASE}/runs/${run.id}/generate-script`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model_key: "qwen3-4b" }),
+        body: JSON.stringify({ model_key: modelSelection.script_model || "qwen3-4b" }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
@@ -256,7 +361,7 @@ export default function ProjectPage() {
     } finally {
       setGenerating(false);
     }
-  }, [run, refreshRun]);
+  }, [run, refreshRun, modelSelection.script_model]);
 
   const handleRestart = useCallback(async () => {
     if (!run) return;
@@ -314,7 +419,7 @@ export default function ProjectPage() {
       const res = await fetch(`${API_BASE}/runs/${run.id}/generate-visual-plan`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model_key: "qwen3-4b" }),
+        body: JSON.stringify({ model_key: modelSelection.script_model || "qwen3-4b" }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
@@ -327,7 +432,7 @@ export default function ProjectPage() {
     } finally {
       setGenerating(false);
     }
-  }, [run, refreshRun]);
+  }, [run, refreshRun, modelSelection.script_model]);
 
   const handleRestartVisualPlan = useCallback(async () => {
     if (!run) return;
@@ -362,7 +467,7 @@ export default function ProjectPage() {
       const res = await fetch(`${API_BASE}/runs/${run.id}/generate-visual-assets`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model_key: "sd15", image_params: imageParams }),
+        body: JSON.stringify({ model_key: modelSelection.image_model || "sd15", image_params: imageParams }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
@@ -376,7 +481,7 @@ export default function ProjectPage() {
     } finally {
       setGenerating(false);
     }
-  }, [run, imageParams]);
+  }, [run, imageParams, modelSelection.image_model]);
 
   const handleRegenerateScene = useCallback(
     async (sceneId: string) => {
@@ -420,7 +525,7 @@ export default function ProjectPage() {
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ model_key: "sd15", image_params: imageParams }),
+            body: JSON.stringify({ model_key: modelSelection.image_model || "sd15", image_params: imageParams }),
           },
         );
         if (!res.ok) {
@@ -436,7 +541,7 @@ export default function ProjectPage() {
         setStatusMessage(err instanceof Error ? err.message : "Generate scene failed");
       }
     },
-    [run, imageParams, refreshRun],
+    [run, imageParams, refreshRun, modelSelection.image_model],
   );
 
   const handleApproveAssets = useCallback(async () => {
@@ -495,7 +600,7 @@ export default function ProjectPage() {
       const res = await fetch(`${API_BASE}/runs/${run.id}/generate-audio`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tts_model: "qwen3-tts", voice: "default" }),
+        body: JSON.stringify({ tts_model: modelSelection.tts_model || "qwen3-tts", voice: "default" }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
@@ -509,7 +614,7 @@ export default function ProjectPage() {
     } finally {
       setGenerating(false);
     }
-  }, [run]);
+  }, [run, modelSelection.tts_model]);
 
   // ---- subtitle actions ----
 
@@ -521,7 +626,7 @@ export default function ProjectPage() {
       const res = await fetch(`${API_BASE}/runs/${run.id}/generate-subtitles`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ subtitle_model: "whisper-small", subtitle_format: "srt" }),
+        body: JSON.stringify({ subtitle_model: modelSelection.subtitle_model || "whisper-small", subtitle_format: "srt" }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
@@ -535,7 +640,7 @@ export default function ProjectPage() {
     } finally {
       setGenerating(false);
     }
-  }, [run]);
+  }, [run, modelSelection.subtitle_model]);
 
   // ---- render actions ----
 
@@ -547,7 +652,7 @@ export default function ProjectPage() {
       const res = await fetch(`${API_BASE}/runs/${run.id}/render`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ render_profile: "shorts_default" }),
+        body: JSON.stringify({ render_profile: modelSelection.render_profile || "shorts_default" }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
@@ -561,7 +666,7 @@ export default function ProjectPage() {
     } finally {
       setGenerating(false);
     }
-  }, [run]);
+  }, [run, modelSelection.render_profile]);
 
   // ---- progress dialog callbacks ----
 
@@ -665,9 +770,6 @@ export default function ProjectPage() {
       ? (previewVideo as Record<string, unknown>).path
       : null;
 
-  void handleGenerateAudio;
-  void handleGenerateSubtitles;
-  void handleRender;
 
   // ---- action bar config ----
 
@@ -1428,6 +1530,16 @@ export default function ProjectPage() {
       {/* Unified Storyboard view — replaces separate audio/subtitle/render indicators */}
       {run && isStoryboardStage && (
         <div style={{ marginBottom: 24 }}>
+          {!isRenderStage && (
+            <div style={{ marginBottom: 12 }}>
+              <ModelSelector
+                categories={["tts", "stt"]}
+                selectedModels={buildSelectedModels(["tts", "stt"])}
+                apiBase=""
+                onSelectionChange={handleModelChange}
+              />
+            </div>
+          )}
           <StoryboardView
             runId={run.id}
             readOnly={isRenderStage}
@@ -1435,6 +1547,8 @@ export default function ProjectPage() {
             onRenderReady={() => {
               if (run) refreshRun(run.id);
             }}
+            ttsModel={modelSelection.tts_model}
+            subtitleModel={modelSelection.subtitle_model}
           />
 
           {/* Final review extras — review link + video path */}
@@ -1494,6 +1608,63 @@ export default function ProjectPage() {
           onFailed={handleProgressFailed}
           onClose={() => setProgressOpen(false)}
         />
+      )}
+
+      {/* Back navigation button */}
+      {run && STAGE_BACK_LABELS[currentStage] && (
+        <div style={{ display: "flex", justifyContent: "flex-start", padding: "8px 16px" }}>
+          <button
+            type="button"
+            data-testid="go-back-btn"
+            disabled={goingBack}
+            onClick={handleGoBack}
+            style={{
+              padding: "6px 16px",
+              fontSize: 13,
+              fontWeight: 500,
+              border: "1px solid #d1d5db",
+              borderRadius: 6,
+              background: "#fff",
+              color: "#374151",
+              cursor: goingBack ? "not-allowed" : "pointer",
+              opacity: goingBack ? 0.6 : 1,
+            }}
+          >
+            {goingBack ? "Going back\u2026" : STAGE_BACK_LABELS[currentStage]}
+          </button>
+        </div>
+      )}
+
+      {/* Per-stage model selector */}
+      {run && currentStage === "IDEA_READY" && (
+        <div style={{ padding: "8px 16px" }}>
+          <ModelSelector
+            categories={["script"]}
+            selectedModels={buildSelectedModels(["script"])}
+            apiBase=""
+            onSelectionChange={handleModelChange}
+          />
+        </div>
+      )}
+      {run && currentStage === "SCRIPT_REVIEW" && (
+        <div style={{ padding: "8px 16px" }}>
+          <ModelSelector
+            categories={["script"]}
+            selectedModels={buildSelectedModels(["script"])}
+            apiBase=""
+            onSelectionChange={handleModelChange}
+          />
+        </div>
+      )}
+      {run && currentStage === "VISUAL_PLAN_REVIEW" && (
+        <div style={{ padding: "8px 16px" }}>
+          <ModelSelector
+            categories={["image"]}
+            selectedModels={buildSelectedModels(["image"])}
+            apiBase=""
+            onSelectionChange={handleModelChange}
+          />
+        </div>
       )}
 
       {/* Stage action bar */}

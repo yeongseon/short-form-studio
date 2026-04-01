@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from creator_domain.models import ModelSelection, PipelineRun, RunStage, REVIEW_STAGES, GENERATING_STAGES, STAGE_BEFORE_GENERATING, can_transition
+from creator_domain.models import ModelSelection, PipelineRun, RunStage, REVIEW_STAGES, GENERATING_STAGES, STAGE_BEFORE_GENERATING, STAGE_BACK, can_transition
 
 class RunStorageBackend(Protocol):
     async def create_run(self, row: dict[str, Any]) -> dict[str, Any]:
@@ -42,6 +42,9 @@ class RunStorageBackend(Protocol):
 
     async def delete_runs_by_project(self, project_id: int) -> int:
         """Delete all runs for a project. Returns count of deleted rows."""
+        ...
+    async def merge_model_defaults(self, run_id: int, updates_json: str) -> dict[str, Any]:
+        """Atomically merge JSON updates into model_defaults_json."""
         ...
 
 class InMemoryRunStorage:
@@ -105,6 +108,17 @@ class InMemoryRunStorage:
             return True
         return False
 
+    async def merge_model_defaults(self, run_id: int, updates_json: str) -> dict[str, Any]:
+        row = self._rows.get(run_id)
+        if row is None:
+            raise ValueError(f"Run {run_id} not found")
+        current = json.loads(row.get("model_defaults_json") or "{}")
+        updates = json.loads(updates_json)
+        merged = {**current, **updates}
+        row["model_defaults_json"] = json.dumps(merged)
+        row["updated_at"] = datetime.now(timezone.utc)
+        self._rows[run_id] = row
+        return dict(row)
     async def delete_runs_by_project(self, project_id: int) -> int:
         to_delete = [rid for rid, r in self._rows.items() if r.get("project_id") == project_id]
         for rid in to_delete:
@@ -277,6 +291,46 @@ class RunService:
             run_id,
             {"status": "running"},
         )
+        return PipelineRun.from_row(row)
+
+    async def go_back(self, run_id: int) -> PipelineRun:
+        run = await self.get_run(run_id)
+        if run is None:
+            raise ValueError(f"Run {run_id} not found")
+
+        if run.current_stage is None:
+            raise ValueError(f"Run {run_id} has no current stage")
+
+        try:
+            current = RunStage(run.current_stage)
+        except ValueError as exc:
+            raise ValueError(f"Invalid current stage '{run.current_stage}'") from exc
+
+        if current not in STAGE_BACK:
+            raise ValueError(
+                f"Cannot go back from stage '{current.value}'. "
+                f"Go-back is only allowed from review stages: "
+                f"{', '.join(s.value for s in STAGE_BACK)}"
+            )
+
+        target = STAGE_BACK[current]
+
+        ok, row = await self.storage.conditional_update_run(
+            run_id,
+            {"current_stage": target.value},
+            frozenset({current.value}),
+        )
+        if not ok:
+            if row is None:
+                raise ValueError(f"Run {run_id} not found")
+            raise RuntimeError(
+                f"Stage conflict: expected '{current.value}' but run is at '{row.get('current_stage')}'"
+            )
+        return PipelineRun.from_row(row)
+
+    async def update_model_defaults(self, run_id: int, updates: dict[str, str]) -> PipelineRun:
+        """Atomically merge model default updates (no read-merge-write race)."""
+        row = await self.storage.merge_model_defaults(run_id, json.dumps(updates))
         return PipelineRun.from_row(row)
 
     async def delete_run(self, run_id: int) -> bool:
