@@ -30,7 +30,7 @@ from creator_service.visual_plan_service import visual_plan_service as _visual_p
 
 logger = logging.getLogger(__name__)
 
-_ALLOWED_STAGES = frozenset({RunStage.SCRIPT_REVIEW, RunStage.VISUAL_PLAN_GENERATING})
+_ALLOWED_STAGES = frozenset({RunStage.VISUAL_PLAN_SETUP, RunStage.VISUAL_PLAN_GENERATING})
 
 # Stages where writing VISUAL_PLAN_REVIEW or FAILED is safe — the run
 # hasn't advanced past visual plan generation.

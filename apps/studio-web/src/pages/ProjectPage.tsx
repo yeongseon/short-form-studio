@@ -61,7 +61,7 @@ type EditorMode = "markdown" | "structured";
 const SCRIPT_STAGES = new Set(["SCRIPT_GENERATING", "SCRIPT_REVIEW"]);
 
 // Visual plan stages where the editor area is relevant
-const VISUAL_PLAN_STAGES = new Set(["VISUAL_PLAN_GENERATING", "VISUAL_PLAN_REVIEW"]);
+const VISUAL_PLAN_STAGES = new Set(["VISUAL_PLAN_SETUP", "VISUAL_PLAN_GENERATING", "VISUAL_PLAN_REVIEW"]);
 
 // Visual asset stages
 const VISUAL_ASSET_STAGES = new Set(["VISUAL_ASSET_GENERATING", "VISUAL_ASSET_REVIEW"]);
@@ -87,7 +87,8 @@ const EDITABLE_STAGES = new Set(["SCRIPT_REVIEW", "VISUAL_PLAN_REVIEW"]);
 // Back navigation labels per review stage
 const STAGE_BACK_LABELS: Record<string, string> = {
   SCRIPT_REVIEW: "\u2190 Back to Idea",
-  VISUAL_PLAN_REVIEW: "\u2190 Back to Script Review",
+  VISUAL_PLAN_SETUP: "\u2190 Back to Script Review",
+  VISUAL_PLAN_REVIEW: "\u2190 Back to Visual Plan Setup",
   VISUAL_ASSET_REVIEW: "\u2190 Back to Visual Plan",
   FINAL_REVIEW: "\u2190 Back to Visual Assets",
 };
@@ -107,6 +108,163 @@ const SD_SAMPLERS = [
   "DPM++ 2M", "DPM++ SDE", "DPM++ 2S a Karras",
   "Euler a", "Euler", "DDIM", "UniPC", "LMS Karras", "Heun",
 ];
+// --------------- Visual Plan Setup Cards ---------------
+
+interface ScriptSection {
+  section_id: string;
+  type: string;
+  text: string;
+  display_text?: string;
+  speaker?: string;
+  duration?: number;
+  turn_kind?: string;
+}
+
+function VisualPlanSetupCards({ runId }: { runId: number }) {
+  const [sections, setSections] = useState<ScriptSection[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(`${API_BASE}/runs/${runId}/script/structured`);
+        if (!res.ok) {
+          throw new Error(`Failed to load script (${res.status})`);
+        }
+        const data = await res.json();
+        setSections(data.sections ?? []);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load script sections");
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [runId]);
+
+  if (loading) {
+    return (
+      <div style={{ textAlign: "center", padding: 24, color: "#6b7280" }}>
+        Loading script sections\u2026
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div
+        style={{
+          padding: 16,
+          background: "#fef2f2",
+          border: "1px solid #fca5a5",
+          borderRadius: 8,
+          color: "#b91c1c",
+          fontSize: 13,
+        }}
+      >
+        {error}
+      </div>
+    );
+  }
+
+  if (sections.length === 0) {
+    return (
+      <div style={{ textAlign: "center", padding: 24, color: "#6b7280" }}>
+        No script sections found. Go back and generate a script first.
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {sections.map((sec, idx) => (
+        <div
+          key={sec.section_id}
+          style={{
+            display: "flex",
+            alignItems: "stretch",
+            border: "1px solid #e5e7eb",
+            borderRadius: 10,
+            background: "#fff",
+            overflow: "hidden",
+            boxShadow: "0 1px 3px rgba(0,0,0,0.06)",
+          }}
+        >
+          {/* Left: paragraph number badge */}
+          <div
+            style={{
+              width: 52,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              background: sec.type === "narration" ? "#eff6ff" : sec.type === "dialogue" ? "#fdf4ff" : "#f0fdf4",
+              borderRight: "1px solid #e5e7eb",
+              padding: "12px 0",
+              flexShrink: 0,
+            }}
+          >
+            <span style={{ fontSize: 11, color: "#6b7280", fontWeight: 500 }}>\u00a7{idx + 1}</span>
+            <span
+              style={{
+                fontSize: 10,
+                color:
+                  sec.type === "narration" ? "#2563eb" : sec.type === "dialogue" ? "#7c3aed" : "#16a34a",
+                fontWeight: 600,
+                marginTop: 2,
+                textTransform: "uppercase",
+              }}
+            >
+              {sec.type}
+            </span>
+          </div>
+
+          {/* Center: text */}
+          <div style={{ flex: 1, padding: "12px 16px", minWidth: 0 }}>
+            <p
+              style={{
+                margin: 0,
+                fontSize: 13,
+                lineHeight: 1.55,
+                color: "#1f2937",
+                whiteSpace: "pre-wrap",
+                wordBreak: "break-word",
+              }}
+            >
+              {sec.display_text || sec.text}
+            </p>
+            {sec.speaker && (
+              <span style={{ fontSize: 11, color: "#9ca3af", marginTop: 4, display: "inline-block" }}>
+                Speaker: {sec.speaker}
+              </span>
+            )}
+          </div>
+
+          {/* Right: image indicator */}
+          <div
+            style={{
+              width: 80,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              background: "#faf5ff",
+              borderLeft: "1px solid #e5e7eb",
+              padding: "12px 0",
+              flexShrink: 0,
+            }}
+          >
+            <span style={{ fontSize: 20 }}>\ud83d\uddbc\ufe0f</span>
+            <span style={{ fontSize: 10, color: "#6b21a8", fontWeight: 600, marginTop: 4 }}>1 Image</span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const numericProjectId = Number(projectId);
@@ -758,6 +916,7 @@ export default function ProjectPage() {
   const isEditable = EDITABLE_STAGES.has(currentStage);
   const isGenerating = currentStage === "SCRIPT_GENERATING";
   const isVPGenerating = currentStage === "VISUAL_PLAN_GENERATING";
+  const isVPSetup = currentStage === "VISUAL_PLAN_SETUP";
   const isVAGenerating = currentStage === "VISUAL_ASSET_GENERATING";
   const isAudioStage = AUDIO_STAGES.has(currentStage);
   const isSubtitleStage = SUBTITLE_STAGES.has(currentStage);
@@ -863,6 +1022,22 @@ export default function ProjectPage() {
     }
 
     // Visual plan stages
+    // Visual plan setup — show only "Generate Visual Plan" button
+    if (isVPSetup) {
+      return {
+        save: { visible: false },
+        approve: { visible: false },
+        generate: {
+          visible: true,
+          disabled: generating,
+          loading: generating,
+          onClick: handleGenerateVisualPlan,
+          label: "Generate Visual Plan",
+        },
+        restart: { visible: false },
+      };
+    }
+
     if (isVisualPlanStage) {
       return {
         save: { visible: false },
@@ -895,11 +1070,11 @@ export default function ProjectPage() {
         label: "Approve Script",
       },
       generate: {
-        visible: currentStage === "IDEA_READY" || currentStage === "SCRIPT_REVIEW",
+        visible: currentStage === "IDEA_READY",
         disabled: generating,
         loading: generating,
-        onClick: currentStage === "SCRIPT_REVIEW" ? handleGenerateVisualPlan : handleGenerate,
-        label: currentStage === "SCRIPT_REVIEW" ? "Generate Visual Plan" : "Generate Script",
+        onClick: handleGenerate,
+        label: "Generate Script",
       },
       restart: {
         visible: currentStage === "SCRIPT_REVIEW",
@@ -1202,8 +1377,45 @@ export default function ProjectPage() {
         </div>
       )}
 
+      {/* Visual plan setup — paragraph→image mapping before generation */}
+      {run && isVPSetup && (
+        <div style={{ marginBottom: 24 }}>
+          <div
+            style={{
+              padding: "16px 20px",
+              background: "linear-gradient(135deg, #eff6ff 0%, #f5f3ff 100%)",
+              borderRadius: 10,
+              border: "1px solid #c7d2fe",
+              marginBottom: 16,
+            }}
+          >
+            <h3 style={{ margin: "0 0 6px", fontSize: 16, fontWeight: 700, color: "#1e3a5f" }}>
+              Visual Plan Setup
+            </h3>
+            <p style={{ margin: 0, fontSize: 13, color: "#4b5563", lineHeight: 1.5 }}>
+              Review the paragraph-to-image mapping below. Each paragraph in your script will
+              generate one image. Select your preferred image model, then click
+              <strong> Generate Visual Plan</strong> to proceed.
+            </p>
+          </div>
+
+          {/* Image model selector */}
+          <div style={{ marginBottom: 16 }}>
+            <ModelSelector
+              categories={["image"]}
+              selectedModels={buildSelectedModels(["image"])}
+              apiBase=""
+              onSelectionChange={handleModelChange}
+            />
+          </div>
+
+          {/* Paragraph → Image cards */}
+          <VisualPlanSetupCards runId={run.id} />
+        </div>
+      )}
+
       {/* Visual plan editor area */}
-      {run && isVisualPlanStage && !isVPGenerating && (
+      {run && isVisualPlanStage && !isVPGenerating && !isVPSetup && (
         <div style={{ marginBottom: 24 }}>
           <VisualPlanEditor
             runId={run.id}
