@@ -25,6 +25,7 @@ from creator_service.render_service import render_service as _render_service
 from creator_service.run_service import run_service as _run_service
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
 from creator_service.visual_asset_service import visual_asset_service as _visual_asset_service
+from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
 from creator_service.script_service import script_service as _script_service
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,16 @@ def _resolve_profile(name: str) -> RenderProfile:
         return RenderProfile.default()
     return factory()
 
+
+async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
+    remover = getattr(_run_service.storage, "remove_active_task_id", None)
+    if not callable(remover):
+        return
+    try:
+        await remover(run_id, task_id)
+    except Exception:
+        logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
+
 @celery_app.task(bind=True, name="render_video")
 def render_video(
     self,
@@ -63,186 +74,188 @@ def render_video(
     task_id = str(getattr(getattr(self, "request", None), "id", None) or f"run-{run_id}")
 
     async def _run_task() -> dict[str, object]:
-        run = await _run_service.storage.get_run(run_id)
-        if run is None:
-            raise _StageGuardError(f"Run {run_id} not found")
-
         try:
-            current = RunStage(run["current_stage"])
-        except ValueError as exc:
-            raise _StageGuardError(
-                f"Run {run_id} has invalid stage {run['current_stage']!r}"
-            ) from exc
-        if current not in _ALLOWED_STAGES:
-            raise _StageGuardError(
-                f"Run {run_id} is in stage {current.value}, "
-                f"expected one of {', '.join(s for s in _ALLOWED_STAGES)}"
+            run = await _run_service.storage.get_run(run_id)
+            if run is None:
+                raise _StageGuardError(f"Run {run_id} not found")
+
+            try:
+                current = RunStage(run["current_stage"])
+            except ValueError as exc:
+                raise _StageGuardError(
+                    f"Run {run_id} has invalid stage {run['current_stage']!r}"
+                ) from exc
+            if current not in _ALLOWED_STAGES:
+                raise _StageGuardError(
+                    f"Run {run_id} is in stage {current.value}, "
+                    f"expected one of {', '.join(s for s in _ALLOWED_STAGES)}"
+                )
+
+            manifest = await _render_service.build_render_manifest(
+                run_id,
+                _visual_asset_service,
+                _audio_service,
+                _subtitle_service,
+                render_profile_name=render_profile,
             )
 
-        manifest = await _render_service.build_render_manifest(
-            run_id,
-            _visual_asset_service,
-            _audio_service,
-            _subtitle_service,
-            render_profile_name=render_profile,
-        )
+            active_plan = await _visual_plan_service.get_active_plan(run_id)
+            if active_plan is not None:
+                scenes_by_id = {scene["scene_id"]: scene for scene in manifest["scenes"]}
+                ordered_scenes = [
+                    scenes_by_id[scene.scene_id]
+                    for scene in active_plan.scenes
+                    if scene.scene_id in scenes_by_id
+                ]
+                remaining_scenes = [
+                    scene
+                    for scene in manifest["scenes"]
+                    if scene["scene_id"] not in {ordered["scene_id"] for ordered in ordered_scenes}
+                ]
+                manifest["scenes"] = ordered_scenes + remaining_scenes
 
-        if not manifest["scenes"]:
-            raise RuntimeError("No scenes found for render")
+            if not manifest["scenes"]:
+                raise RuntimeError("No scenes found for render")
 
-        profile_data = manifest["render_profile"]
-        scene_count = len(manifest["scenes"])
-        image_paths = [Path(scene["asset_path"]) for scene in manifest["scenes"]]
+            profile_data = manifest["render_profile"]
+            scene_count = len(manifest["scenes"])
+            image_paths = [Path(scene["asset_path"]) for scene in manifest["scenes"]]
 
-        resolved_profile = _resolve_profile(render_profile)
-        ffmpeg = FFmpegService(profile=resolved_profile)
+            resolved_profile = _resolve_profile(render_profile)
+            ffmpeg = FFmpegService(profile=resolved_profile)
 
-        # --- Per-paragraph audio/subtitle assembly (Phase 9) -----------------
-        # Try per-paragraph artifacts first; fall back to run-level.
-        paragraph_audio = await _audio_service.list_paragraph_audio(run_id)
-        paragraph_subtitles = await _subtitle_service.list_paragraph_subtitles(run_id)
+            paragraph_audio = await _audio_service.list_paragraph_audio(run_id)
+            paragraph_subtitles = await _subtitle_service.list_paragraph_subtitles(run_id)
 
-        audio_path: Path | None = None
-        subtitle_path: Path | None = None
-        scene_durations: list[float]
+            audio_path: Path | None = None
+            subtitle_path: Path | None = None
+            scene_durations: list[float]
 
-        if paragraph_audio:
-            # Build section_id -> audio mapping
-            audio_by_section: dict[str, Any] = {}
-            for a in paragraph_audio:
-                if a.section_id and a.section_id not in audio_by_section:
-                    audio_by_section[a.section_id] = a
+            if paragraph_audio:
+                audio_by_section: dict[str, Any] = {}
+                for a in paragraph_audio:
+                    if a.section_id and a.section_id not in audio_by_section:
+                        audio_by_section[a.section_id] = a
 
-            # Get section order from script
-            draft = await _script_service.get_active_draft(run_id)
-            if draft and draft.structured_script:
-                ordered_sections = [s.section_id for s in draft.structured_script]
-            else:
-                ordered_sections = sorted(audio_by_section.keys())
+                draft = await _script_service.get_active_draft(run_id)
+                if draft and draft.structured_script:
+                    ordered_sections = [s.section_id for s in draft.structured_script]
+                else:
+                    ordered_sections = list(audio_by_section.keys())
 
-            # Collect audio files and durations in section order
-            ordered_audio_paths: list[str] = []
-            ordered_durations: list[float] = []
-            for sid in ordered_sections:
-                art = audio_by_section.get(sid)
-                if art:
-                    ordered_audio_paths.append(art.path)
-                    try:
-                        dur = ffmpeg.get_audio_duration(art.path)
-                    except Exception:
-                        logger.warning(
-                            "Failed to probe duration for %s, using 5.0s fallback",
-                            art.path,
+                ordered_audio_paths: list[str] = []
+                duration_by_section: dict[str, float] = {}
+                for sid in ordered_sections:
+                    art = audio_by_section.get(sid)
+                    if art:
+                        ordered_audio_paths.append(art.path)
+                        try:
+                            duration_by_section[sid] = ffmpeg.get_audio_duration(art.path)
+                        except Exception:
+                            logger.warning(
+                                "Failed to probe duration for %s, using 5.0s fallback",
+                                art.path,
+                            )
+                            duration_by_section[sid] = 5.0
+
+                if ordered_audio_paths:
+                    concat_path = f"{_ARTIFACT_ROOT}/{run_id}/render/audio_concat.wav"
+                    ffmpeg.concatenate_audio(ordered_audio_paths, concat_path)
+                    audio_path = Path(concat_path)
+
+                    scene_durations = [
+                        duration_by_section[sid]
+                        for sid in ordered_sections
+                        if sid in duration_by_section
+                    ][:scene_count]
+                    if len(scene_durations) < scene_count:
+                        total_known = sum(scene_durations)
+                        remaining = max(0.0, profile_data["max_duration_seconds"] - total_known)
+                        missing = scene_count - len(scene_durations)
+                        pad_dur = remaining / missing if missing > 0 else 5.0
+                        scene_durations.extend([pad_dur] * missing)
+                else:
+                    scene_duration = profile_data["max_duration_seconds"] / scene_count
+                    scene_durations = [scene_duration] * scene_count
+
+                if paragraph_subtitles:
+                    sub_by_section: dict[str, Any] = {}
+                    for s in paragraph_subtitles:
+                        if s.section_id and s.section_id not in sub_by_section:
+                            sub_by_section[s.section_id] = s
+
+                    ordered_sub_paths: list[str] = []
+                    ordered_sub_durations: list[float] = []
+                    for sid in ordered_sections:
+                        sub = sub_by_section.get(sid)
+                        if sub:
+                            ordered_sub_paths.append(sub.path)
+                            ordered_sub_durations.append(duration_by_section.get(sid, 5.0))
+
+                    if ordered_sub_paths:
+                        merged_sub_path = f"{_ARTIFACT_ROOT}/{run_id}/render/subtitles_merged.srt"
+                        ffmpeg.merge_subtitles(
+                            ordered_sub_paths, ordered_sub_durations, merged_sub_path
                         )
-                        dur = 5.0
-                    ordered_durations.append(dur)
-
-            if ordered_audio_paths:
-                # Concatenate per-paragraph audio into a single file
-                concat_path = f"{_ARTIFACT_ROOT}/{run_id}/render/audio_concat.wav"
-                ffmpeg.concatenate_audio(ordered_audio_paths, concat_path)
-                audio_path = Path(concat_path)
-
-                # Use actual per-paragraph durations for scene timing
-                scene_durations = ordered_durations[:scene_count]
-                # If fewer durations than scenes, pad with equal split of remaining time
-                if len(scene_durations) < scene_count:
-                    total_known = sum(scene_durations)
-                    remaining = max(0.0, profile_data["max_duration_seconds"] - total_known)
-                    missing = scene_count - len(scene_durations)
-                    pad_dur = remaining / missing if missing > 0 else 5.0
-                    scene_durations.extend([pad_dur] * missing)
+                        subtitle_path = Path(merged_sub_path)
             else:
-                # No matched audio — fall back to equal split
+                run_audio_path = manifest["audio_path"]
+                audio_path = Path(run_audio_path) if run_audio_path else None
+                run_sub_path = manifest["subtitle_path"]
+                subtitle_path = Path(run_sub_path) if run_sub_path else None
                 scene_duration = profile_data["max_duration_seconds"] / scene_count
                 scene_durations = [scene_duration] * scene_count
 
-            # Merge per-paragraph subtitles if available
-            if paragraph_subtitles:
-                sub_by_section: dict[str, Any] = {}
-                for s in paragraph_subtitles:
-                    if s.section_id and s.section_id not in sub_by_section:
-                        sub_by_section[s.section_id] = s
-
-                ordered_sub_paths: list[str] = []
-                ordered_sub_durations: list[float] = []
-                for sid in ordered_sections:
-                    sub = sub_by_section.get(sid)
-                    if sub:
-                        ordered_sub_paths.append(sub.path)
-                        # Use same duration as audio
-                        art = audio_by_section.get(sid)
-                        ordered_sub_durations.append(
-                            ordered_durations[ordered_sections.index(sid)]
-                            if sid in audio_by_section and ordered_durations
-                            else 5.0
-                        )
-
-                if ordered_sub_paths:
-                    merged_sub_path = f"{_ARTIFACT_ROOT}/{run_id}/render/subtitles_merged.srt"
-                    ffmpeg.merge_subtitles(
-                        ordered_sub_paths, ordered_sub_durations, merged_sub_path
-                    )
-                    subtitle_path = Path(merged_sub_path)
-        else:
-            # No per-paragraph audio — fall back to run-level artifacts
-            run_audio_path = manifest["audio_path"]
-            audio_path = Path(run_audio_path) if run_audio_path else None
-            run_sub_path = manifest["subtitle_path"]
-            subtitle_path = Path(run_sub_path) if run_sub_path else None
-            scene_duration = profile_data["max_duration_seconds"] / scene_count
-            scene_durations = [scene_duration] * scene_count
-
-        render_input = RenderInput(
-            image_paths=image_paths,
-            audio_path=audio_path,
-            subtitle_path=subtitle_path,
-            scene_durations=scene_durations,
-        )
-
-        output_path = f"{_ARTIFACT_ROOT}/{run_id}/render/output.mp4"
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        resolved_profile = _resolve_profile(render_profile)
-        ffmpeg = FFmpegService(profile=resolved_profile)
-        ffmpeg.render(render_input, Path(output_path))
-
-        artifact = await _render_service.create_artifact(
-            run_id=run_id,
-            path=output_path,
-            render_profile=render_profile,
-        )
-
-        applied, _ = await _run_service.storage.conditional_update_run(
-            run_id,
-            {
-                "current_stage": RunStage.FINAL_REVIEW,
-                "status": "running",
-            },
-            expected_stages=_SAFE_STAGES,
-        )
-        if not applied:
-            logger.info(
-                "Run %d stage changed during video render -- skipping transition",
-                run_id,
+            render_input = RenderInput(
+                image_paths=image_paths,
+                audio_path=audio_path,
+                subtitle_path=subtitle_path,
+                scene_durations=scene_durations,
             )
 
-        end_time = datetime.now(timezone.utc)
-        duration_seconds = (end_time - start_time).total_seconds()
+            output_path = f"{_ARTIFACT_ROOT}/{run_id}/render/output.mp4"
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            ffmpeg.render(render_input, Path(output_path))
 
-        return {
-            "task_id": task_id,
-            "run_id": run_id,
-            "render_profile": render_profile,
-            "video_artifact_id": artifact.id,
-            "video_path": artifact.path,
-            "scene_count": len(manifest["scenes"]),
-            "audio_path": manifest["audio_path"],
-            "subtitle_path": manifest["subtitle_path"],
-            "start_time": start_iso,
-            "end_time": end_time.isoformat(),
-            "duration_seconds": duration_seconds,
-            "status": "success",
-        }
+            artifact = await _render_service.create_artifact(
+                run_id=run_id,
+                path=output_path,
+                render_profile=render_profile,
+            )
+
+            applied, _ = await _run_service.storage.conditional_update_run(
+                run_id,
+                {
+                    "current_stage": RunStage.FINAL_REVIEW,
+                    "status": "running",
+                },
+                expected_stages=_SAFE_STAGES,
+            )
+            if not applied:
+                logger.info(
+                    "Run %d stage changed during video render -- skipping transition",
+                    run_id,
+                )
+
+            end_time = datetime.now(timezone.utc)
+            duration_seconds = (end_time - start_time).total_seconds()
+
+            return {
+                "task_id": task_id,
+                "run_id": run_id,
+                "render_profile": render_profile,
+                "video_artifact_id": artifact.id,
+                "video_path": artifact.path,
+                "scene_count": len(manifest["scenes"]),
+                "audio_path": manifest["audio_path"],
+                "subtitle_path": manifest["subtitle_path"],
+                "start_time": start_iso,
+                "end_time": end_time.isoformat(),
+                "duration_seconds": duration_seconds,
+                "status": "success",
+            }
+        finally:
+            await _remove_active_task_id_best_effort(run_id, task_id)
 
     try:
         return asyncio.run(_run_task())

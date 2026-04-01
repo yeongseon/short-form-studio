@@ -1,5 +1,6 @@
 # pyright: reportMissingImports=false
 
+import json
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -20,6 +21,7 @@ class StubPipelineRun(BaseModel):
     style_preset: str | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    active_task_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -63,6 +65,7 @@ class StubRunService:
             style_preset=style_preset,
             started_at=None,
             finished_at=None,
+            active_task_id=None,
             created_at=now,
             updated_at=now,
         )
@@ -114,6 +117,8 @@ class StubRunStorage:
     def __init__(self, run_svc: "StubRunService") -> None:
         self._run_svc = run_svc
         self.conditional_update_calls: list[dict[str, object]] = []
+        self.append_task_calls: list[dict[str, object]] = []
+        self.remove_task_calls: list[dict[str, object]] = []
 
     async def conditional_update_run(
         self,
@@ -136,6 +141,42 @@ class StubRunStorage:
         updated = run.model_copy(update=updates)
         self._run_svc.runs[run_id] = updated
         return True, updated.model_dump(mode="json")
+
+    async def append_active_task_id(self, run_id: int, task_id: str) -> dict[str, object]:
+        self.append_task_calls.append({"run_id": run_id, "task_id": task_id})
+        run = self._run_svc.runs.get(run_id)
+        if run is None:
+            raise ValueError(f"Run {run_id} not found")
+        current_raw = getattr(run, "active_task_id", None)
+        if current_raw:
+            try:
+                current = json.loads(current_raw)
+            except (TypeError, ValueError):
+                current = [current_raw]
+        else:
+            current = []
+        current.append(task_id)
+        updated = run.model_copy(update={"active_task_id": json.dumps(current)})
+        self._run_svc.runs[run_id] = updated
+        return updated.model_dump(mode="json")
+
+    async def remove_active_task_id(self, run_id: int, task_id: str) -> dict[str, object]:
+        self.remove_task_calls.append({"run_id": run_id, "task_id": task_id})
+        run = self._run_svc.runs.get(run_id)
+        if run is None:
+            raise ValueError(f"Run {run_id} not found")
+        current_raw = getattr(run, "active_task_id", None)
+        if current_raw:
+            try:
+                current = json.loads(current_raw)
+            except (TypeError, ValueError):
+                current = [current_raw]
+        else:
+            current = []
+        current = [tid for tid in current if tid != task_id]
+        updated = run.model_copy(update={"active_task_id": json.dumps(current)})
+        self._run_svc.runs[run_id] = updated
+        return updated.model_dump(mode="json")
 class StubStageReviewService:
     def __init__(self, run_svc: StubRunService) -> None:
         self.approve_calls: list[dict[str, object]] = []
@@ -653,6 +694,7 @@ async def test_generate_script_from_idea_ready(client, stub_generate_services):
         "model_key": "qwen3-4b",
         "instructions": "Focus on pasta",
     }]
+    assert run_svc.storage.append_task_calls == [{"run_id": 10, "task_id": "test-task-id-123"}]
 
 
 @pytest.mark.asyncio
@@ -924,6 +966,7 @@ async def test_generate_visual_plan_from_visual_plan_setup(client, stub_generate
         "model_key": "qwen3-4b",
         "style_preset": "cinematic",
     }]
+    assert run_svc.storage.append_task_calls == [{"run_id": 30, "task_id": "test-vp-task-id-456"}]
 
 
 @pytest.mark.asyncio
@@ -952,7 +995,7 @@ async def test_generate_visual_plan_retry_from_generating(client, stub_generate_
 @pytest.mark.asyncio
 async def test_generate_visual_plan_default_model(client, stub_generate_visual_plan_services):
     run_svc, dispatcher = stub_generate_visual_plan_services
-    run_svc.runs[32] = _make_run(32, "SCRIPT_REVIEW")
+    run_svc.runs[32] = _make_run(32, "VISUAL_PLAN_SETUP")
 
     response = await client.post(
         "/api/creator/runs/32/generate-visual-plan",
@@ -1008,7 +1051,7 @@ async def test_generate_visual_plan_wrong_stage_visual_review(client, stub_gener
 async def test_generate_visual_plan_cas_conflict(client, stub_generate_visual_plan_services):
     """CAS fails because stage changed between initial check and CAS."""
     run_svc, dispatcher = stub_generate_visual_plan_services
-    run_svc.runs[35] = _make_run(35, "SCRIPT_REVIEW")
+    run_svc.runs[35] = _make_run(35, "VISUAL_PLAN_SETUP")
 
     async def cas_conflict(run_id, updates, expected_stages):
         return False, {"current_stage": "VISUAL_PLAN_GENERATING", "id": run_id}
@@ -1029,7 +1072,7 @@ async def test_generate_visual_plan_cas_conflict(client, stub_generate_visual_pl
 async def test_generate_visual_plan_dispatch_failure_rollback(client, stub_generate_visual_plan_services):
     """Celery dispatch failure triggers rollback to original stage."""
     run_svc, _ = stub_generate_visual_plan_services
-    run_svc.runs[36] = _make_run(36, "SCRIPT_REVIEW")
+    run_svc.runs[36] = _make_run(36, "VISUAL_PLAN_SETUP")
 
     def failing_dispatcher(run_id, model_key, style_preset):
         raise RuntimeError("Celery broker down")
@@ -1050,13 +1093,13 @@ async def test_generate_visual_plan_dispatch_failure_rollback(client, stub_gener
     # Rollback: CAS was called twice — first to advance, then to rollback
     cas_calls = run_svc.storage.conditional_update_calls
     assert len(cas_calls) == 2
-    # Second CAS = rollback to SCRIPT_REVIEW
+    # Second CAS = rollback to VISUAL_PLAN_SETUP
     rollback = cas_calls[1]
-    assert rollback["updates"]["current_stage"] == "SCRIPT_REVIEW"
+    assert rollback["updates"]["current_stage"] == "VISUAL_PLAN_SETUP"
     assert rollback["expected_stages"] == frozenset({"VISUAL_PLAN_GENERATING"})
 
-    # Verify run was actually rolled back to SCRIPT_REVIEW
-    assert run_svc.runs[36].current_stage == "SCRIPT_REVIEW"
+    # Verify run was actually rolled back to VISUAL_PLAN_SETUP
+    assert run_svc.runs[36].current_stage == "VISUAL_PLAN_SETUP"
 
 
 
@@ -1074,6 +1117,7 @@ class StubImageDispatcher:
     def __call__(
         self, run_id: int, model_key: str, scene_id: str | None,
         prompt_override: str | None, is_active: bool,
+        image_params: dict[str, object] | None = None,
     ) -> str:
         self.calls.append({
             "run_id": run_id,
@@ -1081,6 +1125,7 @@ class StubImageDispatcher:
             "scene_id": scene_id,
             "prompt_override": prompt_override,
             "is_active": is_active,
+            "image_params": image_params,
         })
         return self.task_id
 
@@ -1125,7 +1170,9 @@ async def test_generate_visual_assets_from_visual_plan_review(client, stub_gener
         "scene_id": None,
         "prompt_override": None,
         "is_active": True,
+        "image_params": None,
     }]
+    assert run_svc.storage.append_task_calls == [{"run_id": 60, "task_id": "test-img-task-id-789"}]
 
 
 @pytest.mark.asyncio
@@ -1232,7 +1279,7 @@ async def test_generate_visual_assets_dispatch_failure_rollback(client, stub_gen
     run_svc, _ = stub_generate_visual_assets_services
     run_svc.runs[66] = _make_run(66, "VISUAL_PLAN_REVIEW")
 
-    def failing_dispatcher(run_id, model_key, scene_id, prompt_override, is_active):
+    def failing_dispatcher(run_id, model_key, scene_id, prompt_override, is_active, image_params=None):
         raise RuntimeError("Celery broker down")
 
     from shorts_api.main import runs_router as _r
@@ -1299,6 +1346,7 @@ async def test_generate_scene_image_from_visual_plan_review(client, stub_single_
         "scene_id": "scene-sec-0",
         "prompt_override": None,
         "is_active": True,
+        "image_params": None,
     }]
 
 
@@ -1344,7 +1392,7 @@ async def test_generate_scene_image_dispatch_failure(client, stub_single_scene_s
     run_svc, _ = stub_single_scene_services
     run_svc.runs[73] = _make_run(73, "VISUAL_PLAN_REVIEW")
 
-    def failing_dispatcher(run_id, model_key, scene_id, prompt_override, is_active):
+    def failing_dispatcher(run_id, model_key, scene_id, prompt_override, is_active, image_params=None):
         raise RuntimeError("Celery broker down")
 
     for route in runs_router.routes:
@@ -1386,6 +1434,7 @@ async def test_regenerate_scene_image_success(client, stub_single_scene_services
         "scene_id": "scene-sec-0",
         "prompt_override": "A dark moody scene",
         "is_active": False,  # regenerated assets are inactive
+        "image_params": None,
     }]
 
 
@@ -1448,7 +1497,7 @@ async def test_regenerate_scene_image_dispatch_failure(client, stub_single_scene
     run_svc, _ = stub_single_scene_services
     run_svc.runs[84] = _make_run(84, "VISUAL_ASSET_REVIEW")
 
-    def failing_dispatcher(run_id, model_key, scene_id, prompt_override, is_active):
+    def failing_dispatcher(run_id, model_key, scene_id, prompt_override, is_active, image_params=None):
         raise RuntimeError("Celery broker down")
 
     for route in runs_router.routes:
@@ -1925,7 +1974,7 @@ async def test_generate_audio_default_model(client, stub_generate_audio_services
 
     assert response.status_code == 202
     assert dispatcher.calls[0]["tts_model"] == "qwen3-tts"
-    assert dispatcher.calls[0]["voice"] == "en_US-lessac-medium"
+    assert dispatcher.calls[0]["voice"] == "default"
 
 
 @pytest.mark.asyncio

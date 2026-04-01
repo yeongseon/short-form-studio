@@ -1262,28 +1262,8 @@ def _revoke_active_tasks(active_task_id: str | None) -> None:
 
 
 async def _append_task_id(run_id: int, task_id: str) -> None:
-    """Atomically append a task_id to the run's active_task_id JSON list.
-
-    Uses a single UPDATE with jsonb to avoid read-modify-write races when
-    multiple scene-image tasks are dispatched concurrently.
-    """
-    from creator_service.db import execute
-
-    await execute(
-        "UPDATE creator_runs "
-        "SET active_task_id = ("
-        "  COALESCE("
-        "    CASE WHEN active_task_id IS NOT NULL "
-        "         AND left(active_task_id, 1) = '[' "
-        "    THEN active_task_id::jsonb "
-        "    ELSE '[]'::jsonb "
-        "    END, '[]'::jsonb"
-        "  ) || to_jsonb($2::text)"
-        ")::text "
-        "WHERE id = $1",
-        run_id,
-        task_id,
-    )
+    """Atomically append a task id via the configured run storage backend."""
+    await run_service.storage.append_active_task_id(run_id, task_id)
 
 @router.post("/runs/{run_id}/stop")
 async def stop_run(run_id: int) -> dict[str, object]:

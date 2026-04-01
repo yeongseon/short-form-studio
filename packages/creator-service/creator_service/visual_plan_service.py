@@ -73,6 +73,14 @@ class VisualPlanStorageBackend(Protocol):
         """List all plan versions for a run, newest first."""
         ...
 
+    async def save_plan_if_version(
+        self,
+        row: dict[str, Any],
+        expected_version: int,
+    ) -> tuple[bool, dict[str, Any] | None, int | None]:
+        """Atomically save only if the current active version matches expected_version."""
+        ...
+
 
 # ---------------------------------------------------------------------------
 # In-Memory Storage
@@ -113,6 +121,31 @@ class InMemoryVisualPlanStorage:
     async def list_plan_versions(self, run_id: int) -> list[dict[str, Any]]:
         plans = self._plans.get(run_id, [])
         return [dict(p) for p in sorted(plans, key=lambda p: p["version"], reverse=True)]
+
+    async def save_plan_if_version(
+        self,
+        row: dict[str, Any],
+        expected_version: int,
+    ) -> tuple[bool, dict[str, Any] | None, int | None]:
+        run_id = row["run_id"]
+        lock = self._run_locks.setdefault(run_id, asyncio.Lock())
+        async with lock:
+            plans = self._plans.setdefault(run_id, [])
+            actual_version = max((p["version"] for p in plans), default=0)
+            if actual_version != expected_version:
+                current = max(plans, key=lambda p: p["version"]) if plans else None
+                return False, dict(current) if current is not None else None, actual_version
+
+            now = datetime.now(timezone.utc)
+            saved = {
+                "id": self._next_id,
+                "created_at": now,
+                "version": actual_version + 1,
+                **row,
+            }
+            self._next_id += 1
+            plans.append(saved)
+            return True, dict(saved), actual_version
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +214,6 @@ class VisualPlanService:
         if active_row is None:
             raise ValueError(f"No active visual plan for run {run_id}")
 
-        # Optimistic concurrency check
         active_version = active_row.get("version", 1)
         if expected_version is not None and active_version != expected_version:
             raise VersionConflictError(run_id, expected_version, active_version)
@@ -202,7 +234,34 @@ class VisualPlanService:
                 f"Scene '{scene_id}' not found in visual plan for run {run_id}"
             )
 
-        return await self.save_plan(run_id, scenes)
+        scenes_json = json.dumps(
+            [scene.model_dump(mode="json") for scene in scenes]
+        )
+        if expected_version is None:
+            row = await self.storage.save_plan(
+                {
+                    "run_id": run_id,
+                    "scenes_json": scenes_json,
+                }
+            )
+            return self._row_to_plan(row)
+
+        applied, row, actual_version = await self.storage.save_plan_if_version(
+            {
+                "run_id": run_id,
+                "scenes_json": scenes_json,
+            },
+            expected_version,
+        )
+        if not applied:
+            raise VersionConflictError(
+                run_id,
+                expected_version,
+                actual_version if actual_version is not None else 0,
+            )
+        if row is None:
+            raise ValueError(f"No active visual plan for run {run_id}")
+        return self._row_to_plan(row)
 
     # -- Reads --------------------------------------------------------------
 

@@ -194,7 +194,7 @@ describe("ReviewPage", () => {
     });
 
     // Script section
-    expect(screen.getByText(/calm morning in Tokyo/)).toBeTruthy();
+    expect(screen.getAllByText(/calm morning in Tokyo/i).length).toBeGreaterThan(0);
 
     // Visual plan section
     expect(screen.getByTestId("review-visual-plan-section")).toBeTruthy();

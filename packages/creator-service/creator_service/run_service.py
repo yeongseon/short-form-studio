@@ -47,6 +47,14 @@ class RunStorageBackend(Protocol):
         """Atomically merge JSON updates into model_defaults_json."""
         ...
 
+    async def append_active_task_id(self, run_id: int, task_id: str) -> dict[str, Any]:
+        """Atomically append a task id to active_task_id."""
+        ...
+
+    async def remove_active_task_id(self, run_id: int, task_id: str) -> dict[str, Any]:
+        """Atomically remove a task id from active_task_id."""
+        ...
+
 class InMemoryRunStorage:
     def __init__(self) -> None:
         self._rows: dict[int, dict[str, Any]] = {}
@@ -119,11 +127,49 @@ class InMemoryRunStorage:
         row["updated_at"] = datetime.now(timezone.utc)
         self._rows[run_id] = row
         return dict(row)
+
+    async def append_active_task_id(self, run_id: int, task_id: str) -> dict[str, Any]:
+        row = self._rows.get(run_id)
+        if row is None:
+            raise ValueError(f"Run {run_id} not found")
+        current = row.get("active_task_id")
+        task_ids = self._parse_active_task_ids(current)
+        task_ids.append(task_id)
+        row["active_task_id"] = json.dumps(task_ids)
+        row["updated_at"] = datetime.now(timezone.utc)
+        self._rows[run_id] = row
+        return dict(row)
+
+    async def remove_active_task_id(self, run_id: int, task_id: str) -> dict[str, Any]:
+        row = self._rows.get(run_id)
+        if row is None:
+            raise ValueError(f"Run {run_id} not found")
+        current = row.get("active_task_id")
+        task_ids = [tid for tid in self._parse_active_task_ids(current) if tid != task_id]
+        row["active_task_id"] = json.dumps(task_ids)
+        row["updated_at"] = datetime.now(timezone.utc)
+        self._rows[run_id] = row
+        return dict(row)
+
     async def delete_runs_by_project(self, project_id: int) -> int:
         to_delete = [rid for rid, r in self._rows.items() if r.get("project_id") == project_id]
         for rid in to_delete:
             del self._rows[rid]
         return len(to_delete)
+
+    @staticmethod
+    def _parse_active_task_ids(raw: Any) -> list[str]:
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+        except (TypeError, ValueError):
+            return [str(raw)]
+        if isinstance(parsed, list):
+            return [str(item) for item in parsed if item]
+        if isinstance(parsed, str):
+            return [parsed] if parsed else []
+        return []
 
 class RunService:
     def __init__(self, storage: RunStorageBackend):
