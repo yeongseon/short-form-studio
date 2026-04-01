@@ -33,6 +33,10 @@ export interface StoryboardViewProps {
   onRenderReady?: () => void;
   /** Polling interval in ms. Default 5000. */
   pollInterval?: number;
+  /** TTS model key passed from parent model selection */
+  ttsModel?: string;
+  /** Subtitle (STT) model key passed from parent model selection */
+  subtitleModel?: string;
 }
 
 // --------------- styles ---------------
@@ -88,6 +92,8 @@ export default function StoryboardView({
   onStatusMessage,
   onRenderReady,
   pollInterval = 5000,
+  ttsModel,
+  subtitleModel,
 }: StoryboardViewProps) {
   const [storyboard, setStoryboard] = useState<StoryboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -137,7 +143,7 @@ export default function StoryboardView({
   const handleGenerateAudio = useCallback(
     async (sectionId: string, params: ParagraphAudioParams) => {
       try {
-        await generateParagraphAudio(runId, sectionId, params);
+        await generateParagraphAudio(runId, sectionId, { ...params, tts_model: params.tts_model || ttsModel });
         onStatusMessage?.(`Audio generation started for §${sectionId}`);
         // Update local state to show generating
         setStoryboard((prev) => {
@@ -155,13 +161,13 @@ export default function StoryboardView({
         onStatusMessage?.(err instanceof Error ? err.message : "Audio generation failed");
       }
     },
-    [runId, onStatusMessage],
+    [runId, onStatusMessage, ttsModel],
   );
 
   const handleGenerateSubtitles = useCallback(
     async (sectionId: string, params: ParagraphSubtitlesParams) => {
       try {
-        await generateParagraphSubtitles(runId, sectionId, params);
+        await generateParagraphSubtitles(runId, sectionId, { ...params, subtitle_model: params.subtitle_model || subtitleModel });
         onStatusMessage?.(`Subtitle generation started for §${sectionId}`);
         setStoryboard((prev) => {
           if (!prev) return prev;
@@ -178,13 +184,13 @@ export default function StoryboardView({
         onStatusMessage?.(err instanceof Error ? err.message : "Subtitle generation failed");
       }
     },
-    [runId, onStatusMessage],
+    [runId, onStatusMessage, subtitleModel],
   );
 
   const handleBulkAudio = useCallback(async () => {
     setBulkGenerating(true);
     try {
-      const result = await generateAllParagraphAudio(runId);
+      const result = await generateAllParagraphAudio(runId, { tts_model: ttsModel });
       onStatusMessage?.(`Audio generation started for ${result.dispatched} paragraphs`);
       // Mark all paragraphs as generating
       setStoryboard((prev) => {
@@ -203,12 +209,12 @@ export default function StoryboardView({
     } finally {
       setBulkGenerating(false);
     }
-  }, [runId, onStatusMessage]);
+  }, [runId, onStatusMessage, ttsModel]);
 
   const handleBulkSubtitles = useCallback(async () => {
     setBulkGenerating(true);
     try {
-      const result = await generateAllParagraphSubtitles(runId);
+      const result = await generateAllParagraphSubtitles(runId, { subtitle_model: subtitleModel });
       onStatusMessage?.(`Subtitle generation started for ${result.dispatched} paragraphs`);
       setStoryboard((prev) => {
         if (!prev) return prev;
@@ -226,7 +232,7 @@ export default function StoryboardView({
     } finally {
       setBulkGenerating(false);
     }
-  }, [runId, onStatusMessage]);
+  }, [runId, onStatusMessage, subtitleModel]);
 
   // ---- render ----
 

@@ -84,6 +84,12 @@ STAGE_BEFORE_GENERATING: dict[RunStage, RunStage] = {
     RunStage.RENDER_GENERATING: RunStage.VISUAL_ASSET_REVIEW,
 
 }
+STAGE_BACK: dict[RunStage, RunStage] = {
+    RunStage.SCRIPT_REVIEW: RunStage.IDEA_READY,
+    RunStage.VISUAL_PLAN_REVIEW: RunStage.SCRIPT_REVIEW,
+    RunStage.VISUAL_ASSET_REVIEW: RunStage.VISUAL_PLAN_REVIEW,
+    RunStage.FINAL_REVIEW: RunStage.VISUAL_ASSET_REVIEW,
+}
 
 
 
