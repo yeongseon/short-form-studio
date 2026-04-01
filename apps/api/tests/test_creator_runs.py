@@ -675,7 +675,7 @@ async def test_generate_script_from_script_review(client, stub_generate_services
         "current_stage": "SCRIPT_GENERATING",
         "restart_from": "SCRIPT_GENERATING",
     }
-    assert "VISUAL_PLAN_SETUP" in cas_calls[0]["expected_stages"]
+    assert "SCRIPT_REVIEW" in cas_calls[0]["expected_stages"]
     assert dispatcher.calls[0]["idea_brief"] == "Science explainer"
 
 
