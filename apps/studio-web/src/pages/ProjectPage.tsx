@@ -36,6 +36,11 @@ interface ProjectDetail {
   title: string | null;
   source_type: string;
   status: string;
+  latest_run?: {
+    run_id: number;
+    current_stage: string | null;
+    status: string | null;
+  } | null;
 }
 
 interface ModelDefaults {
@@ -1188,7 +1193,8 @@ export default function ProjectPage() {
           {project.title || "Untitled Project"}
         </h1>
         <span style={{ fontSize: 12, color: "#6b7280" }}>
-          Source: {project.source_type} · Status: {project.status}
+          Source: {project.source_type} · Status: {run ? run.status : project.status}
+          {run ? ` · Stage: ${currentStage}` : ""}
         </span>
 
         {/* Stop / Resume / Delete actions */}
@@ -1254,7 +1260,11 @@ export default function ProjectPage() {
       {/* Pipeline stepper */}
       {run && (
         <div style={{ marginBottom: 24 }}>
-          <PipelineStepper currentStage={currentStage} failed={isFailed} />
+          <PipelineStepper
+            currentStage={currentStage}
+            failed={isFailed}
+            sourceType={project.source_type as "idea" | "markdown" | "url"}
+          />
         </div>
       )}
 

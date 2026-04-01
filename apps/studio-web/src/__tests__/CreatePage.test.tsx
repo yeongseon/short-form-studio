@@ -288,6 +288,35 @@ describe("CreatePage", () => {
     expect(runBody.model_defaults.render_profile).toBe("high_quality");
   });
 
+  it("sends backend model-default field names from CreatePage selectors", async () => {
+    mockFetchFullFlow();
+    renderCreatePage();
+    await waitFor(() => {
+      expect(screen.getByTestId("model-selector")).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText(/^Title/), { target: { value: "My Video" } });
+    fireEvent.change(screen.getByLabelText(/Idea Brief/), { target: { value: "Brief" } });
+
+    fireEvent.click(screen.getByLabelText(/Qwen3 4B/i));
+    fireEvent.click(screen.getByLabelText(/SD 1.5/i));
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Project" }));
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith("/projects/42");
+    });
+
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    const runCall = calls.find((c: unknown[]) => typeof c[0] === "string" && c[0].includes("/runs"));
+    const runBody = JSON.parse((runCall![1] as RequestInit).body as string);
+
+    expect(runBody.model_defaults.script_model).toBe("qwen3-4b");
+    expect(runBody.model_defaults.image_model).toBe("sd15");
+    expect(runBody.model_defaults.script).toBeUndefined();
+    expect(runBody.model_defaults.image).toBeUndefined();
+  });
+
   it("shows error when project creation fails", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const url = typeof input === "string" ? input : (input as Request).url;

@@ -45,6 +45,8 @@ export interface PipelineStepperProps {
   currentStage: string;
   /** True when the run is in FAILED state. */
   failed?: boolean;
+  /** Entry source type for source-aware first-step label. */
+  sourceType?: "idea" | "markdown" | "url";
 }
 
 // --------------- styles ---------------
@@ -78,7 +80,11 @@ function getStepStatus(stepIdx: number, activeIdx: number, isFailed: boolean): S
 
 // --------------- component ---------------
 
-export default function PipelineStepper({ currentStage, failed = false }: PipelineStepperProps) {
+export default function PipelineStepper({
+  currentStage,
+  failed = false,
+  sourceType = "idea",
+}: PipelineStepperProps) {
   const activeIdx = resolveStepIndex(currentStage);
 
   // For PUBLISHED, bump activeIdx past all steps so all show completed.
@@ -100,6 +106,14 @@ export default function PipelineStepper({ currentStage, failed = false }: Pipeli
           const status = getStepStatus(idx, effectiveIdx, failed);
           const colors = COLORS[status];
           const isLast = idx === PIPELINE_STEPS.length - 1;
+          const label =
+            step.key === "idea"
+              ? sourceType === "markdown"
+                ? "Markdown"
+                : sourceType === "url"
+                  ? "URL"
+                  : step.label
+              : step.label;
 
           return (
             <li
@@ -144,7 +158,7 @@ export default function PipelineStepper({ currentStage, failed = false }: Pipeli
                     whiteSpace: "nowrap",
                   }}
                 >
-                  {step.label}
+                  {label}
                 </span>
               </div>
 

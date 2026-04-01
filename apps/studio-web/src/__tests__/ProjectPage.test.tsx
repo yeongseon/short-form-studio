@@ -10,6 +10,7 @@ const MOCK_PROJECT: {
   title: string | null;
   source_type: string;
   status: string;
+  latest_run?: { run_id: number; current_stage: string | null; status: string | null } | null;
   created_at: string;
   updated_at: string;
 } = {
@@ -17,6 +18,7 @@ const MOCK_PROJECT: {
   title: "My Short",
   source_type: "idea",
   status: "active",
+  latest_run: { run_id: 1, current_stage: "IDEA_READY", status: "pending" },
   created_at: "2025-03-15T10:00:00Z",
   updated_at: "2025-03-15T12:00:00Z",
 };
@@ -255,6 +257,15 @@ describe("ProjectPage", () => {
       expect(screen.getByText(/Source: idea/)).toBeInTheDocument();
     });
     expect(screen.getByText(/Status: active/)).toBeInTheDocument();
+  });
+
+  it("shows run status and stage metadata when a run exists", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText(/Status: running/)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Stage: SCRIPT_REVIEW/)).toBeInTheDocument();
   });
 
   // ---- Project with run in IDEA_READY ----

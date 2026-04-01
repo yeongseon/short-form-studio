@@ -65,7 +65,16 @@ export default function CreatePage() {
   stylePresetRef.current = stylePreset;
 
   const handleModelChange = useCallback((category: string, modelKey: string) => {
-    setModelDefaults((prev) => ({ ...prev, [category]: modelKey }));
+    const fieldMap: Record<string, string> = {
+      script: "script_model",
+      image: "image_model",
+      tts: "tts_model",
+      stt: "subtitle_model",
+      render: "render_profile",
+    };
+    const field = fieldMap[category];
+    if (!field) return;
+    setModelDefaults((prev) => ({ ...prev, [field]: modelKey }));
   }, []);
 
   const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {

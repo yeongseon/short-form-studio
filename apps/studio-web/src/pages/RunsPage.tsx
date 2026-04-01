@@ -12,6 +12,11 @@ interface ProjectSummary {
   status: "draft" | "active" | "completed" | "archived";
   created_at: string;
   updated_at: string;
+  latest_run?: {
+    run_id: number;
+    current_stage: string | null;
+    status: string | null;
+  } | null;
 }
 
 interface ProjectListResponse {
@@ -26,6 +31,11 @@ const STATUS_COLORS: Record<string, { bg: string; fg: string }> = {
   active: { bg: "#dbeafe", fg: "#1e40af" },
   completed: { bg: "#dcfce7", fg: "#166534" },
   archived: { bg: "#f3f4f6", fg: "#6b7280" },
+  pending: { bg: "#fef3c7", fg: "#92400e" },
+  running: { bg: "#dbeafe", fg: "#1d4ed8" },
+  failed: { bg: "#fee2e2", fg: "#b91c1c" },
+  cancelled: { bg: "#f3f4f6", fg: "#6b7280" },
+  paused: { bg: "#ede9fe", fg: "#6d28d9" },
 };
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -247,7 +257,8 @@ export default function RunsPage() {
             </thead>
             <tbody>
               {projects.map((proj) => {
-                const statusColor = STATUS_COLORS[proj.status] ?? STATUS_COLORS.draft;
+                const effectiveStatus = proj.latest_run?.status ?? proj.status;
+                const statusColor = STATUS_COLORS[effectiveStatus] ?? STATUS_COLORS.draft;
                 return (
                   <tr
                     key={proj.id}
@@ -289,8 +300,13 @@ export default function RunsPage() {
                           color: statusColor.fg,
                         }}
                       >
-                        {proj.status}
+                        {effectiveStatus}
                       </span>
+                      {proj.latest_run?.current_stage && (
+                        <div style={{ marginTop: 4, fontSize: 11, color: "#6b7280" }}>
+                          {proj.latest_run.current_stage}
+                        </div>
+                      )}
                     </td>
                     <td style={{ padding: "10px 12px", color: "#6b7280" }}>
                       {formatDate(proj.created_at)}
