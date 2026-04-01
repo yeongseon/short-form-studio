@@ -252,7 +252,7 @@ class RunService:
             {
                 "status": "cancelled",
                 "current_stage": rollback_stage.value,
-                "active_task_id": None,
+                "active_task_id": "[]",
             },
         )
         return PipelineRun.from_row(row)

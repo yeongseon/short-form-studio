@@ -40,7 +40,7 @@ _ALLOWED_STAGES = frozenset({RunStage.VISUAL_PLAN_REVIEW, RunStage.VISUAL_ASSET_
 
 # Stages where writing VISUAL_ASSET_REVIEW or FAILED is safe — the run
 # hasn't advanced past image generation.
-_SAFE_STAGES = frozenset({RunStage.VISUAL_PLAN_REVIEW, RunStage.VISUAL_ASSET_GENERATING})
+_SAFE_STAGES = frozenset({RunStage.VISUAL_ASSET_GENERATING})
 
 # Base directory for artifact storage (relative to project root).
 _ARTIFACTS_BASE = os.getenv("ARTIFACT_ROOT", "data/artifacts")

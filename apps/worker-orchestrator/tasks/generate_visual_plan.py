@@ -34,7 +34,7 @@ _ALLOWED_STAGES = frozenset({RunStage.SCRIPT_REVIEW, RunStage.VISUAL_PLAN_GENERA
 
 # Stages where writing VISUAL_PLAN_REVIEW or FAILED is safe — the run
 # hasn't advanced past visual plan generation.
-_SAFE_STAGES = frozenset({RunStage.SCRIPT_REVIEW.value, RunStage.VISUAL_PLAN_GENERATING.value})
+_SAFE_STAGES = frozenset({RunStage.VISUAL_PLAN_GENERATING.value})
 
 
 class _StageGuardError(ValueError):
