@@ -43,6 +43,9 @@ class RunStorageBackend(Protocol):
     async def delete_runs_by_project(self, project_id: int) -> int:
         """Delete all runs for a project. Returns count of deleted rows."""
         ...
+    async def merge_model_defaults(self, run_id: int, updates_json: str) -> dict[str, Any]:
+        """Atomically merge JSON updates into model_defaults_json."""
+        ...
 
 class InMemoryRunStorage:
     def __init__(self) -> None:
@@ -105,6 +108,17 @@ class InMemoryRunStorage:
             return True
         return False
 
+    async def merge_model_defaults(self, run_id: int, updates_json: str) -> dict[str, Any]:
+        row = self._rows.get(run_id)
+        if row is None:
+            raise ValueError(f"Run {run_id} not found")
+        current = json.loads(row.get("model_defaults_json") or "{}")
+        updates = json.loads(updates_json)
+        merged = {**current, **updates}
+        row["model_defaults_json"] = json.dumps(merged)
+        row["updated_at"] = datetime.now(timezone.utc)
+        self._rows[run_id] = row
+        return dict(row)
     async def delete_runs_by_project(self, project_id: int) -> int:
         to_delete = [rid for rid, r in self._rows.items() if r.get("project_id") == project_id]
         for rid in to_delete:
@@ -315,20 +329,8 @@ class RunService:
         return PipelineRun.from_row(row)
 
     async def update_model_defaults(self, run_id: int, updates: dict[str, str]) -> PipelineRun:
-        run = await self.get_run(run_id)
-        if run is None:
-            raise ValueError(f"Run {run_id} not found")
-
-        current_defaults = {}
-        if run.model_defaults is not None:
-            current_defaults = run.model_defaults.model_dump(exclude_none=True)
-
-        merged = {**current_defaults, **updates}
-
-        row = await self.storage.update_run(
-            run_id,
-            {"model_defaults_json": json.dumps(merged)},
-        )
+        """Atomically merge model default updates (no read-merge-write race)."""
+        row = await self.storage.merge_model_defaults(run_id, json.dumps(updates))
         return PipelineRun.from_row(row)
 
     async def delete_run(self, run_id: int) -> bool:

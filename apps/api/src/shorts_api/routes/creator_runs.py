@@ -1326,7 +1326,10 @@ async def go_back(run_id: int) -> dict[str, object]:
         run = await run_service.go_back(run_id)
         return run.model_dump(mode="json")
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        detail = str(exc)
+        if "not found" in detail.lower():
+            raise HTTPException(status_code=404, detail=detail) from exc
+        raise HTTPException(status_code=400, detail=detail) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 

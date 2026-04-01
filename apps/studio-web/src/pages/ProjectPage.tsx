@@ -11,7 +11,7 @@
  * - StageActionBar (save / approve / generate / restart)
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 
 import PipelineStepper from "../components/creator/PipelineStepper";
@@ -243,6 +243,16 @@ export default function ProjectPage() {
     }
   }, [run?.model_defaults]);
 
+  // Build selectedModels map for controlled ModelSelector (category → model key)
+  const selectedModelsMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    if (modelSelection.script_model) map.script = modelSelection.script_model;
+    if (modelSelection.image_model) map.image = modelSelection.image_model;
+    if (modelSelection.tts_model) map.tts = modelSelection.tts_model;
+    if (modelSelection.subtitle_model) map.stt = modelSelection.subtitle_model;
+    return Object.keys(map).length > 0 ? map : undefined;
+  }, [modelSelection]);
+
   // Persist model selection to backend
   const handleModelChange = useCallback(
     (category: string, modelKey: string) => {
@@ -252,6 +262,7 @@ export default function ProjectPage() {
         image: "image_model",
         tts: "tts_model",
         stt: "subtitle_model",
+        render: "render_profile",
       };
       const field = fieldMap[category];
       if (!field) return;
@@ -628,7 +639,7 @@ export default function ProjectPage() {
       const res = await fetch(`${API_BASE}/runs/${run.id}/render`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ render_profile: "shorts_default" }),
+        body: JSON.stringify({ render_profile: modelSelection.render_profile || "shorts_default" }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
@@ -642,7 +653,7 @@ export default function ProjectPage() {
     } finally {
       setGenerating(false);
     }
-  }, [run]);
+  }, [run, modelSelection.render_profile]);
 
   // ---- progress dialog callbacks ----
 
@@ -1510,6 +1521,7 @@ export default function ProjectPage() {
             <div style={{ marginBottom: 12 }}>
               <ModelSelector
                 categories={["tts", "stt"]}
+                selectedModels={selectedModelsMap}
                 apiBase=""
                 onSelectionChange={handleModelChange}
               />
@@ -1615,6 +1627,7 @@ export default function ProjectPage() {
         <div style={{ padding: "8px 16px" }}>
           <ModelSelector
             categories={["script"]}
+            selectedModels={selectedModelsMap}
             apiBase=""
             onSelectionChange={handleModelChange}
           />
@@ -1624,6 +1637,7 @@ export default function ProjectPage() {
         <div style={{ padding: "8px 16px" }}>
           <ModelSelector
             categories={["script"]}
+            selectedModels={selectedModelsMap}
             apiBase=""
             onSelectionChange={handleModelChange}
           />
@@ -1633,6 +1647,7 @@ export default function ProjectPage() {
         <div style={{ padding: "8px 16px" }}>
           <ModelSelector
             categories={["image"]}
+            selectedModels={selectedModelsMap}
             apiBase=""
             onSelectionChange={handleModelChange}
           />
