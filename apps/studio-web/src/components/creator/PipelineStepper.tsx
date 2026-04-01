@@ -26,6 +26,7 @@ export const STAGE_TO_STEP: Record<string, StepKey> = {
   IDEA_READY: "idea",
   SCRIPT_GENERATING: "script",
   SCRIPT_REVIEW: "script",
+  VISUAL_PLAN_SETUP: "visual_plan",
   VISUAL_PLAN_GENERATING: "visual_plan",
   VISUAL_PLAN_REVIEW: "visual_plan",
   VISUAL_ASSET_GENERATING: "assets",

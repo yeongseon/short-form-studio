@@ -42,6 +42,7 @@ def test_happy_path_sequence_idea_ready_to_published() -> None:
         RunStage.IDEA_READY,
         RunStage.SCRIPT_GENERATING,
         RunStage.SCRIPT_REVIEW,
+        RunStage.VISUAL_PLAN_SETUP,
         RunStage.VISUAL_PLAN_GENERATING,
         RunStage.VISUAL_PLAN_REVIEW,
         RunStage.VISUAL_ASSET_GENERATING,

@@ -181,7 +181,7 @@ async def approve_script(run_id: int, request: ApproveScriptRequest) -> dict[str
             run_service=run_service,
             run_id=run_id,
             stage_name="SCRIPT_REVIEW",
-            target_stage="VISUAL_PLAN_GENERATING",
+            target_stage="VISUAL_PLAN_SETUP",
             reviewer=request.reviewer,
             notes=request.notes,
         )
@@ -317,8 +317,8 @@ async def generate_visual_plan_trigger(run_id: int, request: GenerateVisualPlanR
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    # 2. Validate stage — SCRIPT_REVIEW (after approval) or VISUAL_PLAN_GENERATING (retry)
-    allowed_stages = frozenset({"SCRIPT_REVIEW", "VISUAL_PLAN_GENERATING"})
+    # 2. Validate stage — VISUAL_PLAN_SETUP (normal) or VISUAL_PLAN_GENERATING (retry)
+    allowed_stages = frozenset({"VISUAL_PLAN_SETUP", "VISUAL_PLAN_GENERATING"})
     if run.current_stage not in allowed_stages:
         raise HTTPException(
             status_code=400,
