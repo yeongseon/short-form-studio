@@ -221,7 +221,7 @@ def test_generate_subtitles_success(monkeypatch: pytest.MonkeyPatch) -> None:
         }
     ]
     assert storage.calls == [(101, {"current_stage": "RENDER_GENERATING", "status": "running"})]
-    assert storage.cas_calls[0][2] == frozenset({"AUDIO_GENERATING", "SUBTITLE_GENERATING"})
+    assert storage.cas_calls[0][2] == frozenset({"SUBTITLE_GENERATING"})
 
 
 def test_generate_subtitles_run_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -293,7 +293,7 @@ def test_generate_subtitles_provider_failure_marks_failed(monkeypatch: pytest.Mo
 
     assert subtitle_service.calls == []
     assert storage.calls == [(104, {"current_stage": "FAILED", "status": "failed"})]
-    assert storage.cas_calls[0][2] == frozenset({"AUDIO_GENERATING", "SUBTITLE_GENERATING"})
+    assert storage.cas_calls[0][2] == frozenset({"SUBTITLE_GENERATING"})
 
 
 def test_generate_subtitles_with_audio_path(monkeypatch: pytest.MonkeyPatch) -> None:

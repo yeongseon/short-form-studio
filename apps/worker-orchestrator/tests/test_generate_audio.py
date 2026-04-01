@@ -200,7 +200,7 @@ def test_generate_audio_success(monkeypatch: pytest.MonkeyPatch) -> None:
         }
     ]
     assert storage.calls == [(101, {"current_stage": "SUBTITLE_GENERATING", "status": "running"})]
-    assert storage.cas_calls[0][2] == frozenset({"VISUAL_ASSET_REVIEW", "AUDIO_GENERATING"})
+    assert storage.cas_calls[0][2] == frozenset({"AUDIO_GENERATING"})
 
 
 def test_generate_audio_run_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -268,7 +268,7 @@ def test_generate_audio_provider_failure_marks_failed(monkeypatch: pytest.Monkey
 
     assert audio_service.calls == []
     assert storage.calls == [(104, {"current_stage": "FAILED", "status": "failed"})]
-    assert storage.cas_calls[0][2] == frozenset({"VISUAL_ASSET_REVIEW", "AUDIO_GENERATING"})
+    assert storage.cas_calls[0][2] == frozenset({"AUDIO_GENERATING"})
 
 
 def test_generate_audio_with_gpu_lock(monkeypatch: pytest.MonkeyPatch) -> None:
