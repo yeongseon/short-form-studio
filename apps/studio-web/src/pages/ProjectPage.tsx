@@ -3,27 +3,21 @@
  *
  * Loads the project detail and its latest run, then renders:
  * - PipelineStepper (header progress bar)
- * - Editor area with markdown / structured toggle (during script stages)
- * - VisualPlanEditor (during visual plan stages)
- * - VisualAssetGrid (during visual asset stages)
- * - Audio / subtitle / render generating indicators (automatic stages)
+ * - ScriptComposer (during script stages: IDEA_READY, SCRIPT_GENERATING, SCRIPT_REVIEW)
+ * - VisualPlanEditor section (during visual plan stages)
+ * - StoryboardWorkspace (post visual-plan: scene-centric card grid)
  * - Final review section with preview summary and review-page link
- * - StageActionBar (save / approve / generate / restart)
+ * - ConfirmDialog for stop / resume / delete
  */
 
 import { useState, useEffect, useCallback } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 
 import PipelineStepper from "../components/creator/PipelineStepper";
-import StageActionBar, {
-  type ActionConfig,
-} from "../components/creator/StageActionBar";
-import MarkdownScriptEditor from "../components/creator/MarkdownScriptEditor";
-import StructuredScriptEditor from "../components/creator/StructuredScriptEditor";
+import ScriptComposer from "../components/creator/ScriptComposer";
+import StoryboardWorkspace from "../components/creator/StoryboardWorkspace";
 import VisualPlanEditor from "../components/creator/VisualPlanEditor";
-import VisualAssetGrid from "../components/creator/VisualAssetGrid";
 import ModelSelector from "../components/creator/ModelSelector";
-import StoryboardView from "../components/creator/StoryboardView";
 import ConfirmDialog from "../components/creator/ConfirmDialog";
 
 const API_BASE = "/api/creator";
@@ -64,14 +58,21 @@ interface RunDetail {
 
 type EditorMode = "markdown" | "structured";
 
-// Script stages where the editor area is relevant
+// Script stages where ScriptComposer is shown
 const SCRIPT_STAGES = new Set(["SCRIPT_GENERATING", "SCRIPT_REVIEW"]);
 
 // Visual plan stages where the editor area is relevant
-const VISUAL_PLAN_STAGES = new Set(["VISUAL_PLAN_SETUP", "VISUAL_PLAN_GENERATING", "VISUAL_PLAN_REVIEW"]);
+const VISUAL_PLAN_STAGES = new Set([
+  "VISUAL_PLAN_SETUP",
+  "VISUAL_PLAN_GENERATING",
+  "VISUAL_PLAN_REVIEW",
+]);
 
 // Visual asset stages
-const VISUAL_ASSET_STAGES = new Set(["VISUAL_ASSET_GENERATING", "VISUAL_ASSET_REVIEW"]);
+const VISUAL_ASSET_STAGES = new Set([
+  "VISUAL_ASSET_GENERATING",
+  "VISUAL_ASSET_REVIEW",
+]);
 
 // Audio stage
 const AUDIO_STAGES = new Set(["AUDIO_GENERATING"]);
@@ -85,8 +86,18 @@ const RENDER_STAGES = new Set(["RENDER_GENERATING"]);
 // Final review
 const FINAL_REVIEW_STAGES = new Set(["FINAL_REVIEW"]);
 
-// Storyboard stages — show unified storyboard view instead of separate indicators
-const STORYBOARD_STAGES = new Set(["AUDIO_GENERATING", "SUBTITLE_GENERATING", "RENDER_GENERATING", "FINAL_REVIEW"]);
+// All stages handled by StoryboardWorkspace (scene-centric view)
+const STORYBOARD_WORKSPACE_STAGES = new Set([
+  "VISUAL_ASSET_GENERATING",
+  "VISUAL_ASSET_REVIEW",
+  "AUDIO_GENERATING",
+  "SUBTITLE_GENERATING",
+  "RENDER_GENERATING",
+  "FINAL_REVIEW",
+  "PUBLISHED",
+]);
+
+// Stages where we poll run status
 const RUN_POLL_STAGES = new Set([
   "SCRIPT_GENERATING",
   "VISUAL_PLAN_GENERATING",
@@ -113,15 +124,42 @@ const SD_QUALITY_PRESETS: Record<
   string,
   { steps: number; cfg_scale: number; sampler_name: string; label: string; description: string }
 > = {
-  fast: { steps: 15, cfg_scale: 5, sampler_name: "Euler a", label: "⚡ Fast Preview", description: "Quick preview, lower quality (15 steps)" },
-  balanced: { steps: 25, cfg_scale: 7, sampler_name: "DPM++ 2M Karras", label: "⚖️ Balanced", description: "Good quality/speed balance (25 steps)" },
-  high: { steps: 40, cfg_scale: 8, sampler_name: "DPM++ 2M Karras", label: "✨ High Quality", description: "Best quality, slower (40 steps)" },
+  fast: {
+    steps: 15,
+    cfg_scale: 5,
+    sampler_name: "Euler a",
+    label: "\u26a1 Fast Preview",
+    description: "Quick preview, lower quality (15 steps)",
+  },
+  balanced: {
+    steps: 25,
+    cfg_scale: 7,
+    sampler_name: "DPM++ 2M Karras",
+    label: "\u2696\ufe0f Balanced",
+    description: "Good quality/speed balance (25 steps)",
+  },
+  high: {
+    steps: 40,
+    cfg_scale: 8,
+    sampler_name: "DPM++ 2M Karras",
+    label: "\u2728 High Quality",
+    description: "Best quality, slower (40 steps)",
+  },
 };
 
 const SD_SAMPLERS = [
-  "DPM++ 2M Karras", "DPM++ SDE Karras", "DPM++ 2M SDE Karras",
-  "DPM++ 2M", "DPM++ SDE", "DPM++ 2S a Karras",
-  "Euler a", "Euler", "DDIM", "UniPC", "LMS Karras", "Heun",
+  "DPM++ 2M Karras",
+  "DPM++ SDE Karras",
+  "DPM++ 2M SDE Karras",
+  "DPM++ 2M",
+  "DPM++ SDE",
+  "DPM++ 2S a Karras",
+  "Euler a",
+  "Euler",
+  "DDIM",
+  "UniPC",
+  "LMS Karras",
+  "Heun",
 ];
 
 const RENDER_PROFILE_OPTIONS = [
@@ -129,6 +167,7 @@ const RENDER_PROFILE_OPTIONS = [
   { value: "high_quality", label: "High Quality" },
   { value: "fast_preview", label: "Fast Preview" },
 ];
+
 // --------------- Visual Plan Setup Cards ---------------
 
 interface ScriptSection {
@@ -221,18 +260,29 @@ function VisualPlanSetupCards({ runId }: { runId: number }) {
               flexDirection: "column",
               alignItems: "center",
               justifyContent: "center",
-              background: sec.type === "narration" ? "#eff6ff" : sec.type === "dialogue" ? "#fdf4ff" : "#f0fdf4",
+              background:
+                sec.type === "narration"
+                  ? "#eff6ff"
+                  : sec.type === "dialogue"
+                    ? "#fdf4ff"
+                    : "#f0fdf4",
               borderRight: "1px solid #e5e7eb",
               padding: "12px 0",
               flexShrink: 0,
             }}
           >
-            <span style={{ fontSize: 11, color: "#6b7280", fontWeight: 500 }}>\u00a7{idx + 1}</span>
+            <span style={{ fontSize: 11, color: "#6b7280", fontWeight: 500 }}>
+              \u00a7{idx + 1}
+            </span>
             <span
               style={{
                 fontSize: 10,
                 color:
-                  sec.type === "narration" ? "#2563eb" : sec.type === "dialogue" ? "#7c3aed" : "#16a34a",
+                  sec.type === "narration"
+                    ? "#2563eb"
+                    : sec.type === "dialogue"
+                      ? "#7c3aed"
+                      : "#16a34a",
                 fontWeight: 600,
                 marginTop: 2,
                 textTransform: "uppercase",
@@ -257,7 +307,14 @@ function VisualPlanSetupCards({ runId }: { runId: number }) {
               {sec.display_text || sec.text}
             </p>
             {sec.speaker && (
-              <span style={{ fontSize: 11, color: "#9ca3af", marginTop: 4, display: "inline-block" }}>
+              <span
+                style={{
+                  fontSize: 11,
+                  color: "#9ca3af",
+                  marginTop: 4,
+                  display: "inline-block",
+                }}
+              >
                 Speaker: {sec.speaker}
               </span>
             )}
@@ -277,14 +334,20 @@ function VisualPlanSetupCards({ runId }: { runId: number }) {
               flexShrink: 0,
             }}
           >
-            <span style={{ fontSize: 20 }}>\ud83d\uddbc\ufe0f</span>
-            <span style={{ fontSize: 10, color: "#6b21a8", fontWeight: 600, marginTop: 4 }}>1 Image</span>
+            <span style={{ fontSize: 20 }}>{"\ud83d\uddbc\ufe0f"}</span>
+            <span
+              style={{ fontSize: 10, color: "#6b21a8", fontWeight: 600, marginTop: 4 }}
+            >
+              1 Image
+            </span>
           </div>
         </div>
       ))}
     </div>
   );
 }
+
+// --------------- Main Component ---------------
 
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -297,9 +360,6 @@ export default function ProjectPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Editor mode
-  const [editorMode, setEditorMode] = useState<EditorMode>("markdown");
-
   // Action loading states
   const [approving, setApproving] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -309,33 +369,19 @@ export default function ProjectPage() {
   const [stopping, setStopping] = useState(false);
   const [resuming, setResuming] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [confirmAction, setConfirmAction] = useState<"stop" | "resume" | "delete" | null>(null);
+  const [confirmAction, setConfirmAction] = useState<
+    "stop" | "resume" | "delete" | null
+  >(null);
 
   // Status toast
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
-  // Scene regeneration model override
-  const [regenModelKey, setRegenModelKey] = useState<string | null>(null);
-
-  // SD image tuning parameters
-  const [imageParams, setImageParams] = useState({
-    steps: 25,
-    sampler_name: "DPM++ 2M Karras",
-    negative_prompt:
-      "low quality, worst quality, blurry, out of focus, ugly, deformed, disfigured, watermark, text, signature, poorly drawn, bad anatomy, extra limbs",
-    cfg_scale: 7,
-  });
-  const [activePreset, setActivePreset] = useState<string>("balanced");
-  const [tuningOpen, setTuningOpen] = useState(true);
-  // Asset grid refresh key — increment to force re-fetch
-  const [assetRefreshKey, setAssetRefreshKey] = useState(0);
-
-  // Preview data for FINAL_REVIEW
-  const [preview, setPreview] = useState<Record<string, unknown> | null>(null);
-
   // Per-stage model selection (persisted to backend via model_defaults)
   const [modelSelection, setModelSelection] = useState<ModelDefaults>({});
   const [goingBack, setGoingBack] = useState(false);
+
+  // Preview data for FINAL_REVIEW
+  const [preview, setPreview] = useState<Record<string, unknown> | null>(null);
 
   // ---- data fetching ----
 
@@ -348,21 +394,28 @@ export default function ProjectPage() {
       if (!projRes.ok) {
         if (projRes.status === 404) throw new Error("Project not found");
         const body = await projRes.json().catch(() => null);
-        throw new Error(body?.detail ?? `Failed to load project (${projRes.status})`);
+        throw new Error(
+          body?.detail ?? `Failed to load project (${projRes.status})`,
+        );
       }
       const projData: ProjectDetail = await projRes.json();
       setProject(projData);
 
       // 2. Fetch runs for this project (newest first), take the latest
-      const runsRes = await fetch(`${API_BASE}/projects/${numericProjectId}/runs`);
+      const runsRes = await fetch(
+        `${API_BASE}/projects/${numericProjectId}/runs`,
+      );
       if (runsRes.ok) {
-        const runsData: { runs: RunDetail[]; total: number } = await runsRes.json();
+        const runsData: { runs: RunDetail[]; total: number } =
+          await runsRes.json();
         setRun(runsData.runs.length > 0 ? runsData.runs[0] : null);
       } else {
         setRun(null);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "An unexpected error occurred");
+      setError(
+        err instanceof Error ? err.message : "An unexpected error occurred",
+      );
     } finally {
       setLoading(false);
     }
@@ -410,9 +463,6 @@ export default function ProjectPage() {
     if (!run || !RUN_POLL_STAGES.has(run.current_stage)) return;
     const timer = setInterval(() => {
       void refreshRun(run.id);
-      if (run.current_stage === "VISUAL_ASSET_GENERATING") {
-        setAssetRefreshKey((k) => k + 1);
-      }
     }, 3000);
     return () => clearInterval(timer);
   }, [run, refreshRun]);
@@ -421,7 +471,6 @@ export default function ProjectPage() {
   useEffect(() => {
     if (run?.model_defaults) {
       setModelSelection((prev) => {
-        // Only set if we don't have local selections yet
         const hasLocal = Object.keys(prev).length > 0;
         if (hasLocal) return prev;
         return { ...run.model_defaults } as ModelDefaults;
@@ -430,8 +479,6 @@ export default function ProjectPage() {
   }, [run?.model_defaults]);
 
   // Build a selectedModels map scoped to specific categories.
-  // Returns undefined when none of the requested categories have persisted values,
-  // so ModelSelector stays uncontrolled and can compute its own defaults.
   const buildSelectedModels = useCallback(
     (categories: string[]): Record<string, string> | undefined => {
       const FIELD_TO_CAT: Record<string, string> = {
@@ -443,7 +490,10 @@ export default function ProjectPage() {
       const catSet = new Set(categories);
       const map: Record<string, string> = {};
       for (const [field, cat] of Object.entries(FIELD_TO_CAT)) {
-        if (catSet.has(cat) && modelSelection[field as keyof ModelDefaults]) {
+        if (
+          catSet.has(cat) &&
+          modelSelection[field as keyof ModelDefaults]
+        ) {
           map[cat] = modelSelection[field as keyof ModelDefaults]!;
         }
       }
@@ -455,7 +505,6 @@ export default function ProjectPage() {
   // Persist model selection to backend
   const handleModelChange = useCallback(
     (category: string, modelKey: string) => {
-      // Map ModelSelector category → ModelDefaults field
       const fieldMap: Record<string, keyof ModelDefaults> = {
         script: "script_model",
         image: "image_model",
@@ -466,13 +515,14 @@ export default function ProjectPage() {
       const field = fieldMap[category];
       if (!field) return;
       setModelSelection((prev) => ({ ...prev, [field]: modelKey }));
-      // Fire-and-forget persist to backend
       if (run) {
         fetch(`${API_BASE}/runs/${run.id}/model-defaults`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ [field]: modelKey }),
-        }).catch(() => { /* non-critical */ });
+        }).catch(() => {
+          /* non-critical */
+        });
       }
     },
     [run],
@@ -534,7 +584,9 @@ export default function ProjectPage() {
       const res = await fetch(`${API_BASE}/runs/${run.id}/generate-script`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model_key: modelSelection.script_model || "qwen3-4b" }),
+        body: JSON.stringify({
+          model_key: modelSelection.script_model || "qwen3-4b",
+        }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
@@ -543,7 +595,9 @@ export default function ProjectPage() {
       setStatusMessage("Script generation started");
       setTimeout(() => refreshRun(run.id), 2000);
     } catch (err) {
-      setStatusMessage(err instanceof Error ? err.message : "Generate failed");
+      setStatusMessage(
+        err instanceof Error ? err.message : "Generate failed",
+      );
     } finally {
       setGenerating(false);
     }
@@ -563,10 +617,12 @@ export default function ProjectPage() {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Restart failed (${res.status})`);
       }
-      setStatusMessage("Restarting script generation…");
+      setStatusMessage("Restarting script generation\u2026");
       await refreshRun(run.id);
     } catch (err) {
-      setStatusMessage(err instanceof Error ? err.message : "Restart failed");
+      setStatusMessage(
+        err instanceof Error ? err.message : "Restart failed",
+      );
     } finally {
       setRestarting(false);
     }
@@ -579,11 +635,14 @@ export default function ProjectPage() {
     setApproving(true);
     setStatusMessage(null);
     try {
-      const res = await fetch(`${API_BASE}/runs/${run.id}/approve-visual-plan`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reviewer: "agent" }),
-      });
+      const res = await fetch(
+        `${API_BASE}/runs/${run.id}/approve-visual-plan`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reviewer: "agent" }),
+        },
+      );
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Approve failed (${res.status})`);
@@ -602,11 +661,16 @@ export default function ProjectPage() {
     setGenerating(true);
     setStatusMessage(null);
     try {
-      const res = await fetch(`${API_BASE}/runs/${run.id}/generate-visual-plan`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model_key: modelSelection.script_model || "qwen3-4b" }),
-      });
+      const res = await fetch(
+        `${API_BASE}/runs/${run.id}/generate-visual-plan`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model_key: modelSelection.script_model || "qwen3-4b",
+          }),
+        },
+      );
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Generate failed (${res.status})`);
@@ -614,7 +678,9 @@ export default function ProjectPage() {
       setStatusMessage("Visual plan generation started");
       setTimeout(() => refreshRun(run.id), 2000);
     } catch (err) {
-      setStatusMessage(err instanceof Error ? err.message : "Generate failed");
+      setStatusMessage(
+        err instanceof Error ? err.message : "Generate failed",
+      );
     } finally {
       setGenerating(false);
     }
@@ -634,112 +700,64 @@ export default function ProjectPage() {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Restart failed (${res.status})`);
       }
-      setStatusMessage("Restarting visual plan generation…");
+      setStatusMessage("Restarting visual plan generation\u2026");
       await refreshRun(run.id);
     } catch (err) {
-      setStatusMessage(err instanceof Error ? err.message : "Restart failed");
+      setStatusMessage(
+        err instanceof Error ? err.message : "Restart failed",
+      );
     } finally {
       setRestarting(false);
     }
   }, [run, refreshRun]);
 
-  // ---- visual asset actions ----
+  // ---- visual asset actions (kept for StoryboardWorkspace internal use) ----
 
   const handleGenerateAllAssets = useCallback(async () => {
     if (!run) return;
     setGenerating(true);
     setStatusMessage(null);
     try {
-      const res = await fetch(`${API_BASE}/runs/${run.id}/generate-visual-assets`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model_key: modelSelection.image_model || "sd15", image_params: imageParams }),
-      });
+      const res = await fetch(
+        `${API_BASE}/runs/${run.id}/generate-visual-assets`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model_key: modelSelection.image_model || "sd15",
+          }),
+        },
+      );
       if (!res.ok) {
         const body = await res.json().catch(() => null);
-        throw new Error(body?.detail ?? `Generate assets failed (${res.status})`);
+        throw new Error(
+          body?.detail ?? `Generate assets failed (${res.status})`,
+        );
       }
       setStatusMessage("Visual asset generation started");
       await refreshRun(run.id);
-      setAssetRefreshKey((k) => k + 1);
     } catch (err) {
-      setStatusMessage(err instanceof Error ? err.message : "Generate assets failed");
+      setStatusMessage(
+        err instanceof Error ? err.message : "Generate assets failed",
+      );
     } finally {
       setGenerating(false);
     }
-  }, [run, imageParams, modelSelection.image_model]);
-
-  const handleRegenerateScene = useCallback(
-    async (sceneId: string) => {
-      if (!run) return;
-      setStatusMessage(null);
-      try {
-        const payload: Record<string, unknown> = { image_params: imageParams };
-        if (regenModelKey) payload.model_key = regenModelKey;
-        const res = await fetch(
-          `${API_BASE}/runs/${run.id}/visual-plan/scenes/${sceneId}/regenerate-image`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
-          },
-        );
-        if (!res.ok) {
-          const body = await res.json().catch(() => null);
-          throw new Error(body?.detail ?? `Regenerate failed (${res.status})`);
-        }
-        setStatusMessage(`Regenerating scene ${sceneId}…`);
-        // Refresh asset grid after a short delay for task to complete
-        setTimeout(() => {
-          setAssetRefreshKey((k) => k + 1);
-          if (run) refreshRun(run.id);
-        }, 3000);
-      } catch (err) {
-        setStatusMessage(err instanceof Error ? err.message : "Regenerate failed");
-      }
-    },
-    [run, regenModelKey, imageParams, refreshRun],
-  );
-
-  const handleGenerateScene = useCallback(
-    async (sceneId: string) => {
-      if (!run) return;
-      setStatusMessage(null);
-      try {
-        const res = await fetch(
-          `${API_BASE}/runs/${run.id}/visual-plan/scenes/${sceneId}/generate-image`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ model_key: modelSelection.image_model || "sd15", image_params: imageParams }),
-          },
-        );
-        if (!res.ok) {
-          const body = await res.json().catch(() => null);
-          throw new Error(body?.detail ?? `Generate scene failed (${res.status})`);
-        }
-        setStatusMessage(`Generating image for scene ${sceneId}…`);
-        setTimeout(() => {
-          setAssetRefreshKey((k) => k + 1);
-          if (run) refreshRun(run.id);
-        }, 3000);
-      } catch (err) {
-        setStatusMessage(err instanceof Error ? err.message : "Generate scene failed");
-      }
-    },
-    [run, imageParams, refreshRun, modelSelection.image_model],
-  );
+  }, [run, modelSelection.image_model]);
 
   const handleApproveAssets = useCallback(async () => {
     if (!run) return;
     setApproving(true);
     setStatusMessage(null);
     try {
-      const res = await fetch(`${API_BASE}/runs/${run.id}/approve-visual-assets`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reviewer: "agent" }),
-      });
+      const res = await fetch(
+        `${API_BASE}/runs/${run.id}/approve-visual-assets`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reviewer: "agent" }),
+        },
+      );
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Approve failed (${res.status})`);
@@ -747,7 +765,9 @@ export default function ProjectPage() {
       setStatusMessage("Visual assets approved");
       await refreshRun(run.id);
     } catch (err) {
-      setStatusMessage(err instanceof Error ? err.message : "Approve assets failed");
+      setStatusMessage(
+        err instanceof Error ? err.message : "Approve assets failed",
+      );
     } finally {
       setApproving(false);
     }
@@ -767,10 +787,12 @@ export default function ProjectPage() {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Restart failed (${res.status})`);
       }
-      setStatusMessage("Restarting visual asset generation…");
+      setStatusMessage("Restarting visual asset generation\u2026");
       await refreshRun(run.id);
     } catch (err) {
-      setStatusMessage(err instanceof Error ? err.message : "Restart failed");
+      setStatusMessage(
+        err instanceof Error ? err.message : "Restart failed",
+      );
     } finally {
       setRestarting(false);
     }
@@ -786,16 +808,23 @@ export default function ProjectPage() {
       const res = await fetch(`${API_BASE}/runs/${run.id}/generate-audio`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tts_model: modelSelection.tts_model || "qwen3-tts", voice: "default" }),
+        body: JSON.stringify({
+          tts_model: modelSelection.tts_model || "qwen3-tts",
+          voice: "default",
+        }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
-        throw new Error(body?.detail ?? `Generate audio failed (${res.status})`);
+        throw new Error(
+          body?.detail ?? `Generate audio failed (${res.status})`,
+        );
       }
       setStatusMessage("Audio generation started");
       await refreshRun(run.id);
     } catch (err) {
-      setStatusMessage(err instanceof Error ? err.message : "Generate audio failed");
+      setStatusMessage(
+        err instanceof Error ? err.message : "Generate audio failed",
+      );
     } finally {
       setGenerating(false);
     }
@@ -808,19 +837,29 @@ export default function ProjectPage() {
     setGenerating(true);
     setStatusMessage(null);
     try {
-      const res = await fetch(`${API_BASE}/runs/${run.id}/generate-subtitles`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ subtitle_model: modelSelection.subtitle_model || "whisper-small", subtitle_format: "srt" }),
-      });
+      const res = await fetch(
+        `${API_BASE}/runs/${run.id}/generate-subtitles`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            subtitle_model: modelSelection.subtitle_model || "whisper-small",
+            subtitle_format: "srt",
+          }),
+        },
+      );
       if (!res.ok) {
         const body = await res.json().catch(() => null);
-        throw new Error(body?.detail ?? `Generate subtitles failed (${res.status})`);
+        throw new Error(
+          body?.detail ?? `Generate subtitles failed (${res.status})`,
+        );
       }
       setStatusMessage("Subtitle generation started");
       await refreshRun(run.id);
     } catch (err) {
-      setStatusMessage(err instanceof Error ? err.message : "Generate subtitles failed");
+      setStatusMessage(
+        err instanceof Error ? err.message : "Generate subtitles failed",
+      );
     } finally {
       setGenerating(false);
     }
@@ -836,7 +875,9 @@ export default function ProjectPage() {
       const res = await fetch(`${API_BASE}/runs/${run.id}/render`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ render_profile: modelSelection.render_profile || "shorts_default" }),
+        body: JSON.stringify({
+          render_profile: modelSelection.render_profile || "shorts_default",
+        }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
@@ -858,7 +899,9 @@ export default function ProjectPage() {
     setStopping(true);
     setStatusMessage(null);
     try {
-      const res = await fetch(`${API_BASE}/runs/${run.id}/stop`, { method: "POST" });
+      const res = await fetch(`${API_BASE}/runs/${run.id}/stop`, {
+        method: "POST",
+      });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Stop failed (${res.status})`);
@@ -877,7 +920,9 @@ export default function ProjectPage() {
     setResuming(true);
     setStatusMessage(null);
     try {
-      const res = await fetch(`${API_BASE}/runs/${run.id}/resume`, { method: "POST" });
+      const res = await fetch(`${API_BASE}/runs/${run.id}/resume`, {
+        method: "POST",
+      });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Resume failed (${res.status})`);
@@ -895,7 +940,9 @@ export default function ProjectPage() {
     setDeleting(true);
     setStatusMessage(null);
     try {
-      const res = await fetch(`${API_BASE}/projects/${numericProjectId}`, { method: "DELETE" });
+      const res = await fetch(`${API_BASE}/projects/${numericProjectId}`, {
+        method: "DELETE",
+      });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Delete failed (${res.status})`);
@@ -915,194 +962,24 @@ export default function ProjectPage() {
   const isScriptStage = SCRIPT_STAGES.has(currentStage);
   const isScriptWorkspace = currentStage === "IDEA_READY" || isScriptStage;
   const isVisualPlanStage = VISUAL_PLAN_STAGES.has(currentStage);
-  const isVisualAssetStage = VISUAL_ASSET_STAGES.has(currentStage);
-  const isEditable = EDITABLE_STAGES.has(currentStage);
-  const isGenerating = currentStage === "SCRIPT_GENERATING";
+  const isStoryboardWorkspace = STORYBOARD_WORKSPACE_STAGES.has(currentStage);
   const isVPGenerating = currentStage === "VISUAL_PLAN_GENERATING";
   const isVPSetup = currentStage === "VISUAL_PLAN_SETUP";
-  const isVAGenerating = currentStage === "VISUAL_ASSET_GENERATING";
-  const isAudioStage = AUDIO_STAGES.has(currentStage);
-  const isSubtitleStage = SUBTITLE_STAGES.has(currentStage);
-  const isRenderStage = RENDER_STAGES.has(currentStage);
   const isFinalReview = FINAL_REVIEW_STAGES.has(currentStage);
-  const isStoryboardStage = STORYBOARD_STAGES.has(currentStage);
+  const isRenderStage = RENDER_STAGES.has(currentStage);
   const previewVideo = (preview as Record<string, unknown> | null)?.video;
   const previewVideoPath =
     previewVideo && typeof previewVideo === "object"
       ? (previewVideo as Record<string, unknown>).path
       : null;
 
+  // Determine max width — wider for storyboard scene grid
+  const maxWidth = isStoryboardWorkspace ? 1200 : 960;
 
-  // ---- action bar config ----
-
-  const buildActionBar = (): {
-    save: ActionConfig;
-    approve: ActionConfig;
-    generate: ActionConfig;
-    restart: ActionConfig;
-  } => {
-    // Final review — no actions needed, just view
-    if (isFinalReview) {
-      return {
-        save: { visible: false },
-        approve: { visible: false },
-        generate: { visible: false },
-        restart: {
-          visible: true,
-          disabled: restarting,
-          loading: restarting,
-          onClick: handleRestart,
-          label: "Restart from Script",
-        },
-      };
-    }
-
-    // Storyboard stages — audio/subtitle generation is handled by StoryboardView
-    // Only show render button and restart in the action bar
-    if (isAudioStage) {
-      return {
-        save: { visible: false },
-        approve: { visible: false },
-        generate: { visible: false },
-        restart: {
-          visible: true,
-          disabled: restarting,
-          loading: restarting,
-          onClick: handleRestart,
-          label: "Restart from Script",
-        },
-      };
-    }
-
-    if (isSubtitleStage) {
-      return {
-        save: { visible: false },
-        approve: { visible: false },
-        generate: {
-          visible: true,
-          disabled: generating,
-          loading: generating,
-          onClick: handleRender,
-          label: "Render Video",
-        },
-        restart: {
-          visible: true,
-          disabled: restarting,
-          loading: restarting,
-          onClick: handleRestart,
-          label: "Restart from Script",
-        },
-      };
-    }
-
-    // Render stage — rendering in progress, show restart only
-    if (isRenderStage) {
-      return {
-        save: { visible: false },
-        approve: { visible: false },
-        generate: { visible: false },
-        restart: {
-          visible: true,
-          disabled: restarting,
-          loading: restarting,
-          onClick: handleRestart,
-          label: "Restart from Script",
-        },
-      };
-    }
-
-    // Visual asset stages
-    if (isVisualAssetStage) {
-      return {
-        save: { visible: false },
-        approve: {
-          visible: currentStage === "VISUAL_ASSET_REVIEW",
-          disabled: approving,
-          loading: approving,
-          onClick: handleApproveAssets,
-          label: "Approve Assets",
-        },
-        generate: {
-          visible: currentStage === "VISUAL_ASSET_REVIEW",
-          disabled: generating,
-          loading: generating,
-          onClick: handleGenerateAllAssets,
-          label: "Regenerate All",
-        },
-        restart: {
-          visible: currentStage === "VISUAL_ASSET_REVIEW",
-          disabled: restarting,
-          loading: restarting,
-          onClick: handleRestartAssets,
-          label: "Restart Assets",
-        },
-      };
-    }
-
-    // Visual plan stages
-    // Visual plan setup — show only "Generate Visual Plan" button
-    if (isVPSetup) {
-      return {
-        save: { visible: false },
-        approve: { visible: false },
-        generate: {
-          visible: true,
-          disabled: generating,
-          loading: generating,
-          onClick: handleGenerateVisualPlan,
-          label: "Generate Visual Plan",
-        },
-        restart: { visible: false },
-      };
-    }
-
-    if (isVisualPlanStage) {
-      return {
-        save: { visible: false },
-        approve: {
-          visible: currentStage === "VISUAL_PLAN_REVIEW",
-          disabled: approving,
-          loading: approving,
-          onClick: handleApproveVisualPlan,
-          label: "Approve Visual Plan",
-        },
-        generate: { visible: false },
-        restart: {
-          visible: currentStage === "VISUAL_PLAN_REVIEW",
-          disabled: restarting,
-          loading: restarting,
-          onClick: handleRestartVisualPlan,
-          label: "Regenerate Plan",
-        },
-      };
-    }
-
-    // Script stages and transitions
-    return {
-      save: { visible: false },
-      approve: {
-        visible: currentStage === "SCRIPT_REVIEW",
-        disabled: approving,
-        loading: approving,
-        onClick: handleApprove,
-        label: "Approve Script",
-      },
-      generate: {
-        visible: currentStage === "IDEA_READY",
-        disabled: generating,
-        loading: generating,
-        onClick: handleGenerate,
-        label: "Generate Script",
-      },
-      restart: {
-        visible: currentStage === "SCRIPT_REVIEW",
-        disabled: restarting,
-        loading: restarting,
-        onClick: handleRestart,
-        label: "Regenerate Script",
-      },
-    };
-  };
+  const showGoBack =
+    Boolean(run) &&
+    Boolean(STAGE_BACK_LABELS[currentStage]) &&
+    !(currentStage === "SCRIPT_REVIEW" && project?.source_type !== "idea");
 
   // ---- render ----
 
@@ -1124,9 +1001,15 @@ export default function ProjectPage() {
       <div
         role="status"
         aria-label="Loading project"
-        style={{ maxWidth: 720, margin: "0 auto", padding: 24, textAlign: "center", color: "#6b7280" }}
+        style={{
+          maxWidth: 720,
+          margin: "0 auto",
+          padding: 24,
+          textAlign: "center",
+          color: "#6b7280",
+        }}
       >
-        Loading project…
+        Loading project\u2026
       </div>
     );
   }
@@ -1168,25 +1051,23 @@ export default function ProjectPage() {
     );
   }
 
-  const actions = buildActionBar();
-  const showGoBack =
-    Boolean(run) &&
-    Boolean(STAGE_BACK_LABELS[currentStage]) &&
-    !(currentStage === "SCRIPT_REVIEW" && project.source_type !== "idea");
-
   return (
-    <div style={{ maxWidth: 960, margin: "0 auto", padding: 24 }}>
+    <div style={{ maxWidth, margin: "0 auto", padding: 24 }}>
       {/* Header */}
       <div style={{ marginBottom: 16 }}>
-        <Link to="/runs" style={{ color: "#6b7280", fontSize: 12, textDecoration: "none" }}>
-          ← Projects
+        <Link
+          to="/runs"
+          style={{ color: "#6b7280", fontSize: 12, textDecoration: "none" }}
+        >
+          \u2190 Projects
         </Link>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: "8px 0 4px" }}>
           {project.title || "Untitled Project"}
         </h1>
         <span style={{ fontSize: 12, color: "#6b7280" }}>
-          Source: {project.source_type} · Status: {run ? run.status : project.status}
-          {run ? ` · Stage: ${currentStage}` : ""}
+          Source: {project.source_type} \u00b7 Status:{" "}
+          {run ? run.status : project.status}
+          {run ? ` \u00b7 Stage: ${currentStage}` : ""}
         </span>
 
         {/* Stop / Resume / Delete actions */}
@@ -1207,28 +1088,31 @@ export default function ProjectPage() {
                 cursor: stopping ? "not-allowed" : "pointer",
               }}
             >
-              {stopping ? "Stopping…" : "⏹ Stop"}
+              {stopping ? "Stopping\u2026" : "\u23f9 Stop"}
             </button>
           )}
-          {run && (run.status === "cancelled" || run.status === "failed" || run.status === "paused") && (
-            <button
-              type="button"
-              onClick={() => setConfirmAction("resume")}
-              disabled={resuming}
-              style={{
-                padding: "6px 14px",
-                border: "1px solid #16a34a",
-                borderRadius: 6,
-                background: "#fff",
-                color: "#16a34a",
-                fontSize: 12,
-                fontWeight: 600,
-                cursor: resuming ? "not-allowed" : "pointer",
-              }}
-            >
-              {resuming ? "Resuming…" : "▶ Resume"}
-            </button>
-          )}
+          {run &&
+            (run.status === "cancelled" ||
+              run.status === "failed" ||
+              run.status === "paused") && (
+              <button
+                type="button"
+                onClick={() => setConfirmAction("resume")}
+                disabled={resuming}
+                style={{
+                  padding: "6px 14px",
+                  border: "1px solid #16a34a",
+                  borderRadius: 6,
+                  background: "#fff",
+                  color: "#16a34a",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: resuming ? "not-allowed" : "pointer",
+                }}
+              >
+                {resuming ? "Resuming\u2026" : "\u25b6 Resume"}
+              </button>
+            )}
           <button
             type="button"
             onClick={() => setConfirmAction("delete")}
@@ -1244,7 +1128,7 @@ export default function ProjectPage() {
               cursor: deleting ? "not-allowed" : "pointer",
             }}
           >
-            {deleting ? "Deleting…" : "🗑 Delete Project"}
+            {deleting ? "Deleting\u2026" : "\ud83d\uddd1 Delete Project"}
           </button>
         </div>
       </div>
@@ -1281,140 +1165,32 @@ export default function ProjectPage() {
         </div>
       )}
 
-      {/* Script workspace */}
+      {/* ═══════════════ Script Workspace ═══════════════ */}
       {run && isScriptWorkspace && (
         <div style={{ marginBottom: 24 }}>
-          {isGenerating && (
-            <div
-              data-testid="generating-indicator"
-              style={{
-                padding: "10px 14px",
-                background: "#eff6ff",
-                borderRadius: 8,
-                border: "1px solid #bfdbfe",
-                color: "#1e40af",
-                marginBottom: 12,
-                fontSize: 13,
-              }}
-            >
-              Generating Script… Current draft will update automatically.
-            </div>
-          )}
-
-          <div
-            style={{
-              padding: "14px 16px",
-              background: "#f9fafb",
-              border: "1px solid #e5e7eb",
-              borderRadius: 8,
-              marginBottom: 12,
-            }}
-          >
-            <div style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", marginBottom: 6 }}>
-              Source Context
-            </div>
-            <div style={{ fontSize: 13, lineHeight: 1.5, color: "#374151", whiteSpace: "pre-wrap" }}>
-              {project.source_type === "idea"
-                ? (project.idea_brief || "No idea brief")
+          <ScriptComposer
+            runId={run.id}
+            currentStage={currentStage}
+            sourceType={project.source_type as "idea" | "markdown" | "url"}
+            sourceContext={
+              project.source_type === "idea"
+                ? project.idea_brief
                 : project.source_type === "markdown"
-                  ? (project.markdown_source || "No markdown source")
-                  : (project.url_source || "No URL source")}
-            </div>
-          </div>
-
-          {/* Editor mode toggle */}
-          <div
-            role="tablist"
-            style={{
-              display: "flex",
-              gap: 4,
-              marginBottom: 12,
-              borderBottom: "2px solid #ddd",
-            }}
-          >
-            <button
-              type="button"
-              role="tab"
-              id="tab-markdown"
-              aria-selected={editorMode === "markdown"}
-              aria-controls="panel-markdown"
-              onClick={() => setEditorMode("markdown")}
-              style={{
-                padding: "6px 14px",
-                border: "none",
-                borderBottom: editorMode === "markdown" ? "2px solid #4285f4" : "2px solid transparent",
-                background: "transparent",
-                cursor: "pointer",
-                fontWeight: editorMode === "markdown" ? 600 : 400,
-                color: editorMode === "markdown" ? "#4285f4" : "#666",
-                fontSize: 13,
-              }}
-            >
-              Markdown
-            </button>
-            <button
-              type="button"
-              role="tab"
-              id="tab-structured"
-              aria-selected={editorMode === "structured"}
-              aria-controls="panel-structured"
-              onClick={() => setEditorMode("structured")}
-              style={{
-                padding: "6px 14px",
-                border: "none",
-                borderBottom: editorMode === "structured" ? "2px solid #4285f4" : "2px solid transparent",
-                background: "transparent",
-                cursor: "pointer",
-                fontWeight: editorMode === "structured" ? 600 : 400,
-                color: editorMode === "structured" ? "#4285f4" : "#666",
-                fontSize: 13,
-              }}
-            >
-              Structured
-            </button>
-          </div>
-
-          {/* Markdown editor panel */}
-          {editorMode === "markdown" && (
-            <div role="tabpanel" id="panel-markdown" aria-labelledby="tab-markdown">
-              <MarkdownScriptEditor
-                runId={run.id}
-                readOnly={currentStage !== "SCRIPT_REVIEW"}
-                pollIntervalMs={currentStage === "IDEA_READY" || isGenerating ? 3000 : undefined}
-                suppressMissingDraftError={currentStage === "IDEA_READY" || isGenerating}
-                pendingMessage={
-                  currentStage === "IDEA_READY"
-                    ? "No script yet. Click Generate Script to start from this source."
-                    : "Waiting for generated script…"
-                }
-                onSuccess={() => setStatusMessage("Script saved")}
-                onError={(_action, msg) => setStatusMessage(msg)}
-              />
-            </div>
-          )}
-
-          {/* Structured editor panel */}
-          {editorMode === "structured" && (
-            <div role="tabpanel" id="panel-structured" aria-labelledby="tab-structured">
-              <StructuredScriptEditor
-                runId={run.id}
-                readOnly={currentStage !== "SCRIPT_REVIEW"}
-                pollIntervalMs={currentStage === "IDEA_READY" || isGenerating ? 3000 : undefined}
-                suppressMissingDraftError={currentStage === "IDEA_READY" || isGenerating}
-                pendingMessage={
-                  currentStage === "IDEA_READY"
-                    ? "No structured sections yet. Generate a script first."
-                    : "Waiting for generated sections…"
-                }
-                onSuccess={() => setStatusMessage("Script saved")}
-                onError={(_action, msg) => setStatusMessage(msg)}
-              />
-            </div>
-          )}
+                  ? project.markdown_source
+                  : project.url_source
+            }
+            selectedScriptModel={modelSelection.script_model}
+            onModelChange={handleModelChange}
+            onConfirm={handleApprove}
+            onGenerate={handleGenerate}
+            onRegenerate={handleRestart}
+            onStatusMessage={setStatusMessage}
+            disabled={approving || generating || restarting}
+          />
         </div>
       )}
 
-      {/* Visual plan workspace */}
+      {/* ═══════════════ Visual Plan Workspace ═══════════════ */}
       {run && isVisualPlanStage && (
         <div style={{ marginBottom: 24 }}>
           {(isVPSetup || isVPGenerating) && (
@@ -1431,7 +1207,7 @@ export default function ProjectPage() {
               }}
             >
               {isVPGenerating
-                ? "Generating Visual Plan… Scene prompts will appear here automatically."
+                ? "Generating Visual Plan\u2026 Scene prompts will appear here automatically."
                 : "Visual plan not generated yet. Review the source mapping below, then generate it in place."}
             </div>
           )}
@@ -1444,12 +1220,27 @@ export default function ProjectPage() {
               marginBottom: 16,
             }}
           >
-            <h3 style={{ margin: "0 0 6px", fontSize: 16, fontWeight: 700, color: "#1e3a5f" }}>
+            <h3
+              style={{
+                margin: "0 0 6px",
+                fontSize: 16,
+                fontWeight: 700,
+                color: "#1e3a5f",
+              }}
+            >
               Visual Plan Setup
             </h3>
-            <p style={{ margin: 0, fontSize: 13, color: "#4b5563", lineHeight: 1.5 }}>
-              Review the paragraph-to-image mapping below. Each paragraph in your script will
-              generate one image. Select the script model that will draft the visual plan, then click
+            <p
+              style={{
+                margin: 0,
+                fontSize: 13,
+                color: "#4b5563",
+                lineHeight: 1.5,
+              }}
+            >
+              Review the paragraph-to-image mapping below. Each paragraph in
+              your script will generate one image. Select the script model that
+              will draft the visual plan, then click
               <strong> Generate Visual Plan</strong> to proceed.
             </p>
           </div>
@@ -1464,7 +1255,7 @@ export default function ProjectPage() {
             />
           </div>
 
-          {/* Paragraph → Image cards */}
+          {/* Paragraph \u2192 Image cards */}
           <VisualPlanSetupCards runId={run.id} />
           <div style={{ marginTop: 16 }}>
             <VisualPlanEditor
@@ -1475,371 +1266,97 @@ export default function ProjectPage() {
               pendingMessage={
                 isVPSetup
                   ? "No visual plan yet. Generate it from the mapped script sections above."
-                  : "Waiting for generated scenes…"
+                  : "Waiting for generated scenes\u2026"
               }
               onSuccess={() => setStatusMessage("Visual plan saved")}
               onError={(_action, msg) => setStatusMessage(msg)}
             />
           </div>
-        </div>
-      )}
 
-      {/* Visual asset area */}
-      {run && isVisualAssetStage && (
-        <div data-testid="visual-asset-section" style={{ marginBottom: 24 }}>
-          {/* Asset generating indicator */}
-          {isVAGenerating && (
-            <div
-              data-testid="va-generating-indicator"
-              style={{
-                textAlign: "center",
-                padding: 32,
-                background: "#fdf4ff",
-                borderRadius: 8,
-                border: "1px solid #e9d5ff",
-                color: "#6b21a8",
-                marginBottom: 16,
-              }}
-            >
-              <p style={{ margin: "0 0 4px", fontWeight: 600 }}>Generating Visual Assets…</p>
-              <p style={{ margin: 0, fontSize: 13 }}>
-                Image generation is in progress. This may take several minutes.
-              </p>
-            </div>
-          )}
-
-          {/* Asset grid — visible in review or generating (read-only during generation) */}
-          <VisualAssetGrid
-            key={assetRefreshKey}
-            runId={run.id}
-            apiBase={API_BASE}
-            readOnly={isVAGenerating}
-            onSelect={() => setStatusMessage("Active asset updated")}
-            onError={(_action, msg) => setStatusMessage(msg)}
-          />
-
-          {/* Scene-level regeneration controls (review stage only) */}
-          {currentStage === "VISUAL_ASSET_REVIEW" && (
-            <div
-              data-testid="scene-regen-controls"
-              style={{
-                marginTop: 16,
-                padding: 16,
-                border: "1px solid #e5e7eb",
-                borderRadius: 8,
-                background: "#f9fafb",
-              }}
-            >
-              <h4 style={{ margin: "0 0 12px", fontSize: 14, fontWeight: 600 }}>
-                Regenerate Single Scene
-              </h4>
-
-              {/* Model override selector — image category only */}
-              <div style={{ marginBottom: 12 }}>
-                <ModelSelector
-                  categories={["image"]}
-                  apiBase={API_BASE}
-                  onSelectionChange={(_cat, modelKey) => setRegenModelKey(modelKey)}
-                />
-              </div>
-
-              {/* Image quality tuning controls */}
-              <div
-                data-testid="image-tuning-panel"
+          {/* Visual plan action buttons */}
+          <div
+            style={{
+              display: "flex",
+              gap: 8,
+              marginTop: 16,
+              justifyContent: "flex-end",
+            }}
+          >
+            {isVPSetup && (
+              <button
+                type="button"
+                data-testid="generate-vp-btn"
+                disabled={generating}
+                onClick={handleGenerateVisualPlan}
                 style={{
-                  marginBottom: 16,
-                  border: "1px solid #e5e7eb",
-                  borderRadius: 8,
-                  background: "#fff",
-                  overflow: "hidden",
+                  padding: "8px 20px",
+                  border: "none",
+                  borderRadius: 6,
+                  background: generating ? "#9ca3af" : "#4285f4",
+                  color: "#fff",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: generating ? "not-allowed" : "pointer",
                 }}
               >
-                {/* Panel header — toggle */}
+                {generating ? "Generating\u2026" : "Generate Visual Plan"}
+              </button>
+            )}
+            {currentStage === "VISUAL_PLAN_REVIEW" && (
+              <>
                 <button
                   type="button"
-                  data-testid="tuning-toggle"
-                  onClick={() => setTuningOpen((v) => !v)}
+                  data-testid="restart-vp-btn"
+                  disabled={restarting}
+                  onClick={handleRestartVisualPlan}
                   style={{
-                    width: "100%",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    alignItems: "center",
-                    padding: "10px 14px",
-                    background: "#faf5ff",
+                    padding: "8px 20px",
+                    border: "1px solid #d1d5db",
+                    borderRadius: 6,
+                    background: "#fff",
+                    color: "#374151",
+                    fontSize: 13,
+                    fontWeight: 500,
+                    cursor: restarting ? "not-allowed" : "pointer",
+                  }}
+                >
+                  {restarting ? "Restarting\u2026" : "Regenerate Plan"}
+                </button>
+                <button
+                  type="button"
+                  data-testid="approve-vp-btn"
+                  disabled={approving}
+                  onClick={handleApproveVisualPlan}
+                  style={{
+                    padding: "8px 20px",
                     border: "none",
-                    borderBottom: tuningOpen ? "1px solid #e5e7eb" : "none",
-                    cursor: "pointer",
+                    borderRadius: 6,
+                    background: approving ? "#9ca3af" : "#16a34a",
+                    color: "#fff",
                     fontSize: 13,
                     fontWeight: 600,
-                    color: "#6b21a8",
+                    cursor: approving ? "not-allowed" : "pointer",
                   }}
                 >
-                  <span>🎨 Image Quality Settings</span>
-                  <span style={{ fontSize: 11 }}>{tuningOpen ? "▲" : "▼"}</span>
+                  {approving ? "Approving\u2026" : "Approve Visual Plan"}
                 </button>
-
-                {tuningOpen && (
-                  <div style={{ padding: 14, display: "flex", flexDirection: "column", gap: 14 }}>
-                    {/* Quality presets */}
-                    <div>
-                      <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 6 }}>
-                        Quality Preset
-                      </label>
-                      <div style={{ display: "flex", gap: 6 }}>
-                        {Object.entries(SD_QUALITY_PRESETS).map(([key, preset]) => (
-                          <button
-                            type="button"
-                            key={key}
-                            data-testid={`preset-${key}`}
-                            title={preset.description}
-                            onClick={() => {
-                              setActivePreset(key);
-                              setImageParams((p) => ({
-                                ...p,
-                                steps: preset.steps,
-                                cfg_scale: preset.cfg_scale,
-                                sampler_name: preset.sampler_name,
-                              }));
-                            }}
-                            style={{
-                              flex: 1,
-                              padding: "6px 8px",
-                              fontSize: 12,
-                              fontWeight: activePreset === key ? 600 : 400,
-                              border: activePreset === key ? "2px solid #7c3aed" : "1px solid #d1d5db",
-                              borderRadius: 6,
-                              background: activePreset === key ? "#ede9fe" : "#fff",
-                              color: activePreset === key ? "#6b21a8" : "#374151",
-                              cursor: "pointer",
-                              transition: "all 0.15s",
-                            }}
-                          >
-                            {preset.label}
-                          </button>
-                        ))}
-                      </div>
-                      <p style={{ margin: "4px 0 0", fontSize: 11, color: "#9ca3af" }}>
-                        {SD_QUALITY_PRESETS[activePreset]?.description}
-                      </p>
-                    </div>
-
-                    {/* Steps slider */}
-                    <div>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                        <label style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>
-                          Steps
-                        </label>
-                        <span style={{ fontSize: 12, color: "#6b21a8", fontWeight: 600 }}>{imageParams.steps}</span>
-                      </div>
-                      <input
-                        data-testid="steps-slider"
-                        type="range"
-                        min={15}
-                        max={50}
-                        value={imageParams.steps}
-                        onChange={(e) => {
-                          setActivePreset("");
-                          setImageParams((p) => ({ ...p, steps: Number(e.target.value) }));
-                        }}
-                        style={{ width: "100%", accentColor: "#7c3aed" }}
-                      />
-                      <p style={{ margin: "2px 0 0", fontSize: 11, color: "#9ca3af" }}>
-                        More steps = higher quality but slower. 20-30 is usually optimal.
-                      </p>
-                    </div>
-
-                    {/* CFG Scale slider */}
-                    <div>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                        <label style={{ fontSize: 12, fontWeight: 600, color: "#374151" }}>
-                          CFG Scale (Prompt Adherence)
-                        </label>
-                        <span style={{ fontSize: 12, color: "#6b21a8", fontWeight: 600 }}>{imageParams.cfg_scale}</span>
-                      </div>
-                      <input
-                        data-testid="cfg-slider"
-                        type="range"
-                        min={1}
-                        max={20}
-                        value={imageParams.cfg_scale}
-                        onChange={(e) => {
-                          setActivePreset("");
-                          setImageParams((p) => ({ ...p, cfg_scale: Number(e.target.value) }));
-                        }}
-                        style={{ width: "100%", accentColor: "#7c3aed" }}
-                      />
-                      <p style={{ margin: "2px 0 0", fontSize: 11, color: "#9ca3af" }}>
-                        How closely to follow the prompt. 5-9 works well; too high can look harsh.
-                      </p>
-                    </div>
-
-                    {/* Sampler dropdown */}
-                    <div>
-                      <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>
-                        Sampler
-                      </label>
-                      <select
-                        data-testid="sampler-select"
-                        value={imageParams.sampler_name}
-                        onChange={(e) => {
-                          setActivePreset("");
-                          setImageParams((p) => ({ ...p, sampler_name: e.target.value }));
-                        }}
-                        style={{
-                          width: "100%",
-                          padding: "6px 10px",
-                          border: "1px solid #d1d5db",
-                          borderRadius: 4,
-                          fontSize: 13,
-                          background: "#fff",
-                          color: "#374151",
-                        }}
-                      >
-                        {SD_SAMPLERS.map((s) => (
-                          <option key={s} value={s}>{s}</option>
-                        ))}
-                      </select>
-                      <p style={{ margin: "2px 0 0", fontSize: 11, color: "#9ca3af" }}>
-                        DPM++ 2M Karras gives best quality for SD 1.5. Euler a is fastest.
-                      </p>
-                    </div>
-
-                    {/* Negative prompt */}
-                    <div>
-                      <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#374151", marginBottom: 4 }}>
-                        Negative Prompt
-                      </label>
-                      <textarea
-                        data-testid="negative-prompt"
-                        rows={3}
-                        value={imageParams.negative_prompt}
-                        onChange={(e) => {
-                          setActivePreset("");
-                          setImageParams((p) => ({ ...p, negative_prompt: e.target.value }));
-                        }}
-                        style={{
-                          width: "100%",
-                          padding: "6px 10px",
-                          border: "1px solid #d1d5db",
-                          borderRadius: 4,
-                          fontSize: 12,
-                          fontFamily: "inherit",
-                          resize: "vertical",
-                          color: "#374151",
-                          boxSizing: "border-box",
-                        }}
-                      />
-                      <p style={{ margin: "2px 0 0", fontSize: 11, color: "#9ca3af" }}>
-                        Describe what you do NOT want in the image. Helps avoid common SD artifacts.
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Scene action buttons — rendered per-scene from the asset grid data is impractical
-                  without lifting scene IDs up. Instead, provide a text input for scene ID. */}
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                <input
-                  data-testid="scene-id-input"
-                  type="text"
-                  placeholder="Scene ID (e.g. scene-0)"
-                  style={{
-                    flex: 1,
-                    padding: "6px 10px",
-                    border: "1px solid #d1d5db",
-                    borderRadius: 4,
-                    fontSize: 13,
-                  }}
-                  id="regen-scene-id"
-                />
-                <button
-                  type="button"
-                  data-testid="regen-scene-btn"
-                  onClick={() => {
-                    const input = document.getElementById("regen-scene-id") as HTMLInputElement;
-                    const sceneId = input?.value?.trim();
-                    if (sceneId) handleRegenerateScene(sceneId);
-                  }}
-                  style={{
-                    padding: "6px 16px",
-                    border: "1px solid #d1d5db",
-                    borderRadius: 4,
-                    background: "#fff",
-                    cursor: "pointer",
-                    fontSize: 13,
-                  }}
-                >
-                  Regenerate
-                </button>
-                <button
-                  type="button"
-                  data-testid="generate-scene-btn"
-                  onClick={() => {
-                    const input = document.getElementById("regen-scene-id") as HTMLInputElement;
-                    const sceneId = input?.value?.trim();
-                    if (sceneId) handleGenerateScene(sceneId);
-                  }}
-                  style={{
-                    padding: "6px 16px",
-                    border: "1px solid #d1d5db",
-                    borderRadius: 4,
-                    background: "#fff",
-                    cursor: "pointer",
-                    fontSize: 13,
-                  }}
-                >
-                  Generate New
-                </button>
-              </div>
-            </div>
-          )}
+              </>
+            )}
+          </div>
         </div>
       )}
 
-      {/* Unified Storyboard view — replaces separate audio/subtitle/render indicators */}
-      {run && isStoryboardStage && (
+      {/* ═══════════════ Storyboard Workspace (Scene-Centric) ═══════════════ */}
+      {run && isStoryboardWorkspace && (
         <div style={{ marginBottom: 24 }}>
-          {!isRenderStage && (
-            <div style={{ marginBottom: 12 }}>
-              <ModelSelector
-                categories={["tts", "stt"]}
-                selectedModels={buildSelectedModels(["tts", "stt"])}
-                apiBase=""
-                onSelectionChange={handleModelChange}
-              />
-              <div style={{ marginTop: 12 }}>
-                <label
-                  htmlFor="project-render-profile"
-                  style={{ display: "block", fontWeight: 600, marginBottom: 4, fontSize: 13 }}
-                >
-                  Render Profile
-                </label>
-                <select
-                  id="project-render-profile"
-                  value={modelSelection.render_profile || "shorts_default"}
-                  onChange={(e) => handleModelChange("render", e.target.value)}
-                  style={{ padding: "8px 12px", border: "1px solid #ccc", borderRadius: 4, fontSize: 14 }}
-                >
-                  {RENDER_PROFILE_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          )}
-          <StoryboardView
+          <StoryboardWorkspace
             runId={run.id}
-            readOnly={isRenderStage}
-            currentStage={currentStage}
-            onStatusMessage={setStatusMessage}
-            onRenderReady={() => {
-              if (run) refreshRun(run.id);
-            }}
             ttsModel={modelSelection.tts_model}
             subtitleModel={modelSelection.subtitle_model}
+            imageModel={modelSelection.image_model}
+            onStatusMessage={setStatusMessage}
+            onRender={handleRender}
+            rendering={generating}
           />
 
           {/* Final review extras — review link + video path */}
@@ -1856,14 +1373,27 @@ export default function ProjectPage() {
                 color: "#166534",
               }}
             >
-              <p style={{ margin: "0 0 8px", fontWeight: 600, fontSize: 16 }}>
+              <p
+                style={{
+                  margin: "0 0 8px",
+                  fontWeight: 600,
+                  fontSize: 16,
+                }}
+              >
                 Pipeline Complete
               </p>
               <p style={{ margin: "0 0 16px", fontSize: 13 }}>
-                All stages are done. Review the final output or restart from any stage.
+                All stages are done. Review the final output or restart from
+                any stage.
               </p>
               {typeof previewVideoPath === "string" && (
-                <p style={{ margin: "0 0 8px", fontSize: 13, color: "#374151" }}>
+                <p
+                  style={{
+                    margin: "0 0 8px",
+                    fontSize: 13,
+                    color: "#374151",
+                  }}
+                >
                   Video: {previewVideoPath}
                 </p>
               )}
@@ -1881,7 +1411,7 @@ export default function ProjectPage() {
                   fontSize: 14,
                 }}
               >
-                Open Review Page →
+                Open Review Page \u2192
               </Link>
             </div>
           )}
@@ -1890,7 +1420,13 @@ export default function ProjectPage() {
 
       {/* Back navigation button */}
       {showGoBack && (
-        <div style={{ display: "flex", justifyContent: "flex-start", padding: "8px 16px" }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "flex-start",
+            padding: "8px 0",
+          }}
+        >
           <button
             type="button"
             data-testid="go-back-btn"
@@ -1908,62 +1444,34 @@ export default function ProjectPage() {
               opacity: goingBack ? 0.6 : 1,
             }}
           >
-            {goingBack ? "Going back\u2026" : STAGE_BACK_LABELS[currentStage]}
+            {goingBack
+              ? "Going back\u2026"
+              : STAGE_BACK_LABELS[currentStage]}
           </button>
         </div>
       )}
 
-      {/* Per-stage model selector */}
-      {run && currentStage === "IDEA_READY" && (
-        <div style={{ padding: "8px 16px" }}>
-          <ModelSelector
-            categories={["script"]}
-            selectedModels={buildSelectedModels(["script"])}
-            apiBase=""
-            onSelectionChange={handleModelChange}
-          />
+      {/* Status toast */}
+      {statusMessage && (
+        <div
+          data-testid="status-toast"
+          style={{
+            position: "fixed",
+            bottom: 24,
+            left: "50%",
+            transform: "translateX(-50%)",
+            padding: "10px 24px",
+            background: "#1f2937",
+            color: "#fff",
+            borderRadius: 8,
+            fontSize: 13,
+            fontWeight: 500,
+            boxShadow: "0 4px 12px rgba(0,0,0,0.15)",
+            zIndex: 1000,
+          }}
+        >
+          {statusMessage}
         </div>
-      )}
-      {run && currentStage === "SCRIPT_REVIEW" && (
-        <div style={{ padding: "8px 16px" }}>
-          <ModelSelector
-            categories={["script"]}
-            selectedModels={buildSelectedModels(["script"])}
-            apiBase=""
-            onSelectionChange={handleModelChange}
-          />
-        </div>
-      )}
-      {run && currentStage === "VISUAL_PLAN_REVIEW" && (
-        <div style={{ padding: "8px 16px" }}>
-          <ModelSelector
-            categories={["script"]}
-            selectedModels={buildSelectedModels(["script"])}
-            apiBase=""
-            onSelectionChange={handleModelChange}
-          />
-        </div>
-      )}
-      {run && currentStage === "VISUAL_ASSET_REVIEW" && (
-        <div style={{ padding: "8px 16px" }}>
-          <ModelSelector
-            categories={["image"]}
-            selectedModels={buildSelectedModels(["image"])}
-            apiBase=""
-            onSelectionChange={handleModelChange}
-          />
-        </div>
-      )}
-
-      {/* Stage action bar */}
-      {run && (
-        <StageActionBar
-          save={actions.save}
-          approve={actions.approve}
-          generate={actions.generate}
-          restart={actions.restart}
-          statusMessage={statusMessage ?? undefined}
-        />
       )}
 
       {/* Confirm dialog for stop / resume / delete */}
@@ -1983,8 +1491,20 @@ export default function ProjectPage() {
               ? "This will resume the stopped/failed run from where it left off."
               : "This will permanently delete the project and all its runs, assets, and generated content. This action cannot be undone."
         }
-        variant={confirmAction === "stop" ? "warning" : confirmAction === "resume" ? "info" : "danger"}
-        confirmLabel={confirmAction === "stop" ? "Stop Run" : confirmAction === "resume" ? "Resume" : "Delete Forever"}
+        variant={
+          confirmAction === "stop"
+            ? "warning"
+            : confirmAction === "resume"
+              ? "info"
+              : "danger"
+        }
+        confirmLabel={
+          confirmAction === "stop"
+            ? "Stop Run"
+            : confirmAction === "resume"
+              ? "Resume"
+              : "Delete Forever"
+        }
         loading={stopping || resuming || deleting}
         onConfirm={async () => {
           if (confirmAction === "stop") await handleStop();
