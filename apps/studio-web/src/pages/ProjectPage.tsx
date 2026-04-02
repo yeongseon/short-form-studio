@@ -35,6 +35,9 @@ interface ProjectDetail {
   title: string | null;
   source_type: string;
   status: string;
+  idea_brief?: string | null;
+  markdown_source?: string | null;
+  url_source?: string | null;
   latest_run?: {
     run_id: number;
     current_stage: string | null;
@@ -910,6 +913,7 @@ export default function ProjectPage() {
   const currentStage = run?.current_stage ?? "IDEA_READY";
   const isFailed = run?.status === "failed";
   const isScriptStage = SCRIPT_STAGES.has(currentStage);
+  const isScriptWorkspace = currentStage === "IDEA_READY" || isScriptStage;
   const isVisualPlanStage = VISUAL_PLAN_STAGES.has(currentStage);
   const isVisualAssetStage = VISUAL_ASSET_STAGES.has(currentStage);
   const isEditable = EDITABLE_STAGES.has(currentStage);
@@ -1277,8 +1281,8 @@ export default function ProjectPage() {
         </div>
       )}
 
-      {/* Script editor area */}
-      {run && isScriptStage && (
+      {/* Script workspace */}
+      {run && isScriptWorkspace && (
         <div style={{ marginBottom: 24 }}>
           {isGenerating && (
             <div
@@ -1296,6 +1300,28 @@ export default function ProjectPage() {
               Generating Script… Current draft will update automatically.
             </div>
           )}
+
+          <div
+            style={{
+              padding: "14px 16px",
+              background: "#f9fafb",
+              border: "1px solid #e5e7eb",
+              borderRadius: 8,
+              marginBottom: 12,
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", marginBottom: 6 }}>
+              Source Context
+            </div>
+            <div style={{ fontSize: 13, lineHeight: 1.5, color: "#374151", whiteSpace: "pre-wrap" }}>
+              {project.source_type === "idea"
+                ? (project.idea_brief || "No idea brief")
+                : project.source_type === "markdown"
+                  ? (project.markdown_source || "No markdown source")
+                  : (project.url_source || "No URL source")}
+            </div>
+          </div>
+
           {/* Editor mode toggle */}
           <div
             role="tablist"
@@ -1353,9 +1379,14 @@ export default function ProjectPage() {
             <div role="tabpanel" id="panel-markdown" aria-labelledby="tab-markdown">
               <MarkdownScriptEditor
                 runId={run.id}
-                readOnly={!isEditable}
-                pollIntervalMs={isGenerating ? 3000 : undefined}
-                suppressMissingDraftError={isGenerating}
+                readOnly={currentStage !== "SCRIPT_REVIEW"}
+                pollIntervalMs={currentStage === "IDEA_READY" || isGenerating ? 3000 : undefined}
+                suppressMissingDraftError={currentStage === "IDEA_READY" || isGenerating}
+                pendingMessage={
+                  currentStage === "IDEA_READY"
+                    ? "No script yet. Click Generate Script to start from this source."
+                    : "Waiting for generated script…"
+                }
                 onSuccess={() => setStatusMessage("Script saved")}
                 onError={(_action, msg) => setStatusMessage(msg)}
               />
@@ -1367,9 +1398,14 @@ export default function ProjectPage() {
             <div role="tabpanel" id="panel-structured" aria-labelledby="tab-structured">
               <StructuredScriptEditor
                 runId={run.id}
-                readOnly={!isEditable}
-                pollIntervalMs={isGenerating ? 3000 : undefined}
-                suppressMissingDraftError={isGenerating}
+                readOnly={currentStage !== "SCRIPT_REVIEW"}
+                pollIntervalMs={currentStage === "IDEA_READY" || isGenerating ? 3000 : undefined}
+                suppressMissingDraftError={currentStage === "IDEA_READY" || isGenerating}
+                pendingMessage={
+                  currentStage === "IDEA_READY"
+                    ? "No structured sections yet. Generate a script first."
+                    : "Waiting for generated sections…"
+                }
                 onSuccess={() => setStatusMessage("Script saved")}
                 onError={(_action, msg) => setStatusMessage(msg)}
               />
@@ -1378,10 +1414,10 @@ export default function ProjectPage() {
         </div>
       )}
 
-      {/* Visual plan setup — paragraph→image mapping before generation */}
-      {run && (isVPSetup || (isVPGenerating && !run.restart_from)) && (
+      {/* Visual plan workspace */}
+      {run && isVisualPlanStage && (
         <div style={{ marginBottom: 24 }}>
-          {isVPGenerating && (
+          {(isVPSetup || isVPGenerating) && (
             <div
               data-testid="vp-generating-indicator"
               style={{
@@ -1394,7 +1430,9 @@ export default function ProjectPage() {
                 fontSize: 13,
               }}
             >
-              Generating Visual Plan… Scene prompts will appear here automatically.
+              {isVPGenerating
+                ? "Generating Visual Plan… Scene prompts will appear here automatically."
+                : "Visual plan not generated yet. Review the source mapping below, then generate it in place."}
             </div>
           )}
           <div
@@ -1428,36 +1466,21 @@ export default function ProjectPage() {
 
           {/* Paragraph → Image cards */}
           <VisualPlanSetupCards runId={run.id} />
-        </div>
-      )}
-
-      {/* Visual plan editor area */}
-      {run && isVisualPlanStage && !(isVPSetup || (isVPGenerating && !run.restart_from)) && (
-        <div style={{ marginBottom: 24 }}>
-          {isVPGenerating && (
-            <div
-              data-testid="vp-generating-indicator"
-              style={{
-                padding: "10px 14px",
-                background: "#f0fdf4",
-                borderRadius: 8,
-                border: "1px solid #bbf7d0",
-                color: "#166534",
-                marginBottom: 12,
-                fontSize: 13,
-              }}
-            >
-              Regenerating Visual Plan… Existing prompts stay visible until the new plan is ready.
-            </div>
-          )}
-          <VisualPlanEditor
-            runId={run.id}
-            readOnly={currentStage !== "VISUAL_PLAN_REVIEW"}
-            pollIntervalMs={isVPGenerating ? 3000 : undefined}
-            suppressMissingPlanError={isVPGenerating}
-            onSuccess={() => setStatusMessage("Visual plan saved")}
-            onError={(_action, msg) => setStatusMessage(msg)}
-          />
+          <div style={{ marginTop: 16 }}>
+            <VisualPlanEditor
+              runId={run.id}
+              readOnly={currentStage !== "VISUAL_PLAN_REVIEW"}
+              pollIntervalMs={isVPSetup || isVPGenerating ? 3000 : undefined}
+              suppressMissingPlanError={isVPSetup || isVPGenerating}
+              pendingMessage={
+                isVPSetup
+                  ? "No visual plan yet. Generate it from the mapped script sections above."
+                  : "Waiting for generated scenes…"
+              }
+              onSuccess={() => setStatusMessage("Visual plan saved")}
+              onError={(_action, msg) => setStatusMessage(msg)}
+            />
+          </div>
         </div>
       )}
 

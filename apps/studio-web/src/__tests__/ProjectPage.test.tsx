@@ -488,7 +488,7 @@ describe("ProjectPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("visual-plan-editor")).toBeInTheDocument();
     });
-    expect(screen.getByText("Script Model")).toBeInTheDocument();
+    expect(screen.getAllByText("Script Model").length).toBeGreaterThan(0);
     // Approve and Regenerate Plan visible
     expect(screen.getByRole("button", { name: "Approve Visual Plan" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Regenerate Plan" })).toBeInTheDocument();
