@@ -305,6 +305,7 @@ export default function SceneCard({
   const displayComposition = visualFields?.composition;
   const displayStyleTags = visualFields?.style_tags ?? [];
   const hasAnyMeta = Boolean(displayMood || displayComposition || displayStyleTags.length > 0);
+  const canEditPrompt = Boolean(p.scene_id && visualFields && onVisualFieldChange);
 
   return (
     <div
@@ -404,18 +405,44 @@ export default function SceneCard({
             </div>
           )}
 
-          {/* Image generation prompt */}
-          {displayPrompt && (
-            <div>
-              <div style={sectionLabelStyle}>Image Prompt</div>
+          {/* Image generation prompt — inline editable */}
+          <div>
+            <div style={sectionLabelStyle}>Image Prompt</div>
+            {canEditPrompt ? (
+              <textarea
+                style={{
+                  ...promptTextStyle,
+                  width: "100%",
+                  minHeight: 48,
+                  resize: "vertical",
+                  fontFamily: "inherit",
+                  outline: "none",
+                  boxSizing: "border-box" as const,
+                  cursor: "text",
+                }}
+                value={displayPrompt ?? ""}
+                placeholder="Enter image generation prompt…"
+                data-testid={`scene-image-prompt-${p.section_id}`}
+                onChange={(e) => {
+                  if (p.scene_id && onVisualFieldChange) {
+                    onVisualFieldChange(p.scene_id, "prompt", e.target.value);
+                  }
+                }}
+                onBlur={() => {
+                  if (p.scene_id && onSaveVisualFields && visualFields?.dirty) {
+                    onSaveVisualFields(p.scene_id);
+                  }
+                }}
+              />
+            ) : (
               <div
                 style={promptTextStyle}
                 data-testid={`scene-image-prompt-${p.section_id}`}
               >
-                {displayPrompt}
+                {displayPrompt || <span style={{ color: "#9ca3af", fontStyle: "italic" }}>No prompt yet</span>}
               </div>
-            </div>
-          )}
+            )}
+          </div>
 
           {/* Visual plan metadata: mood, composition, style tags */}
           {hasAnyMeta && (
