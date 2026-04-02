@@ -25,7 +25,9 @@ export interface AssetSlotProps {
   duration?: number | null;
   /** Subtitle entry count (subtitle type only). */
   subtitleCount?: number | null;
-  /** Called when the user clicks regenerate. */
+  /** Called when asset doesn't exist yet and user clicks to generate. */
+  onGenerate?: () => void;
+  /** Called when the user clicks regenerate (asset already exists). */
   onRegenerate?: () => void;
   /** Called when the user clicks to preview the asset. */
   onPreview?: () => void;
@@ -167,6 +169,7 @@ export default function AssetSlot({
   url,
   duration,
   subtitleCount,
+  onGenerate,
   onRegenerate,
   onPreview,
   disabled = false,
@@ -203,16 +206,29 @@ export default function AssetSlot({
 
   // ---- empty ----
   if (status === "empty") {
+    const canGenerate = Boolean(onGenerate) && !disabled;
     return (
       <div
-        style={emptyStyle}
+        style={{
+          ...emptyStyle,
+          cursor: canGenerate ? "pointer" : "default",
+          ...(canGenerate && hovered ? { borderColor: "#93c5fd", background: "#eff6ff" } : {}),
+        }}
         data-testid={`asset-slot-${type}`}
         data-status="empty"
+        role={canGenerate ? "button" : undefined}
+        tabIndex={canGenerate ? 0 : undefined}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
+        onClick={canGenerate ? onGenerate : undefined}
       >
         <span style={iconStyle}>{ICONS[type]}</span>
-        <span style={labelStyle}>{LABELS[type]}</span>
+        <span style={{
+          ...labelStyle,
+          ...(canGenerate ? { color: "#1d4ed8", fontWeight: 600 } : {}),
+        }}>
+          {canGenerate ? `Generate ${LABELS[type]}` : LABELS[type]}
+        </span>
       </div>
     );
   }

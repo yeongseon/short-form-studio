@@ -113,31 +113,33 @@ describe("SceneCard", () => {
 
   // ---- action buttons ----
 
-  it("shows Gen Image button when image missing and scene_id exists", () => {
+  it("shows Generate Image in asset slot when image missing and scene_id exists", () => {
     const onGenImage = vi.fn();
     const p = makeParagraph({ scene_id: "scene-0" });
     render(<SceneCard paragraph={p} currentStage="VISUAL_ASSET_GENERATING" onGenerateImage={onGenImage} />);
-    const btn = screen.getByTestId("gen-image-sec-0");
-    expect(btn).toBeInTheDocument();
-    fireEvent.click(btn);
+    const slot = screen.getByTestId("asset-slot-image");
+    expect(slot).toHaveTextContent("Generate Image");
+    fireEvent.click(slot);
     expect(onGenImage).toHaveBeenCalledWith("scene-0");
   });
 
-  it("shows Gen Audio button when image exists but audio missing", () => {
+  it("shows Generate Audio in asset slot when image exists but audio missing", () => {
     const onGenAudio = vi.fn();
     const p = makeParagraph({ image_url: "/img.png" });
     render(<SceneCard paragraph={p} currentStage="AUDIO_GENERATING" onGenerateAudio={onGenAudio} />);
-    const btn = screen.getByTestId("gen-audio-sec-0");
-    fireEvent.click(btn);
+    const slot = screen.getByTestId("asset-slot-audio");
+    expect(slot).toHaveTextContent("Generate Audio");
+    fireEvent.click(slot);
     expect(onGenAudio).toHaveBeenCalledWith("sec-0");
   });
 
-  it("shows Gen Subtitles button when audio exists but subtitles missing", () => {
+  it("shows Generate Subtitles in asset slot when audio exists but subtitles missing", () => {
     const onGenSubs = vi.fn();
     const p = makeParagraph({ image_url: "/img.png", audio_url: "/audio.wav" });
     render(<SceneCard paragraph={p} currentStage="SUBTITLE_GENERATING" onGenerateSubtitles={onGenSubs} />);
-    const btn = screen.getByTestId("gen-subs-sec-0");
-    fireEvent.click(btn);
+    const slot = screen.getByTestId("asset-slot-subtitle");
+    expect(slot).toHaveTextContent("Generate Subtitles");
+    fireEvent.click(slot);
     expect(onGenSubs).toHaveBeenCalledWith("sec-0");
   });
 
@@ -153,9 +155,11 @@ describe("SceneCard", () => {
         disabled
       />,
     );
-    expect(screen.queryByTestId("gen-image-sec-0")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("gen-audio-sec-0")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("gen-subs-sec-0")).not.toBeInTheDocument();
+    // When disabled, asset slots should not show "Generate" action text
+    const imageSlot = screen.getByTestId("asset-slot-image");
+    expect(imageSlot).not.toHaveTextContent("Generate Image");
+    const audioSlot = screen.getByTestId("asset-slot-audio");
+    expect(audioSlot).not.toHaveTextContent("Generate Audio");
   });
 
   it("hides action buttons during generation", () => {
@@ -163,7 +167,9 @@ describe("SceneCard", () => {
     render(
       <SceneCard paragraph={p} currentStage="VISUAL_ASSET_GENERATING" onGenerateImage={vi.fn()} />,
     );
-    expect(screen.queryByTestId("gen-image-sec-0")).not.toBeInTheDocument();
+    // Asset slot shows loading state, not generate button
+    const imageSlot = screen.getByTestId("asset-slot-image");
+    expect(imageSlot).not.toHaveTextContent("Generate Image");
   });
 
   // ---- structured metadata ----

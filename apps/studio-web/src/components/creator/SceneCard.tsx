@@ -445,6 +445,11 @@ export default function SceneCard({
                 type="image"
                 status={assetStatus(p.image_url, isGeneratingImage)}
                 url={p.image_url}
+                onGenerate={
+                  !p.image_url && p.scene_id && onGenerateImage && imageEnabled
+                    ? () => onGenerateImage(p.scene_id!)
+                    : undefined
+                }
                 onRegenerate={
                   p.image_url && onGenerateImage && p.scene_id
                     ? () => onGenerateImage(p.scene_id!)
@@ -459,6 +464,11 @@ export default function SceneCard({
                 status={assetStatus(p.audio_url, isGeneratingAudio)}
                 url={p.audio_url}
                 duration={p.audio_duration}
+                onGenerate={
+                  !p.audio_url && p.image_url && onGenerateAudio && audioEnabled
+                    ? () => onGenerateAudio(p.section_id)
+                    : undefined
+                }
                 onRegenerate={
                   p.audio_url && onGenerateAudio
                     ? () => onGenerateAudio(p.section_id)
@@ -473,6 +483,11 @@ export default function SceneCard({
                 status={assetStatus(p.subtitles_url, isGeneratingSubs)}
                 url={p.subtitles_url}
                 subtitleCount={p.subtitle_entries?.length ?? null}
+                onGenerate={
+                  !p.subtitles_url && p.audio_url && onGenerateSubtitles && subtitleEnabled
+                    ? () => onGenerateSubtitles(p.section_id)
+                    : undefined
+                }
                 onRegenerate={
                   p.subtitles_url && onGenerateSubtitles
                     ? () => onGenerateSubtitles(p.section_id)
@@ -483,41 +498,7 @@ export default function SceneCard({
             </div>
           </div>
 
-          {/* Per-scene action buttons */}
-          {!isGenerating && !disabled && (
-            <div style={actionRowStyle}>
-              {!p.image_url && p.scene_id && onGenerateImage && imageEnabled && (
-                <button
-                  type="button"
-                  style={{ ...actionBtnStyle, borderColor: "#e9d5ff", color: "#6b21a8" }}
-                  onClick={() => onGenerateImage(p.scene_id!)}
-                  data-testid={`gen-image-${p.section_id}`}
-                >
-                  🖼️ Generate Image
-                </button>
-              )}
-              {!p.audio_url && p.image_url && onGenerateAudio && audioEnabled && (
-                <button
-                  type="button"
-                  style={{ ...actionBtnStyle, borderColor: "#fde68a", color: "#92400e" }}
-                  onClick={() => onGenerateAudio(p.section_id)}
-                  data-testid={`gen-audio-${p.section_id}`}
-                >
-                  🔊 Generate Audio
-                </button>
-              )}
-              {!p.subtitles_url && p.audio_url && onGenerateSubtitles && subtitleEnabled && (
-                <button
-                  type="button"
-                  style={{ ...actionBtnStyle, borderColor: "#bae6fd", color: "#075985" }}
-                  onClick={() => onGenerateSubtitles(p.section_id)}
-                  data-testid={`gen-subs-${p.section_id}`}
-                >
-                  💬 Generate Subtitles
-                </button>
-              )}
-            </div>
-          )}
+          {/* Generate actions are now integrated into AssetSlot empty state */}
         </div>
       </div>
 
