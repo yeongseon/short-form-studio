@@ -10,6 +10,7 @@ const MOCK_PROJECT: {
   title: string | null;
   source_type: string;
   status: string;
+  idea_brief?: string | null;
   latest_run?: { run_id: number; current_stage: string | null; status: string | null } | null;
   created_at: string;
   updated_at: string;
@@ -18,6 +19,7 @@ const MOCK_PROJECT: {
   title: "My Short",
   source_type: "idea",
   status: "active",
+  idea_brief: "A cool idea",
   latest_run: { run_id: 1, current_stage: "IDEA_READY", status: "pending" },
   created_at: "2025-03-15T10:00:00Z",
   updated_at: "2025-03-15T12:00:00Z",
@@ -71,6 +73,54 @@ const MOCK_RUN_VP_REVIEW = {
   restart_from: null,
 };
 
+const MOCK_RUN_VA_GENERATING = {
+  id: 1,
+  project_id: 7,
+  current_stage: "VISUAL_ASSET_GENERATING",
+  status: "running",
+  restart_from: null,
+};
+
+const MOCK_RUN_VA_REVIEW = {
+  id: 1,
+  project_id: 7,
+  current_stage: "VISUAL_ASSET_REVIEW",
+  status: "running",
+  restart_from: null,
+};
+
+const MOCK_RUN_AUDIO_GENERATING = {
+  id: 1,
+  project_id: 7,
+  current_stage: "AUDIO_GENERATING",
+  status: "running",
+  restart_from: null,
+};
+
+const MOCK_RUN_SUBTITLE_GENERATING = {
+  id: 1,
+  project_id: 7,
+  current_stage: "SUBTITLE_GENERATING",
+  status: "running",
+  restart_from: null,
+};
+
+const MOCK_RUN_RENDER_GENERATING = {
+  id: 1,
+  project_id: 7,
+  current_stage: "RENDER_GENERATING",
+  status: "running",
+  restart_from: null,
+};
+
+const MOCK_RUN_FINAL_REVIEW = {
+  id: 1,
+  project_id: 7,
+  current_stage: "FINAL_REVIEW",
+  status: "running",
+  restart_from: null,
+};
+
 // ---- helpers ----
 
 const mockNavigate = vi.fn();
@@ -81,7 +131,10 @@ vi.mock("react-router-dom", async () => {
 
 function renderPage(projectId = "7") {
   return render(
-    <MemoryRouter initialEntries={[`/projects/${projectId}`]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+    <MemoryRouter
+      initialEntries={[`/projects/${projectId}`]}
+      future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+    >
       <Routes>
         <Route path="/projects/:projectId" element={<ProjectPage />} />
       </Routes>
@@ -106,7 +159,7 @@ function mockFetchProjectAndRuns(
       } as Response);
     }
     // GET /projects/:id
-    if (url.includes("/projects/")) {
+    if (url.includes("/projects/") && !url.includes("/runs")) {
       if (!project) {
         return Promise.resolve({
           ok: false,
@@ -119,8 +172,6 @@ function mockFetchProjectAndRuns(
         json: () => Promise.resolve(project),
       } as Response);
     }
-    // GET /runs/:id (for refreshRun)
-    // GET /runs/:id/visual-assets
     // GET /runs/:id/preview
     if (url.includes("/preview")) {
       return Promise.resolve({
@@ -129,16 +180,14 @@ function mockFetchProjectAndRuns(
           Promise.resolve({
             run_id: 1,
             current_stage: "FINAL_REVIEW",
-            video: { id: 1, path: "data/artifacts/1/render/output.mp4", render_profile: "shorts_default" },
-            audio: { id: 2, path: "data/artifacts/1/audio/audio.wav", model_used: "qwen3-tts" },
-            subtitle: { id: 3, path: "data/artifacts/1/subtitles/subtitles.srt", format: "srt" },
+            video: {
+              id: 1,
+              path: "data/artifacts/1/render/output.mp4",
+              render_profile: "shorts_default",
+            },
+            audio: { id: 2, path: "data/artifacts/1/audio/audio.wav" },
+            subtitle: { id: 3, path: "data/artifacts/1/subtitles/subtitles.srt" },
           }),
-      } as Response);
-    }
-    if (url.includes("/visual-assets")) {
-      return Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve({ run_id: 1, scenes: {}, total_scenes: 0, total_assets: 0 }),
       } as Response);
     }
     // GET /api/creator/models
@@ -146,7 +195,12 @@ function mockFetchProjectAndRuns(
       return Promise.resolve({
         ok: true,
         json: () =>
-          Promise.resolve({ script_models: [], image_models: [], tts_models: [], stt_models: [] }),
+          Promise.resolve({
+            script_models: [],
+            image_models: [],
+            tts_models: [],
+            stt_models: [],
+          }),
       } as Response);
     }
     // GET /runs/:id/storyboard
@@ -182,6 +236,22 @@ function mockFetchProjectAndRuns(
           }),
       } as Response);
     }
+    // GET /runs/:id/script/structured
+    if (url.includes("/script/structured")) {
+      return Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({ sections: [] }),
+      } as Response);
+    }
+    // GET /runs/:id/script/markdown
+    if (url.includes("/script/markdown")) {
+      return Promise.resolve({
+        ok: true,
+        json: () =>
+          Promise.resolve({ markdown: "# Test Script" }),
+      } as Response);
+    }
     // GET /runs/:id (for refreshRun)
     if (url.includes("/runs/")) {
       const latestRun = runs[0];
@@ -192,7 +262,10 @@ function mockFetchProjectAndRuns(
         } as Response);
       }
     }
-    return Promise.resolve({ ok: true, json: () => Promise.resolve({}) } as Response);
+    return Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve({}),
+    } as Response);
   });
 }
 
@@ -202,14 +275,14 @@ beforeEach(() => {
 });
 
 describe("ProjectPage", () => {
-  // ---- Loading ----
+  // ═══════════════ Loading / Error / Edge Cases ═══════════════
+
   it("shows loading state initially", () => {
     vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise(() => {}));
     renderPage();
     expect(screen.getByRole("status")).toHaveTextContent("Loading project");
   });
 
-  // ---- Error ----
   it("shows error when project not found", async () => {
     mockFetchProjectAndRuns(null);
     renderPage();
@@ -227,10 +300,12 @@ describe("ProjectPage", () => {
     });
   });
 
-  // ---- Invalid project ID ----
   it("shows invalid ID message for non-numeric id", () => {
     render(
-      <MemoryRouter initialEntries={["/projects/abc"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <MemoryRouter
+        initialEntries={["/projects/abc"]}
+        future={{ v7_startTransition: true, v7_relativeSplatPath: true }}
+      >
         <Routes>
           <Route path="/projects/:projectId" element={<ProjectPage />} />
         </Routes>
@@ -239,7 +314,6 @@ describe("ProjectPage", () => {
     expect(screen.getByText("Invalid project ID.")).toBeInTheDocument();
   });
 
-  // ---- Project loaded, no runs ----
   it("shows project title and no-run state", async () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, []);
     renderPage();
@@ -268,133 +342,25 @@ describe("ProjectPage", () => {
     expect(screen.getByText(/Stage: SCRIPT_REVIEW/)).toBeInTheDocument();
   });
 
-  // ---- Project with run in IDEA_READY ----
-  it("shows stepper and Generate Script button for IDEA_READY", async () => {
+  it("shows 'Untitled Project' for null title", async () => {
+    mockFetchProjectAndRuns(
+      { ...MOCK_PROJECT, title: null as unknown as string },
+      [],
+    );
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("Untitled Project")).toBeInTheDocument();
+    });
+  });
+
+  it("renders back link to projects", async () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_IDEA]);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByText("My Short")).toBeInTheDocument();
-    });
-    // Stepper should be present (PipelineStepper renders step labels)
-    expect(screen.getByText("Idea")).toBeInTheDocument();
-    expect(screen.getByText("Script")).toBeInTheDocument();
-    // Generate button visible
-    expect(screen.getByRole("button", { name: "Generate Script" })).toBeInTheDocument();
-    // Approve and Regenerate should not be visible
-    expect(screen.queryByRole("button", { name: "Approve Script" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Regenerate Script" })).not.toBeInTheDocument();
-  });
-
-  // ---- Project with run in SCRIPT_REVIEW ----
-  it("shows editor tabs and action buttons for SCRIPT_REVIEW", async () => {
-    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
-    renderPage();
-    await waitFor(() => {
-      expect(screen.getByText("My Short")).toBeInTheDocument();
-    });
-    // Editor tabs
-    expect(screen.getByRole("tab", { name: "Markdown" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Structured" })).toBeInTheDocument();
-    // Approve + Regenerate Script  visible
-    expect(screen.getByRole("button", { name: "Approve Script" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Regenerate Script" })).toBeInTheDocument();
-  });
-
-  it("switches between markdown and structured tabs", async () => {
-    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
-    renderPage();
-    await waitFor(() => {
-      expect(screen.getByRole("tab", { name: "Markdown" })).toBeInTheDocument();
-    });
-
-    // Default: Markdown tab selected
-    const mdTab = screen.getByRole("tab", { name: "Markdown" });
-    expect(mdTab.getAttribute("aria-selected")).toBe("true");
-
-    // Switch to structured
-    fireEvent.click(screen.getByRole("tab", { name: "Structured" }));
-    await waitFor(() => {
-      const stTab = screen.getByRole("tab", { name: "Structured" });
-      expect(stTab.getAttribute("aria-selected")).toBe("true");
-      expect(mdTab.getAttribute("aria-selected")).toBe("false");
+      expect(screen.getByText(/Projects/)).toBeInTheDocument();
     });
   });
 
-  // ---- SCRIPT_GENERATING state ----
-  it("shows generating indicator for SCRIPT_GENERATING", async () => {
-    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_GENERATING]);
-    renderPage();
-    await waitFor(() => {
-      expect(screen.getByTestId("generating-indicator")).toBeInTheDocument();
-    });
-    expect(screen.getByText(/Generating Script/i)).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Markdown" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "Structured" })).toBeInTheDocument();
-  });
-
-  // ---- Approve action ----
-  it("calls approve endpoint and shows status", async () => {
-    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
-    renderPage();
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Approve Script" })).toBeInTheDocument();
-    });
-
-    // Override fetch for the approve call
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-
-    fireEvent.click(screen.getByRole("button", { name: "Approve Script" }));
-
-    await waitFor(() => {
-      // Verify approve endpoint was called
-      const calls = fetchSpy.mock.calls.map(([url]) =>
-        typeof url === "string" ? url : (url as Request).url,
-      );
-      expect(calls.some((u) => u.includes("/approve-script"))).toBe(true);
-    });
-  });
-
-  // ---- Generate action ----
-  it("calls generate endpoint on button click", async () => {
-    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_IDEA]);
-    renderPage();
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Generate Script" })).toBeInTheDocument();
-    });
-
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-
-    fireEvent.click(screen.getByRole("button", { name: "Generate Script" }));
-
-    await waitFor(() => {
-      const calls = fetchSpy.mock.calls.map(([url]) =>
-        typeof url === "string" ? url : (url as Request).url,
-      );
-      expect(calls.some((u) => u.includes("/generate-script"))).toBe(true);
-    });
-  });
-
-  // ---- Restart action ----
-  it("calls restart endpoint on Regenerate click", async () => {
-    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
-    renderPage();
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Regenerate Script" })).toBeInTheDocument();
-    });
-
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-
-    fireEvent.click(screen.getByRole("button", { name: "Regenerate Script" }));
-
-    await waitFor(() => {
-      const calls = fetchSpy.mock.calls.map(([url]) =>
-        typeof url === "string" ? url : (url as Request).url,
-      );
-      expect(calls.some((u) => u.includes("/restart"))).toBe(true);
-    });
-  });
-
-  // ---- API calls ----
   it("fetches project and runs on mount", async () => {
     const spy = vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const url = typeof input === "string" ? input : (input as Request).url;
@@ -416,35 +382,160 @@ describe("ProjectPage", () => {
       const calls = spy.mock.calls.map(([url]) =>
         typeof url === "string" ? url : (url as Request).url,
       );
-      expect(calls.some((u) => u.includes("/projects/7") && !u.includes("/runs"))).toBe(true);
+      expect(
+        calls.some((u) => u.includes("/projects/7") && !u.includes("/runs")),
+      ).toBe(true);
       expect(calls.some((u) => u.includes("/projects/7/runs"))).toBe(true);
     });
   });
 
-  // ---- Untitled project ----
-  it("shows 'Untitled Project' for null title", async () => {
-    mockFetchProjectAndRuns({ ...MOCK_PROJECT, title: null as unknown as string }, []);
-    renderPage();
-    await waitFor(() => {
-      expect(screen.getByText("Untitled Project")).toBeInTheDocument();
-    });
-  });
+  // ═══════════════ Script Stages (via ScriptComposer) ═══════════════
 
-  // ---- Back link ----
-  it("renders back link to projects", async () => {
+  it("renders ScriptComposer for IDEA_READY with Generate button", async () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_IDEA]);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByText("← Projects")).toBeInTheDocument();
+      expect(screen.getByTestId("script-composer")).toBeInTheDocument();
+    });
+    // Stepper visible
+    expect(screen.getByText("Idea")).toBeInTheDocument();
+    expect(screen.getByText("Script")).toBeInTheDocument();
+    // Generate Script button visible
+    expect(
+      screen.getByRole("button", { name: "Generate Script" }),
+    ).toBeInTheDocument();
+  });
+
+  it("shows editor tabs for SCRIPT_REVIEW via ScriptComposer", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("script-composer")).toBeInTheDocument();
+    });
+    // Editor tabs
+    expect(screen.getByRole("tab", { name: "Markdown" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("tab", { name: "Structured" }),
+    ).toBeInTheDocument();
+    // Confirm + Regenerate buttons visible (ScriptComposer labels)
+    expect(
+      screen.getByRole("button", {
+        name: "Confirm & Generate Visual Plan",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Regenerate" }),
+    ).toBeInTheDocument();
+  });
+
+  it("switches between markdown and structured tabs", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(
+        screen.getByRole("tab", { name: "Markdown" }),
+      ).toBeInTheDocument();
+    });
+
+    const mdTab = screen.getByRole("tab", { name: "Markdown" });
+    expect(mdTab.getAttribute("aria-selected")).toBe("true");
+
+    fireEvent.click(screen.getByRole("tab", { name: "Structured" }));
+    await waitFor(() => {
+      const stTab = screen.getByRole("tab", { name: "Structured" });
+      expect(stTab.getAttribute("aria-selected")).toBe("true");
+      expect(mdTab.getAttribute("aria-selected")).toBe("false");
     });
   });
 
-  // ---- Action error display ----
+  it("shows generating indicator for SCRIPT_GENERATING", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_GENERATING]);
+    renderPage();
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("script-generating-indicator"),
+      ).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Generating Script/i)).toBeInTheDocument();
+  });
+
+  it("calls generate-script endpoint on Generate Script click", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_IDEA]);
+    renderPage();
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Generate Script" }),
+      ).toBeInTheDocument();
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Generate Script" }),
+    );
+
+    await waitFor(() => {
+      const calls = fetchSpy.mock.calls.map(([url]) =>
+        typeof url === "string" ? url : (url as Request).url,
+      );
+      expect(calls.some((u) => u.includes("/generate-script"))).toBe(true);
+    });
+  });
+
+  it("calls approve-script endpoint on Confirm click", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", {
+          name: "Confirm & Generate Visual Plan",
+        }),
+      ).toBeInTheDocument();
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Confirm & Generate Visual Plan",
+      }),
+    );
+
+    await waitFor(() => {
+      const calls = fetchSpy.mock.calls.map(([url]) =>
+        typeof url === "string" ? url : (url as Request).url,
+      );
+      expect(calls.some((u) => u.includes("/approve-script"))).toBe(true);
+    });
+  });
+
+  it("calls restart endpoint on Regenerate click", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Regenerate" }),
+      ).toBeInTheDocument();
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    fireEvent.click(screen.getByRole("button", { name: "Regenerate" }));
+
+    await waitFor(() => {
+      const calls = fetchSpy.mock.calls.map(([url]) =>
+        typeof url === "string" ? url : (url as Request).url,
+      );
+      expect(calls.some((u) => u.includes("/restart"))).toBe(true);
+    });
+  });
+
   it("shows error status when approve fails", async () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Approve Script" })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", {
+          name: "Confirm & Generate Visual Plan",
+        }),
+      ).toBeInTheDocument();
     });
 
     // Override fetch to fail on approve
@@ -457,26 +548,34 @@ describe("ProjectPage", () => {
           json: () => Promise.resolve({ detail: "Stage conflict" }),
         } as Response);
       }
-      // Fallback for other calls
       return Promise.resolve({
         ok: true,
         json: () => Promise.resolve(MOCK_RUN_REVIEW),
       } as Response);
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Approve Script" }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Confirm & Generate Visual Plan",
+      }),
+    );
 
     await waitFor(() => {
-      expect(screen.getByText("Stage conflict")).toBeInTheDocument();
+      expect(screen.getByTestId("status-toast")).toHaveTextContent(
+        "Stage conflict",
+      );
     });
   });
-  // ---- Visual Plan stages ----
+
+  // ═══════════════ Visual Plan Stages ═══════════════
 
   it("shows VP generating indicator for VISUAL_PLAN_GENERATING", async () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VP_GENERATING]);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByTestId("vp-generating-indicator")).toBeInTheDocument();
+      expect(
+        screen.getByTestId("vp-generating-indicator"),
+      ).toBeInTheDocument();
     });
     expect(screen.getByText(/Generating Visual Plan/i)).toBeInTheDocument();
     expect(screen.getByText("Visual Plan Setup")).toBeInTheDocument();
@@ -486,33 +585,39 @@ describe("ProjectPage", () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VP_REVIEW]);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByTestId("visual-plan-editor")).toBeInTheDocument();
+      expect(
+        screen.getByTestId("visual-plan-editor"),
+      ).toBeInTheDocument();
     });
-    expect(screen.getAllByText("Script Model").length).toBeGreaterThan(0);
-    // Approve and Regenerate Plan visible
-    expect(screen.getByRole("button", { name: "Approve Visual Plan" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Regenerate Plan" })).toBeInTheDocument();
-    // Script actions should not be visible
-    expect(screen.queryByRole("button", { name: "Approve Script" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Generate Script" })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Approve Visual Plan" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Regenerate Plan" }),
+    ).toBeInTheDocument();
   });
 
   it("calls approve-visual-plan endpoint on Approve Visual Plan click", async () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VP_REVIEW]);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Approve Visual Plan" })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Approve Visual Plan" }),
+      ).toBeInTheDocument();
     });
 
     const fetchSpy = vi.spyOn(globalThis, "fetch");
-
-    fireEvent.click(screen.getByRole("button", { name: "Approve Visual Plan" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Approve Visual Plan" }),
+    );
 
     await waitFor(() => {
       const calls = fetchSpy.mock.calls.map(([url]) =>
         typeof url === "string" ? url : (url as Request).url,
       );
-      expect(calls.some((u) => u.includes("/approve-visual-plan"))).toBe(true);
+      expect(calls.some((u) => u.includes("/approve-visual-plan"))).toBe(
+        true,
+      );
     });
   });
 
@@ -520,28 +625,33 @@ describe("ProjectPage", () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VP_SETUP]);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Generate Visual Plan" })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Generate Visual Plan" }),
+      ).toBeInTheDocument();
     });
-    expect(screen.getByText("Script Model")).toBeInTheDocument();
-    expect(screen.queryByText("Image Model")).not.toBeInTheDocument();
   });
 
   it("calls generate-visual-plan endpoint from VISUAL_PLAN_SETUP", async () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VP_SETUP]);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Generate Visual Plan" })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Generate Visual Plan" }),
+      ).toBeInTheDocument();
     });
 
     const fetchSpy = vi.spyOn(globalThis, "fetch");
-
-    fireEvent.click(screen.getByRole("button", { name: "Generate Visual Plan" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Generate Visual Plan" }),
+    );
 
     await waitFor(() => {
       const calls = fetchSpy.mock.calls.map(([url]) =>
         typeof url === "string" ? url : (url as Request).url,
       );
-      expect(calls.some((u) => u.includes("/generate-visual-plan"))).toBe(true);
+      expect(calls.some((u) => u.includes("/generate-visual-plan"))).toBe(
+        true,
+      );
     });
   });
 
@@ -549,12 +659,15 @@ describe("ProjectPage", () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VP_REVIEW]);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Regenerate Plan" })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Regenerate Plan" }),
+      ).toBeInTheDocument();
     });
 
     const fetchSpy = vi.spyOn(globalThis, "fetch");
-
-    fireEvent.click(screen.getByRole("button", { name: "Regenerate Plan" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Regenerate Plan" }),
+    );
 
     await waitFor(() => {
       const calls = fetchSpy.mock.calls;
@@ -568,279 +681,188 @@ describe("ProjectPage", () => {
     });
   });
 
-  // ---- Visual Asset Stages ----
+  // ═══════════════ Storyboard Workspace Stages ═══════════════
 
-  const MOCK_RUN_VA_GENERATING = {
-    id: 1,
-    project_id: 7,
-    current_stage: "VISUAL_ASSET_GENERATING",
-    status: "running",
-    restart_from: null,
-  };
-
-  const MOCK_RUN_VA_REVIEW = {
-    id: 1,
-    project_id: 7,
-    current_stage: "VISUAL_ASSET_REVIEW",
-    status: "running",
-    restart_from: null,
-  };
-
-  const MOCK_RUN_AUDIO_GENERATING = {
-    id: 1,
-    project_id: 7,
-    current_stage: "AUDIO_GENERATING",
-    status: "running",
-    restart_from: null,
-  };
-
-  const MOCK_RUN_SUBTITLE_GENERATING = {
-    id: 1,
-    project_id: 7,
-    current_stage: "SUBTITLE_GENERATING",
-    status: "running",
-    restart_from: null,
-  };
-
-  const MOCK_RUN_RENDER_GENERATING = {
-    id: 1,
-    project_id: 7,
-    current_stage: "RENDER_GENERATING",
-    status: "running",
-    restart_from: null,
-  };
-
-  const MOCK_RUN_FINAL_REVIEW = {
-    id: 1,
-    project_id: 7,
-    current_stage: "FINAL_REVIEW",
-    status: "running",
-    restart_from: null,
-  };
-
-  it("shows VA generating indicator for VISUAL_ASSET_GENERATING", async () => {
+  it("renders StoryboardWorkspace for VISUAL_ASSET_GENERATING", async () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VA_GENERATING]);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByTestId("va-generating-indicator")).toBeInTheDocument();
+      expect(
+        screen.getByTestId("storyboard-workspace"),
+      ).toBeInTheDocument();
     });
-    expect(screen.getByText("Generating Visual Assets…")).toBeInTheDocument();
   });
 
-  it("shows visual-asset-section for VISUAL_ASSET_REVIEW", async () => {
+  it("renders StoryboardWorkspace for VISUAL_ASSET_REVIEW", async () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VA_REVIEW]);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByTestId("visual-asset-section")).toBeInTheDocument();
-    });
-    expect(screen.getAllByText("Image Model").length).toBeGreaterThan(0);
-  });
-
-  it("shows scene regen controls in VISUAL_ASSET_REVIEW", async () => {
-    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VA_REVIEW]);
-    renderPage();
-    await waitFor(() => {
-      expect(screen.getByTestId("scene-regen-controls")).toBeInTheDocument();
-    });
-    expect(screen.getByTestId("scene-id-input")).toBeInTheDocument();
-    expect(screen.getByTestId("regen-scene-btn")).toBeInTheDocument();
-    expect(screen.getByTestId("generate-scene-btn")).toBeInTheDocument();
-  });
-
-  it("hides scene regen controls during VISUAL_ASSET_GENERATING", async () => {
-    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VA_GENERATING]);
-    renderPage();
-    await waitFor(() => {
-      expect(screen.getByTestId("visual-asset-section")).toBeInTheDocument();
-    });
-    expect(screen.queryByTestId("scene-regen-controls")).not.toBeInTheDocument();
-  });
-
-  it("shows Approve Assets button in VISUAL_ASSET_REVIEW", async () => {
-    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VA_REVIEW]);
-    renderPage();
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Approve Assets" })).toBeInTheDocument();
+      expect(
+        screen.getByTestId("storyboard-workspace"),
+      ).toBeInTheDocument();
     });
   });
 
-  it("calls approve-visual-assets endpoint on Approve Assets click", async () => {
-    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VA_REVIEW]);
-    renderPage();
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Approve Assets" })).toBeInTheDocument();
-    });
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    fireEvent.click(screen.getByRole("button", { name: "Approve Assets" }));
-    await waitFor(() => {
-      const calls = fetchSpy.mock.calls.map(([url]) =>
-        typeof url === "string" ? url : (url as Request).url,
-      );
-      expect(calls.some((u) => u.includes("/approve-visual-assets"))).toBe(true);
-    });
-  });
-
-  it("calls generate-visual-assets endpoint on Regenerate All click", async () => {
-    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VA_REVIEW]);
-    renderPage();
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Regenerate All" })).toBeInTheDocument();
-    });
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    fireEvent.click(screen.getByRole("button", { name: "Regenerate All" }));
-    await waitFor(() => {
-      const calls = fetchSpy.mock.calls.map(([url]) =>
-        typeof url === "string" ? url : (url as Request).url,
-      );
-      expect(calls.some((u) => u.includes("/generate-visual-assets"))).toBe(true);
-    });
-  });
-
-  it("calls restart with VISUAL_ASSET_GENERATING stage on Restart Assets click", async () => {
-    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VA_REVIEW]);
-    renderPage();
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Restart Assets" })).toBeInTheDocument();
-    });
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    fireEvent.click(screen.getByRole("button", { name: "Restart Assets" }));
-    await waitFor(() => {
-      const calls = fetchSpy.mock.calls;
-      const restartCall = calls.find(([url]) => {
-        const u = typeof url === "string" ? url : (url as Request).url;
-        return u.includes("/restart");
-      });
-      expect(restartCall).toBeDefined();
-      const body = JSON.parse(restartCall![1]!.body as string);
-      expect(body.stage).toBe("VISUAL_ASSET_GENERATING");
-    });
-  });
-
-  it("calls regenerate-image endpoint when scene regen button clicked", async () => {
-    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VA_REVIEW]);
-    renderPage();
-    await waitFor(() => {
-      expect(screen.getByTestId("scene-regen-controls")).toBeInTheDocument();
-    });
-    const input = screen.getByTestId("scene-id-input") as HTMLInputElement;
-    fireEvent.change(input, { target: { value: "scene-0" } });
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    fireEvent.click(screen.getByTestId("regen-scene-btn"));
-    await waitFor(() => {
-      const calls = fetchSpy.mock.calls.map(([url]) =>
-        typeof url === "string" ? url : (url as Request).url,
-      );
-      expect(calls.some((u) => u.includes("/scenes/scene-0/regenerate-image"))).toBe(true);
-    });
-  });
-
-  it("calls generate-image endpoint when generate-scene button clicked", async () => {
-    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VA_REVIEW]);
-    renderPage();
-    await waitFor(() => {
-      expect(screen.getByTestId("scene-regen-controls")).toBeInTheDocument();
-    });
-    const input = screen.getByTestId("scene-id-input") as HTMLInputElement;
-    fireEvent.change(input, { target: { value: "scene-1" } });
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    fireEvent.click(screen.getByTestId("generate-scene-btn"));
-    await waitFor(() => {
-      const calls = fetchSpy.mock.calls.map(([url]) =>
-        typeof url === "string" ? url : (url as Request).url,
-      );
-      expect(calls.some((u) => u.includes("/scenes/scene-1/generate-image"))).toBe(true);
-    });
-  });
-
-  // ---- Audio / Subtitle / Render / Final Review Stages ----
-
-  it("shows storyboard view for AUDIO_GENERATING", async () => {
+  it("renders StoryboardWorkspace for AUDIO_GENERATING", async () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_AUDIO_GENERATING]);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByTestId("storyboard-view")).toBeInTheDocument();
+      expect(
+        screen.getByTestId("storyboard-workspace"),
+      ).toBeInTheDocument();
     });
-    // Render should not be offered before subtitle stage
-    expect(screen.queryByRole("button", { name: "Render Video" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Restart from Script" })).toBeInTheDocument();
   });
 
-  it("shows storyboard view for SUBTITLE_GENERATING", async () => {
+  it("renders StoryboardWorkspace for SUBTITLE_GENERATING", async () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_SUBTITLE_GENERATING]);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByTestId("storyboard-view")).toBeInTheDocument();
+      expect(
+        screen.getByTestId("storyboard-workspace"),
+      ).toBeInTheDocument();
     });
-    expect(screen.getByRole("button", { name: "Render Video" })).toBeInTheDocument();
-    expect(screen.getByLabelText(/Render Profile/)).toBeInTheDocument();
   });
 
-  it("shows storyboard view for RENDER_GENERATING", async () => {
+  it("renders StoryboardWorkspace for RENDER_GENERATING", async () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_RENDER_GENERATING]);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByTestId("storyboard-view")).toBeInTheDocument();
+      expect(
+        screen.getByTestId("storyboard-workspace"),
+      ).toBeInTheDocument();
     });
-    // During render, storyboard should be read-only (no generate buttons in storyboard)
-    expect(screen.getByRole("button", { name: "Restart from Script" })).toBeInTheDocument();
   });
 
-  it("shows final review section with storyboard and review link for FINAL_REVIEW", async () => {
+  it("shows final review section with review link for FINAL_REVIEW", async () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_FINAL_REVIEW]);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByTestId("storyboard-view")).toBeInTheDocument();
+      expect(
+        screen.getByTestId("storyboard-workspace"),
+      ).toBeInTheDocument();
     });
     expect(screen.getByTestId("final-review-section")).toBeInTheDocument();
     expect(screen.getByText("Pipeline Complete")).toBeInTheDocument();
     expect(screen.getByTestId("review-link")).toBeInTheDocument();
-    expect(screen.getByTestId("review-link").getAttribute("href")).toBe("/review/1");
+    expect(screen.getByTestId("review-link").getAttribute("href")).toBe(
+      "/review/1",
+    );
   });
 
-  it("shows Restart from Script button in FINAL_REVIEW", async () => {
-    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_FINAL_REVIEW]);
-    renderPage();
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Restart from Script" })).toBeInTheDocument();
-    });
-  });
-
-  it("hides approve button during AUDIO_GENERATING", async () => {
+  it("shows scene cards inside StoryboardWorkspace", async () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_AUDIO_GENERATING]);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByTestId("storyboard-view")).toBeInTheDocument();
+      expect(
+        screen.getByTestId("storyboard-workspace"),
+      ).toBeInTheDocument();
     });
-    expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+    // The storyboard workspace should render a scene card for sec-0
+    await waitFor(() => {
+      expect(screen.getByTestId("scene-card-sec-0")).toBeInTheDocument();
+    });
   });
 
-  it("hides idea-only go-back action for markdown-source script review", async () => {
-    mockFetchProjectAndRuns({ ...MOCK_PROJECT, source_type: "markdown" }, [MOCK_RUN_REVIEW]);
+  it("shows pipeline overview bar in StoryboardWorkspace", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_AUDIO_GENERATING]);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Approve Script" })).toBeInTheDocument();
+      expect(
+        screen.getByTestId("pipeline-overview-bar"),
+      ).toBeInTheDocument();
+    });
+  });
+
+  it("shows bulk action bar in StoryboardWorkspace", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_AUDIO_GENERATING]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("bulk-action-bar")).toBeInTheDocument();
+    });
+  });
+
+  // ═══════════════ Go-Back Navigation ═══════════════
+
+  it("shows go-back button for VISUAL_PLAN_SETUP", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VP_SETUP]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("go-back-btn")).toBeInTheDocument();
+    });
+    expect(screen.getByTestId("go-back-btn")).toHaveTextContent(
+      "Back to Script Review",
+    );
+  });
+
+  it("hides go-back for markdown-source SCRIPT_REVIEW", async () => {
+    mockFetchProjectAndRuns(
+      { ...MOCK_PROJECT, source_type: "markdown" },
+      [MOCK_RUN_REVIEW],
+    );
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("script-composer")).toBeInTheDocument();
     });
     expect(screen.queryByTestId("go-back-btn")).not.toBeInTheDocument();
   });
 
-  it("uses selected render profile when rendering from subtitle stage", async () => {
-    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_SUBTITLE_GENERATING]);
+  // ═══════════════ Stop / Resume / Delete ═══════════════
+
+  it("shows Stop button for running run", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [
+      { ...MOCK_RUN_IDEA, status: "running" },
+    ]);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Render Video" })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: /Stop/ }),
+      ).toBeInTheDocument();
     });
+  });
 
-    const fetchSpy = vi.spyOn(globalThis, "fetch");
-    fireEvent.change(screen.getByLabelText(/Render Profile/), { target: { value: "high_quality" } });
-    fireEvent.click(screen.getByRole("button", { name: "Render Video" }));
-
+  it("shows Resume button for cancelled run", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [
+      { ...MOCK_RUN_IDEA, status: "cancelled" },
+    ]);
+    renderPage();
     await waitFor(() => {
-      const renderCall = fetchSpy.mock.calls.find(([url]) =>
-        (typeof url === "string" ? url : (url as Request).url).includes("/render")
-      );
-      expect(renderCall).toBeTruthy();
-      const body = JSON.parse((renderCall![1] as RequestInit).body as string);
-      expect(body.render_profile).toBe("high_quality");
+      expect(
+        screen.getByRole("button", { name: /Resume/ }),
+      ).toBeInTheDocument();
     });
+  });
+
+  it("shows Delete Project button", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_IDEA]);
+    renderPage();
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Delete Project/ }),
+      ).toBeInTheDocument();
+    });
+  });
+
+  // ═══════════════ Max Width ═══════════════
+
+  it("uses wider max-width for storyboard stages", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_AUDIO_GENERATING]);
+    const { container } = renderPage();
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("storyboard-workspace"),
+      ).toBeInTheDocument();
+    });
+    const wrapper = container.firstElementChild as HTMLElement;
+    expect(wrapper.style.maxWidth).toBe("1200px");
+  });
+
+  it("uses narrower max-width for script stages", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_IDEA]);
+    const { container } = renderPage();
+    await waitFor(() => {
+      expect(screen.getByTestId("script-composer")).toBeInTheDocument();
+    });
+    const wrapper = container.firstElementChild as HTMLElement;
+    expect(wrapper.style.maxWidth).toBe("960px");
   });
 });
