@@ -5,7 +5,7 @@
  * - PipelineStepper (header progress bar)
  * - Editor area with markdown / structured toggle (during script stages)
  * - VisualPlanEditor (during visual plan stages)
- * - VisualAssetGrid + ProgressDialog (during visual asset stages)
+ * - VisualAssetGrid (during visual asset stages)
  * - Audio / subtitle / render generating indicators (automatic stages)
  * - Final review section with preview summary and review-page link
  * - StageActionBar (save / approve / generate / restart)
@@ -22,7 +22,6 @@ import MarkdownScriptEditor from "../components/creator/MarkdownScriptEditor";
 import StructuredScriptEditor from "../components/creator/StructuredScriptEditor";
 import VisualPlanEditor from "../components/creator/VisualPlanEditor";
 import VisualAssetGrid from "../components/creator/VisualAssetGrid";
-import ProgressDialog from "../components/creator/ProgressDialog";
 import ModelSelector from "../components/creator/ModelSelector";
 import StoryboardView from "../components/creator/StoryboardView";
 import ConfirmDialog from "../components/creator/ConfirmDialog";
@@ -85,6 +84,14 @@ const FINAL_REVIEW_STAGES = new Set(["FINAL_REVIEW"]);
 
 // Storyboard stages — show unified storyboard view instead of separate indicators
 const STORYBOARD_STAGES = new Set(["AUDIO_GENERATING", "SUBTITLE_GENERATING", "RENDER_GENERATING", "FINAL_REVIEW"]);
+const RUN_POLL_STAGES = new Set([
+  "SCRIPT_GENERATING",
+  "VISUAL_PLAN_GENERATING",
+  "VISUAL_ASSET_GENERATING",
+  "AUDIO_GENERATING",
+  "SUBTITLE_GENERATING",
+  "RENDER_GENERATING",
+]);
 
 // Stages where editing is allowed (not generating)
 const EDITABLE_STAGES = new Set(["SCRIPT_REVIEW", "VISUAL_PLAN_REVIEW"]);
@@ -304,10 +311,6 @@ export default function ProjectPage() {
   // Status toast
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
-  // Progress dialog state
-  const [progressOpen, setProgressOpen] = useState(false);
-  const [progressExpectedStage, setProgressExpectedStage] = useState("VISUAL_ASSET_GENERATING");
-
   // Scene regeneration model override
   const [regenModelKey, setRegenModelKey] = useState<string | null>(null);
 
@@ -399,6 +402,17 @@ export default function ProjectPage() {
       // silent — non-critical
     }
   }, []);
+
+  useEffect(() => {
+    if (!run || !RUN_POLL_STAGES.has(run.current_stage)) return;
+    const timer = setInterval(() => {
+      void refreshRun(run.id);
+      if (run.current_stage === "VISUAL_ASSET_GENERATING") {
+        setAssetRefreshKey((k) => k + 1);
+      }
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [run, refreshRun]);
 
   // Initialize model selection from run.model_defaults on load
   useEffect(() => {
@@ -643,8 +657,8 @@ export default function ProjectPage() {
         throw new Error(body?.detail ?? `Generate assets failed (${res.status})`);
       }
       setStatusMessage("Visual asset generation started");
-      setProgressExpectedStage("VISUAL_ASSET_GENERATING");
-      setProgressOpen(true);
+      await refreshRun(run.id);
+      setAssetRefreshKey((k) => k + 1);
     } catch (err) {
       setStatusMessage(err instanceof Error ? err.message : "Generate assets failed");
     } finally {
@@ -776,8 +790,7 @@ export default function ProjectPage() {
         throw new Error(body?.detail ?? `Generate audio failed (${res.status})`);
       }
       setStatusMessage("Audio generation started");
-      setProgressExpectedStage("AUDIO_GENERATING");
-      setProgressOpen(true);
+      await refreshRun(run.id);
     } catch (err) {
       setStatusMessage(err instanceof Error ? err.message : "Generate audio failed");
     } finally {
@@ -802,8 +815,7 @@ export default function ProjectPage() {
         throw new Error(body?.detail ?? `Generate subtitles failed (${res.status})`);
       }
       setStatusMessage("Subtitle generation started");
-      setProgressExpectedStage("SUBTITLE_GENERATING");
-      setProgressOpen(true);
+      await refreshRun(run.id);
     } catch (err) {
       setStatusMessage(err instanceof Error ? err.message : "Generate subtitles failed");
     } finally {
@@ -828,37 +840,13 @@ export default function ProjectPage() {
         throw new Error(body?.detail ?? `Render failed (${res.status})`);
       }
       setStatusMessage("Render started");
-      setProgressExpectedStage("RENDER_GENERATING");
-      setProgressOpen(true);
+      await refreshRun(run.id);
     } catch (err) {
       setStatusMessage(err instanceof Error ? err.message : "Render failed");
     } finally {
       setGenerating(false);
     }
   }, [run, modelSelection.render_profile]);
-
-  // ---- progress dialog callbacks ----
-
-  const handleProgressComplete = useCallback(
-    (stage: string) => {
-      setProgressOpen(false);
-      setStatusMessage(`Generation complete — now at ${stage}`);
-      if (run) {
-        refreshRun(run.id);
-        setAssetRefreshKey((k) => k + 1);
-      }
-    },
-    [run, refreshRun],
-  );
-
-  const handleProgressFailed = useCallback(
-    (_stage: string) => {
-      setProgressOpen(false);
-      setStatusMessage("Generation failed");
-      if (run) refreshRun(run.id);
-    },
-    [run, refreshRun],
-  );
 
   // ---- stop / resume / delete actions ----
 
@@ -1476,8 +1464,8 @@ export default function ProjectPage() {
       {/* Visual asset area */}
       {run && isVisualAssetStage && (
         <div data-testid="visual-asset-section" style={{ marginBottom: 24 }}>
-          {/* Asset generating indicator (inline — ProgressDialog also available) */}
-          {isVAGenerating && !progressOpen && (
+          {/* Asset generating indicator */}
+          {isVAGenerating && (
             <div
               data-testid="va-generating-indicator"
               style={{
@@ -1875,19 +1863,6 @@ export default function ProjectPage() {
             </div>
           )}
         </div>
-      )}
-
-      {/* ProgressDialog for long-running generation */}
-      {run && (
-        <ProgressDialog
-          open={progressOpen}
-          runId={run.id}
-          expectedStage={progressExpectedStage}
-          apiBase={API_BASE}
-          onComplete={handleProgressComplete}
-          onFailed={handleProgressFailed}
-          onClose={() => setProgressOpen(false)}
-        />
       )}
 
       {/* Back navigation button */}
