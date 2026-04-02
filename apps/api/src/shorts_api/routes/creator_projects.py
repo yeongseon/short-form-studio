@@ -31,6 +31,19 @@ async def create_project(request: CreateProjectRequest) -> dict[str, object]:
     return project.model_dump(mode="json")
 
 
+
+
+class UpdateProjectRequest(BaseModel):
+    title: str
+
+
+@router.patch("/{project_id}")
+async def update_project(project_id: int, request: UpdateProjectRequest) -> dict[str, object]:
+    project = await project_service.update_project(project_id, title=request.title)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project.model_dump(mode="json")
+
 @router.get("/{project_id}")
 async def get_project_detail(project_id: int) -> dict[str, object]:
     project = await project_service.get_project(project_id)

@@ -71,6 +71,26 @@ class PostgresProjectStorage:
             "status": row["status"],
         }
 
+
+    async def update_project(self, project_id: int, updates: dict[str, Any]) -> dict[str, Any] | None:
+        """Update project fields. Returns updated row or None if not found."""
+        if not updates:
+            return await self.fetch_project(project_id)
+        set_clauses = []
+        params: list[Any] = []
+        idx = 1
+        for key, value in updates.items():
+            set_clauses.append(f"{key} = ${idx}")
+            params.append(value)
+            idx += 1
+        params.append(project_id)
+        query = f"""
+            UPDATE creator_projects
+            SET {', '.join(set_clauses)}, updated_at = NOW()
+            WHERE id = ${idx}
+            RETURNING *
+        """
+        return await fetch_one(query, *params)
     async def delete_project(self, project_id: int) -> bool:
         """Delete a project by id. Returns True if deleted.
 

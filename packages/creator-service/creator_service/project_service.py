@@ -34,6 +34,10 @@ class ProjectStorageBackend(Protocol):
     async def count_projects(self) -> int:
         ...
 
+    async def update_project(self, project_id: int, updates: dict[str, Any]) -> dict[str, Any] | None:
+        """Update project fields. Returns updated row or None if not found."""
+        ...
+
     async def delete_project(self, project_id: int) -> bool:
         """Delete a project by id. Returns True if deleted."""
         ...
@@ -83,6 +87,15 @@ class InMemoryProjectStorage:
 
     async def count_projects(self) -> int:
         return len(self._projects)
+
+    async def update_project(self, project_id: int, updates: dict[str, Any]) -> dict[str, Any] | None:
+        row = self._projects.get(project_id)
+        if row is None:
+            return None
+        for key, value in updates.items():
+            row[key] = value
+        row["updated_at"] = datetime.now(timezone.utc)
+        return dict(row)
 
     async def delete_project(self, project_id: int) -> bool:
         if project_id in self._projects:
@@ -210,6 +223,14 @@ class ProjectService:
 
     async def count_projects(self) -> int:
         return await self.db.count_projects()
+
+    async def update_project(self, project_id: int, title: str) -> Project | None:
+        """Update project title."""
+        row = await self.db.update_project(project_id, {"title": title})
+        if row is None:
+            return None
+        latest_run = await self.db.fetch_latest_run_summary(project_id)
+        return ProjectWithLatestRun.model_validate({**row, "latest_run": latest_run})
 
     async def delete_project(self, project_id: int) -> bool:
         """Delete a project. FK cascade handles associated runs."""

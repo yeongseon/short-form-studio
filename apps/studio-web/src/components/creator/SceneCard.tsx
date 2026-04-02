@@ -382,6 +382,28 @@ export default function SceneCard({
             )}
           </div>
 
+          {/* Script text */}
+          {(p.display_text || p.text) && (
+            <div style={{ margin: "2px 0" }}>
+              <div style={sectionLabelStyle}>Script</div>
+              <div
+                style={{
+                  fontSize: 13,
+                  lineHeight: 1.5,
+                  color: "#1f2937",
+                  padding: "4px 8px",
+                  background: "#f9fafb",
+                  borderRadius: 6,
+                  border: "1px solid #f3f4f6",
+                  whiteSpace: "pre-wrap",
+                }}
+                data-testid={`scene-script-${p.section_id}`}
+              >
+                {p.display_text || p.text}
+              </div>
+            </div>
+          )}
+
           {/* Image generation prompt */}
           {displayPrompt && (
             <div>
@@ -471,7 +493,7 @@ export default function SceneCard({
                   onClick={() => onGenerateImage(p.scene_id!)}
                   data-testid={`gen-image-${p.section_id}`}
                 >
-                  Gen Image
+                  🖼️ Generate Image
                 </button>
               )}
               {!p.audio_url && p.image_url && onGenerateAudio && audioEnabled && (
@@ -481,7 +503,7 @@ export default function SceneCard({
                   onClick={() => onGenerateAudio(p.section_id)}
                   data-testid={`gen-audio-${p.section_id}`}
                 >
-                  Gen Audio
+                  🔊 Generate Audio
                 </button>
               )}
               {!p.subtitles_url && p.audio_url && onGenerateSubtitles && subtitleEnabled && (
@@ -491,7 +513,7 @@ export default function SceneCard({
                   onClick={() => onGenerateSubtitles(p.section_id)}
                   data-testid={`gen-subs-${p.section_id}`}
                 >
-                  Gen Subtitles
+                  💬 Generate Subtitles
                 </button>
               )}
             </div>

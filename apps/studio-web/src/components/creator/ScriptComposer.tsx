@@ -1,20 +1,16 @@
 /**
- * ScriptComposer — script editing phase before scene generation.
+ * ScriptComposer — always-visible markdown editor + action buttons.
  *
- * Wraps MarkdownScriptEditor / StructuredScriptEditor with a
- * "Confirm Script" button that triggers visual plan generation
- * and signals the parent to transition to StoryboardWorkspace.
+ * Shows only the MarkdownScriptEditor (single source of truth).
+ * Structured metadata is shown in SceneCards below, not here.
+ * When the user saves markdown, auto-parse runs and onScriptChange
+ * fires so the parent can refresh downstream data (storyboard).
  */
 
-import { useState } from "react";
-
 import MarkdownScriptEditor from "./MarkdownScriptEditor";
-import StructuredScriptEditor from "./StructuredScriptEditor";
 import ModelSelector from "./ModelSelector";
 
 // --------------- types ---------------
-
-type EditorMode = "markdown" | "structured";
 
 export interface ScriptComposerProps {
   runId: number;
@@ -22,8 +18,6 @@ export interface ScriptComposerProps {
   currentStage: string;
   /** Source type from the project. */
   sourceType: "idea" | "markdown" | "url";
-  /** Source context text to display. */
-  sourceContext?: string | null;
   /** Model selection state for script category. */
   selectedScriptModel?: string;
   /** Called when model selection changes. */
@@ -34,6 +28,8 @@ export interface ScriptComposerProps {
   onGenerate?: () => void;
   /** Called when script should be regenerated. */
   onRegenerate?: () => void;
+  /** Called after save+parse completes — parent should refresh storyboard. */
+  onScriptChange?: () => void;
   /** Status message callback. */
   onStatusMessage?: (msg: string) => void;
   /** Whether action buttons should be disabled (e.g. during generation). */
@@ -47,34 +43,6 @@ const containerStyle: React.CSSProperties = {
   flexDirection: "column",
   gap: 12,
 };
-
-const sourceBoxStyle: React.CSSProperties = {
-  padding: "10px 14px",
-  background: "#f9fafb",
-  border: "1px solid #e5e7eb",
-  borderRadius: 8,
-  fontSize: 13,
-  lineHeight: 1.5,
-  color: "#374151",
-  whiteSpace: "pre-wrap",
-};
-
-const tabListStyle: React.CSSProperties = {
-  display: "flex",
-  gap: 4,
-  borderBottom: "2px solid #ddd",
-};
-
-const tabStyle = (active: boolean): React.CSSProperties => ({
-  padding: "6px 14px",
-  border: "none",
-  borderBottom: active ? "2px solid #4285f4" : "2px solid transparent",
-  background: "transparent",
-  cursor: "pointer",
-  fontWeight: active ? 600 : 400,
-  color: active ? "#4285f4" : "#666",
-  fontSize: 13,
-});
 
 const actionBarStyle: React.CSSProperties = {
   display: "flex",
@@ -113,21 +81,19 @@ export default function ScriptComposer({
   runId,
   currentStage,
   sourceType,
-  sourceContext,
   selectedScriptModel,
   onModelChange,
   onConfirm,
   onGenerate,
   onRegenerate,
+  onScriptChange,
   onStatusMessage,
   disabled = false,
 }: ScriptComposerProps) {
-  const [editorMode, setEditorMode] = useState<EditorMode>("markdown");
-
   const isIdeaReady = currentStage === "IDEA_READY";
   const isGenerating = currentStage === "SCRIPT_GENERATING";
   const isReview = currentStage === "SCRIPT_REVIEW";
-  const isEditable = true; // Always editable — single source of truth for script editing
+  const isEditable = true;
   const showGenerateBtn = isIdeaReady;
   const showApproveBtn = isReview;
   const showRegenerateBtn = isReview;
@@ -151,16 +117,6 @@ export default function ScriptComposer({
         </div>
       )}
 
-      {/* Source context */}
-      {sourceContext && (
-        <div>
-          <div style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", marginBottom: 4 }}>
-            Source ({sourceType})
-          </div>
-          <div style={sourceBoxStyle}>{sourceContext}</div>
-        </div>
-      )}
-
       {/* Model selector for script */}
       {(isIdeaReady || isReview) && sourceType !== "markdown" && onModelChange && (
         <ModelSelector
@@ -171,71 +127,28 @@ export default function ScriptComposer({
         />
       )}
 
-      {/* Editor mode tabs */}
-      <div role="tablist" style={tabListStyle}>
-        <button
-          type="button"
-          role="tab"
-          id="tab-md"
-          aria-selected={editorMode === "markdown"}
-          aria-controls="panel-md"
-          onClick={() => setEditorMode("markdown")}
-          style={tabStyle(editorMode === "markdown")}
-        >
-          Markdown
-        </button>
-        <button
-          type="button"
-          role="tab"
-          id="tab-struct"
-          aria-selected={editorMode === "structured"}
-          aria-controls="panel-struct"
-          onClick={() => setEditorMode("structured")}
-          style={tabStyle(editorMode === "structured")}
-        >
-          Structured
-        </button>
-      </div>
-
-      {/* Editor panels */}
-      {editorMode === "markdown" && (
-        <div role="tabpanel" id="panel-md" aria-labelledby="tab-md">
-          <MarkdownScriptEditor
-            runId={runId}
-            readOnly={!isEditable}
-            pollIntervalMs={isGenerating ? 3000 : undefined}
-            suppressMissingDraftError={isIdeaReady || isGenerating}
-            pendingMessage={
-              isIdeaReady
-                ? "No script yet. Click Generate Script to start."
-                : isGenerating
-                  ? "Waiting for generated script…"
-                  : undefined
-            }
-            onSuccess={() => onStatusMessage?.("Script saved")}
-            onError={(_action, msg) => onStatusMessage?.(msg)}
-          />
-        </div>
-      )}
-      {editorMode === "structured" && (
-        <div role="tabpanel" id="panel-struct" aria-labelledby="tab-struct">
-          <StructuredScriptEditor
-            runId={runId}
-            readOnly={!isEditable}
-            pollIntervalMs={isGenerating ? 3000 : undefined}
-            suppressMissingDraftError={isIdeaReady || isGenerating}
-            pendingMessage={
-              isIdeaReady
-                ? "No structured sections yet. Generate a script first."
-                : isGenerating
-                  ? "Waiting for generated sections…"
-                  : undefined
-            }
-            onSuccess={() => onStatusMessage?.("Script saved")}
-            onError={(_action, msg) => onStatusMessage?.(msg)}
-          />
-        </div>
-      )}
+      {/* Markdown editor — single source of truth */}
+      <MarkdownScriptEditor
+        runId={runId}
+        readOnly={!isEditable}
+        pollIntervalMs={isGenerating ? 3000 : undefined}
+        suppressMissingDraftError={isIdeaReady || isGenerating}
+        pendingMessage={
+          isIdeaReady
+            ? "No script yet. Click Generate Script to start."
+            : isGenerating
+              ? "Waiting for generated script\u2026"
+              : undefined
+        }
+        onSuccess={(action) => {
+          if (action === "save") onStatusMessage?.("Script saved");
+          if (action === "parse") {
+            onStatusMessage?.("Script parsed — scenes updated");
+            onScriptChange?.();
+          }
+        }}
+        onError={(_action, msg) => onStatusMessage?.(msg)}
+      />
 
       {/* Action buttons */}
       <div style={actionBarStyle} data-testid="script-actions">

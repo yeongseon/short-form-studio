@@ -11,14 +11,6 @@ vi.mock("../components/creator/MarkdownScriptEditor", () => ({
   ),
 }));
 
-vi.mock("../components/creator/StructuredScriptEditor", () => ({
-  default: (props: Record<string, unknown>) => (
-    <div data-testid="structured-editor" data-readonly={String(props.readOnly)}>
-      StructuredEditor
-    </div>
-  ),
-}));
-
 vi.mock("../components/creator/ModelSelector", () => ({
   default: () => <div data-testid="model-selector">ModelSelector</div>,
 }));
@@ -80,19 +72,7 @@ describe("ScriptComposer", () => {
     expect(screen.getByTestId("script-generating-indicator")).toBeInTheDocument();
   });
 
-  it("shows source context when provided", () => {
-    render(
-      <ScriptComposer
-        runId={1}
-        currentStage="IDEA_READY"
-        sourceType="idea"
-        sourceContext="A video about cats"
-      />,
-    );
-    expect(screen.getByText("A video about cats")).toBeInTheDocument();
-  });
-
-  it("switches editor mode tabs", () => {
+  it("shows only markdown editor (no tabs, no structured editor)", () => {
     render(
       <ScriptComposer
         runId={1}
@@ -100,17 +80,13 @@ describe("ScriptComposer", () => {
         sourceType="idea"
       />,
     );
-    // Default is markdown
     expect(screen.getByTestId("markdown-editor")).toBeInTheDocument();
-    // Click structured tab
-    fireEvent.click(screen.getByText("Structured"));
-    expect(screen.getByTestId("structured-editor")).toBeInTheDocument();
-    // Click back to markdown
-    fireEvent.click(screen.getByText("Markdown"));
-    expect(screen.getByTestId("markdown-editor")).toBeInTheDocument();
+    // No tab buttons or structured editor
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+    expect(screen.queryByText("Structured")).not.toBeInTheDocument();
   });
 
-  it("passes readOnly=false to editor in SCRIPT_REVIEW stage", () => {
+  it("passes readOnly=false to editor — always editable", () => {
     render(
       <ScriptComposer
         runId={1}

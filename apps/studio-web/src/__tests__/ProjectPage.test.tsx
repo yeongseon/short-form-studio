@@ -318,7 +318,7 @@ describe("ProjectPage", () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, []);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByText("My Short")).toBeInTheDocument();
+      expect(screen.getByTestId("project-title")).toHaveValue("My Short");
     });
     expect(screen.getByTestId("no-run")).toBeInTheDocument();
     expect(screen.getByText("No runs yet")).toBeInTheDocument();
@@ -342,14 +342,14 @@ describe("ProjectPage", () => {
     expect(screen.getByText(/Stage: SCRIPT_REVIEW/)).toBeInTheDocument();
   });
 
-  it("shows 'Untitled Project' for null title", async () => {
+  it("shows 'Untitled Project' placeholder for null title", async () => {
     mockFetchProjectAndRuns(
       { ...MOCK_PROJECT, title: null as unknown as string },
       [],
     );
     renderPage();
     await waitFor(() => {
-      expect(screen.getByText("Untitled Project")).toBeInTheDocument();
+      expect(screen.getByPlaceholderText("Untitled Project")).toBeInTheDocument();
     });
   });
 
@@ -397,26 +397,21 @@ describe("ProjectPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("script-composer")).toBeInTheDocument();
     });
-    // Stepper visible
-    expect(screen.getByText("Idea")).toBeInTheDocument();
-    expect(screen.getByText("Script")).toBeInTheDocument();
     // Generate Script button visible
     expect(
       screen.getByRole("button", { name: "Generate Script" }),
     ).toBeInTheDocument();
   });
 
-  it("shows editor tabs for SCRIPT_REVIEW via ScriptComposer", async () => {
+  it("shows markdown editor (no tabs) for SCRIPT_REVIEW via ScriptComposer", async () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
     renderPage();
     await waitFor(() => {
       expect(screen.getByTestId("script-composer")).toBeInTheDocument();
     });
-    // Editor tabs
-    expect(screen.getByRole("tab", { name: "Markdown" })).toBeInTheDocument();
-    expect(
-      screen.getByRole("tab", { name: "Structured" }),
-    ).toBeInTheDocument();
+    // Markdown editor shown directly — no tab UI
+    expect(screen.getByTestId("markdown-editor")).toBeInTheDocument();
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
     // Confirm + Regenerate buttons visible (ScriptComposer labels)
     expect(
       screen.getByRole("button", {
@@ -428,24 +423,15 @@ describe("ProjectPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("switches between markdown and structured tabs", async () => {
+  it("shows only markdown editor without structured tab", async () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
     renderPage();
     await waitFor(() => {
-      expect(
-        screen.getByRole("tab", { name: "Markdown" }),
-      ).toBeInTheDocument();
+      expect(screen.getByTestId("markdown-editor")).toBeInTheDocument();
     });
-
-    const mdTab = screen.getByRole("tab", { name: "Markdown" });
-    expect(mdTab.getAttribute("aria-selected")).toBe("true");
-
-    fireEvent.click(screen.getByRole("tab", { name: "Structured" }));
-    await waitFor(() => {
-      const stTab = screen.getByRole("tab", { name: "Structured" });
-      expect(stTab.getAttribute("aria-selected")).toBe("true");
-      expect(mdTab.getAttribute("aria-selected")).toBe("false");
-    });
+    // No structured tab or tablist present
+    expect(screen.queryByText("Structured")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
   });
 
   it("shows generating indicator for SCRIPT_GENERATING", async () => {

@@ -43,9 +43,9 @@ describe("BulkActionBar", () => {
       makeParagraph({ section_id: "s2" }),
     ];
     render(<BulkActionBar paragraphs={paragraphs} currentStage="SUBTITLE_GENERATING" />);
-    expect(screen.getByTestId("bulk-gen-images")).toHaveTextContent("Generate All Images (2)");
-    expect(screen.getByTestId("bulk-gen-audio")).toHaveTextContent("Generate All Audio (3)");
-    expect(screen.getByTestId("bulk-gen-subtitles")).toHaveTextContent("Generate All Subtitles (3)");
+    expect(screen.getByTestId("bulk-gen-images")).toHaveTextContent("🖼️ Generate All Images (2)");
+    expect(screen.getByTestId("bulk-gen-audio")).toHaveTextContent("🔊 Generate All Audio (3)");
+    expect(screen.getByTestId("bulk-gen-subtitles")).toHaveTextContent("💬 Generate All Subtitles (3)");
   });
 
   it("shows Done label when all complete", () => {
@@ -58,9 +58,9 @@ describe("BulkActionBar", () => {
       }),
     ];
     render(<BulkActionBar paragraphs={paragraphs} currentStage="SUBTITLE_GENERATING" />);
-    expect(screen.getByTestId("bulk-gen-images")).toHaveTextContent("All Images Done ✓");
-    expect(screen.getByTestId("bulk-gen-audio")).toHaveTextContent("All Audio Done ✓");
-    expect(screen.getByTestId("bulk-gen-subtitles")).toHaveTextContent("All Subtitles Done ✓");
+    expect(screen.getByTestId("bulk-gen-images")).toHaveTextContent("🖼️ All Images Done ✓");
+    expect(screen.getByTestId("bulk-gen-audio")).toHaveTextContent("🔊 All Audio Done ✓");
+    expect(screen.getByTestId("bulk-gen-subtitles")).toHaveTextContent("💬 All Subtitles Done ✓");
   });
 
   it("disables buttons when generating prop is true", () => {

@@ -169,8 +169,8 @@ export default function BulkActionBar({
         data-testid="bulk-gen-images"
       >
         {imagesRemaining > 0
-          ? `Generate All Images (${imagesRemaining})`
-          : `All Images Done ✓`}
+          ? `🖼️ Generate All Images (${imagesRemaining})`
+          : `🖼️ All Images Done ✓`}
       </button>
 
       {/* Generate All Audio */}
@@ -189,8 +189,8 @@ export default function BulkActionBar({
         data-testid="bulk-gen-audio"
       >
         {audioRemaining > 0
-          ? `Generate All Audio (${audioRemaining})`
-          : `All Audio Done ✓`}
+          ? `🔊 Generate All Audio (${audioRemaining})`
+          : `🔊 All Audio Done ✓`}
       </button>
 
       {/* Generate All Subtitles */}
@@ -209,8 +209,8 @@ export default function BulkActionBar({
         data-testid="bulk-gen-subtitles"
       >
         {subtitlesRemaining > 0
-          ? `Generate All Subtitles (${subtitlesRemaining})`
-          : `All Subtitles Done ✓`}
+          ? `💬 Generate All Subtitles (${subtitlesRemaining})`
+          : `💬 All Subtitles Done ✓`}
       </button>
     </div>
   );

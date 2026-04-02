@@ -32,6 +32,8 @@ interface VisualScene {
 export interface UnifiedSceneWorkspaceProps {
   runId: number;
   currentStage: string;
+  /** Increment to force immediate storyboard reload (e.g. after script edit). */
+  refreshTrigger?: number;
   ttsModel?: string;
   subtitleModel?: string;
   imageModel?: string;
@@ -103,7 +105,9 @@ export default function UnifiedSceneWorkspace({
   onGenerateVisualPlan,
   onApproveVisualPlan,
   onRegenerateVisualPlan,
+  refreshTrigger = 0,
 }: UnifiedSceneWorkspaceProps) {
+  // -- force-refresh when script is edited --
   const [storyboard, setStoryboard] = useState<StoryboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -175,6 +179,13 @@ export default function UnifiedSceneWorkspace({
   useEffect(() => {
     void loadStoryboard();
   }, [loadStoryboard]);
+
+  // Reload when parent signals a script change
+  useEffect(() => {
+    if (refreshTrigger > 0) {
+      void loadStoryboard();
+    }
+  }, [refreshTrigger, loadStoryboard]);
 
   useEffect(() => {
     void loadVisualPlan();

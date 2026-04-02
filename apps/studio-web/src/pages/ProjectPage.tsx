@@ -2,7 +2,6 @@
  * ProjectPage — main working page for a short-form video project.
  *
  * Loads the project detail and its latest run, then renders:
- * - PipelineStepper (header progress bar)
  * - ScriptComposer (during script stages: IDEA_READY, SCRIPT_GENERATING, SCRIPT_REVIEW)
  * - UnifiedSceneWorkspace (single scene-centric grid view)
  * - Final review section with preview summary and review-page link
@@ -12,7 +11,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 
-import PipelineStepper from "../components/creator/PipelineStepper";
 import ScriptComposer from "../components/creator/ScriptComposer";
 import UnifiedSceneWorkspace from "../components/creator/UnifiedSceneWorkspace";
 import ConfirmDialog from "../components/creator/ConfirmDialog";
@@ -103,6 +101,43 @@ export default function ProjectPage() {
 
   // Status toast
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+
+  // Incremented when script is edited+parsed — triggers storyboard refresh
+  const [scriptVersion, setScriptVersion] = useState(0);
+
+  // Inline title editing — always-editable input, saves on blur / Enter
+  const [titleDraft, setTitleDraft] = useState("");
+  const [savingTitle, setSavingTitle] = useState(false);
+
+  const handleTitleSave = useCallback(async () => {
+    const trimmed = titleDraft.trim();
+    if (!trimmed || trimmed === project?.title) return;
+    setSavingTitle(true);
+    try {
+      const res = await fetch(`${API_BASE}/projects/${numericProjectId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: trimmed }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail ?? `Rename failed (${res.status})`);
+      }
+      const data = await res.json();
+      setProject((prev) => prev ? { ...prev, title: data.title } : prev);
+    } catch (err) {
+      setStatusMessage(err instanceof Error ? err.message : "Rename failed");
+    } finally {
+      setSavingTitle(false);
+    }
+  }, [titleDraft, project?.title, numericProjectId]);
+
+  // Sync titleDraft from project on load
+  useEffect(() => {
+    if (project?.title && !titleDraft) {
+      setTitleDraft(project.title);
+    }
+  }, [project?.title]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Per-stage model selection (persisted to backend via model_defaults)
   const [modelSelection, setModelSelection] = useState<ModelDefaults>({});
@@ -604,9 +639,47 @@ export default function ProjectPage() {
         >
           \u2190 Projects
         </Link>
-        <h1 style={{ fontSize: 22, fontWeight: 700, margin: "8px 0 4px" }}>
-          {project.title || "Untitled Project"}
-        </h1>
+        <input
+          data-testid="project-title"
+          value={titleDraft}
+          onChange={(e) => setTitleDraft(e.target.value)}
+          onBlur={() => void handleTitleSave()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.currentTarget.blur();
+            }
+          }}
+          disabled={savingTitle}
+          placeholder="Untitled Project"
+          style={{
+            fontSize: 22,
+            fontWeight: 700,
+            margin: "8px 0 4px",
+            padding: "2px 8px",
+            border: "1px solid transparent",
+            borderRadius: 6,
+            background: "transparent",
+            outline: "none",
+            width: "100%",
+            transition: "border-color 0.15s, background 0.15s",
+            cursor: "text",
+          }}
+          onFocus={(e) => {
+            e.currentTarget.style.borderColor = "#d1d5db";
+            e.currentTarget.style.background = "#fff";
+          }}
+          onMouseEnter={(e) => {
+            if (document.activeElement !== e.currentTarget) {
+              e.currentTarget.style.borderColor = "#e5e7eb";
+            }
+          }}
+          onMouseLeave={(e) => {
+            if (document.activeElement !== e.currentTarget) {
+              e.currentTarget.style.borderColor = "transparent";
+              e.currentTarget.style.background = "transparent";
+            }
+          }}
+        />
         <span style={{ fontSize: 12, color: "#6b7280" }}>
           Source: {project.source_type} \u00b7 Status:{" "}
           {run ? run.status : project.status}
@@ -676,17 +749,6 @@ export default function ProjectPage() {
         </div>
       </div>
 
-      {/* Pipeline stepper */}
-      {run && (
-        <div style={{ marginBottom: 24 }}>
-          <PipelineStepper
-            currentStage={currentStage}
-            failed={isFailed}
-            sourceType={project.source_type as "idea" | "markdown" | "url"}
-          />
-        </div>
-      )}
-
       {/* No run state */}
       {!run && (
         <div
@@ -714,18 +776,12 @@ export default function ProjectPage() {
             runId={run.id}
             currentStage={currentStage}
             sourceType={project.source_type as "idea" | "markdown" | "url"}
-            sourceContext={
-              project.source_type === "idea"
-                ? project.idea_brief
-                : project.source_type === "markdown"
-                  ? project.markdown_source
-                  : project.url_source
-            }
             selectedScriptModel={modelSelection.script_model}
             onModelChange={handleModelChange}
             onConfirm={handleApprove}
             onGenerate={handleGenerate}
             onRegenerate={handleRestart}
+            onScriptChange={() => setScriptVersion((v) => v + 1)}
             onStatusMessage={setStatusMessage}
             disabled={approving || generating || restarting}
           />
@@ -737,6 +793,7 @@ export default function ProjectPage() {
           <UnifiedSceneWorkspace
             runId={run.id}
             currentStage={currentStage}
+            refreshTrigger={scriptVersion}
             ttsModel={modelSelection.tts_model}
             subtitleModel={modelSelection.subtitle_model}
             imageModel={modelSelection.image_model}
