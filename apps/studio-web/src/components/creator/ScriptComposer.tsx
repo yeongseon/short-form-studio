@@ -6,13 +6,11 @@
  * and signals the parent to transition to StoryboardWorkspace.
  */
 
-import { useState, useCallback } from "react";
+import { useState } from "react";
 
 import MarkdownScriptEditor from "./MarkdownScriptEditor";
 import StructuredScriptEditor from "./StructuredScriptEditor";
 import ModelSelector from "./ModelSelector";
-
-const API_BASE = "/api/creator";
 
 // --------------- types ---------------
 
@@ -129,7 +127,7 @@ export default function ScriptComposer({
   const isIdeaReady = currentStage === "IDEA_READY";
   const isGenerating = currentStage === "SCRIPT_GENERATING";
   const isReview = currentStage === "SCRIPT_REVIEW";
-  const isEditable = isReview;
+  const isEditable = true; // Always editable — single source of truth for script editing
   const showGenerateBtn = isIdeaReady;
   const showApproveBtn = isReview;
   const showRegenerateBtn = isReview;
@@ -164,7 +162,7 @@ export default function ScriptComposer({
       )}
 
       {/* Model selector for script */}
-      {(isIdeaReady || isReview) && onModelChange && (
+      {(isIdeaReady || isReview) && sourceType !== "markdown" && onModelChange && (
         <ModelSelector
           categories={["script"]}
           selectedModels={selectedScriptModel ? { script: selectedScriptModel } : undefined}
@@ -205,12 +203,14 @@ export default function ScriptComposer({
           <MarkdownScriptEditor
             runId={runId}
             readOnly={!isEditable}
-            pollIntervalMs={isIdeaReady || isGenerating ? 3000 : undefined}
+            pollIntervalMs={isGenerating ? 3000 : undefined}
             suppressMissingDraftError={isIdeaReady || isGenerating}
             pendingMessage={
               isIdeaReady
                 ? "No script yet. Click Generate Script to start."
-                : "Waiting for generated script…"
+                : isGenerating
+                  ? "Waiting for generated script…"
+                  : undefined
             }
             onSuccess={() => onStatusMessage?.("Script saved")}
             onError={(_action, msg) => onStatusMessage?.(msg)}
@@ -222,12 +222,14 @@ export default function ScriptComposer({
           <StructuredScriptEditor
             runId={runId}
             readOnly={!isEditable}
-            pollIntervalMs={isIdeaReady || isGenerating ? 3000 : undefined}
+            pollIntervalMs={isGenerating ? 3000 : undefined}
             suppressMissingDraftError={isIdeaReady || isGenerating}
             pendingMessage={
               isIdeaReady
                 ? "No structured sections yet. Generate a script first."
-                : "Waiting for generated sections…"
+                : isGenerating
+                  ? "Waiting for generated sections…"
+                  : undefined
             }
             onSuccess={() => onStatusMessage?.("Script saved")}
             onError={(_action, msg) => onStatusMessage?.(msg)}

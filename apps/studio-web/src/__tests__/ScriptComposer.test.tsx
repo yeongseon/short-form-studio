@@ -121,7 +121,7 @@ describe("ScriptComposer", () => {
     expect(screen.getByTestId("markdown-editor")).toHaveAttribute("data-readonly", "false");
   });
 
-  it("passes readOnly=true to editor in IDEA_READY stage", () => {
+  it("editor is always editable regardless of stage", () => {
     render(
       <ScriptComposer
         runId={1}
@@ -129,7 +129,7 @@ describe("ScriptComposer", () => {
         sourceType="idea"
       />,
     );
-    expect(screen.getByTestId("markdown-editor")).toHaveAttribute("data-readonly", "true");
+    expect(screen.getByTestId("markdown-editor")).toHaveAttribute("data-readonly", "false");
   });
 
   it("disables buttons when disabled prop is true", () => {
@@ -166,5 +166,17 @@ describe("ScriptComposer", () => {
     );
     expect(screen.queryByTestId("btn-confirm-script")).not.toBeInTheDocument();
     expect(screen.queryByTestId("btn-regenerate-script")).not.toBeInTheDocument();
+  });
+
+  it("hides script model selector for markdown source", () => {
+    render(
+      <ScriptComposer
+        runId={1}
+        currentStage="SCRIPT_REVIEW"
+        sourceType="markdown"
+        onModelChange={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("model-selector")).not.toBeInTheDocument();
   });
 });

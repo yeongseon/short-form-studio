@@ -1062,6 +1062,11 @@ async def get_storyboard(run_id: int) -> dict[str, object]:
             "image_asset_id": image_asset_id,
             "audio_artifact_id": audio_artifact_id,
             "subtitle_artifact_id": subtitle_artifact_id,
+            "section_type": section.type,
+            "speaker": section.speaker,
+            "duration": section.duration,
+            "turn_kind": section.turn_kind,
+            "visual_override": section.visual_override.model_dump(mode="json") if section.visual_override else None,
         })
 
     total = len(paragraphs)

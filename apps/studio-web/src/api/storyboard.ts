@@ -49,6 +49,11 @@ export interface StoryboardParagraph {
   image_asset_id: number | null;
   audio_artifact_id: number | null;
   subtitle_artifact_id: number | null;
+  section_type: string | null;
+  speaker: string | null;
+  duration: number | null;
+  turn_kind: string | null;
+  visual_override: { type: "prompt" | "image_url" | "none"; value: string | null } | null;
 }
 
 export interface StoryboardResponse {

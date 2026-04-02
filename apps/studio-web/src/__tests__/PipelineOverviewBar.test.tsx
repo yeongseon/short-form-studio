@@ -21,6 +21,11 @@ function makeParagraph(overrides: Partial<StoryboardParagraph> = {}): Storyboard
     image_asset_id: null,
     audio_artifact_id: null,
     subtitle_artifact_id: null,
+    section_type: null,
+    speaker: null,
+    duration: null,
+    turn_kind: null,
+    visual_override: null,
     ...overrides,
   };
 }

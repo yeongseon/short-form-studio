@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
-import StoryboardWorkspace from "../components/creator/StoryboardWorkspace";
+import UnifiedSceneWorkspace from "../components/creator/UnifiedSceneWorkspace";
 import type { StoryboardResponse } from "../api/storyboard";
 
 // Mock the storyboard API
@@ -35,6 +35,11 @@ const MOCK_STORYBOARD: StoryboardResponse = {
       image_asset_id: 1,
       audio_artifact_id: 2,
       subtitle_artifact_id: null,
+      section_type: null,
+      speaker: null,
+      duration: null,
+      turn_kind: null,
+      visual_override: null,
     },
     {
       section_id: "sec-1",
@@ -53,6 +58,11 @@ const MOCK_STORYBOARD: StoryboardResponse = {
       image_asset_id: null,
       audio_artifact_id: null,
       subtitle_artifact_id: null,
+      section_type: null,
+      speaker: null,
+      duration: null,
+      turn_kind: null,
+      visual_override: null,
     },
   ],
   render_ready: false,
@@ -60,22 +70,22 @@ const MOCK_STORYBOARD: StoryboardResponse = {
   ready_paragraphs: 0,
 };
 
-describe("StoryboardWorkspace", () => {
+describe("UnifiedSceneWorkspace", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
   it("shows loading skeleton initially", () => {
     mockFetchStoryboard.mockReturnValue(new Promise(() => {})); // never resolves
-    render(<StoryboardWorkspace runId={1} />);
-    expect(screen.getByTestId("storyboard-workspace-loading")).toBeInTheDocument();
+    render(<UnifiedSceneWorkspace runId={1} currentStage="SCRIPT_REVIEW" />);
+    expect(screen.getByTestId("unified-scene-workspace-loading")).toBeInTheDocument();
   });
 
   it("renders storyboard after loading", async () => {
     mockFetchStoryboard.mockResolvedValue(MOCK_STORYBOARD);
-    render(<StoryboardWorkspace runId={1} />);
+    render(<UnifiedSceneWorkspace runId={1} currentStage="SCRIPT_REVIEW" />);
     await waitFor(() => {
-      expect(screen.getByTestId("storyboard-workspace")).toBeInTheDocument();
+      expect(screen.getByTestId("unified-scene-workspace")).toBeInTheDocument();
     });
     expect(screen.getByTestId("pipeline-overview-bar")).toBeInTheDocument();
     expect(screen.getByTestId("bulk-action-bar")).toBeInTheDocument();
@@ -84,16 +94,16 @@ describe("StoryboardWorkspace", () => {
 
   it("shows error state on fetch failure", async () => {
     mockFetchStoryboard.mockRejectedValue(new Error("Network error"));
-    render(<StoryboardWorkspace runId={1} />);
+    render(<UnifiedSceneWorkspace runId={1} currentStage="SCRIPT_REVIEW" />);
     await waitFor(() => {
-      expect(screen.getByTestId("storyboard-workspace-error")).toBeInTheDocument();
+      expect(screen.getByTestId("unified-scene-workspace-error")).toBeInTheDocument();
     });
-    expect(screen.getByTestId("storyboard-workspace-error")).toHaveTextContent("Network error");
+    expect(screen.getByTestId("unified-scene-workspace-error")).toHaveTextContent("Network error");
   });
 
   it("renders correct number of scene cards", async () => {
     mockFetchStoryboard.mockResolvedValue(MOCK_STORYBOARD);
-    render(<StoryboardWorkspace runId={1} />);
+    render(<UnifiedSceneWorkspace runId={1} currentStage="SCRIPT_REVIEW" />);
     await waitFor(() => {
       expect(screen.getByTestId("scene-card-sec-0")).toBeInTheDocument();
       expect(screen.getByTestId("scene-card-sec-1")).toBeInTheDocument();
@@ -102,7 +112,7 @@ describe("StoryboardWorkspace", () => {
 
   it("shows per-type stats in overview bar", async () => {
     mockFetchStoryboard.mockResolvedValue(MOCK_STORYBOARD);
-    render(<StoryboardWorkspace runId={1} />);
+    render(<UnifiedSceneWorkspace runId={1} currentStage="SCRIPT_REVIEW" />);
     await waitFor(() => {
       expect(screen.getByTestId("stat-images")).toHaveTextContent("1/2");
       expect(screen.getByTestId("stat-audio")).toHaveTextContent("1/2");
@@ -112,7 +122,7 @@ describe("StoryboardWorkspace", () => {
 
   it("render button is disabled when not ready", async () => {
     mockFetchStoryboard.mockResolvedValue(MOCK_STORYBOARD);
-    render(<StoryboardWorkspace runId={1} />);
+    render(<UnifiedSceneWorkspace runId={1} currentStage="SCRIPT_REVIEW" />);
     await waitFor(() => {
       expect(screen.getByTestId("render-btn")).toBeDisabled();
     });
@@ -132,7 +142,7 @@ describe("StoryboardWorkspace", () => {
       })),
     };
     mockFetchStoryboard.mockResolvedValue(allReady);
-    render(<StoryboardWorkspace runId={1} />);
+    render(<UnifiedSceneWorkspace runId={1} currentStage="RENDER_GENERATING" />);
     await waitFor(() => {
       expect(screen.getByTestId("render-btn")).not.toBeDisabled();
     });
