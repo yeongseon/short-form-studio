@@ -5,7 +5,7 @@
  * - PipelineStepper (header progress bar)
  * - Editor area with markdown / structured toggle (during script stages)
  * - VisualPlanEditor (during visual plan stages)
- * - VisualAssetGrid + ProgressDialog (during visual asset stages)
+ * - VisualAssetGrid (during visual asset stages)
  * - Audio / subtitle / render generating indicators (automatic stages)
  * - Final review section with preview summary and review-page link
  * - StageActionBar (save / approve / generate / restart)
@@ -22,7 +22,6 @@ import MarkdownScriptEditor from "../components/creator/MarkdownScriptEditor";
 import StructuredScriptEditor from "../components/creator/StructuredScriptEditor";
 import VisualPlanEditor from "../components/creator/VisualPlanEditor";
 import VisualAssetGrid from "../components/creator/VisualAssetGrid";
-import ProgressDialog from "../components/creator/ProgressDialog";
 import ModelSelector from "../components/creator/ModelSelector";
 import StoryboardView from "../components/creator/StoryboardView";
 import ConfirmDialog from "../components/creator/ConfirmDialog";
@@ -36,6 +35,14 @@ interface ProjectDetail {
   title: string | null;
   source_type: string;
   status: string;
+  idea_brief?: string | null;
+  markdown_source?: string | null;
+  url_source?: string | null;
+  latest_run?: {
+    run_id: number;
+    current_stage: string | null;
+    status: string | null;
+  } | null;
 }
 
 interface ModelDefaults {
@@ -80,6 +87,14 @@ const FINAL_REVIEW_STAGES = new Set(["FINAL_REVIEW"]);
 
 // Storyboard stages — show unified storyboard view instead of separate indicators
 const STORYBOARD_STAGES = new Set(["AUDIO_GENERATING", "SUBTITLE_GENERATING", "RENDER_GENERATING", "FINAL_REVIEW"]);
+const RUN_POLL_STAGES = new Set([
+  "SCRIPT_GENERATING",
+  "VISUAL_PLAN_GENERATING",
+  "VISUAL_ASSET_GENERATING",
+  "AUDIO_GENERATING",
+  "SUBTITLE_GENERATING",
+  "RENDER_GENERATING",
+]);
 
 // Stages where editing is allowed (not generating)
 const EDITABLE_STAGES = new Set(["SCRIPT_REVIEW", "VISUAL_PLAN_REVIEW"]);
@@ -107,6 +122,12 @@ const SD_SAMPLERS = [
   "DPM++ 2M Karras", "DPM++ SDE Karras", "DPM++ 2M SDE Karras",
   "DPM++ 2M", "DPM++ SDE", "DPM++ 2S a Karras",
   "Euler a", "Euler", "DDIM", "UniPC", "LMS Karras", "Heun",
+];
+
+const RENDER_PROFILE_OPTIONS = [
+  { value: "shorts_default", label: "Shorts Default" },
+  { value: "high_quality", label: "High Quality" },
+  { value: "fast_preview", label: "Fast Preview" },
 ];
 // --------------- Visual Plan Setup Cards ---------------
 
@@ -293,10 +314,6 @@ export default function ProjectPage() {
   // Status toast
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
-  // Progress dialog state
-  const [progressOpen, setProgressOpen] = useState(false);
-  const [progressExpectedStage, setProgressExpectedStage] = useState("VISUAL_ASSET_GENERATING");
-
   // Scene regeneration model override
   const [regenModelKey, setRegenModelKey] = useState<string | null>(null);
 
@@ -388,6 +405,17 @@ export default function ProjectPage() {
       // silent — non-critical
     }
   }, []);
+
+  useEffect(() => {
+    if (!run || !RUN_POLL_STAGES.has(run.current_stage)) return;
+    const timer = setInterval(() => {
+      void refreshRun(run.id);
+      if (run.current_stage === "VISUAL_ASSET_GENERATING") {
+        setAssetRefreshKey((k) => k + 1);
+      }
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [run, refreshRun]);
 
   // Initialize model selection from run.model_defaults on load
   useEffect(() => {
@@ -632,8 +660,8 @@ export default function ProjectPage() {
         throw new Error(body?.detail ?? `Generate assets failed (${res.status})`);
       }
       setStatusMessage("Visual asset generation started");
-      setProgressExpectedStage("VISUAL_ASSET_GENERATING");
-      setProgressOpen(true);
+      await refreshRun(run.id);
+      setAssetRefreshKey((k) => k + 1);
     } catch (err) {
       setStatusMessage(err instanceof Error ? err.message : "Generate assets failed");
     } finally {
@@ -765,8 +793,7 @@ export default function ProjectPage() {
         throw new Error(body?.detail ?? `Generate audio failed (${res.status})`);
       }
       setStatusMessage("Audio generation started");
-      setProgressExpectedStage("AUDIO_GENERATING");
-      setProgressOpen(true);
+      await refreshRun(run.id);
     } catch (err) {
       setStatusMessage(err instanceof Error ? err.message : "Generate audio failed");
     } finally {
@@ -791,8 +818,7 @@ export default function ProjectPage() {
         throw new Error(body?.detail ?? `Generate subtitles failed (${res.status})`);
       }
       setStatusMessage("Subtitle generation started");
-      setProgressExpectedStage("SUBTITLE_GENERATING");
-      setProgressOpen(true);
+      await refreshRun(run.id);
     } catch (err) {
       setStatusMessage(err instanceof Error ? err.message : "Generate subtitles failed");
     } finally {
@@ -817,37 +843,13 @@ export default function ProjectPage() {
         throw new Error(body?.detail ?? `Render failed (${res.status})`);
       }
       setStatusMessage("Render started");
-      setProgressExpectedStage("RENDER_GENERATING");
-      setProgressOpen(true);
+      await refreshRun(run.id);
     } catch (err) {
       setStatusMessage(err instanceof Error ? err.message : "Render failed");
     } finally {
       setGenerating(false);
     }
   }, [run, modelSelection.render_profile]);
-
-  // ---- progress dialog callbacks ----
-
-  const handleProgressComplete = useCallback(
-    (stage: string) => {
-      setProgressOpen(false);
-      setStatusMessage(`Generation complete — now at ${stage}`);
-      if (run) {
-        refreshRun(run.id);
-        setAssetRefreshKey((k) => k + 1);
-      }
-    },
-    [run, refreshRun],
-  );
-
-  const handleProgressFailed = useCallback(
-    (_stage: string) => {
-      setProgressOpen(false);
-      setStatusMessage("Generation failed");
-      if (run) refreshRun(run.id);
-    },
-    [run, refreshRun],
-  );
 
   // ---- stop / resume / delete actions ----
 
@@ -911,6 +913,7 @@ export default function ProjectPage() {
   const currentStage = run?.current_stage ?? "IDEA_READY";
   const isFailed = run?.status === "failed";
   const isScriptStage = SCRIPT_STAGES.has(currentStage);
+  const isScriptWorkspace = currentStage === "IDEA_READY" || isScriptStage;
   const isVisualPlanStage = VISUAL_PLAN_STAGES.has(currentStage);
   const isVisualAssetStage = VISUAL_ASSET_STAGES.has(currentStage);
   const isEditable = EDITABLE_STAGES.has(currentStage);
@@ -956,7 +959,22 @@ export default function ProjectPage() {
 
     // Storyboard stages — audio/subtitle generation is handled by StoryboardView
     // Only show render button and restart in the action bar
-    if (isAudioStage || isSubtitleStage) {
+    if (isAudioStage) {
+      return {
+        save: { visible: false },
+        approve: { visible: false },
+        generate: { visible: false },
+        restart: {
+          visible: true,
+          disabled: restarting,
+          loading: restarting,
+          onClick: handleRestart,
+          label: "Restart from Script",
+        },
+      };
+    }
+
+    if (isSubtitleStage) {
       return {
         save: { visible: false },
         approve: { visible: false },
@@ -1151,6 +1169,10 @@ export default function ProjectPage() {
   }
 
   const actions = buildActionBar();
+  const showGoBack =
+    Boolean(run) &&
+    Boolean(STAGE_BACK_LABELS[currentStage]) &&
+    !(currentStage === "SCRIPT_REVIEW" && project.source_type !== "idea");
 
   return (
     <div style={{ maxWidth: 960, margin: "0 auto", padding: 24 }}>
@@ -1163,7 +1185,8 @@ export default function ProjectPage() {
           {project.title || "Untitled Project"}
         </h1>
         <span style={{ fontSize: 12, color: "#6b7280" }}>
-          Source: {project.source_type} · Status: {project.status}
+          Source: {project.source_type} · Status: {run ? run.status : project.status}
+          {run ? ` · Stage: ${currentStage}` : ""}
         </span>
 
         {/* Stop / Resume / Delete actions */}
@@ -1229,7 +1252,11 @@ export default function ProjectPage() {
       {/* Pipeline stepper */}
       {run && (
         <div style={{ marginBottom: 24 }}>
-          <PipelineStepper currentStage={currentStage} failed={isFailed} />
+          <PipelineStepper
+            currentStage={currentStage}
+            failed={isFailed}
+            sourceType={project.source_type as "idea" | "markdown" | "url"}
+          />
         </div>
       )}
 
@@ -1254,51 +1281,47 @@ export default function ProjectPage() {
         </div>
       )}
 
-      {/* Generating indicator */}
-      {run && isGenerating && (
-        <div
-          data-testid="generating-indicator"
-          style={{
-            textAlign: "center",
-            padding: 32,
-            background: "#eff6ff",
-            borderRadius: 8,
-            border: "1px solid #bfdbfe",
-            color: "#1e40af",
-            marginBottom: 24,
-          }}
-        >
-          <p style={{ margin: "0 0 4px", fontWeight: 600 }}>Generating Script…</p>
-          <p style={{ margin: 0, fontSize: 13 }}>
-            The AI model is writing your script. This may take a moment.
-          </p>
-        </div>
-      )}
-
-      {/* Visual plan generating indicator */}
-      {run && isVPGenerating && (
-        <div
-          data-testid="vp-generating-indicator"
-          style={{
-            textAlign: "center",
-            padding: 32,
-            background: "#f0fdf4",
-            borderRadius: 8,
-            border: "1px solid #bbf7d0",
-            color: "#166534",
-            marginBottom: 24,
-          }}
-        >
-          <p style={{ margin: "0 0 4px", fontWeight: 600 }}>Generating Visual Plan…</p>
-          <p style={{ margin: 0, fontSize: 13 }}>
-            The AI model is creating scene descriptions. This may take a moment.
-          </p>
-        </div>
-      )}
-
-      {/* Script editor area */}
-      {run && isScriptStage && !isGenerating && (
+      {/* Script workspace */}
+      {run && isScriptWorkspace && (
         <div style={{ marginBottom: 24 }}>
+          {isGenerating && (
+            <div
+              data-testid="generating-indicator"
+              style={{
+                padding: "10px 14px",
+                background: "#eff6ff",
+                borderRadius: 8,
+                border: "1px solid #bfdbfe",
+                color: "#1e40af",
+                marginBottom: 12,
+                fontSize: 13,
+              }}
+            >
+              Generating Script… Current draft will update automatically.
+            </div>
+          )}
+
+          <div
+            style={{
+              padding: "14px 16px",
+              background: "#f9fafb",
+              border: "1px solid #e5e7eb",
+              borderRadius: 8,
+              marginBottom: 12,
+            }}
+          >
+            <div style={{ fontSize: 12, fontWeight: 600, color: "#6b7280", marginBottom: 6 }}>
+              Source Context
+            </div>
+            <div style={{ fontSize: 13, lineHeight: 1.5, color: "#374151", whiteSpace: "pre-wrap" }}>
+              {project.source_type === "idea"
+                ? (project.idea_brief || "No idea brief")
+                : project.source_type === "markdown"
+                  ? (project.markdown_source || "No markdown source")
+                  : (project.url_source || "No URL source")}
+            </div>
+          </div>
+
           {/* Editor mode toggle */}
           <div
             role="tablist"
@@ -1356,7 +1379,14 @@ export default function ProjectPage() {
             <div role="tabpanel" id="panel-markdown" aria-labelledby="tab-markdown">
               <MarkdownScriptEditor
                 runId={run.id}
-                readOnly={!isEditable}
+                readOnly={currentStage !== "SCRIPT_REVIEW"}
+                pollIntervalMs={currentStage === "IDEA_READY" || isGenerating ? 3000 : undefined}
+                suppressMissingDraftError={currentStage === "IDEA_READY" || isGenerating}
+                pendingMessage={
+                  currentStage === "IDEA_READY"
+                    ? "No script yet. Click Generate Script to start from this source."
+                    : "Waiting for generated script…"
+                }
                 onSuccess={() => setStatusMessage("Script saved")}
                 onError={(_action, msg) => setStatusMessage(msg)}
               />
@@ -1368,7 +1398,14 @@ export default function ProjectPage() {
             <div role="tabpanel" id="panel-structured" aria-labelledby="tab-structured">
               <StructuredScriptEditor
                 runId={run.id}
-                readOnly={!isEditable}
+                readOnly={currentStage !== "SCRIPT_REVIEW"}
+                pollIntervalMs={currentStage === "IDEA_READY" || isGenerating ? 3000 : undefined}
+                suppressMissingDraftError={currentStage === "IDEA_READY" || isGenerating}
+                pendingMessage={
+                  currentStage === "IDEA_READY"
+                    ? "No structured sections yet. Generate a script first."
+                    : "Waiting for generated sections…"
+                }
                 onSuccess={() => setStatusMessage("Script saved")}
                 onError={(_action, msg) => setStatusMessage(msg)}
               />
@@ -1377,9 +1414,27 @@ export default function ProjectPage() {
         </div>
       )}
 
-      {/* Visual plan setup — paragraph→image mapping before generation */}
-      {run && isVPSetup && (
+      {/* Visual plan workspace */}
+      {run && isVisualPlanStage && (
         <div style={{ marginBottom: 24 }}>
+          {(isVPSetup || isVPGenerating) && (
+            <div
+              data-testid="vp-generating-indicator"
+              style={{
+                padding: "10px 14px",
+                background: "#f0fdf4",
+                borderRadius: 8,
+                border: "1px solid #bbf7d0",
+                color: "#166534",
+                marginBottom: 12,
+                fontSize: 13,
+              }}
+            >
+              {isVPGenerating
+                ? "Generating Visual Plan… Scene prompts will appear here automatically."
+                : "Visual plan not generated yet. Review the source mapping below, then generate it in place."}
+            </div>
+          )}
           <div
             style={{
               padding: "16px 20px",
@@ -1394,16 +1449,16 @@ export default function ProjectPage() {
             </h3>
             <p style={{ margin: 0, fontSize: 13, color: "#4b5563", lineHeight: 1.5 }}>
               Review the paragraph-to-image mapping below. Each paragraph in your script will
-              generate one image. Select your preferred image model, then click
+              generate one image. Select the script model that will draft the visual plan, then click
               <strong> Generate Visual Plan</strong> to proceed.
             </p>
           </div>
 
-          {/* Image model selector */}
+          {/* Script model selector for visual-plan drafting */}
           <div style={{ marginBottom: 16 }}>
             <ModelSelector
-              categories={["image"]}
-              selectedModels={buildSelectedModels(["image"])}
+              categories={["script"]}
+              selectedModels={buildSelectedModels(["script"])}
               apiBase=""
               onSelectionChange={handleModelChange}
             />
@@ -1411,26 +1466,29 @@ export default function ProjectPage() {
 
           {/* Paragraph → Image cards */}
           <VisualPlanSetupCards runId={run.id} />
-        </div>
-      )}
-
-      {/* Visual plan editor area */}
-      {run && isVisualPlanStage && !isVPGenerating && !isVPSetup && (
-        <div style={{ marginBottom: 24 }}>
-          <VisualPlanEditor
-            runId={run.id}
-            readOnly={currentStage !== "VISUAL_PLAN_REVIEW"}
-            onSuccess={() => setStatusMessage("Visual plan saved")}
-            onError={(_action, msg) => setStatusMessage(msg)}
-          />
+          <div style={{ marginTop: 16 }}>
+            <VisualPlanEditor
+              runId={run.id}
+              readOnly={currentStage !== "VISUAL_PLAN_REVIEW"}
+              pollIntervalMs={isVPSetup || isVPGenerating ? 3000 : undefined}
+              suppressMissingPlanError={isVPSetup || isVPGenerating}
+              pendingMessage={
+                isVPSetup
+                  ? "No visual plan yet. Generate it from the mapped script sections above."
+                  : "Waiting for generated scenes…"
+              }
+              onSuccess={() => setStatusMessage("Visual plan saved")}
+              onError={(_action, msg) => setStatusMessage(msg)}
+            />
+          </div>
         </div>
       )}
 
       {/* Visual asset area */}
       {run && isVisualAssetStage && (
         <div data-testid="visual-asset-section" style={{ marginBottom: 24 }}>
-          {/* Asset generating indicator (inline — ProgressDialog also available) */}
-          {isVAGenerating && !progressOpen && (
+          {/* Asset generating indicator */}
+          {isVAGenerating && (
             <div
               data-testid="va-generating-indicator"
               style={{
@@ -1750,11 +1808,32 @@ export default function ProjectPage() {
                 apiBase=""
                 onSelectionChange={handleModelChange}
               />
+              <div style={{ marginTop: 12 }}>
+                <label
+                  htmlFor="project-render-profile"
+                  style={{ display: "block", fontWeight: 600, marginBottom: 4, fontSize: 13 }}
+                >
+                  Render Profile
+                </label>
+                <select
+                  id="project-render-profile"
+                  value={modelSelection.render_profile || "shorts_default"}
+                  onChange={(e) => handleModelChange("render", e.target.value)}
+                  style={{ padding: "8px 12px", border: "1px solid #ccc", borderRadius: 4, fontSize: 14 }}
+                >
+                  {RENDER_PROFILE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           )}
           <StoryboardView
             runId={run.id}
             readOnly={isRenderStage}
+            currentStage={currentStage}
             onStatusMessage={setStatusMessage}
             onRenderReady={() => {
               if (run) refreshRun(run.id);
@@ -1809,21 +1888,8 @@ export default function ProjectPage() {
         </div>
       )}
 
-      {/* ProgressDialog for long-running generation */}
-      {run && (
-        <ProgressDialog
-          open={progressOpen}
-          runId={run.id}
-          expectedStage={progressExpectedStage}
-          apiBase={API_BASE}
-          onComplete={handleProgressComplete}
-          onFailed={handleProgressFailed}
-          onClose={() => setProgressOpen(false)}
-        />
-      )}
-
       {/* Back navigation button */}
-      {run && STAGE_BACK_LABELS[currentStage] && (
+      {showGoBack && (
         <div style={{ display: "flex", justifyContent: "flex-start", padding: "8px 16px" }}>
           <button
             type="button"
@@ -1869,6 +1935,16 @@ export default function ProjectPage() {
         </div>
       )}
       {run && currentStage === "VISUAL_PLAN_REVIEW" && (
+        <div style={{ padding: "8px 16px" }}>
+          <ModelSelector
+            categories={["script"]}
+            selectedModels={buildSelectedModels(["script"])}
+            apiBase=""
+            onSelectionChange={handleModelChange}
+          />
+        </div>
+      )}
+      {run && currentStage === "VISUAL_ASSET_REVIEW" && (
         <div style={{ padding: "8px 16px" }}>
           <ModelSelector
             categories={["image"]}

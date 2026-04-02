@@ -43,6 +43,9 @@ docker compose up -d
 
 Studio Web UI에서 **"Create New Project"** 버튼을 클릭하면 두 가지 탭이 제공됩니다:
 
+> 현재 제품 UI에서 지원하는 시작 방식은 **Idea** 와 **Markdown** 두 가지입니다.
+> `URL` source는 레거시/내부 계약에는 남아 있을 수 있지만, 현재 사용자 플로우에서는 지원하지 않습니다.
+
 ### 탭 1: Start from Idea
 
 아이디어에서 AI가 자동으로 스크립트를 생성합니다.

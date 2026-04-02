@@ -854,3 +854,25 @@ def test_scene_results_contain_asset_info(monkeypatch: pytest.MonkeyPatch) -> No
     assert sr["asset_id"] == 1
     assert sr["version"] == 1
     assert "asset_path" in sr
+
+
+def test_regeneration_uses_unique_asset_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = FakeImageProvider()
+    entry = FakeEntry(requires_gpu=False)
+    registry = FakeRegistry(entry=entry, provider=provider)
+    _patch_registry(monkeypatch, registry)
+
+    plan = FakeVisualPlan(run_id=703, scenes=[FakeVisualScene()])
+    vp_service = FakeVisualPlanService(plan=plan)
+    va_service = FakeVisualAssetService()
+    storage = _make_storage(run_id=703, stage="VISUAL_PLAN_REVIEW")
+    _patch_services(monkeypatch, vp_service, va_service, storage)
+
+    first = _invoke_task(run_id=703, scene_id="scene-sec-0")
+    second = _invoke_task(run_id=703, scene_id="scene-sec-0", prompt_override="New prompt")
+
+    first_path = first["scene_results"][0]["asset_path"]
+    second_path = second["scene_results"][0]["asset_path"]
+
+    assert first_path != second_path
+    assert va_service.calls[0]["asset_path"] != va_service.calls[1]["asset_path"]

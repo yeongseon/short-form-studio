@@ -10,6 +10,7 @@ const MOCK_PROJECT: {
   title: string | null;
   source_type: string;
   status: string;
+  latest_run?: { run_id: number; current_stage: string | null; status: string | null } | null;
   created_at: string;
   updated_at: string;
 } = {
@@ -17,6 +18,7 @@ const MOCK_PROJECT: {
   title: "My Short",
   source_type: "idea",
   status: "active",
+  latest_run: { run_id: 1, current_stage: "IDEA_READY", status: "pending" },
   created_at: "2025-03-15T10:00:00Z",
   updated_at: "2025-03-15T12:00:00Z",
 };
@@ -79,7 +81,7 @@ vi.mock("react-router-dom", async () => {
 
 function renderPage(projectId = "7") {
   return render(
-    <MemoryRouter initialEntries={[`/projects/${projectId}`]}>
+    <MemoryRouter initialEntries={[`/projects/${projectId}`]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <Routes>
         <Route path="/projects/:projectId" element={<ProjectPage />} />
       </Routes>
@@ -228,7 +230,7 @@ describe("ProjectPage", () => {
   // ---- Invalid project ID ----
   it("shows invalid ID message for non-numeric id", () => {
     render(
-      <MemoryRouter initialEntries={["/projects/abc"]}>
+      <MemoryRouter initialEntries={["/projects/abc"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Routes>
           <Route path="/projects/:projectId" element={<ProjectPage />} />
         </Routes>
@@ -255,6 +257,15 @@ describe("ProjectPage", () => {
       expect(screen.getByText(/Source: idea/)).toBeInTheDocument();
     });
     expect(screen.getByText(/Status: active/)).toBeInTheDocument();
+  });
+
+  it("shows run status and stage metadata when a run exists", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText(/Status: running/)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/Stage: SCRIPT_REVIEW/)).toBeInTheDocument();
   });
 
   // ---- Project with run in IDEA_READY ----
@@ -302,10 +313,11 @@ describe("ProjectPage", () => {
 
     // Switch to structured
     fireEvent.click(screen.getByRole("tab", { name: "Structured" }));
-
-    const stTab = screen.getByRole("tab", { name: "Structured" });
-    expect(stTab.getAttribute("aria-selected")).toBe("true");
-    expect(mdTab.getAttribute("aria-selected")).toBe("false");
+    await waitFor(() => {
+      const stTab = screen.getByRole("tab", { name: "Structured" });
+      expect(stTab.getAttribute("aria-selected")).toBe("true");
+      expect(mdTab.getAttribute("aria-selected")).toBe("false");
+    });
   });
 
   // ---- SCRIPT_GENERATING state ----
@@ -315,9 +327,9 @@ describe("ProjectPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("generating-indicator")).toBeInTheDocument();
     });
-    expect(screen.getByText("Generating Script…")).toBeInTheDocument();
-    // Editor tabs should NOT be visible during generation
-    expect(screen.queryByRole("tab", { name: "Markdown" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Generating Script/i)).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Markdown" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Structured" })).toBeInTheDocument();
   });
 
   // ---- Approve action ----
@@ -466,9 +478,8 @@ describe("ProjectPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("vp-generating-indicator")).toBeInTheDocument();
     });
-    expect(screen.getByText("Generating Visual Plan\u2026")).toBeInTheDocument();
-    // Script editor tabs should NOT be visible
-    expect(screen.queryByRole("tab", { name: "Markdown" })).not.toBeInTheDocument();
+    expect(screen.getByText(/Generating Visual Plan/i)).toBeInTheDocument();
+    expect(screen.getByText("Visual Plan Setup")).toBeInTheDocument();
   });
 
   it("shows VisualPlanEditor and action buttons for VISUAL_PLAN_REVIEW", async () => {
@@ -477,6 +488,7 @@ describe("ProjectPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("visual-plan-editor")).toBeInTheDocument();
     });
+    expect(screen.getAllByText("Script Model").length).toBeGreaterThan(0);
     // Approve and Regenerate Plan visible
     expect(screen.getByRole("button", { name: "Approve Visual Plan" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Regenerate Plan" })).toBeInTheDocument();
@@ -510,6 +522,8 @@ describe("ProjectPage", () => {
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Generate Visual Plan" })).toBeInTheDocument();
     });
+    expect(screen.getByText("Script Model")).toBeInTheDocument();
+    expect(screen.queryByText("Image Model")).not.toBeInTheDocument();
   });
 
   it("calls generate-visual-plan endpoint from VISUAL_PLAN_SETUP", async () => {
@@ -619,6 +633,7 @@ describe("ProjectPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("visual-asset-section")).toBeInTheDocument();
     });
+    expect(screen.getAllByText("Image Model").length).toBeGreaterThan(0);
   });
 
   it("shows scene regen controls in VISUAL_ASSET_REVIEW", async () => {
@@ -745,8 +760,8 @@ describe("ProjectPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("storyboard-view")).toBeInTheDocument();
     });
-    // Render Video and Restart from Script buttons should be in action bar
-    expect(screen.getByRole("button", { name: "Render Video" })).toBeInTheDocument();
+    // Render should not be offered before subtitle stage
+    expect(screen.queryByRole("button", { name: "Render Video" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Restart from Script" })).toBeInTheDocument();
   });
 
@@ -756,6 +771,8 @@ describe("ProjectPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("storyboard-view")).toBeInTheDocument();
     });
+    expect(screen.getByRole("button", { name: "Render Video" })).toBeInTheDocument();
+    expect(screen.getByLabelText(/Render Profile/)).toBeInTheDocument();
   });
 
   it("shows storyboard view for RENDER_GENERATING", async () => {
@@ -795,5 +812,35 @@ describe("ProjectPage", () => {
       expect(screen.getByTestId("storyboard-view")).toBeInTheDocument();
     });
     expect(screen.queryByRole("button", { name: "Approve" })).not.toBeInTheDocument();
+  });
+
+  it("hides idea-only go-back action for markdown-source script review", async () => {
+    mockFetchProjectAndRuns({ ...MOCK_PROJECT, source_type: "markdown" }, [MOCK_RUN_REVIEW]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Approve Script" })).toBeInTheDocument();
+    });
+    expect(screen.queryByTestId("go-back-btn")).not.toBeInTheDocument();
+  });
+
+  it("uses selected render profile when rendering from subtitle stage", async () => {
+    mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_SUBTITLE_GENERATING]);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Render Video" })).toBeInTheDocument();
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    fireEvent.change(screen.getByLabelText(/Render Profile/), { target: { value: "high_quality" } });
+    fireEvent.click(screen.getByRole("button", { name: "Render Video" }));
+
+    await waitFor(() => {
+      const renderCall = fetchSpy.mock.calls.find(([url]) =>
+        (typeof url === "string" ? url : (url as Request).url).includes("/render")
+      );
+      expect(renderCall).toBeTruthy();
+      const body = JSON.parse((renderCall![1] as RequestInit).body as string);
+      expect(body.render_profile).toBe("high_quality");
+    });
   });
 });

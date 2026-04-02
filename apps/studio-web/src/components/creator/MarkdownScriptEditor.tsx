@@ -22,6 +22,12 @@ export interface MarkdownScriptEditorProps {
   onError?: (action: "load" | "save" | "parse", message: string) => void;
   /** Whether the editor should be read-only. */
   readOnly?: boolean;
+  /** Optional polling interval for reloading content while generation is in progress. */
+  pollIntervalMs?: number;
+  /** Treat missing draft as a waiting state instead of an error. */
+  suppressMissingDraftError?: boolean;
+  /** Message shown when the draft is not available yet. */
+  pendingMessage?: string;
 }
 
 // --------------- component ---------------
@@ -32,6 +38,9 @@ export default function MarkdownScriptEditor({
   onSuccess,
   onError,
   readOnly = false,
+  pollIntervalMs,
+  suppressMissingDraftError = false,
+  pendingMessage = "Waiting for generated script…",
 }: MarkdownScriptEditorProps) {
   const [markdown, setMarkdown] = useState("");
   const [savedMarkdown, setSavedMarkdown] = useState("");
@@ -40,44 +49,67 @@ export default function MarkdownScriptEditor({
   const [saving, setSaving] = useState(false);
   const [parsing, setParsing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingDraft, setPendingDraft] = useState(false);
 
   const isDirty = markdown !== savedMarkdown;
 
   // Load markdown on mount / runId change
-  useEffect(() => {
-    let cancelled = false;
-
-    async function load() {
-      setLoading(true);
+  const load = useCallback(
+    async (showLoading: boolean) => {
+      if (showLoading) setLoading(true);
       setError(null);
       try {
         const res = await fetch(`${apiBase}/runs/${runId}/script/markdown`);
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
-          throw new Error(body.detail ?? `Failed to load (${res.status})`);
+          const detail = body.detail ?? `Failed to load (${res.status})`;
+          if (
+            suppressMissingDraftError &&
+            typeof detail === "string" &&
+            detail.toLowerCase().includes("no script draft")
+          ) {
+            setMarkdown("");
+            setSavedMarkdown("");
+            setVersion(null);
+            setPendingDraft(true);
+            return;
+          }
+          throw new Error(detail);
         }
         const data = await res.json();
-        if (!cancelled) {
-          setMarkdown(data.markdown ?? "");
-          setSavedMarkdown(data.markdown ?? "");
-          setVersion(data.version ?? null);
-        }
+        setMarkdown(data.markdown ?? "");
+        setSavedMarkdown(data.markdown ?? "");
+        setVersion(data.version ?? null);
+        setPendingDraft(false);
       } catch (err) {
-        if (!cancelled) {
-          const msg = err instanceof Error ? err.message : "Failed to load script";
-          setError(msg);
-          onError?.("load", msg);
-        }
+        const msg = err instanceof Error ? err.message : "Failed to load script";
+        setError(msg);
+        onError?.("load", msg);
       } finally {
-        if (!cancelled) setLoading(false);
+        if (showLoading) setLoading(false);
       }
-    }
+    },
+    [apiBase, runId, suppressMissingDraftError, onError],
+  );
 
-    load();
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      await load(true);
+      if (cancelled) return;
+    })();
     return () => {
       cancelled = true;
     };
-  }, [apiBase, runId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [load]);
+
+  useEffect(() => {
+    if (!pollIntervalMs) return;
+    const timer = setInterval(() => {
+      void load(false);
+    }, pollIntervalMs);
+    return () => clearInterval(timer);
+  }, [pollIntervalMs, load]);
 
   // Save markdown
   const handleSave = useCallback(async () => {
@@ -161,6 +193,22 @@ export default function MarkdownScriptEditor({
           }}
         >
           {error}
+        </div>
+      )}
+
+      {pendingDraft && !error && (
+        <div
+          data-testid="markdown-pending"
+          style={{
+            padding: "8px 12px",
+            marginBottom: 12,
+            backgroundColor: "#eff6ff",
+            color: "#1e40af",
+            borderRadius: 4,
+            fontSize: 13,
+          }}
+        >
+          {pendingMessage}
         </div>
       )}
 

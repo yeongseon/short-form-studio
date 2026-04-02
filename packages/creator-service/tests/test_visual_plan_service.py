@@ -208,6 +208,37 @@ def test_patch_scene_skips_version_check_when_none(service: VisualPlanService) -
     assert plan.scenes[0].prompt == "No version check"
 
 
+@pytest.mark.asyncio
+async def test_patch_scene_expected_version_is_atomic() -> None:
+    storage = InMemoryVisualPlanStorage()
+    service_a = VisualPlanService(storage)
+    service_b = VisualPlanService(storage)
+
+    await service_a.save_plan(run_id=213, scenes=[_make_scene(prompt="Base")])
+
+    async def patch(service: VisualPlanService, prompt: str) -> str:
+        plan = await service.patch_scene(
+            run_id=213,
+            scene_id="sc-1",
+            updates={"prompt": prompt},
+            expected_version=1,
+        )
+        return plan.scenes[0].prompt
+
+    results = await asyncio.gather(
+        patch(service_a, "A"),
+        patch(service_b, "B"),
+        return_exceptions=True,
+    )
+
+    successes = [result for result in results if not isinstance(result, Exception)]
+    failures = [result for result in results if isinstance(result, Exception)]
+
+    assert len(successes) == 1
+    assert len(failures) == 1
+    assert isinstance(failures[0], VersionConflictError)
+
+
 # -- patch_scene: field allowlist ----------------------------------------------
 
 

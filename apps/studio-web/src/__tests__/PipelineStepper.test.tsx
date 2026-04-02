@@ -100,6 +100,18 @@ describe("PipelineStepper", () => {
     expect(screen.getByText("Render")).toBeInTheDocument();
   });
 
+  it("uses source-aware first label for markdown projects", () => {
+    render(<PipelineStepper currentStage="SCRIPT_REVIEW" sourceType="markdown" />);
+    expect(screen.getByText("Markdown")).toBeInTheDocument();
+    expect(screen.queryByText("Idea")).not.toBeInTheDocument();
+  });
+
+  it("uses source-aware first label for url projects", () => {
+    render(<PipelineStepper currentStage="SCRIPT_REVIEW" sourceType="url" />);
+    expect(screen.getByText("URL")).toBeInTheDocument();
+    expect(screen.queryByText("Idea")).not.toBeInTheDocument();
+  });
+
   it("shows checkmark for completed steps", () => {
     render(<PipelineStepper currentStage="VISUAL_PLAN_GENERATING" />);
     // Idea and Script are completed — should show ✓

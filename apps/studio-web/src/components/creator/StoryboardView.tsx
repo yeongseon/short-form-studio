@@ -33,6 +33,8 @@ export interface StoryboardViewProps {
   onRenderReady?: () => void;
   /** Polling interval in ms. Default 5000. */
   pollInterval?: number;
+  /** Current pipeline stage, used to keep polling during long-running stages. */
+  currentStage?: string;
   /** TTS model key passed from parent model selection */
   ttsModel?: string;
   /** Subtitle (STT) model key passed from parent model selection */
@@ -92,6 +94,7 @@ export default function StoryboardView({
   onStatusMessage,
   onRenderReady,
   pollInterval = 5000,
+  currentStage,
   ttsModel,
   subtitleModel,
 }: StoryboardViewProps) {
@@ -104,6 +107,7 @@ export default function StoryboardView({
   const hasGenerating = storyboard?.paragraphs.some(
     (p) => p.status.startsWith("generating_"),
   ) ?? false;
+  const stageImpliesPolling = currentStage === "AUDIO_GENERATING" || currentStage === "SUBTITLE_GENERATING" || currentStage === "RENDER_GENERATING";
 
   const loadStoryboard = useCallback(async () => {
     try {
@@ -124,12 +128,12 @@ export default function StoryboardView({
 
   // Polling while generating
   useEffect(() => {
-    if (!hasGenerating && !bulkGenerating) return;
+    if (!hasGenerating && !bulkGenerating && !stageImpliesPolling) return;
     const timer = setInterval(() => {
       loadStoryboard();
     }, pollInterval);
     return () => clearInterval(timer);
-  }, [hasGenerating, bulkGenerating, pollInterval, loadStoryboard]);
+  }, [hasGenerating, bulkGenerating, stageImpliesPolling, pollInterval, loadStoryboard]);
 
   // Notify when render-ready
   useEffect(() => {

@@ -144,6 +144,16 @@ def _get_redis_client() -> Any | None:
     return redis.Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"))
 
 
+async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
+    remover = getattr(_run_service.storage, "remove_active_task_id", None)
+    if not callable(remover):
+        return
+    try:
+        await remover(run_id, task_id)
+    except Exception:
+        logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
+
+
 @celery_app.task(bind=True, name="generate_visual_plan")
 def generate_visual_plan(
     self,
@@ -165,115 +175,115 @@ def generate_visual_plan(
     async def _run_task() -> dict[str, object]:
         nonlocal provider_type, endpoint, gpu_lock_acquired_at, gpu_lock_released_at
         nonlocal redis_client, lock_acquired
-
-        # 1. Stage guard — reject before any side effects.
-        run = await _run_service.storage.get_run(run_id)
-        if run is None:
-            raise _StageGuardError(f"Run {run_id} not found")
-
         try:
-            current = RunStage(run["current_stage"])
-        except ValueError as exc:
-            raise _StageGuardError(
-                f"Run {run_id} has invalid stage {run['current_stage']!r}"
-            ) from exc
-        if current not in _ALLOWED_STAGES:
-            raise _StageGuardError(
-                f"Run {run_id} is in stage {current.value}, "
-                f"expected one of {', '.join(s.value for s in _ALLOWED_STAGES)}"
-            )
+            # 1. Stage guard — reject before any side effects.
+            run = await _run_service.storage.get_run(run_id)
+            if run is None:
+                raise _StageGuardError(f"Run {run_id} not found")
 
-        # 2. Fetch approved script draft.
-        draft = await _script_service.get_active_draft(run_id)
-        if draft is None:
-            raise _StageGuardError(f"No script draft found for run {run_id}")
-
-        # Extract sections from the draft
-        sections: list[dict[str, Any]] = []
-        if draft.structured_script:
-            sections = [s.model_dump(mode="json") for s in draft.structured_script]
-        elif draft.markdown_content:
-            # Minimal fallback: single section from raw markdown
-            sections = [{"section_id": "sec-0", "type": "body", "text": draft.markdown_content}]
-
-        if not sections:
-            raise _StageGuardError(f"Script draft for run {run_id} has no content")
-
-        # 3. Provider resolution (sync — blocks briefly, fine in Celery worker).
-        registry = ProviderRegistry.create_default()
-        entry = registry.resolve(model_key)
-        provider = registry.get_provider(model_key)
-
-        provider_type = entry.provider_type
-        endpoint = entry.endpoint
-
-        # 4. GPU lock acquisition (sync).
-        if entry.requires_gpu:
-            redis_client = _get_redis_client()
-            if redis_client is None:
-                raise RuntimeError("Redis client is unavailable; cannot acquire GPU lock")
-            acquire_gpu_lock(redis_client, task_id)
-            lock_acquired = True
-            gpu_lock_acquired_at = _utc_now_iso()
-
-        try:
-            # 5. Generation: send script sections to LLM for visual planning.
-            system_prompt = _build_system_prompt(style_preset)
-            sections_prompt = _build_sections_prompt(sections)
-            full_prompt = f"{system_prompt}\n\n---\nScript sections:\n{sections_prompt}"
-
-            params = dict(entry.default_params or {})
-            raw_response = await provider.generate(full_prompt, params)
-
-            # 6. Parse LLM response into VisualScene objects.
-            visual_scenes = _parse_llm_response(raw_response, sections)
-
-            # 7. Save visual plan via service.
-            await _visual_plan_service.save_plan(
-                run_id=run_id,
-                scenes=visual_scenes,
-            )
-
-            # 8. Atomic success transition: only advance if run is still in a
-            # generating-compatible stage.
-            applied, _ = await _run_service.storage.conditional_update_run(
-                run_id,
-                {
-                    "current_stage": RunStage.VISUAL_PLAN_REVIEW.value,
-                    "status": "running",
-                },
-                expected_stages=_SAFE_STAGES,
-            )
-            if not applied:
-                logger.info(
-                    "Run %d stage changed during visual plan generation -- skipping transition",
-                    run_id,
+            try:
+                current = RunStage(run["current_stage"])
+            except ValueError as exc:
+                raise _StageGuardError(
+                    f"Run {run_id} has invalid stage {run['current_stage']!r}"
+                ) from exc
+            if current not in _ALLOWED_STAGES:
+                raise _StageGuardError(
+                    f"Run {run_id} is in stage {current.value}, "
+                    f"expected one of {', '.join(s.value for s in _ALLOWED_STAGES)}"
                 )
-        finally:
-            if lock_acquired:
-                try:
-                    release_gpu_lock(redis_client, task_id)
-                    gpu_lock_released_at = _utc_now_iso()
-                except Exception:
-                    logger.exception("Failed to release GPU lock for task %s", task_id)
 
-        end_time = datetime.now(timezone.utc)
-        duration_seconds = (end_time - start_time).total_seconds()
-        return {
-            "task_id": task_id,
-            "run_id": run_id,
-            "model_key": model_key,
-            "provider_type": provider_type,
-            "endpoint": endpoint,
-            "gpu_lock_acquired_at": gpu_lock_acquired_at,
-            "gpu_lock_released_at": gpu_lock_released_at,
-            "scene_count": len(visual_scenes),
-            "start_time": start_iso,
-            "end_time": end_time.isoformat(),
-            "duration_seconds": duration_seconds,
-            "status": "success",
-            "error": None,
-        }
+            # 2. Fetch approved script draft.
+            draft = await _script_service.get_active_draft(run_id)
+            if draft is None:
+                raise _StageGuardError(f"No script draft found for run {run_id}")
+
+            sections: list[dict[str, Any]] = []
+            if draft.structured_script:
+                sections = [s.model_dump(mode="json") for s in draft.structured_script]
+            elif draft.markdown_content:
+                sections = [{"section_id": "sec-0", "type": "body", "text": draft.markdown_content}]
+
+            if not sections:
+                raise _StageGuardError(f"Script draft for run {run_id} has no content")
+
+            # 3. Provider resolution (sync — blocks briefly, fine in Celery worker).
+            registry = ProviderRegistry.create_default()
+            entry = registry.resolve(model_key)
+            provider = registry.get_provider(model_key)
+
+            provider_type = entry.provider_type
+            endpoint = entry.endpoint
+
+            # 4. GPU lock acquisition (sync).
+            if entry.requires_gpu:
+                redis_client = _get_redis_client()
+                if redis_client is None:
+                    raise RuntimeError("Redis client is unavailable; cannot acquire GPU lock")
+                acquire_gpu_lock(redis_client, task_id)
+                lock_acquired = True
+                gpu_lock_acquired_at = _utc_now_iso()
+
+            try:
+                # 5. Generation: send script sections to LLM for visual planning.
+                system_prompt = _build_system_prompt(style_preset)
+                sections_prompt = _build_sections_prompt(sections)
+                full_prompt = f"{system_prompt}\n\n---\nScript sections:\n{sections_prompt}"
+
+                params = dict(entry.default_params or {})
+                raw_response = await provider.generate(full_prompt, params)
+
+                # 6. Parse LLM response into VisualScene objects.
+                visual_scenes = _parse_llm_response(raw_response, sections)
+
+                # 7. Save visual plan via service.
+                await _visual_plan_service.save_plan(
+                    run_id=run_id,
+                    scenes=visual_scenes,
+                )
+
+                # 8. Atomic success transition: only advance if run is still in a
+                # generating-compatible stage.
+                applied, _ = await _run_service.storage.conditional_update_run(
+                    run_id,
+                    {
+                        "current_stage": RunStage.VISUAL_PLAN_REVIEW.value,
+                        "status": "running",
+                    },
+                    expected_stages=_SAFE_STAGES,
+                )
+                if not applied:
+                    logger.info(
+                        "Run %d stage changed during visual plan generation -- skipping transition",
+                        run_id,
+                    )
+            finally:
+                if lock_acquired:
+                    try:
+                        release_gpu_lock(redis_client, task_id)
+                        gpu_lock_released_at = _utc_now_iso()
+                    except Exception:
+                        logger.exception("Failed to release GPU lock for task %s", task_id)
+
+            end_time = datetime.now(timezone.utc)
+            duration_seconds = (end_time - start_time).total_seconds()
+            return {
+                "task_id": task_id,
+                "run_id": run_id,
+                "model_key": model_key,
+                "provider_type": provider_type,
+                "endpoint": endpoint,
+                "gpu_lock_acquired_at": gpu_lock_acquired_at,
+                "gpu_lock_released_at": gpu_lock_released_at,
+                "scene_count": len(visual_scenes),
+                "start_time": start_iso,
+                "end_time": end_time.isoformat(),
+                "duration_seconds": duration_seconds,
+                "status": "success",
+                "error": None,
+            }
+        finally:
+            await _remove_active_task_id_best_effort(run_id, task_id)
 
     try:
         return asyncio.run(_run_task())

@@ -60,27 +60,82 @@ class FakeVisualAssetService:
 @dataclass
 class FakeAudioArtifact:
     path: str
+    section_id: str | None = None
 
 
 class FakeAudioService:
-    def __init__(self, artifact: FakeAudioArtifact | None = None) -> None:
+    def __init__(
+        self,
+        artifact: FakeAudioArtifact | None = None,
+        paragraph_artifacts: list[FakeAudioArtifact] | None = None,
+    ) -> None:
         self.artifact = artifact
+        self.paragraph_artifacts = paragraph_artifacts or []
 
     async def get_latest(self, _run_id: int) -> FakeAudioArtifact | None:
         return self.artifact
+
+    async def list_paragraph_audio(self, _run_id: int) -> list[FakeAudioArtifact]:
+        return self.paragraph_artifacts
 
 
 @dataclass
 class FakeSubtitleArtifact:
     path: str
+    section_id: str | None = None
 
 
 class FakeSubtitleService:
-    def __init__(self, artifact: FakeSubtitleArtifact | None = None) -> None:
+    def __init__(
+        self,
+        artifact: FakeSubtitleArtifact | None = None,
+        paragraph_artifacts: list[FakeSubtitleArtifact] | None = None,
+    ) -> None:
         self.artifact = artifact
+        self.paragraph_artifacts = paragraph_artifacts or []
 
     async def get_latest(self, _run_id: int) -> FakeSubtitleArtifact | None:
         return self.artifact
+
+    async def list_paragraph_subtitles(self, _run_id: int) -> list[FakeSubtitleArtifact]:
+        return self.paragraph_artifacts
+
+
+@dataclass
+class FakePlanScene:
+    scene_id: str
+    section_id: str
+
+
+@dataclass
+class FakeVisualPlan:
+    scenes: list[FakePlanScene]
+
+
+class FakeVisualPlanService:
+    def __init__(self, plan: FakeVisualPlan | None = None) -> None:
+        self.plan = plan
+
+    async def get_active_plan(self, _run_id: int) -> FakeVisualPlan | None:
+        return self.plan
+
+
+@dataclass
+class FakeScriptSection:
+    section_id: str
+
+
+@dataclass
+class FakeScriptDraft:
+    structured_script: list[FakeScriptSection] | None
+
+
+class FakeScriptService:
+    def __init__(self, draft: FakeScriptDraft | None = None) -> None:
+        self.draft = draft
+
+    async def get_active_draft(self, _run_id: int) -> FakeScriptDraft | None:
+        return self.draft
 
 
 @dataclass
@@ -141,11 +196,30 @@ class FakeFFmpegService:
     def __init__(self, error: Exception | None = None) -> None:
         self.error = error
         self.calls: list[tuple[Any, Path]] = []
+        self.concatenate_calls: list[tuple[list[str], str]] = []
+        self.merge_calls: list[tuple[list[str], list[float], str]] = []
+        self.duration_map: dict[str, float] = {}
 
     def render(self, render_input: Any, output_path: Path) -> Path:
         self.calls.append((render_input, output_path))
         if self.error is not None:
             raise self.error
+        return output_path
+
+    def get_audio_duration(self, path: str) -> float:
+        return self.duration_map[path]
+
+    def concatenate_audio(self, input_paths: list[str], output_path: str) -> str:
+        self.concatenate_calls.append((input_paths, output_path))
+        return output_path
+
+    def merge_subtitles(
+        self,
+        input_paths: list[str],
+        durations: list[float],
+        output_path: str,
+    ) -> str:
+        self.merge_calls.append((input_paths, durations, output_path))
         return output_path
 
 
@@ -193,12 +267,24 @@ def _patch_services(
     fake_audio: FakeAudioService,
     fake_subtitle: FakeSubtitleService,
     fake_ffmpeg: FakeFFmpegService,
+    fake_visual_plan: FakeVisualPlanService | None = None,
+    fake_script: FakeScriptService | None = None,
 ) -> None:
     monkeypatch.setattr(render_video_module, "_run_service", SimpleNamespace(storage=storage))
     monkeypatch.setattr(render_video_module, "_render_service", fake_render_service)
     monkeypatch.setattr(render_video_module, "_visual_asset_service", fake_vas)
     monkeypatch.setattr(render_video_module, "_audio_service", fake_audio)
     monkeypatch.setattr(render_video_module, "_subtitle_service", fake_subtitle)
+    monkeypatch.setattr(
+        render_video_module,
+        "_visual_plan_service",
+        fake_visual_plan or FakeVisualPlanService(),
+    )
+    monkeypatch.setattr(
+        render_video_module,
+        "_script_service",
+        fake_script or FakeScriptService(),
+    )
     monkeypatch.setattr(render_video_module, "FFmpegService", lambda profile=None: fake_ffmpeg)
 
 
@@ -506,3 +592,127 @@ def test_render_video_profile_propagated_to_ffmpeg(monkeypatch: pytest.MonkeyPat
     assert profile.name == "high_quality"
     assert profile.crf == 18
     assert profile.preset == "slow"
+
+
+def test_render_video_reorders_scenes_from_active_visual_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = 209
+    storage = _make_storage(run_id=run_id, stage="RENDER_GENERATING")
+    fake_render_service = FakeRenderService(
+        manifest=_manifest(
+            run_id=run_id,
+            scenes=[
+                {"scene_id": "scene-10", "asset_path": "data/artifacts/209/visual/scene-10.png"},
+                {"scene_id": "scene-2", "asset_path": "data/artifacts/209/visual/scene-2.png"},
+            ],
+        ),
+        artifact_path="data/artifacts/209/render/output.mp4",
+    )
+    fake_vas = FakeVisualAssetService()
+    fake_audio = FakeAudioService()
+    fake_subtitle = FakeSubtitleService()
+    fake_ffmpeg = FakeFFmpegService()
+    fake_visual_plan = FakeVisualPlanService(
+        FakeVisualPlan(
+            scenes=[
+                FakePlanScene(scene_id="scene-2", section_id="sec-2"),
+                FakePlanScene(scene_id="scene-10", section_id="sec-10"),
+            ]
+        )
+    )
+    _patch_services(
+        monkeypatch,
+        storage=storage,
+        fake_render_service=fake_render_service,
+        fake_vas=fake_vas,
+        fake_audio=fake_audio,
+        fake_subtitle=fake_subtitle,
+        fake_ffmpeg=fake_ffmpeg,
+        fake_visual_plan=fake_visual_plan,
+    )
+
+    result = _invoke_task(run_id=run_id)
+
+    assert result["status"] == "success"
+    render_input, _ = fake_ffmpeg.calls[0]
+    assert render_input.image_paths == [
+        Path("data/artifacts/209/visual/scene-2.png"),
+        Path("data/artifacts/209/visual/scene-10.png"),
+    ]
+
+
+def test_render_video_handles_sparse_paragraph_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = 210
+    storage = _make_storage(run_id=run_id, stage="RENDER_GENERATING")
+    fake_render_service = FakeRenderService(
+        manifest=_manifest(
+            run_id=run_id,
+            scenes=[
+                {"scene_id": "scene-1", "asset_path": "data/artifacts/210/visual/scene-1.png"},
+                {"scene_id": "scene-2", "asset_path": "data/artifacts/210/visual/scene-2.png"},
+            ],
+        ),
+        artifact_path="data/artifacts/210/render/output.mp4",
+    )
+    fake_vas = FakeVisualAssetService()
+    fake_audio = FakeAudioService(
+        paragraph_artifacts=[
+            FakeAudioArtifact(path="data/artifacts/210/audio/sec-2.wav", section_id="sec-2")
+        ]
+    )
+    fake_subtitle = FakeSubtitleService(
+        paragraph_artifacts=[
+            FakeSubtitleArtifact(path="data/artifacts/210/subtitles/sec-2.srt", section_id="sec-2")
+        ]
+    )
+    fake_ffmpeg = FakeFFmpegService()
+    fake_ffmpeg.duration_map["data/artifacts/210/audio/sec-2.wav"] = 7.5
+    fake_visual_plan = FakeVisualPlanService(
+        FakeVisualPlan(
+            scenes=[
+                FakePlanScene(scene_id="scene-1", section_id="sec-1"),
+                FakePlanScene(scene_id="scene-2", section_id="sec-2"),
+            ]
+        )
+    )
+    fake_script = FakeScriptService(
+        FakeScriptDraft(
+            structured_script=[
+                FakeScriptSection(section_id="sec-1"),
+                FakeScriptSection(section_id="sec-2"),
+            ]
+        )
+    )
+    _patch_services(
+        monkeypatch,
+        storage=storage,
+        fake_render_service=fake_render_service,
+        fake_vas=fake_vas,
+        fake_audio=fake_audio,
+        fake_subtitle=fake_subtitle,
+        fake_ffmpeg=fake_ffmpeg,
+        fake_visual_plan=fake_visual_plan,
+        fake_script=fake_script,
+    )
+
+    result = _invoke_task(run_id=run_id)
+
+    assert result["status"] == "success"
+    render_input, _ = fake_ffmpeg.calls[0]
+    assert render_input.scene_durations == [7.5, 22.5]
+    assert fake_ffmpeg.concatenate_calls == [
+        (
+            ["data/artifacts/210/audio/sec-2.wav"],
+            "data/artifacts/210/render/audio_concat.wav",
+        )
+    ]
+    assert fake_ffmpeg.merge_calls == [
+        (
+            ["data/artifacts/210/subtitles/sec-2.srt"],
+            [7.5],
+            "data/artifacts/210/render/subtitles_merged.srt",
+        )
+    ]

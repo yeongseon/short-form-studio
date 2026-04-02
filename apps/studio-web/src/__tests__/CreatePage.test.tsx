@@ -51,7 +51,7 @@ function mockFetchFullFlow() {
 
 function renderCreatePage() {
   return render(
-    <MemoryRouter>
+    <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <CreatePage />
     </MemoryRouter>,
   );
@@ -141,6 +141,15 @@ describe("CreatePage", () => {
     expect(select.value).toBe("cinematic");
   });
 
+  it("render profile select works", () => {
+    renderCreatePage();
+    const select = screen.getByLabelText(/Render Profile/) as HTMLSelectElement;
+    expect(select.value).toBe("shorts_default");
+
+    fireEvent.change(select, { target: { value: "high_quality" } });
+    expect(select.value).toBe("high_quality");
+  });
+
   it("has submit button", () => {
     renderCreatePage();
     expect(screen.getByRole("button", { name: "Create Project" })).toBeTruthy();
@@ -169,6 +178,16 @@ describe("CreatePage", () => {
     // Should NOT show TTS or STT
     expect(screen.queryByText("TTS Model")).toBeNull();
     expect(screen.queryByText("STT Model")).toBeNull();
+  });
+
+  it("shows only image model on markdown tab", async () => {
+    renderCreatePage();
+    fireEvent.click(screen.getByRole("tab", { name: "Start from Markdown" }));
+    await waitFor(() => {
+      expect(screen.getByTestId("model-selector")).toBeTruthy();
+    });
+    expect(screen.getByText("Image Model")).toBeTruthy();
+    expect(screen.queryByText("Script Model")).toBeNull();
   });
 
   it("has proper tablist and tabpanel roles", () => {
@@ -250,6 +269,7 @@ describe("CreatePage", () => {
     fireEvent.change(screen.getByLabelText(/Idea Brief/), { target: { value: "Brief" } });
     fireEvent.change(screen.getByLabelText(/Content Goal/), { target: { value: "educational" } });
     fireEvent.change(screen.getByLabelText(/Target Duration/), { target: { value: "90" } });
+    fireEvent.change(screen.getByLabelText(/Render Profile/), { target: { value: "high_quality" } });
 
     fireEvent.click(screen.getByRole("button", { name: "Create Project" }));
 
@@ -265,6 +285,36 @@ describe("CreatePage", () => {
     expect(runBody.metadata.content_goal).toBe("educational");
     expect(runBody.metadata.target_duration).toBe(90);
     expect(runBody.style_preset).toBe("default");
+    expect(runBody.model_defaults.render_profile).toBe("high_quality");
+  });
+
+  it("sends backend model-default field names from CreatePage selectors", async () => {
+    mockFetchFullFlow();
+    renderCreatePage();
+    await waitFor(() => {
+      expect(screen.getByTestId("model-selector")).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getByLabelText(/^Title/), { target: { value: "My Video" } });
+    fireEvent.change(screen.getByLabelText(/Idea Brief/), { target: { value: "Brief" } });
+
+    fireEvent.click(screen.getByLabelText(/Qwen3 4B/i));
+    fireEvent.click(screen.getByLabelText(/SD 1.5/i));
+
+    fireEvent.click(screen.getByRole("button", { name: "Create Project" }));
+
+    await waitFor(() => {
+      expect(mockNavigate).toHaveBeenCalledWith("/projects/42");
+    });
+
+    const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
+    const runCall = calls.find((c: unknown[]) => typeof c[0] === "string" && c[0].includes("/runs"));
+    const runBody = JSON.parse((runCall![1] as RequestInit).body as string);
+
+    expect(runBody.model_defaults.script_model).toBe("qwen3-4b");
+    expect(runBody.model_defaults.image_model).toBe("sd15");
+    expect(runBody.model_defaults.script).toBeUndefined();
+    expect(runBody.model_defaults.image).toBeUndefined();
   });
 
   it("shows error when project creation fails", async () => {
@@ -408,6 +458,9 @@ describe("CreatePage", () => {
   it("does not submit markdown when content is empty", async () => {
     mockFetchFullFlow();
     renderCreatePage();
+    await waitFor(() => {
+      expect(screen.getByTestId("model-selector")).toBeTruthy();
+    });
     fireEvent.click(screen.getByRole("tab", { name: "Start from Markdown" }));
 
     // Leave markdown content empty, just set title
@@ -416,9 +469,9 @@ describe("CreatePage", () => {
     fireEvent.change(screen.getByLabelText(/Markdown Content/), { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: "Create Project" }));
 
-    // Should NOT navigate since markdown is empty
-    await new Promise((r) => setTimeout(r, 100));
-    expect(mockNavigate).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(mockNavigate).not.toHaveBeenCalled();
+    });
   });
 
   it("shows error when import-markdown fails", async () => {

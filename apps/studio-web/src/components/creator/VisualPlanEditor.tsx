@@ -34,6 +34,9 @@ export interface VisualPlanEditorProps {
   onSuccess?: (data: Record<string, unknown>) => void;
   onError?: (action: "load" | "save", message: string) => void;
   readOnly?: boolean;
+  pollIntervalMs?: number;
+  suppressMissingPlanError?: boolean;
+  pendingMessage?: string;
 }
 
 // --------------- styles ---------------
@@ -295,6 +298,9 @@ export default function VisualPlanEditor({
   onSuccess,
   onError,
   readOnly = false,
+  pollIntervalMs,
+  suppressMissingPlanError = false,
+  pendingMessage = "Waiting for generated scenes…",
 }: VisualPlanEditorProps) {
   const [scenes, setScenes] = useState<SceneData[]>([]);
   const [savedScenes, setSavedScenes] = useState<Record<string, SceneData>>({});
@@ -303,44 +309,70 @@ export default function VisualPlanEditor({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dirtyFields, setDirtyFields] = useState<Set<string>>(new Set());
+  const [pendingPlan, setPendingPlan] = useState(false);
 
   // Load plan
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      setLoading(true);
+  const load = useCallback(
+    async (showLoading: boolean) => {
+      if (showLoading) setLoading(true);
       setError(null);
       try {
         const res = await fetch(`${apiBase}/runs/${runId}/visual-plan`);
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
-          throw new Error(body.detail ?? `Failed to load (${res.status})`);
+          const detail = body.detail ?? `Failed to load (${res.status})`;
+          if (
+            suppressMissingPlanError &&
+            typeof detail === "string" &&
+            detail.toLowerCase().includes("no visual plan")
+          ) {
+            setScenes([]);
+            setSavedScenes({});
+            setVersion(null);
+            setDirtyFields(new Set());
+            setPendingPlan(true);
+            return;
+          }
+          throw new Error(detail);
         }
         const data = await res.json();
         const loaded = (data.scenes ?? []) as SceneData[];
-        if (!cancelled) {
-          setScenes(loaded);
-          const saved: Record<string, SceneData> = {};
-          for (const s of loaded) {
-            saved[s.scene_id] = { ...s };
-          }
-          setSavedScenes(saved);
-          setVersion(data.version ?? null);
-          setDirtyFields(new Set());
+        setScenes(loaded);
+        const saved: Record<string, SceneData> = {};
+        for (const s of loaded) {
+          saved[s.scene_id] = { ...s };
         }
+        setSavedScenes(saved);
+        setVersion(data.version ?? null);
+        setDirtyFields(new Set());
+        setPendingPlan(false);
       } catch (err) {
-        if (!cancelled) {
-          const msg = err instanceof Error ? err.message : "Failed to load visual plan";
-          setError(msg);
-          onError?.("load", msg);
-        }
+        const msg = err instanceof Error ? err.message : "Failed to load visual plan";
+        setError(msg);
+        onError?.("load", msg);
       } finally {
-        if (!cancelled) setLoading(false);
+        if (showLoading) setLoading(false);
       }
-    }
-    load();
+    },
+    [apiBase, runId, suppressMissingPlanError, onError],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      await load(true);
+      if (cancelled) return;
+    })();
     return () => { cancelled = true; };
-  }, [apiBase, runId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [load]);
+
+  useEffect(() => {
+    if (!pollIntervalMs) return;
+    const timer = setInterval(() => {
+      void load(false);
+    }, pollIntervalMs);
+    return () => clearInterval(timer);
+  }, [pollIntervalMs, load]);
 
   // Mark scene dirty
   const markDirty = useCallback((sceneId: string) => {
@@ -474,6 +506,22 @@ export default function VisualPlanEditor({
           }}
         >
           {error}
+        </div>
+      )}
+
+      {pendingPlan && !error && (
+        <div
+          data-testid="visual-plan-pending"
+          style={{
+            padding: "8px 12px",
+            marginBottom: 12,
+            backgroundColor: "#eff6ff",
+            color: "#1e40af",
+            borderRadius: 4,
+            fontSize: 13,
+          }}
+        >
+          {pendingMessage}
         </div>
       )}
 

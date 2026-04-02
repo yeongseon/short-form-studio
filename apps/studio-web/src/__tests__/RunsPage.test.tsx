@@ -9,6 +9,7 @@ const MOCK_PROJECTS = [
     title: "Morning Routine",
     source_type: "idea",
     status: "active",
+    latest_run: { run_id: 11, current_stage: "SCRIPT_REVIEW", status: "running" },
     created_at: "2025-03-15T10:00:00Z",
     updated_at: "2025-03-15T12:00:00Z",
   },
@@ -17,6 +18,7 @@ const MOCK_PROJECTS = [
     title: "Cooking Tips",
     source_type: "markdown",
     status: "draft",
+    latest_run: null,
     created_at: "2025-03-14T08:00:00Z",
     updated_at: "2025-03-14T09:00:00Z",
   },
@@ -25,6 +27,7 @@ const MOCK_PROJECTS = [
     title: null,
     source_type: "url",
     status: "completed",
+    latest_run: { run_id: 14, current_stage: "FINAL_REVIEW", status: "completed" },
     created_at: "2025-03-13T06:00:00Z",
     updated_at: "2025-03-13T07:00:00Z",
   },
@@ -38,7 +41,7 @@ vi.mock("react-router-dom", async () => {
 
 function renderPage() {
   return render(
-    <MemoryRouter initialEntries={["/runs"]}>
+    <MemoryRouter initialEntries={["/runs"]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <RunsPage />
     </MemoryRouter>,
   );
@@ -164,10 +167,18 @@ describe("RunsPage", () => {
     mockFetchOk(MOCK_PROJECTS);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByText("active")).toBeInTheDocument();
+      expect(screen.getByText("running")).toBeInTheDocument();
     });
     expect(screen.getByText("draft")).toBeInTheDocument();
     expect(screen.getByText("completed")).toBeInTheDocument();
+  });
+
+  it("shows latest run stage when available", async () => {
+    mockFetchOk(MOCK_PROJECTS);
+    renderPage();
+    await waitFor(() => {
+      expect(screen.getByText("SCRIPT_REVIEW")).toBeInTheDocument();
+    });
   });
 
   it("renders formatted dates", async () => {
@@ -276,7 +287,7 @@ describe("RunsPage", () => {
 
   // --- Header ---
   it("renders page heading", async () => {
-    mockFetchOk([]);
+    vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise(() => {}));
     renderPage();
     expect(screen.getByRole("heading", { name: "Projects" })).toBeInTheDocument();
   });

@@ -69,7 +69,7 @@ const MOCK_PREVIEW = {
 
 function renderPage(runId = "10") {
   return render(
-    <MemoryRouter initialEntries={[`/review/${runId}`]}>
+    <MemoryRouter initialEntries={[`/review/${runId}`]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <Routes>
         <Route path="/review/:runId" element={<ReviewPage />} />
       </Routes>
@@ -160,7 +160,7 @@ beforeEach(() => {
 
 describe("ReviewPage", () => {
   it("shows loading state initially", () => {
-    mockFetchAll(MOCK_RUN_FINAL_REVIEW);
+    vi.spyOn(globalThis, "fetch").mockReturnValue(new Promise(() => {}));
     renderPage();
     expect(screen.getByRole("status")).toHaveTextContent("Loading review");
   });
@@ -194,7 +194,7 @@ describe("ReviewPage", () => {
     });
 
     // Script section
-    expect(screen.getByText(/calm morning in Tokyo/)).toBeTruthy();
+    expect(screen.getAllByText(/calm morning in Tokyo/i).length).toBeGreaterThan(0);
 
     // Visual plan section
     expect(screen.getByTestId("review-visual-plan-section")).toBeTruthy();

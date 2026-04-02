@@ -104,9 +104,11 @@ describe("ModelSelector", () => {
     expect(gptRadio).not.toBeChecked();
 
     // Parent should have been notified of default selections
-    expect(onChange).toHaveBeenCalledWith("script", "qwen3-4b");
-    expect(onChange).toHaveBeenCalledWith("image", "sd15");
-    expect(onChange).toHaveBeenCalledWith("tts", "qwen3-tts");
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalledWith("script", "qwen3-4b");
+      expect(onChange).toHaveBeenCalledWith("image", "sd15");
+      expect(onChange).toHaveBeenCalledWith("tts", "qwen3-tts");
+    });
   });
 
   it("respects controlled mode with selectedModels prop", async () => {
@@ -209,8 +211,10 @@ describe("ModelSelector", () => {
     });
 
     // Initial defaults should have fired for script + image
-    expect(onChange).toHaveBeenCalledWith("script", "qwen3-4b");
-    expect(onChange).toHaveBeenCalledWith("image", "sd15");
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalledWith("script", "qwen3-4b");
+      expect(onChange).toHaveBeenCalledWith("image", "sd15");
+    });
     const initialCallCount = onChange.mock.calls.length;
     onChange.mockClear();
 
