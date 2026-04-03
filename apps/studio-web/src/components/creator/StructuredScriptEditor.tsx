@@ -430,7 +430,7 @@ export default function StructuredScriptEditor({
 
       {sections.length === 0 ? (
         <p data-testid="structured-empty" style={{ color: "#6c757d", fontSize: 13 }}>
-          No sections yet. Use the Markdown editor to write content, then parse it into sections.
+          No sections yet. Use the JSON editor to define scenes, then save to generate sections.
         </p>
       ) : (
         <div data-testid="structured-sections">

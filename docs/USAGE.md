@@ -4,7 +4,7 @@
 
 1. [시작하기](#시작하기)
 2. [프로젝트 생성](#프로젝트-생성)
-3. [마크다운 스크립트 형식](#마크다운-스크립트-형식)
+3. [JSON 스크립트 형식](#json-스크립트-형식)
 4. [파이프라인 단계](#파이프라인-단계)
 5. [리뷰 및 승인](#리뷰-및-승인)
 6. [모델 설정](#모델-설정)
@@ -24,7 +24,7 @@
 ### 서비스 실행
 
 ```bash
-cd short-form-pipeline
+cd short-form-studio
 docker compose up -d
 ```
 
@@ -43,8 +43,8 @@ docker compose up -d
 
 Studio Web UI에서 **"Create New Project"** 버튼을 클릭하면 두 가지 탭이 제공됩니다:
 
-> 현재 제품 UI에서 지원하는 시작 방식은 **Idea** 와 **Markdown** 두 가지입니다.
-> `URL` source는 레거시/내부 계약에는 남아 있을 수 있지만, 현재 사용자 플로우에서는 지원하지 않습니다.
+> 현재 제품 UI에서 지원하는 시작 방식은 **Idea** 와 **JSON** 두 가지입니다.
+> `URL`, `Markdown` source는 레거시/내부 계약에는 남아 있을 수 있지만, 현재 사용자 플로우에서는 지원하지 않습니다.
 
 ### 탭 1: Start from Idea
 
@@ -59,16 +59,46 @@ Studio Web UI에서 **"Create New Project"** 버튼을 클릭하면 두 가지 �
 
 → "Create Project" 클릭 시: 프로젝트 생성 → AI가 스크립트 자동 생성 → 프로젝트 페이지로 이동
 
-### 탭 2: Start from Markdown
+### 탭 2: Start from JSON
 
-직접 작성한 스크립트를 마크다운 형식으로 입력합니다.
+ChatGPT 등에서 생성한 JSON 스크립트를 입력합니다.
 
 | 필드 | 필수 | 설명 |
 |------|------|------|
 | **Title** | - | 프로젝트 제목 (미입력 시 "Untitled") |
-| **Markdown Content** | ✅ | 마크다운 스크립트 (직접 입력 또는 파일 업로드) |
+| **JSON Script** | ✅ | JSON 형식의 씬 스크립트 (직접 입력 또는 파일 업로드) |
 
-→ `.md` 또는 `.txt` 파일 업로드도 가능합니다.
+→ `.json` 또는 `.txt` 파일 업로드도 가능합니다.
+
+#### JSON 스크립트 형식
+
+```json
+{
+  "scenes": [
+    {
+      "type": "hook",
+      "text": "여러분, AI가 60초 만에 영상을 만들어준다면 믿으시겠어요?",
+      "image_prompt": "A futuristic holographic AI interface creating video content...",
+      "speaker": "host",
+      "mood": "exciting",
+      "composition": "medium shot, centered",
+      "style_tags": ["cinematic", "sci-fi"]
+    }
+  ]
+}
+```
+
+| 필드 | 필수 | 설명 |
+|------|------|------|
+| `type` | ✅ | 씬 유형 (hook, body, cta 등) |
+| `text` | ✅ | 나레이션/스크립트 텍스트 |
+| `image_prompt` | - | 이미지 생성 프롬프트 (비주얼 플랜에서 우선 사용) |
+| `speaker` | - | 화자 (예: host, narrator) |
+| `mood` | - | 분위기 (예: exciting, calm) |
+| `composition` | - | 구도 (예: close-up, wide shot) |
+| `style_tags` | - | 스타일 태그 목록 |
+| `display_text` | - | 화면 표시 텍스트 (자막 오버라이드) |
+| `duration` | - | 씬 길이 (초) |
 
 ### 공통 설정
 
@@ -77,60 +107,9 @@ Studio Web UI에서 **"Create New Project"** 버튼을 클릭하면 두 가지 �
 
 ---
 
-## 마크다운 스크립트 형식
+## JSON 스크립트 형식
 
-마크다운 파서는 **H2 헤딩(`##`)**을 기준으로 섹션을 분리합니다.
-
-### 규칙
-
-1. `## 헤딩이름` 형태로 섹션을 구분합니다.
-2. 헤딩 텍스트는 자동으로 정규화됩니다:
-   - 소문자로 변환
-   - 영숫자가 아닌 문자는 `-`(대시)로 대체
-   - 예: `## Body 1` → `body-1`, `## Hook!` → `hook`, `## CTA` → `cta`
-3. 첫 번째 `##` 이전의 텍스트는 `body` 섹션으로 처리됩니다.
-4. `##`가 하나도 없으면 전체 텍스트가 하나의 `body` 섹션이 됩니다.
-
-### 예시 스크립트
-
-```markdown
-## Hook
-
-여러분, AI가 60초 만에 영상을 만들어준다면 믿으시겠어요?
-
-## Body 1
-
-최신 AI 기술을 활용하면 스크립트 작성부터 영상 렌더링까지
-모든 과정이 자동화됩니다.
-
-## Body 2
-
-텍스트를 입력하면 AI가 장면별 이미지를 생성하고,
-음성과 자막까지 자동으로 추가해줍니다.
-
-## Body 3
-
-이제 영상 제작에 전문 지식이 필요하지 않습니다.
-누구나 몇 분 만에 숏폼 콘텐츠를 만들 수 있어요.
-
-## CTA
-
-지금 바로 시작해보세요! 링크는 설명란에 있습니다.
-```
-
-### 파싱 결과
-
-위 마크다운은 다음 섹션으로 분리됩니다:
-
-| 순서 | Section ID | Type | 내용 |
-|------|-----------|------|------|
-| 1 | `hook-1` | hook | "여러분, AI가 60초 만에..." |
-| 2 | `body-1-2` | body-1 | "최신 AI 기술을 활용하면..." |
-| 3 | `body-2-3` | body-2 | "텍스트를 입력하면 AI가..." |
-| 4 | `body-3-4` | body-3 | "이제 영상 제작에..." |
-| 5 | `cta-5` | cta | "지금 바로 시작해보세요!..." |
-
-> 💡 섹션 이름은 자유롭게 지정 가능합니다. 예: `## 인트로`, `## 본론`, `## 마무리` → `인트로`, `본론`, `마무리`로 파싱됩니다.
+> JSON 스크립트 형식에 대한 자세한 내용은 위의 [탭 2: Start from JSON](#탭-2-start-from-json) 섹션을 참고하세요.
 
 ---
 
@@ -148,7 +127,7 @@ IDEA_READY → SCRIPT_GENERATING → SCRIPT_REVIEW
 
 | 단계 | 설명 | 사용 모델 |
 |------|------|-----------|
-| **SCRIPT_GENERATING** | 아이디어에서 스크립트 생성 (마크다운 입력 시 건너뜀) | Ollama (qwen3:4b) |
+| **SCRIPT_GENERATING** | 아이디어에서 스크립트 생성 (JSON 입력 시 건너뜀) | Ollama (qwen3:4b) |
 | **SCRIPT_REVIEW** | 생성된 스크립트 검토 및 승인 | - |
 | **VISUAL_PLAN_GENERATING** | 각 섹션별 비주얼 플랜(프롬프트) 생성 | Ollama (qwen3:4b) |
 | **VISUAL_PLAN_REVIEW** | 비주얼 플랜 검토 및 승인 | - |
@@ -285,7 +264,7 @@ data/artifacts/<run_id>/
 ```bash
 docker compose run -d --name sfp-worker-direct --no-deps \
   -e REDIS_URL=redis://redis:6379/0 \
-  -e DATABASE_URL=postgresql://short_form_user:short_form_password@postgres:5432/short_form_pipeline \
+  -e DATABASE_URL=postgresql://short_form_user:short_form_password@postgres:5432/short_form_studio \
   -e OLLAMA_BASE_URL=http://ollama:11434 \
   -e STABLE_DIFFUSION_BASE_URL=http://stable-diffusion:7860 \
   -e TTS_QWEN3_BASE_URL=http://tts-qwen3:8100 \

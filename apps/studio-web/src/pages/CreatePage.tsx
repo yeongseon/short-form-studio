@@ -3,11 +3,11 @@ import { useNavigate } from "react-router-dom";
 import ModelSelector from "../components/creator/ModelSelector";
 import IdeaForm, { type IdeaFormData } from "../components/creator/IdeaForm";
 
-type Tab = "idea" | "markdown";
+type Tab = "idea" | "json";
 
-interface MarkdownFormState {
+interface JsonFormState {
   title: string;
-  markdown: string;
+  jsonScript: string;
 }
 
 const API_BASE = "/api/creator";
@@ -16,38 +16,64 @@ const RENDER_PROFILE_OPTIONS = [
   { value: "high_quality", label: "High Quality" },
   { value: "fast_preview", label: "Fast Preview" },
 ];
-const MARKDOWN_TEMPLATE = `## Hook
-
-여러분, AI가 60초 만에 영상을 만들어준다면 믿으시겠어요?
-
-## Body 1
-
-최신 AI 기술을 활용하면 스크립트 작성부터 영상 렌더링까지
-모든 과정이 자동화됩니다.
-
-## Body 2
-
-텍스트를 입력하면 AI가 장면별 이미지를 생성하고,
-음성과 자막까지 자동으로 추가해줍니다.
-
-## Body 3
-
-이제 영상 제작에 전문 지식이 필요하지 않습니다.
-누구나 몇 분 만에 숏폼 콘텐츠를 만들 수 있어요.
-
-## CTA
-
-지금 바로 시작해보세요! 링크는 설명란에 있습니다.`.trimStart();
+const JSON_TEMPLATE = JSON.stringify(
+  {
+    scenes: [
+      {
+        type: "hook",
+        text: "여러분, AI가 60초 만에 영상을 만들어준다면 믿으시겠어요?",
+        image_prompt:
+          "A futuristic holographic AI interface floating in a dark studio, cinematic blue light",
+        speaker: "host",
+        mood: "exciting",
+        composition: "medium shot, centered",
+        style_tags: ["cinematic", "sci-fi"],
+      },
+      {
+        type: "body",
+        text: "최신 AI 기술을 활용하면 스크립트 작성부터 영상 렌더링까지 모든 과정이 자동화됩니다.",
+        image_prompt:
+          "Split screen showing code on left and rendered video on right, modern tech aesthetic",
+        speaker: "host",
+        mood: "informative",
+        composition: "wide shot",
+        style_tags: ["tech", "modern"],
+      },
+      {
+        type: "body",
+        text: "텍스트를 입력하면 AI가 장면별 이미지를 생성하고, 음성과 자막까지 자동으로 추가해줍니다.",
+        image_prompt:
+          "Hands typing on a glowing keyboard with AI-generated images appearing on screen",
+        speaker: "host",
+        mood: "demonstrative",
+        composition: "close-up on hands and screen",
+        style_tags: ["tech", "hands-on"],
+      },
+      {
+        type: "cta",
+        text: "지금 바로 시작해보세요! 링크는 설명란에 있습니다.",
+        image_prompt:
+          "Bright call-to-action screen with arrow pointing down, energetic gradient background",
+        speaker: "host",
+        mood: "urgent",
+        composition: "centered text overlay",
+        style_tags: ["vibrant", "cta"],
+      },
+    ],
+  },
+  null,
+  2,
+);
 
 
 export default function CreatePage() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<Tab>("idea");
 
-  // Markdown form state
-  const [markdownForm, setMarkdownForm] = useState<MarkdownFormState>({
+  // JSON form state
+  const [jsonForm, setJsonForm] = useState<JsonFormState>({
     title: "",
-    markdown: MARKDOWN_TEMPLATE,
+    jsonScript: JSON_TEMPLATE,
   });
 
   // Shared state
@@ -84,7 +110,7 @@ export default function CreatePage() {
     reader.onload = (ev) => {
       const text = ev.target?.result;
       if (typeof text === "string") {
-        setMarkdownForm((prev) => ({ ...prev, markdown: text }));
+        setJsonForm((prev) => ({ ...prev, jsonScript: text }));
       }
     };
     reader.readAsText(file);
@@ -148,10 +174,18 @@ export default function CreatePage() {
     [navigate],
   );
 
-  const handleMarkdownSubmit = useCallback(async () => {
-    const title = markdownForm.title.trim();
-    const markdown = markdownForm.markdown.trim();
-    if (!markdown) return;
+  const handleJsonSubmit = useCallback(async () => {
+    const title = jsonForm.title.trim();
+    const jsonScript = jsonForm.jsonScript.trim();
+    if (!jsonScript) return;
+
+    // Validate JSON locally before sending
+    try {
+      JSON.parse(jsonScript);
+    } catch {
+      setError("Invalid JSON — please check the syntax.");
+      return;
+    }
 
     setSubmitting(true);
     setError(null);
@@ -163,8 +197,8 @@ export default function CreatePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title: title || "Untitled",
-          source_type: "markdown",
-          markdown_source: markdown,
+          source_type: "pasted_json",
+          json_script: jsonScript,
         }),
       });
 
@@ -175,12 +209,12 @@ export default function CreatePage() {
 
       const project = await projRes.json();
 
-      // 2. Import markdown (creates run + saves draft in one call)
-      const importRes = await fetch(`${API_BASE}/projects/${project.id}/script/import-markdown`, {
+      // 2. Import JSON (creates run + saves structured draft in one call)
+      const importRes = await fetch(`${API_BASE}/projects/${project.id}/script/import-json`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          markdown,
+          json_script: jsonScript,
           model_defaults: modelDefaultsRef.current,
           style_preset: stylePresetRef.current,
         }),
@@ -188,7 +222,7 @@ export default function CreatePage() {
 
       if (!importRes.ok) {
         const body = await importRes.json().catch(() => null);
-        throw new Error(body?.detail ?? `Failed to import markdown (${importRes.status})`);
+        throw new Error(body?.detail ?? `Failed to import JSON (${importRes.status})`);
       }
 
       // 3. Navigate to project page
@@ -198,7 +232,7 @@ export default function CreatePage() {
     } finally {
       setSubmitting(false);
     }
-  }, [markdownForm, navigate]);
+  }, [jsonForm, navigate]);
 
   return (
     <div style={{ maxWidth: 720, margin: "0 auto", padding: 24 }}>
@@ -227,22 +261,22 @@ export default function CreatePage() {
         </button>
         <button
           role="tab"
-          id="tab-markdown"
-          aria-selected={activeTab === "markdown"}
-          aria-controls="tabpanel-markdown"
-          onClick={() => setActiveTab("markdown")}
+          id="tab-json"
+          aria-selected={activeTab === "json"}
+          aria-controls="tabpanel-json"
+          onClick={() => setActiveTab("json")}
           style={{
             padding: "8px 16px",
             border: "none",
-            borderBottom: activeTab === "markdown" ? "2px solid #4285f4" : "2px solid transparent",
+            borderBottom: activeTab === "json" ? "2px solid #4285f4" : "2px solid transparent",
             background: "transparent",
             cursor: "pointer",
-            fontWeight: activeTab === "markdown" ? 600 : 400,
-            color: activeTab === "markdown" ? "#4285f4" : "#666",
+            fontWeight: activeTab === "json" ? 600 : 400,
+            color: activeTab === "json" ? "#4285f4" : "#666",
             fontSize: 14,
           }}
         >
-          Start from Markdown
+          Start from JSON
         </button>
       </div>
 
@@ -253,12 +287,12 @@ export default function CreatePage() {
         </div>
       )}
 
-      {/* Markdown tab panel */}
-      {activeTab === "markdown" && (
-        <div role="tabpanel" id="tabpanel-markdown" aria-labelledby="tab-markdown">
+      {/* JSON tab panel */}
+      {activeTab === "json" && (
+        <div role="tabpanel" id="tabpanel-json" aria-labelledby="tab-json">
           {error && (
             <div
-              data-testid="markdown-form-error"
+              data-testid="json-form-error"
               role="alert"
               style={{
                 padding: "8px 12px",
@@ -275,14 +309,14 @@ export default function CreatePage() {
           )}
 
           <div style={{ marginBottom: 16 }}>
-            <label htmlFor="md-title" style={{ display: "block", fontWeight: 600, marginBottom: 4, fontSize: 13 }}>
+            <label htmlFor="json-title" style={{ display: "block", fontWeight: 600, marginBottom: 4, fontSize: 13 }}>
               Title
             </label>
             <input
-              id="md-title"
+              id="json-title"
               type="text"
-              value={markdownForm.title}
-              onChange={(e) => setMarkdownForm((prev) => ({ ...prev, title: e.target.value }))}
+              value={jsonForm.title}
+              onChange={(e) => setJsonForm((prev) => ({ ...prev, title: e.target.value }))}
               disabled={submitting}
               placeholder="Project title"
               style={{ width: "100%", padding: "8px 12px", border: "1px solid #ccc", borderRadius: 4, fontSize: 14, boxSizing: "border-box" }}
@@ -290,28 +324,28 @@ export default function CreatePage() {
           </div>
 
           <div style={{ marginBottom: 16 }}>
-            <label htmlFor="md-content" style={{ display: "block", fontWeight: 600, marginBottom: 4, fontSize: 13 }}>
-              Markdown Content <span style={{ color: "#c00" }}>*</span>
+            <label htmlFor="json-content" style={{ display: "block", fontWeight: 600, marginBottom: 4, fontSize: 13 }}>
+              JSON Script <span style={{ color: "#c00" }}>*</span>
             </label>
             <textarea
-              id="md-content"
+              id="json-content"
               required
-              value={markdownForm.markdown}
-              onChange={(e) => setMarkdownForm((prev) => ({ ...prev, markdown: e.target.value }))}
+              value={jsonForm.jsonScript}
+              onChange={(e) => setJsonForm((prev) => ({ ...prev, jsonScript: e.target.value }))}
               disabled={submitting}
-              rows={10}
-              style={{ width: "100%", padding: "8px 12px", border: "1px solid #ccc", borderRadius: 4, fontSize: 14, fontFamily: "monospace", resize: "vertical", boxSizing: "border-box" }}
+              rows={14}
+              style={{ width: "100%", padding: "8px 12px", border: "1px solid #ccc", borderRadius: 4, fontSize: 13, fontFamily: "monospace", resize: "vertical", boxSizing: "border-box" }}
             />
           </div>
 
           <div style={{ marginBottom: 16 }}>
-            <label htmlFor="md-upload" style={{ display: "block", fontWeight: 600, marginBottom: 4, fontSize: 13 }}>
+            <label htmlFor="json-upload" style={{ display: "block", fontWeight: 600, marginBottom: 4, fontSize: 13 }}>
               Or upload a file
             </label>
             <input
-              id="md-upload"
+              id="json-upload"
               type="file"
-              accept=".md,.txt"
+              accept=".json,.txt"
               onChange={handleFileUpload}
               disabled={submitting}
               style={{ fontSize: 13 }}
@@ -369,7 +403,7 @@ export default function CreatePage() {
           onClick={activeTab === "idea" ? () => {
             const form = document.querySelector<HTMLFormElement>('[data-testid="idea-form"]');
             form?.requestSubmit();
-          } : handleMarkdownSubmit}
+          } : handleJsonSubmit}
           style={{
             padding: "10px 24px",
             background: submitting ? "#93b4f4" : "#4285f4",

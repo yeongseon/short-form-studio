@@ -254,3 +254,62 @@ def test_create_project_url_with_markdown_source_raises_value_error(service: Pro
                 markdown_source="# Content",
             )
         )
+
+
+def test_create_project_with_pasted_json_source_type(service: ProjectService) -> None:
+    json_script = '{"scenes": [{"type": "hook", "text": "Hello world"}]}'
+    project = run(
+        service.create_project(
+            title="JSON Project",
+            source_type="pasted_json",
+            json_script=json_script,
+        )
+    )
+
+    assert project.title == "JSON Project"
+    assert project.source_type == "pasted_json"
+    assert project.json_script == json_script
+    assert project.idea_brief is None
+    assert project.markdown_source is None
+    assert project.url_source is None
+
+
+def test_create_project_pasted_json_missing_script_raises_value_error(service: ProjectService) -> None:
+    with pytest.raises(ValueError, match="source_type='pasted_json' requires json_script"):
+        run(service.create_project(title="Bad JSON", source_type="pasted_json"))
+
+
+def test_create_project_pasted_json_with_idea_brief_raises_value_error(service: ProjectService) -> None:
+    with pytest.raises(ValueError, match="source_type='pasted_json' cannot have"):
+        run(
+            service.create_project(
+                title="Conflicting",
+                source_type="pasted_json",
+                json_script='{"scenes": []}',
+                idea_brief="Should not be here",
+            )
+        )
+
+
+def test_create_project_pasted_json_with_markdown_source_raises_value_error(service: ProjectService) -> None:
+    with pytest.raises(ValueError, match="source_type='pasted_json' cannot have"):
+        run(
+            service.create_project(
+                title="Conflicting",
+                source_type="pasted_json",
+                json_script='{"scenes": []}',
+                markdown_source="# Not allowed",
+            )
+        )
+
+
+def test_create_project_idea_with_json_script_raises_value_error(service: ProjectService) -> None:
+    with pytest.raises(ValueError, match="source_type='idea' cannot have json_script set"):
+        run(
+            service.create_project(
+                title="Conflicting",
+                source_type="idea",
+                idea_brief="My idea",
+                json_script='{"scenes": []}',
+            )
+        )

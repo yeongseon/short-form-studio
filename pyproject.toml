@@ -1,5 +1,5 @@
 [project]
-name = "short-form-pipeline"
+name = "short-form-studio"
 version = "0.1.0"
 description = "Scaffolded monorepo for short-form pipeline"
 readme = "README.md"

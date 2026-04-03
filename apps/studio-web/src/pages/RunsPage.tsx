@@ -8,7 +8,7 @@ const API_BASE = "/api/creator";
 interface ProjectSummary {
   id: number;
   title: string | null;
-  source_type: "idea" | "markdown" | "url";
+  source_type: "idea" | "markdown" | "url" | "pasted_json";
   status: "draft" | "active" | "completed" | "archived";
   created_at: string;
   updated_at: string;
@@ -42,6 +42,7 @@ const SOURCE_LABELS: Record<string, string> = {
   idea: "Idea",
   markdown: "Markdown",
   url: "URL",
+  pasted_json: "JSON",
 };
 
 function formatDate(iso: string): string {

@@ -1,6 +1,6 @@
 # Cutover Checklist & Deployment Notes
 
-Operator-facing guide for deploying and verifying the short-form-pipeline system.
+Operator-facing guide for deploying and verifying the short-form-studio system.
 
 ---
 
@@ -32,7 +32,7 @@ Operator-facing guide for deploying and verifying the short-form-pipeline system
    | `POSTGRES_PASSWORD` | Yes | **Change from default** |
    | `REDIS_URL` | Yes | Default: `redis://redis:6379/0` |
    | `API_HOST` / `API_PORT` | Yes | Default: `0.0.0.0:8000` |
-   | `CORS_ALLOWED_ORIGINS` | Yes | Default: `http://localhost:5173` |
+   | `CORS_ALLOWED_ORIGINS` | Yes | Default: `http://localhost:5173` (internal), exposed as `5174` on host |
    | `ARTIFACT_ROOT` | Yes | Default: `./data/artifacts` |
    | `OLLAMA_BASE_URL` | Yes | Default: `http://ollama:11434` |
    | `OLLAMA_DEFAULT_MODEL` | Yes | Default: `qwen3:4b` |
@@ -93,6 +93,12 @@ docker compose run --rm api alembic upgrade head
 | 003 | `create_creator_stage_reviews` | `creator_stage_reviews` table |
 | 004 | `create_creator_scene_assets` | `creator_scene_assets` table |
 | 005 | `expand_artifact_typing_and_indexes` | `creator_artifacts` table + indexes |
+| 006 | `create_creator_script_drafts` | `creator_script_drafts` table |
+| 007 | `create_creator_visual_plans` | `creator_visual_plans` table |
+| 008 | `add_paragraph_artifact_index` | Paragraph artifact index |
+| 009 | `add_active_task_id` | `active_task_id` column on runs |
+| 010 | `widen_active_task_id` | Widens `active_task_id` column type |
+| 011 | `add_pasted_json_source_type` | `pasted_json` source type + `json_script` column |
 
 ### Step 4: Pull Ollama Model
 

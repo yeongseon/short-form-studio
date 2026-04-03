@@ -3,10 +3,10 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import ScriptComposer from "../components/creator/ScriptComposer";
 
 // Mock child editors to avoid complex setup
-vi.mock("../components/creator/MarkdownScriptEditor", () => ({
+vi.mock("../components/creator/JsonScriptEditor", () => ({
   default: (props: Record<string, unknown>) => (
-    <div data-testid="markdown-editor" data-readonly={String(props.readOnly)}>
-      MarkdownEditor
+    <div data-testid="json-editor" data-readonly={String(props.readOnly)}>
+      JsonEditor
     </div>
   ),
 }));
@@ -72,7 +72,7 @@ describe("ScriptComposer", () => {
     expect(screen.getByTestId("script-generating-indicator")).toBeInTheDocument();
   });
 
-  it("shows only markdown editor (no tabs, no structured editor)", () => {
+  it("shows only JSON editor (no tabs, no structured editor)", () => {
     render(
       <ScriptComposer
         runId={1}
@@ -80,7 +80,7 @@ describe("ScriptComposer", () => {
         sourceType="idea"
       />,
     );
-    expect(screen.getByTestId("markdown-editor")).toBeInTheDocument();
+    expect(screen.getByTestId("json-editor")).toBeInTheDocument();
     // No tab buttons or structured editor
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
     expect(screen.queryByText("Structured")).not.toBeInTheDocument();
@@ -94,7 +94,7 @@ describe("ScriptComposer", () => {
         sourceType="idea"
       />,
     );
-    expect(screen.getByTestId("markdown-editor")).toHaveAttribute("data-readonly", "false");
+    expect(screen.getByTestId("json-editor")).toHaveAttribute("data-readonly", "false");
   });
 
   it("editor is always editable regardless of stage", () => {
@@ -105,7 +105,7 @@ describe("ScriptComposer", () => {
         sourceType="idea"
       />,
     );
-    expect(screen.getByTestId("markdown-editor")).toHaveAttribute("data-readonly", "false");
+    expect(screen.getByTestId("json-editor")).toHaveAttribute("data-readonly", "false");
   });
 
   it("disables buttons when disabled prop is true", () => {

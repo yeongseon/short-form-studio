@@ -20,7 +20,7 @@ from shorts_api.routes.creator_visual_plan import router as visual_plan_router
 setup_json_logging(service_name="api", level="INFO")
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="short-form-pipeline API")
+app = FastAPI(title="short-form-studio API")
 
 cors_origins_env = os.getenv("CORS_ORIGINS")
 cors_origins = [

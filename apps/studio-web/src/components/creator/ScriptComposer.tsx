@@ -1,13 +1,14 @@
 /**
- * ScriptComposer — always-visible markdown editor + action buttons.
+ * ScriptComposer — always-visible JSON editor + action buttons.
  *
- * Shows only the MarkdownScriptEditor (single source of truth).
+ * Shows the JsonScriptEditor (single source of truth).
  * Structured metadata is shown in SceneCards below, not here.
- * When the user saves markdown, auto-parse runs and onScriptChange
- * fires so the parent can refresh downstream data (storyboard).
+ * When the user saves JSON, the backend parses it into sections
+ * and onScriptChange fires so the parent can refresh downstream
+ * data (storyboard).
  */
 
-import MarkdownScriptEditor from "./MarkdownScriptEditor";
+import JsonScriptEditor from "./JsonScriptEditor";
 import ModelSelector from "./ModelSelector";
 
 // --------------- types ---------------
@@ -17,7 +18,7 @@ export interface ScriptComposerProps {
   /** Current backend stage. */
   currentStage: string;
   /** Source type from the project. */
-  sourceType: "idea" | "markdown" | "url";
+  sourceType: "idea" | "markdown" | "json" | "pasted_json" | "url";
   /** Model selection state for script category. */
   selectedScriptModel?: string;
   /** Called when model selection changes. */
@@ -28,7 +29,7 @@ export interface ScriptComposerProps {
   onGenerate?: () => void;
   /** Called when script should be regenerated. */
   onRegenerate?: () => void;
-  /** Called after save+parse completes — parent should refresh storyboard. */
+  /** Called after save completes — parent should refresh storyboard. */
   onScriptChange?: () => void;
   /** Status message callback. */
   onStatusMessage?: (msg: string) => void;
@@ -118,7 +119,7 @@ export default function ScriptComposer({
       )}
 
       {/* Model selector for script */}
-      {(isIdeaReady || isReview) && sourceType !== "markdown" && onModelChange && (
+      {(isIdeaReady || isReview) && sourceType !== "markdown" && sourceType !== "json" && sourceType !== "pasted_json" && onModelChange && (
         <ModelSelector
           categories={["script"]}
           selectedModels={selectedScriptModel ? { script: selectedScriptModel } : undefined}
@@ -127,8 +128,8 @@ export default function ScriptComposer({
         />
       )}
 
-      {/* Markdown editor — single source of truth */}
-      <MarkdownScriptEditor
+      {/* JSON editor — single source of truth */}
+      <JsonScriptEditor
         runId={runId}
         readOnly={!isEditable}
         pollIntervalMs={isGenerating ? 3000 : undefined}
@@ -141,9 +142,8 @@ export default function ScriptComposer({
               : undefined
         }
         onSuccess={(action) => {
-          if (action === "save") onStatusMessage?.("Script saved");
-          if (action === "parse") {
-            onStatusMessage?.("Script parsed — scenes updated");
+          if (action === "save") {
+            onStatusMessage?.("Script saved — scenes updated");
             onScriptChange?.();
           }
         }}

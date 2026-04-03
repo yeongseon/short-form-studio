@@ -24,7 +24,7 @@ _PROVIDER_LABELS: dict[str, str] = {
     "elevenlabs": "ElevenLabs",
 }
 
-_ENV_FILE = Path(os.getenv("ENV_FILE_PATH", "/data/GitHub/short-form-pipeline/.env"))
+_ENV_FILE = Path(os.getenv("ENV_FILE_PATH", "/data/GitHub/short-form-studio/.env"))
 
 
 class ApiKeyUpdate(BaseModel):

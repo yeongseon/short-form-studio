@@ -1,3 +1,3 @@
-# short-form-pipeline
+# short-form-studio
 
 See `docs/` for architecture.

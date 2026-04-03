@@ -64,6 +64,7 @@ class InMemoryProjectStorage:
             "idea_brief": payload.get("idea_brief"),
             "markdown_source": payload.get("markdown_source"),
             "url_source": payload.get("url_source"),
+            "json_script": payload.get("json_script"),
             "status": payload.get("status", "draft"),
             "created_at": now,
             "updated_at": now,
@@ -156,7 +157,7 @@ class ProjectWithLatestRun(Project):
 
 
 class ProjectService:
-    _ALLOWED_SOURCE_TYPES = {"idea", "markdown", "url"}
+    _ALLOWED_SOURCE_TYPES = {"idea", "markdown", "url", "pasted_json"}
 
     def __init__(self, db: ProjectStorageBackend | None = None) -> None:
         self.db = db if db is not None else InMemoryProjectStorage()
@@ -164,10 +165,11 @@ class ProjectService:
     async def create_project(
         self,
         title: str,
-        source_type: Literal["idea", "markdown", "url"],
+        source_type: Literal["idea", "markdown", "url", "pasted_json"],
         idea_brief: str | None = None,
         markdown_source: str | None = None,
         url_source: str | None = None,
+        json_script: str | None = None,
     ) -> Project:
         if source_type not in self._ALLOWED_SOURCE_TYPES:
             raise ValueError(f"Unsupported source_type '{source_type}'")
@@ -188,6 +190,13 @@ class ProjectService:
         if source_type == "url" and (idea_brief is not None or markdown_source is not None):
             raise ValueError("source_type='url' cannot have idea_brief or markdown_source set")
 
+        if source_type == "pasted_json" and json_script is None:
+            raise ValueError("source_type='pasted_json' requires json_script to be provided")
+        if source_type == "pasted_json" and (idea_brief is not None or markdown_source is not None or url_source is not None):
+            raise ValueError("source_type='pasted_json' cannot have idea_brief, markdown_source, or url_source set")
+        if source_type != "pasted_json" and json_script is not None:
+            raise ValueError(f"source_type='{source_type}' cannot have json_script set")
+
         row = await self.db.insert_project(
             {
                 "title": title,
@@ -195,6 +204,7 @@ class ProjectService:
                 "idea_brief": idea_brief,
                 "markdown_source": markdown_source,
                 "url_source": url_source,
+                "json_script": json_script,
                 "status": "draft",
             }
         )

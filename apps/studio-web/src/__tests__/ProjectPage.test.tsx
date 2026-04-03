@@ -244,12 +244,12 @@ function mockFetchProjectAndRuns(
           Promise.resolve({ sections: [] }),
       } as Response);
     }
-    // GET /runs/:id/script/markdown
-    if (url.includes("/script/markdown")) {
+    // GET /runs/:id/script/json
+    if (url.includes("/script/json")) {
       return Promise.resolve({
         ok: true,
         json: () =>
-          Promise.resolve({ markdown: "# Test Script" }),
+          Promise.resolve({ json_script: '{"scenes":[]}', version: 1 }),
       } as Response);
     }
     // GET /runs/:id (for refreshRun)
@@ -403,14 +403,14 @@ describe("ProjectPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows markdown editor (no tabs) for SCRIPT_REVIEW via ScriptComposer", async () => {
+  it("shows JSON editor (no tabs) for SCRIPT_REVIEW via ScriptComposer", async () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
     renderPage();
     await waitFor(() => {
       expect(screen.getByTestId("script-composer")).toBeInTheDocument();
     });
-    // Markdown editor shown directly — no tab UI
-    expect(screen.getByTestId("markdown-editor")).toBeInTheDocument();
+    // JSON editor shown directly — no tab UI
+    expect(screen.getByTestId("json-editor")).toBeInTheDocument();
     expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
     // Confirm + Regenerate buttons visible (ScriptComposer labels)
     expect(
@@ -423,11 +423,11 @@ describe("ProjectPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows only markdown editor without structured tab", async () => {
+  it("shows only JSON editor without structured tab", async () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByTestId("markdown-editor")).toBeInTheDocument();
+      expect(screen.getByTestId("json-editor")).toBeInTheDocument();
     });
     // No structured tab or tablist present
     expect(screen.queryByText("Structured")).not.toBeInTheDocument();

@@ -16,7 +16,7 @@ if not db_url:
     password = os.getenv("POSTGRES_PASSWORD", "short_form_password")
     host = os.getenv("POSTGRES_HOST", "postgres")
     port = os.getenv("POSTGRES_PORT", "5432")
-    db = os.getenv("POSTGRES_DB", "short_form_pipeline")
+    db = os.getenv("POSTGRES_DB", "short_form_studio")
     db_url = f"postgresql://{user}:{password}@{host}:{port}/{db}"
 if db_url:
     config.set_main_option("sqlalchemy.url", db_url)

@@ -15,9 +15,10 @@ class PostgresProjectStorage:
                 idea_brief,
                 markdown_source,
                 url_source,
+                json_script,
                 status
             )
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING *
             """,
             payload.get("title"),
@@ -25,6 +26,7 @@ class PostgresProjectStorage:
             payload.get("idea_brief"),
             payload.get("markdown_source"),
             payload.get("url_source"),
+            payload.get("json_script"),
             payload.get("status", "draft"),
         )
         if row is None:

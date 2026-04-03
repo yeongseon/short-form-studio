@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class VisualOverride(BaseModel):
@@ -18,6 +18,10 @@ class ScriptSection(BaseModel):
     duration: float | None = None
     turn_kind: str | None = None
     visual_override: VisualOverride | None = None
+    image_prompt: str | None = None
+    mood: str | None = None
+    composition: str | None = None
+    style_tags: list[str] = Field(default_factory=list)
 
 
 class ScriptDraft(BaseModel):
@@ -28,6 +32,7 @@ class ScriptDraft(BaseModel):
         "pasted_markdown",
         "uploaded_markdown",
         "edited_manually",
+        "pasted_json",
     ]
     markdown_content: str | None = None
     structured_script: list[ScriptSection] | None = None

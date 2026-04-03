@@ -544,7 +544,7 @@ export default function ProjectPage() {
 
   const currentStage = run?.current_stage ?? "IDEA_READY";
   const isFailed = run?.status === "failed";
-  const showScriptComposer = true; // Always show markdown editor when run exists
+  const showScriptComposer = true; // Always show script editor (JSON) when run exists
   const isFinalReview = FINAL_REVIEW_STAGES.has(currentStage);
   const previewVideo = (preview as Record<string, unknown> | null)?.video;
   const previewVideoPath =
@@ -775,7 +775,7 @@ export default function ProjectPage() {
           <ScriptComposer
             runId={run.id}
             currentStage={currentStage}
-            sourceType={project.source_type as "idea" | "markdown" | "url"}
+            sourceType={project.source_type as "idea" | "markdown" | "json" | "pasted_json" | "url"}
             selectedScriptModel={modelSelection.script_model}
             onModelChange={handleModelChange}
             onConfirm={handleApprove}

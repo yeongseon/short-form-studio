@@ -1050,7 +1050,7 @@ async def get_storyboard(run_id: int) -> dict[str, object]:
             "order": idx,
             "text": section.text,
             "display_text": section.display_text,
-            "image_prompt": scene.prompt if scene else None,
+            "image_prompt": scene.prompt if scene else getattr(section, "image_prompt", None),
             "image_url": image_url,
             "audio_url": audio_url,
             "audio_duration": audio_duration,
