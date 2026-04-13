@@ -87,7 +87,7 @@ Navigate to `http://localhost:5174` to start creating.
 | LLM | Ollama | qwen3:4b |
 | Image | Stable Diffusion | SD 1.5 |
 | TTS | Qwen TTS | Local |
-| STT | Whisper | large-v3 |
+| STT | Whisper | small (configurable) |
 
 ### Remote (API key required)
 

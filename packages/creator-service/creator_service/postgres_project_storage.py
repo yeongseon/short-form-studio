@@ -74,14 +74,24 @@ class PostgresProjectStorage:
         }
 
 
+    _ALLOWED_COLUMNS = frozenset({
+        "title", "source_type", "idea_brief", "markdown_source",
+        "url_source", "json_script", "status",
+    })
+
     async def update_project(self, project_id: int, updates: dict[str, Any]) -> dict[str, Any] | None:
-        """Update project fields. Returns updated row or None if not found."""
-        if not updates:
+        """Update project fields. Returns updated row or None if not found.
+
+        Only columns listed in ``_ALLOWED_COLUMNS`` are accepted; unknown
+        keys are silently dropped to prevent SQL injection via dynamic column names.
+        """
+        safe_updates = {k: v for k, v in updates.items() if k in self._ALLOWED_COLUMNS}
+        if not safe_updates:
             return await self.fetch_project(project_id)
         set_clauses = []
         params: list[Any] = []
         idx = 1
-        for key, value in updates.items():
+        for key, value in safe_updates.items():
             set_clauses.append(f"{key} = ${idx}")
             params.append(value)
             idx += 1

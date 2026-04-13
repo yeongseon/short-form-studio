@@ -29,6 +29,7 @@ except ImportError:
 
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
+from creator_domain.sanitize import sanitize_path_component
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.run_service import run_service as _run_service
@@ -213,7 +214,8 @@ def generate_scene_image(
                         params = dict(entry.default_params or {})
                         if image_params:
                             params.update(image_params)
-                        target_path = str(asset_dir / f"{target_scene.scene_id}-{uuid4().hex}.png")
+                        safe_scene_id = sanitize_path_component(target_scene.scene_id, label="scene_id")
+                        target_path = str(asset_dir / f"{safe_scene_id}-{uuid4().hex}.png")
                         params["output_path"] = target_path
                         await provider.generate(effective_prompt, params)
 

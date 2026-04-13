@@ -63,3 +63,7 @@ jobs:
         run: cd apps/worker-orchestrator && python3 -m pytest tests/ -v --cov=tasks --cov-report=term-missing --cov-fail-under=40
       - name: Test Frontend (with coverage)
         run: npm --prefix apps/studio-web run test -- --coverage --coverage.thresholds.lines=60
+      - name: Build Frontend
+        run: npm --prefix apps/studio-web run build
+      - name: Typecheck Frontend
+        run: npx --prefix apps/studio-web tsc --noEmit

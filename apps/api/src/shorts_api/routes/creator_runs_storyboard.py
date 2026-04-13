@@ -333,10 +333,14 @@ async def generate_all_paragraph_subtitles(
     if not audio_artifacts:
         raise HTTPException(status_code=400, detail="No paragraph audio found. Generate audio first.")
 
+    # Deduplicate by section_id — only dispatch for the first (latest) audio
+    # artifact per section to avoid redundant subtitle generation on regeneration.
+    seen_sections: set[str] = set()
     task_ids: list[dict[str, str]] = []
     for audio in audio_artifacts:
-        if not audio.section_id:
+        if not audio.section_id or audio.section_id in seen_sections:
             continue
+        seen_sections.add(audio.section_id)
         try:
             tid = dispatch_paragraph_subtitles(
                 run_id=run_id,

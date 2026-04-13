@@ -150,23 +150,35 @@ export default function ProjectPage() {
     setRestarting(true);
     setStatusMessage(null);
     try {
-      const res = await fetch(`${API_BASE}/runs/${run.id}/restart`, {
+      const restartRes = await fetch(`${API_BASE}/runs/${run.id}/restart`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ stage: "SCRIPT_GENERATING" }),
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.detail ?? `Restart failed (${res.status})`);
+      if (!restartRes.ok) {
+        const body = await restartRes.json().catch(() => null);
+        throw new Error(body?.detail ?? `Restart failed (${restartRes.status})`);
       }
-      setStatusMessage("Restarting script generation…");
-      await refreshRun(run.id);
+      // Dispatch script generation task after stage reset
+      const genRes = await fetch(`${API_BASE}/runs/${run.id}/generate-script`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model_key: modelSelection.script_model || "qwen3-4b",
+        }),
+      });
+      if (!genRes.ok) {
+        const body = await genRes.json().catch(() => null);
+        throw new Error(body?.detail ?? `Generate failed (${genRes.status})`);
+      }
+      setStatusMessage("Restarting script generation\u2026");
+      setTimeout(() => refreshRun(run.id), 2000);
     } catch (err) {
       setStatusMessage(err instanceof Error ? err.message : "Restart failed");
     } finally {
       setRestarting(false);
     }
-  }, [run, refreshRun]);
+  }, [run, refreshRun, modelSelection.script_model]);
 
   const handleApproveVisualPlan = useCallback(async () => {
     if (!run) return;
@@ -221,23 +233,35 @@ export default function ProjectPage() {
     setRestarting(true);
     setStatusMessage(null);
     try {
-      const res = await fetch(`${API_BASE}/runs/${run.id}/restart`, {
+      const restartRes = await fetch(`${API_BASE}/runs/${run.id}/restart`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ stage: "VISUAL_PLAN_GENERATING" }),
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.detail ?? `Restart failed (${res.status})`);
+      if (!restartRes.ok) {
+        const body = await restartRes.json().catch(() => null);
+        throw new Error(body?.detail ?? `Restart failed (${restartRes.status})`);
       }
-      setStatusMessage("Restarting visual plan generation…");
-      await refreshRun(run.id);
+      // Dispatch visual plan generation task after stage reset
+      const genRes = await fetch(`${API_BASE}/runs/${run.id}/generate-visual-plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model_key: modelSelection.script_model || "qwen3-4b",
+        }),
+      });
+      if (!genRes.ok) {
+        const body = await genRes.json().catch(() => null);
+        throw new Error(body?.detail ?? `Generate failed (${genRes.status})`);
+      }
+      setStatusMessage("Restarting visual plan generation\u2026");
+      setTimeout(() => refreshRun(run.id), 2000);
     } catch (err) {
       setStatusMessage(err instanceof Error ? err.message : "Restart failed");
     } finally {
       setRestarting(false);
     }
-  }, [run, refreshRun]);
+  }, [run, refreshRun, modelSelection.script_model]);
 
   const handleRender = useCallback(async () => {
     if (!run) return;

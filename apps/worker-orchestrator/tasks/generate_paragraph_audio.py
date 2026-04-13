@@ -21,6 +21,7 @@ except ImportError:
     redis = None  # type: ignore[assignment]
 
 from celery_app import celery_app
+from creator_domain.sanitize import sanitize_path_component
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.audio_service import audio_service as _audio_service
@@ -96,7 +97,8 @@ def generate_paragraph_audio(
             lock_acquired = True
             gpu_lock_acquired_at = _utc_now_iso()
 
-        audio_path = f"{_ARTIFACT_ROOT}/{run_id}/audio/{section_id}.wav"
+        safe_section_id = sanitize_path_component(section_id, label="section_id")
+        audio_path = f"{_ARTIFACT_ROOT}/{run_id}/audio/{safe_section_id}.wav"
 
         try:
             os.makedirs(os.path.dirname(audio_path), exist_ok=True)

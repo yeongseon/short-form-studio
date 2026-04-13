@@ -104,8 +104,18 @@ app.include_router(visual_plan_router, prefix="/api/creator")
 app.include_router(settings_router, prefix="/api/creator")
 
 
+@app.get("/healthz")
+async def healthz() -> dict[str, str]:
+    """Lightweight liveness probe — no auth required."""
+    return {"status": "ok"}
+
+
 @app.get("/health")
 async def health() -> dict[str, object]:
+    """Detailed model health — endpoint URLs and error details are stripped.
+
+    Only returns model name, status, and response time.
+    """
     results = await model_health.check_all()
     all_healthy = all(r.status.value == "healthy" for r in results)
     return {
@@ -113,9 +123,7 @@ async def health() -> dict[str, object]:
         "models": {
             r.model_name: {
                 "status": r.status.value,
-                "endpoint": r.endpoint,
                 "response_time_ms": r.response_time_ms,
-                "error": r.error,
             }
             for r in results
         },

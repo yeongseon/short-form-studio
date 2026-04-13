@@ -21,6 +21,7 @@ except ImportError:
     redis = None  # type: ignore[assignment]
 
 from celery_app import celery_app
+from creator_domain.sanitize import sanitize_path_component
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
@@ -99,7 +100,8 @@ def generate_paragraph_subtitles(
             lock_acquired = True
             gpu_lock_acquired_at = _utc_now_iso()
 
-        subtitle_path = f"{_ARTIFACT_ROOT}/{run_id}/subtitles/{section_id}.{subtitle_format}"
+        safe_section_id = sanitize_path_component(section_id, label="section_id")
+        subtitle_path = f"{_ARTIFACT_ROOT}/{run_id}/subtitles/{safe_section_id}.{subtitle_format}"
 
         try:
             os.makedirs(os.path.dirname(subtitle_path), exist_ok=True)

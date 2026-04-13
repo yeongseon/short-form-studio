@@ -1,8 +1,15 @@
-"""Tests for health endpoint."""
+"""Tests for health and healthz endpoints."""
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from creator_service.model_health_service import ModelHealthResult, ModelStatus
+
+
+@pytest.mark.asyncio
+async def test_healthz_returns_ok(client):
+    response = await client.get("/healthz")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
 
 
 @pytest.mark.asyncio
@@ -29,23 +36,24 @@ async def test_health_returns_ok_when_all_healthy(client):
 
     assert response.status_code == 200
     body = response.json()
+    # Endpoint and error are stripped from the public response
     assert body == {
         "status": "ok",
         "models": {
             "ollama": {
                 "status": "healthy",
-                "endpoint": "http://ollama:11434",
                 "response_time_ms": 12.3,
-                "error": None,
             },
             "stable-diffusion": {
                 "status": "healthy",
-                "endpoint": "http://stable-diffusion:7860",
                 "response_time_ms": 45.6,
-                "error": None,
             },
         },
     }
+    # Ensure no endpoint or error fields leak
+    for model_info in body["models"].values():
+        assert "endpoint" not in model_info
+        assert "error" not in model_info
 
 
 @pytest.mark.asyncio
@@ -75,4 +83,5 @@ async def test_health_returns_degraded_when_model_unhealthy(client):
     assert body["status"] == "degraded"
     assert body["models"]["ollama"]["status"] == "healthy"
     assert body["models"]["stable-diffusion"]["status"] == "unhealthy"
-    assert body["models"]["stable-diffusion"]["error"] == "Connection refused"
+    # Error details should NOT be exposed publicly
+    assert "error" not in body["models"]["stable-diffusion"]
