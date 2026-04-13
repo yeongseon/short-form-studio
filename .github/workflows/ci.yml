@@ -54,19 +54,23 @@ jobs:
         run: npm --prefix apps/studio-web ci
       - name: Test Packages (with coverage)
         run: |
-          python3 -m pytest packages/creator-domain/tests/ -v --cov=creator_domain --cov-report=term-missing
-          python3 -m pytest packages/creator-provider/tests/ -v --cov=creator_provider --cov-report=term-missing
-          python3 -m pytest packages/creator-service/tests/ -v --cov=creator_service --cov-report=term-missing
+          python3 -m pytest packages/creator-domain/tests/ -v --cov=creator_domain --cov-report=term-missing --cov-fail-under=60
+          python3 -m pytest packages/creator-provider/tests/ -v --cov=creator_provider --cov-report=term-missing --cov-fail-under=60
+          python3 -m pytest packages/creator-service/tests/ -v --cov=creator_service --cov-report=term-missing --cov-fail-under=60
       - name: Test API (with coverage)
-        run: cd apps/api && python3 -m pytest tests/ -v --cov=shorts_api --cov-report=term-missing --cov-fail-under=60
+        run: cd apps/api && python3 -m pytest tests/ -v --cov=shorts_api --cov-report=term-missing --cov-fail-under=75
       - name: Test Worker (with coverage)
-        run: cd apps/worker-orchestrator && python3 -m pytest tests/ -v --cov=tasks --cov-report=term-missing --cov-fail-under=40
+        run: cd apps/worker-orchestrator && python3 -m pytest tests/ -v --cov=tasks --cov-report=term-missing --cov-fail-under=60
       - name: Test Frontend (with coverage)
-        run: npm --prefix apps/studio-web run test -- --coverage --coverage.thresholds.lines=60
+        run: npm --prefix apps/studio-web run test -- --coverage --coverage.thresholds.lines=75
       - name: Build Frontend
         run: npm --prefix apps/studio-web run build
       - name: Typecheck Frontend
         run: npx --prefix apps/studio-web tsc --noEmit
+      - name: Typecheck Python (basedpyright)
+        run: |
+          pip install basedpyright
+          basedpyright apps packages
 
   docker:
     runs-on: ubuntu-latest
@@ -80,3 +84,11 @@ jobs:
         run: docker build --target runtime -f apps/studio-web/Dockerfile .
       - name: Build Worker runtime image
         run: docker build --target runtime -f apps/worker-orchestrator/Dockerfile .
+      - name: Smoke-test compose up
+        run: |
+          docker compose up -d postgres redis api
+          # Wait for API health endpoint
+          timeout 60 bash -c 'until curl -sf http://localhost:8000/healthz; do sleep 2; done'
+          # Verify API responds
+          curl -sf http://localhost:8000/healthz
+          docker compose down

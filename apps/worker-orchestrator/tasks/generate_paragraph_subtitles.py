@@ -15,10 +15,11 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
+redis: Any  # optional dependency; may be None at runtime
 try:
     import redis
 except ImportError:
-    redis = None  # type: ignore[assignment]
+    redis = None
 
 from celery_app import celery_app
 from creator_domain.sanitize import sanitize_path_component

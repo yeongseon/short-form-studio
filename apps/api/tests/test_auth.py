@@ -25,6 +25,10 @@ def _make_app(api_key: str | None = None) -> FastAPI:
     async def health():
         return {"status": "ok"}
 
+    @test_app.get("/healthz")
+    async def healthz():
+        return {"status": "ok"}
+
     @test_app.get("/api/data")
     async def get_data():
         return {"data": "secret"}
@@ -84,11 +88,17 @@ async def test_no_api_key_allows_api_routes(open_client):
 
 
 @pytest.mark.asyncio
-async def test_health_always_public(authed_client):
-    """Health endpoint should be accessible without auth even when API_KEY is set."""
+async def test_health_requires_auth_when_api_key_set(authed_client):
+    """Detailed /health endpoint requires auth when API_KEY is set."""
     response = await authed_client.get("/health")
-    assert response.status_code == 200
+    assert response.status_code == 401
 
+
+@pytest.mark.asyncio
+async def test_healthz_always_public(authed_client):
+    """Liveness probe /healthz should be accessible without auth even when API_KEY is set."""
+    response = await authed_client.get("/healthz")
+    assert response.status_code == 200
 
 @pytest.mark.asyncio
 async def test_docs_require_auth_when_api_key_set(authed_client):

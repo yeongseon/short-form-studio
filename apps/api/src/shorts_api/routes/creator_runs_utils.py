@@ -1,11 +1,14 @@
 """Shared helpers and task dispatch for creator run routes."""
 
 import json
+import logging
 from collections.abc import Callable, Mapping
 from importlib import import_module
 from typing import Any, cast
 
 from fastapi import HTTPException
+
+logger = logging.getLogger(__name__)
 
 
 def dispatch_generate_script(
@@ -154,7 +157,7 @@ def _revoke_active_tasks(active_task_id: str | None) -> None:
             if tid:
                 celery_app.control.revoke(tid, terminate=True)
     except Exception:
-        pass  # Best-effort: tasks may have already completed
+        logger.warning("Failed to revoke active tasks (task_id=%s)", active_task_id, exc_info=True)
 
 
 async def _append_task_id(run_id: int, task_id: str, *, run_service: Any | None = None) -> None:

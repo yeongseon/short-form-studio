@@ -15,7 +15,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.responses import Response
 
 # Paths that never require authentication
-_PUBLIC_PATHS = frozenset({"/health", "/healthz"})
+_PUBLIC_PATHS = frozenset({"/healthz"})
 
 
 class ApiKeyMiddleware(BaseHTTPMiddleware):

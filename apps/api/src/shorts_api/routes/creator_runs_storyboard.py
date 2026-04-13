@@ -1,5 +1,6 @@
 """Storyboard assembly and paragraph operation routes."""
 
+import logging
 from typing import Any
 
 from creator_service.audio_service import audio_service
@@ -16,6 +17,8 @@ from shorts_api.routes.creator_runs_utils import (
     dispatch_paragraph_audio,
     dispatch_paragraph_subtitles,
 )
+
+logger = logging.getLogger(__name__)
 
 STORYBOARD_ALLOWED_STAGES = frozenset({
     "VISUAL_ASSET_REVIEW",
@@ -301,6 +304,7 @@ async def generate_all_paragraph_audio(
             await _append_task_id(run_id, tid, run_service=run_service)
             task_ids.append({"section_id": section.section_id, "task_id": tid})
         except Exception:
+            logger.exception("Failed to dispatch audio task for section %s of run %s", section.section_id, run_id)
             task_ids.append({"section_id": section.section_id, "task_id": "", "error": "dispatch_failed"})
 
     failed_count = sum(1 for t in task_ids if "error" in t)
@@ -352,6 +356,7 @@ async def generate_all_paragraph_subtitles(
             await _append_task_id(run_id, tid, run_service=run_service)
             task_ids.append({"section_id": audio.section_id, "task_id": tid})
         except Exception:
+            logger.exception("Failed to dispatch subtitle task for section %s of run %s", audio.section_id, run_id)
             task_ids.append({"section_id": audio.section_id, "task_id": "", "error": "dispatch_failed"})
 
     failed_count = sum(1 for t in task_ids if "error" in t)

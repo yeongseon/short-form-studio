@@ -78,7 +78,8 @@ class FFmpegService:
                 f"{concat_inputs}concat="
                 f"n={len(input_data.image_paths)}:v=1:a=0[vcat]"
             )
-            escaped = _escape_subtitle_path(input_data.subtitle_path)  # type: ignore[arg-type]
+            assert input_data.subtitle_path is not None  # guaranteed by need_subs check
+            escaped = _escape_subtitle_path(input_data.subtitle_path)
             filter_parts.append(
                 f"[vcat]subtitles={escaped}"
                 f":force_style='FontSize={self.profile.subtitle_font_size}'[vout]"

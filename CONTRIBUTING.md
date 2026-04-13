@@ -22,9 +22,10 @@ Thank you for your interest in contributing! This guide will help you get starte
 
 ```bash
 # Install dependencies
-cd apps/api && pip install -r requirements.txt -r requirements-dev.txt
+pip install -r apps/api/requirements.txt -r apps/api/requirements-dev.txt
+pip install -r apps/worker-orchestrator/requirements.txt -r apps/worker-orchestrator/requirements-dev.txt
 # Install local packages
-pip install -e packages/creator-domain packages/creator-service packages/creator-provider
+pip install -e packages/creator-domain -e packages/creator-service -e packages/creator-provider
 
 # Run lint
 python3 -m ruff check apps packages

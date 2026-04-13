@@ -22,10 +22,11 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+redis: Any  # optional dependency; may be None at runtime
 try:
     import redis
 except ImportError:
-    redis = None  # type: ignore[assignment]
+    redis = None
 
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
