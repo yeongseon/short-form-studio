@@ -122,19 +122,39 @@ export function useProjectData(projectId: number): UseProjectDataResult {
       const field = fieldMap[category];
       if (!field) return;
 
+      const previousValue = modelSelection[field];
+
       setModelSelection((prev) => ({ ...prev, [field]: modelKey }));
 
       if (run) {
-        apiFetch(`${API_BASE}/runs/${run.id}/model-defaults`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ [field]: modelKey }),
-        }).catch((err: unknown) => {
-          console.error('Failed to persist model-default change', err);
-        });
+        void (async () => {
+          try {
+            const response = await apiFetch(`${API_BASE}/runs/${run.id}/model-defaults`, {
+              method: "PATCH",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ [field]: modelKey }),
+            });
+
+            if (!response.ok) {
+              const body = await response.json().catch(() => null);
+              const detail = body?.detail ?? `Failed to persist model-default change (${response.status})`;
+              throw new Error(detail);
+            }
+          } catch (err) {
+            setModelSelection((prev) => {
+              if (previousValue === undefined) {
+                const next = { ...prev };
+                delete next[field];
+                return next;
+              }
+              return { ...prev, [field]: previousValue };
+            });
+            console.error("Failed to persist model-default change", err);
+          }
+        })();
       }
     },
-    [run],
+    [modelSelection, run],
   );
 
   return {
