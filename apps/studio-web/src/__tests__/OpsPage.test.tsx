@@ -61,7 +61,7 @@ describe("OpsPage", () => {
     const card = screen.getByTestId("ops-tool-health");
     const link = card.querySelector("a");
     expect(link).not.toBeNull();
-    expect(link?.getAttribute("href")).toBe("http://localhost:8000/health");
+    expect(link?.getAttribute("href")).toBe("/health");
   });
 
   it("links docs card to API docs endpoint", () => {
@@ -69,7 +69,7 @@ describe("OpsPage", () => {
     const card = screen.getByTestId("ops-tool-docs");
     const link = card.querySelector("a");
     expect(link).not.toBeNull();
-    expect(link?.getAttribute("href")).toBe("http://localhost:8000/docs");
+    expect(link?.getAttribute("href")).toBe("/docs");
   });
 
 });

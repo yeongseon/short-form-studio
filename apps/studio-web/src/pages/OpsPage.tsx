@@ -1,12 +1,9 @@
-const API_BASE_URL =
-  import.meta.env.VITE_API_BASE_URL ||
-  `${window.location.protocol}//${window.location.hostname}:8000`;
-
 const OPS_TOOLS = [
   {
     id: "monitoring",
     title: "Task Monitoring",
-    description: "View Celery task queue, worker status, and task history via Flower (internal service URL).",
+    description:
+      "View Celery task queue, worker status, and task history via Flower. Requires direct network access to the Flower service.",
     link: `${window.location.protocol}//${window.location.hostname}:5555`,
     external: true,
     icon: "📊",
@@ -15,7 +12,7 @@ const OPS_TOOLS = [
     id: "health",
     title: "System Health",
     description: "Check API, database, Redis, and worker connectivity status.",
-    link: `${API_BASE_URL}/health`,
+    link: "/health",
     external: true,
     icon: "🩺",
   },
@@ -23,7 +20,7 @@ const OPS_TOOLS = [
     id: "docs",
     title: "API Documentation",
     description: "Interactive API reference for all creator endpoints.",
-    link: `${API_BASE_URL}/docs`,
+    link: "/docs",
     external: true,
     icon: "📖",
   },
