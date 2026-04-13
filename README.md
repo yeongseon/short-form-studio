@@ -79,11 +79,17 @@ docker compose --profile gpu up -d
 docker compose run --rm api alembic upgrade head
 ```
 
-### 4. Pull the default LLM model
+### 4. (Optional) Pull the default LLM model
+
+Only needed when using the `gpu` profile for local AI inference.
 
 ```bash
+docker compose --profile gpu up -d ollama
+# Wait for the container to be healthy, then:
 docker compose exec ollama ollama pull qwen3:4b
 ```
+
+> Skip this step if you use remote LLM providers (OpenAI, Anthropic, Google).
 
 ### 5. Open the Studio
 

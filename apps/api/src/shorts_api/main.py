@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 
 from creator_service.db import close_pool
 from creator_service.logging_config import setup_json_logging
-from creator_service.model_health_service import ModelHealthService
+from creator_service.model_health_service import ModelHealthService, ModelStatus
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -117,7 +117,13 @@ async def health() -> dict[str, object]:
     Only returns model name, status, and response time.
     """
     results = await model_health.check_all()
-    all_healthy = all(r.status.value == "healthy" for r in results)
+    # Only consider providers with a definitive status (healthy/unhealthy) for
+    # overall readiness.  UNKNOWN means "not configured" and should not
+    # degrade a correctly-configured deployment.
+    definitive = [r for r in results if r.status != ModelStatus.UNKNOWN]
+    all_healthy = len(definitive) > 0 and all(
+        r.status == ModelStatus.HEALTHY for r in definitive
+    )
     return {
         "status": "ok" if all_healthy else "degraded",
         "models": {

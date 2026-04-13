@@ -125,6 +125,7 @@ export default function CreatePage() {
     async (data: IdeaFormData) => {
       setSubmitting(true);
       setError(null);
+      let projectId: number | null = null;
 
       try {
         // 1. Create project
@@ -144,6 +145,7 @@ export default function CreatePage() {
         }
 
         const project = await projRes.json();
+        projectId = project.id;
 
         // 2. Create run
         const runRes = await apiFetch(`${API_BASE}/projects/${project.id}/runs`, {
@@ -167,6 +169,10 @@ export default function CreatePage() {
         // 3. Navigate to project page
         navigate(`/projects/${project.id}`);
       } catch (err) {
+        // Clean up orphaned project if run creation failed
+        if (projectId !== null) {
+          await apiFetch(`${API_BASE}/projects/${projectId}`, { method: "DELETE" }).catch(() => {});
+        }
         setError(err instanceof Error ? err.message : "An unexpected error occurred");
       } finally {
         setSubmitting(false);
@@ -184,12 +190,13 @@ export default function CreatePage() {
     try {
       JSON.parse(jsonScript);
     } catch {
-      setError("Invalid JSON — please check the syntax.");
+      setError("Invalid JSON \u2014 please check the syntax.");
       return;
     }
 
     setSubmitting(true);
     setError(null);
+    let projectId: number | null = null;
 
     try {
       // 1. Create project
@@ -209,6 +216,7 @@ export default function CreatePage() {
       }
 
       const project = await projRes.json();
+      projectId = project.id;
 
       // 2. Import JSON (creates run + saves structured draft in one call)
       const importRes = await apiFetch(`${API_BASE}/projects/${project.id}/script/import-json`, {
@@ -229,6 +237,10 @@ export default function CreatePage() {
       // 3. Navigate to project page
       navigate(`/projects/${project.id}`);
     } catch (err) {
+      // Clean up orphaned project if import failed
+      if (projectId !== null) {
+        await apiFetch(`${API_BASE}/projects/${projectId}`, { method: "DELETE" }).catch(() => {});
+      }
       setError(err instanceof Error ? err.message : "An unexpected error occurred");
     } finally {
       setSubmitting(false);

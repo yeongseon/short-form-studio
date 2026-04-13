@@ -63,9 +63,9 @@ async def test_remote_provider_unhealthy_when_api_key_missing(
 
     result = await health_service.check_model("api.openai.com")
 
-    assert result.status == ModelStatus.UNHEALTHY
+    assert result.status == ModelStatus.UNKNOWN
     assert result.endpoint == "api.openai.com"
-    assert result.error == "API key not configured"
+    assert result.error == "API key not configured (optional)"
 
 
 @pytest.mark.asyncio

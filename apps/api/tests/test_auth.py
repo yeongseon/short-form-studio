@@ -196,3 +196,23 @@ async def test_x_api_key_takes_precedence(authed_client, api_key):
         headers={"X-API-Key": api_key, "Authorization": "Bearer wrong-key"},
     )
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_cors_preflight_bypasses_auth(authed_client):
+    """CORS preflight (OPTIONS with Origin) should bypass auth even when API_KEY is set."""
+    response = await authed_client.options(
+        "/api/data",
+        headers={
+            "Origin": "http://localhost:5174",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+    assert response.status_code != 401
+
+
+@pytest.mark.asyncio
+async def test_options_without_origin_requires_auth(authed_client):
+    """OPTIONS without Origin header is not CORS preflight — should require auth."""
+    response = await authed_client.options("/api/data")
+    assert response.status_code == 401

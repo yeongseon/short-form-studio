@@ -142,7 +142,7 @@ docker compose --profile monitoring up -d flower
 
 ```bash
 # API health
-curl -f http://localhost:8000/api/health
+curl -f http://localhost:8000/health
 
 # Studio Web
 curl -sf http://localhost:5174/ | head -1
@@ -150,10 +150,10 @@ curl -sf http://localhost:5174/ | head -1
 # Flower (if monitoring profile enabled)
 curl -sf http://localhost:5555/
 
-# Ollama
+# Ollama (GPU profile only)
 curl -f http://localhost:11434/api/tags
 
-# Stable Diffusion
+# Stable Diffusion (GPU profile only)
 curl -f http://localhost:7860/sdapi/v1/options
 ```
 
@@ -232,7 +232,7 @@ Each `*_REVIEW` stage requires explicit approval before advancing.
 | Service | Bind Address | Port | Protocol | Notes |
 |---|---|---|---|---|
 | API (FastAPI) | 127.0.0.1 | 8000 | HTTP | Internal only |
-| Studio Web (Vite) | 0.0.0.0 | 5174 | HTTP | Public-facing |
+| Studio Web (nginx) | 0.0.0.0 | 5174→8080 | HTTP | Public-facing, SPA + reverse proxy |
 | PostgreSQL | 127.0.0.1 | 5432 | TCP | Internal only |
 | Redis | 127.0.0.1 | 6379 | TCP | Internal only |
 | Ollama | 127.0.0.1 | 11434 | HTTP | GPU profile only |
@@ -257,7 +257,7 @@ Each `*_REVIEW` stage requires explicit approval before advancing.
 
 ## Artifact Storage
 
-- Path: `data/artifacts/{project_id}/{run_id}/`
+- Path: `data/artifacts/{run_id}/`
 - Stored locally on host filesystem
 - Mounted into worker container via Docker volume
 - Types: `idea`, `script`, `visual_plan`, `visual_asset`, `audio`, `subtitle`, `video`, `render_manifest`
