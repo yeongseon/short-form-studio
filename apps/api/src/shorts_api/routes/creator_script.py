@@ -11,6 +11,12 @@ from creator_service.script_service import script_service
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, ValidationError
 
+_SCRIPT_EDIT_STAGES = frozenset({
+    RunStage.IDEA_READY.value,
+    RunStage.SCRIPT_REVIEW.value,
+    RunStage.SCRIPT_GENERATING.value,
+})
+
 router = APIRouter(prefix="/projects/{project_id}/script", tags=["script"])
 run_script_router = APIRouter(prefix="/runs/{run_id}/script", tags=["script"])
 
@@ -119,6 +125,14 @@ async def get_script_markdown(run_id: int) -> dict[str, object]:
     run = await run_service.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    if run.current_stage not in _SCRIPT_EDIT_STAGES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cannot modify script in stage '{run.current_stage}'; "
+                f"allowed stages: {sorted(_SCRIPT_EDIT_STAGES)}"
+            ),
+        )
 
     draft = await script_service.get_active_draft(run_id)
     if draft is None:
@@ -136,6 +150,14 @@ async def get_script(run_id: int) -> dict[str, object]:
     run = await run_service.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    if run.current_stage not in _SCRIPT_EDIT_STAGES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cannot modify script in stage '{run.current_stage}'; "
+                f"allowed stages: {sorted(_SCRIPT_EDIT_STAGES)}"
+            ),
+        )
 
     draft = await script_service.get_active_draft(run_id)
     if draft is None:
@@ -157,6 +179,14 @@ async def get_script_structured(run_id: int) -> dict[str, object]:
     run = await run_service.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    if run.current_stage not in _SCRIPT_EDIT_STAGES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cannot modify script in stage '{run.current_stage}'; "
+                f"allowed stages: {sorted(_SCRIPT_EDIT_STAGES)}"
+            ),
+        )
 
     draft = await script_service.get_active_draft(run_id)
     if draft is None:
@@ -174,6 +204,14 @@ async def get_script_json(run_id: int) -> dict[str, object]:
     run = await run_service.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    if run.current_stage not in _SCRIPT_EDIT_STAGES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cannot modify script in stage '{run.current_stage}'; "
+                f"allowed stages: {sorted(_SCRIPT_EDIT_STAGES)}"
+            ),
+        )
 
     draft = await script_service.get_active_draft(run_id)
     if draft is None:
