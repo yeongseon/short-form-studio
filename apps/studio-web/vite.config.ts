@@ -13,8 +13,11 @@ export default defineConfig(({ mode }) => {
   };
 
   return {
+    // Dev server binds to localhost by default. Set VITE_DEV_HOST=0.0.0.0
+    // to expose on the LAN — be aware this also exposes the API proxy
+    // (and VITE_API_KEY if set) to network neighbours.
     server: {
-      host: "0.0.0.0",
+      host: env.VITE_DEV_HOST ?? "127.0.0.1",
       port: 5173,
       proxy: {
         "/api": proxyConfig,
