@@ -882,7 +882,7 @@ async def test_generate_script_wrong_stage_visual(client, stub_generate_services
         json={},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "VISUAL_PLAN_GENERATING" in response.json()["detail"]
 
 
@@ -1138,7 +1138,7 @@ async def test_generate_visual_plan_wrong_stage(client, stub_generate_visual_pla
         json={},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "IDEA_READY" in response.json()["detail"]
 
 
@@ -1152,7 +1152,7 @@ async def test_generate_visual_plan_wrong_stage_visual_review(client, stub_gener
         json={},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "VISUAL_PLAN_REVIEW" in response.json()["detail"]
 
 
@@ -1343,7 +1343,7 @@ async def test_generate_visual_assets_wrong_stage(client, stub_generate_visual_a
         json={},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "IDEA_READY" in response.json()["detail"]
 
 
@@ -1357,7 +1357,7 @@ async def test_generate_visual_assets_wrong_stage_script_review(client, stub_gen
         json={},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "SCRIPT_REVIEW" in response.json()["detail"]
 
 
@@ -1491,7 +1491,7 @@ async def test_generate_scene_image_wrong_stage(client, stub_single_scene_servic
         "/api/creator/runs/72/visual-plan/scenes/scene-sec-0/generate-image",
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "SCRIPT_REVIEW" in response.json()["detail"]
     assert len(dispatcher.calls) == 0
 
@@ -1582,7 +1582,7 @@ async def test_regenerate_scene_image_wrong_stage(client, stub_single_scene_serv
         json={},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "VISUAL_PLAN_REVIEW" in response.json()["detail"]
     assert len(dispatcher.calls) == 0
 
@@ -1597,7 +1597,7 @@ async def test_regenerate_scene_image_wrong_stage_script(client, stub_single_sce
         json={},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert len(dispatcher.calls) == 0
 
 
@@ -1927,7 +1927,7 @@ async def test_select_active_asset_wrong_stage(client, stub_select_services):
     response = await client.post(
         "/api/creator/runs/101/visual-assets/scene-0/select/1"
     )
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "SCRIPT_REVIEW" in response.json()["detail"]
 
 
@@ -2108,7 +2108,7 @@ async def test_generate_audio_wrong_stage(client, stub_generate_audio_services):
         json={},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "IDEA_READY" in response.json()["detail"]
 
 
@@ -2122,7 +2122,7 @@ async def test_generate_audio_wrong_stage_script_review(client, stub_generate_au
         json={},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "SCRIPT_REVIEW" in response.json()["detail"]
 
 
@@ -2322,7 +2322,7 @@ async def test_generate_subtitles_wrong_stage(client, stub_generate_subtitles_se
         json={},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "IDEA_READY" in response.json()["detail"]
 
 
@@ -2336,7 +2336,7 @@ async def test_generate_subtitles_wrong_stage_visual(client, stub_generate_subti
         json={},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "VISUAL_ASSET_REVIEW" in response.json()["detail"]
 
 
@@ -2527,7 +2527,7 @@ async def test_render_wrong_stage(client, stub_generate_render_services):
         json={},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "IDEA_READY" in response.json()["detail"]
 
 

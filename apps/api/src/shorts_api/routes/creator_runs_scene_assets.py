@@ -55,7 +55,7 @@ async def generate_scene_image_endpoint(
     allowed_stages = frozenset({"VISUAL_PLAN_REVIEW", "VISUAL_ASSET_GENERATING", "VISUAL_ASSET_REVIEW"})
     if run.current_stage not in allowed_stages:
         raise HTTPException(
-            status_code=400,
+            status_code=409,
             detail=f"Run is in stage '{run.current_stage}', "
             f"expected one of {sorted(allowed_stages)}",
         )
@@ -99,7 +99,7 @@ async def regenerate_scene_image_endpoint(
     allowed_stages = frozenset({"VISUAL_ASSET_REVIEW", "VISUAL_ASSET_GENERATING"})
     if run.current_stage not in allowed_stages:
         raise HTTPException(
-            status_code=400,
+            status_code=409,
             detail=f"Run is in stage '{run.current_stage}', "
             f"expected one of {sorted(allowed_stages)}",
         )
@@ -171,7 +171,7 @@ async def select_active_asset(run_id: int, scene_id: str, asset_id: int) -> dict
     allowed_stages = frozenset({"VISUAL_ASSET_REVIEW", "VISUAL_ASSET_GENERATING"})
     if run.current_stage not in allowed_stages:
         raise HTTPException(
-            status_code=400,
+            status_code=409,
             detail=f"Run is in stage '{run.current_stage}', "
             f"expected one of {sorted(allowed_stages)}",
         )
@@ -196,7 +196,7 @@ async def generate_audio_trigger(run_id: int, request: GenerateAudioRequest) -> 
     allowed_stages = frozenset(stage.value for stage in TRIGGER_POLICY["generate_audio"])
     if run.current_stage not in allowed_stages:
         raise HTTPException(
-            status_code=400,
+            status_code=409,
             detail=f"Run is in stage '{run.current_stage}', "
             f"expected one of {sorted(allowed_stages)}",
         )
@@ -228,7 +228,7 @@ async def generate_subtitles_trigger(run_id: int, request: GenerateSubtitlesRequ
     allowed_stages = frozenset({"AUDIO_GENERATING", "SUBTITLE_GENERATING"})
     if run.current_stage not in allowed_stages:
         raise HTTPException(
-            status_code=400,
+            status_code=409,
             detail=f"Run is in stage '{run.current_stage}', "
             f"expected one of {sorted(allowed_stages)}",
         )
@@ -260,7 +260,7 @@ async def render_trigger(run_id: int, request: RenderRequest) -> dict[str, objec
     allowed_stages = frozenset({"SUBTITLE_GENERATING", "RENDER_GENERATING"})
     if run.current_stage not in allowed_stages:
         raise HTTPException(
-            status_code=400,
+            status_code=409,
             detail=f"Run is in stage '{run.current_stage}', "
             f"expected one of {sorted(allowed_stages)}",
         )

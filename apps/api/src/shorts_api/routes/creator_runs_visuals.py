@@ -53,7 +53,7 @@ async def generate_visual_plan_trigger(run_id: int, request: GenerateVisualPlanR
     allowed_stages = frozenset(stage.value for stage in TRIGGER_POLICY["generate_visual_plan"])
     if run.current_stage not in allowed_stages:
         raise HTTPException(
-            status_code=400,
+            status_code=409,
             detail=f"Run is in stage '{run.current_stage}', "
             f"expected one of {sorted(allowed_stages)}",
         )
@@ -87,7 +87,7 @@ async def generate_visual_assets_trigger(
     allowed_stages = frozenset(stage.value for stage in TRIGGER_POLICY["generate_visual_assets"])
     if run.current_stage not in allowed_stages:
         raise HTTPException(
-            status_code=400,
+            status_code=409,
             detail=f"Run is in stage '{run.current_stage}', "
             f"expected one of {sorted(allowed_stages)}",
         )

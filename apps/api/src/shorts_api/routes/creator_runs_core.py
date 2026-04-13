@@ -198,7 +198,7 @@ async def generate_script_trigger(run_id: int, request: GenerateScriptRequest) -
     allowed_stages = frozenset(stage.value for stage in TRIGGER_POLICY["generate_script"])
     if run.current_stage not in allowed_stages:
         raise HTTPException(
-            status_code=400,
+            status_code=409,
             detail=f"Run is in stage '{run.current_stage}', "
             f"expected one of {sorted(allowed_stages)}",
         )
