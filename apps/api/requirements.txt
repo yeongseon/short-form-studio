@@ -1,14 +1,15 @@
-fastapi
-uvicorn
-celery
-redis
-alembic
-sqlalchemy
-psycopg2-binary
+fastapi==0.129.0
+uvicorn==0.40.0
+celery==5.6.3
+redis==6.4.0
+alembic==1.18.4
+sqlalchemy==2.0.48
+psycopg2-binary==2.9.11
 
 
 # Dev dependencies
-ruff
-pytest
-httpx
-pytest-asyncio
+ruff==0.11.13
+pytest==8.4.2
+pytest-cov==4.1.0
+httpx==0.28.1
+pytest-asyncio==0.26.0

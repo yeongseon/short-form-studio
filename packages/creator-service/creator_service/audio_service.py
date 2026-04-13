@@ -15,7 +15,6 @@ from typing import Any, Protocol
 
 from creator_domain.models.audio_artifact import AudioArtifact
 
-
 # ---------------------------------------------------------------------------
 # Storage Protocol
 # ---------------------------------------------------------------------------

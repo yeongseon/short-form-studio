@@ -4,8 +4,7 @@
  *
  * Mirrors backend models in creator_domain.models.storyboard.
  */
-
-const API_BASE = "/api/creator";
+import { API_BASE } from "../types/api";
 
 // --------------- types ---------------
 
@@ -54,6 +53,13 @@ export interface StoryboardParagraph {
   duration: number | null;
   turn_kind: string | null;
   visual_override: { type: "prompt" | "image_url" | "none"; value: string | null } | null;
+}
+
+export interface BulkDispatchResponse {
+  run_id: number;
+  tasks: Array<{ section_id: string; task_id: string; error?: string }>;
+  total: number;
+  failed?: number;
 }
 
 export interface StoryboardResponse {
@@ -148,7 +154,7 @@ export async function generateParagraphSubtitles(
 export async function generateAllParagraphAudio(
   runId: number,
   params: ParagraphAudioParams = {},
-): Promise<{ dispatched: number }> {
+): Promise<BulkDispatchResponse> {
   const res = await fetch(
     `${API_BASE}/runs/${runId}/storyboard/generate-all-audio`,
     {
@@ -173,7 +179,7 @@ export async function generateAllParagraphAudio(
 export async function generateAllParagraphSubtitles(
   runId: number,
   params: ParagraphSubtitlesParams = {},
-): Promise<{ dispatched: number }> {
+): Promise<BulkDispatchResponse> {
   const res = await fetch(
     `${API_BASE}/runs/${runId}/storyboard/generate-all-subtitles`,
     {

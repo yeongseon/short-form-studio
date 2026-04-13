@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
-import threading
 from typing import Any
 
 import asyncpg
@@ -14,8 +14,22 @@ import asyncpg
 # loop changes.
 _pool: asyncpg.Pool | None = None
 _pool_loop: asyncio.AbstractEventLoop | None = None
-_pool_thread_lock = threading.Lock()
+_pool_init_lock: asyncio.Lock | None = None
+_pool_init_lock_loop: asyncio.AbstractEventLoop | None = None
 
+
+def _get_init_lock() -> asyncio.Lock:
+    """Return an asyncio.Lock bound to the current event loop.
+    
+    Creates a new lock when the event loop changes (e.g. Celery worker
+    starts a new asyncio.run() per task).
+    """
+    global _pool_init_lock, _pool_init_lock_loop
+    current_loop = asyncio.get_running_loop()
+    if _pool_init_lock is None or _pool_init_lock_loop is not current_loop:
+        _pool_init_lock = asyncio.Lock()
+        _pool_init_lock_loop = current_loop
+    return _pool_init_lock
 
 async def get_pool() -> asyncpg.Pool:
     global _pool, _pool_loop
@@ -26,17 +40,15 @@ async def get_pool() -> asyncpg.Pool:
         return _pool
 
     # Slow path – need to create (or recreate) the pool.
-    with _pool_thread_lock:
+    async with _get_init_lock():
         # Double-check after acquiring lock.
         if _pool is not None and _pool_loop is current_loop:
             return _pool
 
         # Close stale pool from a previous event loop (best-effort).
         if _pool is not None:
-            try:
+            with contextlib.suppress(Exception):
                 await asyncio.wait_for(_pool.close(), timeout=2.0)
-            except Exception:
-                pass  # Old loop may already be gone; nothing we can do.
             _pool = None
             _pool_loop = None
 
@@ -47,6 +59,16 @@ async def get_pool() -> asyncpg.Pool:
         _pool = await asyncpg.create_pool(database_url, min_size=2, max_size=10)
         _pool_loop = current_loop
         return _pool
+
+
+async def close_pool() -> None:
+    """Gracefully close the connection pool. Call on app shutdown."""
+    global _pool, _pool_loop
+    if _pool is not None:
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(_pool.close(), timeout=5.0)
+        _pool = None
+        _pool_loop = None
 
 
 async def fetch_one(query: str, *args: Any) -> dict[str, Any] | None:

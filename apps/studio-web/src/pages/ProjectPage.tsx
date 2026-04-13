@@ -1,113 +1,51 @@
-/**
- * ProjectPage — main working page for a short-form video project.
- *
- * Loads the project detail and its latest run, then renders:
- * - ScriptComposer (during script stages: IDEA_READY, SCRIPT_GENERATING, SCRIPT_REVIEW)
- * - UnifiedSceneWorkspace (single scene-centric grid view)
- * - Final review section with preview summary and review-page link
- * - ConfirmDialog for stop / resume / delete
- */
+import { useCallback, useEffect, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
-import { useState, useEffect, useCallback } from "react";
-import { useParams, Link, useNavigate } from "react-router-dom";
+import ProjectHeader from "./project/ProjectHeader";
+import ScriptSection from "./project/ScriptSection";
+import {
+  API_BASE,
+  FINAL_REVIEW_STAGES,
+  STAGE_BACK_LABELS,
+} from "./project/types";
+import { useProjectData } from "./project/useProjectData";
+import WorkspaceSection from "./project/WorkspaceSection";
 
-import ScriptComposer from "../components/creator/ScriptComposer";
-import UnifiedSceneWorkspace from "../components/creator/UnifiedSceneWorkspace";
-import ConfirmDialog from "../components/creator/ConfirmDialog";
-
-const API_BASE = "/api/creator";
-
-// --------------- types ---------------
-
-interface ProjectDetail {
-  id: number;
-  title: string | null;
-  source_type: string;
-  status: string;
-  idea_brief?: string | null;
-  markdown_source?: string | null;
-  url_source?: string | null;
-  latest_run?: {
-    run_id: number;
-    current_stage: string | null;
-    status: string | null;
-  } | null;
-}
-
-interface ModelDefaults {
-  script_model?: string;
-  image_model?: string;
-  tts_model?: string;
-  subtitle_model?: string;
-  render_profile?: string;
-}
-
-interface RunDetail {
-  id: number;
-  project_id: number;
-  current_stage: string;
-  status: string;
-  restart_from: string | null;
-  model_defaults: ModelDefaults | null;
-}
-
-// Final review
-const FINAL_REVIEW_STAGES = new Set(["FINAL_REVIEW"]);
-
-// Stages where we poll run status
-const RUN_POLL_STAGES = new Set([
-  "SCRIPT_GENERATING",
-  "VISUAL_PLAN_GENERATING",
-  "VISUAL_ASSET_GENERATING",
-  "AUDIO_GENERATING",
-  "SUBTITLE_GENERATING",
-  "RENDER_GENERATING",
-]);
-
-// Back navigation labels per review stage
-const STAGE_BACK_LABELS: Record<string, string> = {
-  SCRIPT_REVIEW: "\u2190 Back to Idea",
-  VISUAL_PLAN_SETUP: "\u2190 Back to Script Review",
-  VISUAL_PLAN_REVIEW: "\u2190 Back to Visual Plan Setup",
-  VISUAL_ASSET_REVIEW: "\u2190 Back to Visual Plan",
-  FINAL_REVIEW: "\u2190 Back to Visual Assets",
-};
-
-// --------------- Main Component ---------------
+type SourceType = "idea" | "markdown" | "json" | "pasted_json" | "url";
 
 export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const numericProjectId = Number(projectId);
   const navigate = useNavigate();
 
-  // Data state
-  const [project, setProject] = useState<ProjectDetail | null>(null);
-  const [run, setRun] = useState<RunDetail | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    project,
+    setProject,
+    run,
+    loading,
+    error,
+    preview,
+    modelSelection,
+    onModelChange,
+    refreshRun,
+  } = useProjectData(numericProjectId);
 
-  // Action loading states
   const [approving, setApproving] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [restarting, setRestarting] = useState(false);
 
-  // Stop / Resume / Delete states
   const [stopping, setStopping] = useState(false);
   const [resuming, setResuming] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [confirmAction, setConfirmAction] = useState<
-    "stop" | "resume" | "delete" | null
-  >(null);
+  const [confirmAction, setConfirmAction] = useState<"stop" | "resume" | "delete" | null>(
+    null,
+  );
 
-  // Status toast
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-
-  // Incremented when script is edited+parsed — triggers storyboard refresh
   const [scriptVersion, setScriptVersion] = useState(0);
-
-  // Inline title editing — always-editable input, saves on blur / Enter
   const [titleDraft, setTitleDraft] = useState("");
   const [savingTitle, setSavingTitle] = useState(false);
+  const [goingBack, setGoingBack] = useState(false);
 
   const handleTitleSave = useCallback(async () => {
     const trimmed = titleDraft.trim();
@@ -124,150 +62,19 @@ export default function ProjectPage() {
         throw new Error(body?.detail ?? `Rename failed (${res.status})`);
       }
       const data = await res.json();
-      setProject((prev) => prev ? { ...prev, title: data.title } : prev);
+      setProject((prev) => (prev ? { ...prev, title: data.title } : prev));
     } catch (err) {
       setStatusMessage(err instanceof Error ? err.message : "Rename failed");
     } finally {
       setSavingTitle(false);
     }
-  }, [titleDraft, project?.title, numericProjectId]);
+  }, [titleDraft, project?.title, numericProjectId, setProject]);
 
-  // Sync titleDraft from project on load
   useEffect(() => {
     if (project?.title && !titleDraft) {
       setTitleDraft(project.title);
     }
-  }, [project?.title]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Per-stage model selection (persisted to backend via model_defaults)
-  const [modelSelection, setModelSelection] = useState<ModelDefaults>({});
-  const [goingBack, setGoingBack] = useState(false);
-
-  // Preview data for FINAL_REVIEW
-  const [preview, setPreview] = useState<Record<string, unknown> | null>(null);
-
-  // ---- data fetching ----
-
-  const fetchProjectAndRun = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      // 1. Fetch project
-      const projRes = await fetch(`${API_BASE}/projects/${numericProjectId}`);
-      if (!projRes.ok) {
-        if (projRes.status === 404) throw new Error("Project not found");
-        const body = await projRes.json().catch(() => null);
-        throw new Error(
-          body?.detail ?? `Failed to load project (${projRes.status})`,
-        );
-      }
-      const projData: ProjectDetail = await projRes.json();
-      setProject(projData);
-
-      // 2. Fetch runs for this project (newest first), take the latest
-      const runsRes = await fetch(
-        `${API_BASE}/projects/${numericProjectId}/runs`,
-      );
-      if (runsRes.ok) {
-        const runsData: { runs: RunDetail[]; total: number } =
-          await runsRes.json();
-        setRun(runsData.runs.length > 0 ? runsData.runs[0] : null);
-      } else {
-        setRun(null);
-      }
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "An unexpected error occurred",
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [numericProjectId]);
-
-  useEffect(() => {
-    if (!Number.isNaN(numericProjectId)) {
-      fetchProjectAndRun();
-    }
-  }, [numericProjectId, fetchProjectAndRun]);
-
-  useEffect(() => {
-    if (!run || run.current_stage !== "FINAL_REVIEW") {
-      setPreview(null);
-      return;
-    }
-    (async () => {
-      try {
-        const res = await fetch(`${API_BASE}/runs/${run.id}/preview`);
-        if (res.ok) {
-          const data = await res.json();
-          setPreview(data);
-        }
-      } catch {
-        // non-critical
-      }
-    })();
-  }, [run]);
-
-  // ---- refresh run ----
-
-  const refreshRun = useCallback(async (runId: number) => {
-    try {
-      const res = await fetch(`${API_BASE}/runs/${runId}`);
-      if (res.ok) {
-        const data: RunDetail = await res.json();
-        setRun(data);
-      }
-    } catch {
-      // silent — non-critical
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!run || !RUN_POLL_STAGES.has(run.current_stage)) return;
-    const timer = setInterval(() => {
-      void refreshRun(run.id);
-    }, 3000);
-    return () => clearInterval(timer);
-  }, [run, refreshRun]);
-
-  // Initialize model selection from run.model_defaults on load
-  useEffect(() => {
-    if (run?.model_defaults) {
-      setModelSelection((prev) => {
-        const hasLocal = Object.keys(prev).length > 0;
-        if (hasLocal) return prev;
-        return { ...run.model_defaults } as ModelDefaults;
-      });
-    }
-  }, [run?.model_defaults]);
-
-  // Persist model selection to backend
-  const handleModelChange = useCallback(
-    (category: string, modelKey: string) => {
-      const fieldMap: Record<string, keyof ModelDefaults> = {
-        script: "script_model",
-        image: "image_model",
-        tts: "tts_model",
-        stt: "subtitle_model",
-        render: "render_profile",
-      };
-      const field = fieldMap[category];
-      if (!field) return;
-      setModelSelection((prev) => ({ ...prev, [field]: modelKey }));
-      if (run) {
-        fetch(`${API_BASE}/runs/${run.id}/model-defaults`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ [field]: modelKey }),
-        }).catch(() => {
-          /* non-critical */
-        });
-      }
-    },
-    [run],
-  );
-
-  // ---- go-back navigation ----
+  }, [project?.title, titleDraft]);
 
   const handleGoBack = useCallback(async () => {
     if (!run) return;
@@ -289,8 +96,6 @@ export default function ProjectPage() {
       setGoingBack(false);
     }
   }, [run, refreshRun]);
-
-  // ---- script actions ----
 
   const handleApprove = useCallback(async () => {
     if (!run) return;
@@ -334,9 +139,7 @@ export default function ProjectPage() {
       setStatusMessage("Script generation started");
       setTimeout(() => refreshRun(run.id), 2000);
     } catch (err) {
-      setStatusMessage(
-        err instanceof Error ? err.message : "Generate failed",
-      );
+      setStatusMessage(err instanceof Error ? err.message : "Generate failed");
     } finally {
       setGenerating(false);
     }
@@ -356,32 +159,25 @@ export default function ProjectPage() {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Restart failed (${res.status})`);
       }
-      setStatusMessage("Restarting script generation\u2026");
+      setStatusMessage("Restarting script generation…");
       await refreshRun(run.id);
     } catch (err) {
-      setStatusMessage(
-        err instanceof Error ? err.message : "Restart failed",
-      );
+      setStatusMessage(err instanceof Error ? err.message : "Restart failed");
     } finally {
       setRestarting(false);
     }
   }, [run, refreshRun]);
-
-  // ---- visual plan actions ----
 
   const handleApproveVisualPlan = useCallback(async () => {
     if (!run) return;
     setApproving(true);
     setStatusMessage(null);
     try {
-      const res = await fetch(
-        `${API_BASE}/runs/${run.id}/approve-visual-plan`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ reviewer: "agent" }),
-        },
-      );
+      const res = await fetch(`${API_BASE}/runs/${run.id}/approve-visual-plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reviewer: "agent" }),
+      });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Approve failed (${res.status})`);
@@ -400,16 +196,13 @@ export default function ProjectPage() {
     setGenerating(true);
     setStatusMessage(null);
     try {
-      const res = await fetch(
-        `${API_BASE}/runs/${run.id}/generate-visual-plan`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model_key: modelSelection.script_model || "qwen3-4b",
-          }),
-        },
-      );
+      const res = await fetch(`${API_BASE}/runs/${run.id}/generate-visual-plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model_key: modelSelection.script_model || "qwen3-4b",
+        }),
+      });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Generate failed (${res.status})`);
@@ -417,9 +210,7 @@ export default function ProjectPage() {
       setStatusMessage("Visual plan generation started");
       setTimeout(() => refreshRun(run.id), 2000);
     } catch (err) {
-      setStatusMessage(
-        err instanceof Error ? err.message : "Generate failed",
-      );
+      setStatusMessage(err instanceof Error ? err.message : "Generate failed");
     } finally {
       setGenerating(false);
     }
@@ -439,18 +230,14 @@ export default function ProjectPage() {
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Restart failed (${res.status})`);
       }
-      setStatusMessage("Restarting visual plan generation\u2026");
+      setStatusMessage("Restarting visual plan generation…");
       await refreshRun(run.id);
     } catch (err) {
-      setStatusMessage(
-        err instanceof Error ? err.message : "Restart failed",
-      );
+      setStatusMessage(err instanceof Error ? err.message : "Restart failed");
     } finally {
       setRestarting(false);
     }
   }, [run, refreshRun]);
-
-  // ---- render actions ----
 
   const handleRender = useCallback(async () => {
     if (!run) return;
@@ -476,8 +263,6 @@ export default function ProjectPage() {
       setGenerating(false);
     }
   }, [run, modelSelection.render_profile, refreshRun]);
-
-  // ---- stop / resume / delete actions ----
 
   const handleStop = useCallback(async () => {
     if (!run) return;
@@ -540,28 +325,21 @@ export default function ProjectPage() {
     }
   }, [numericProjectId, navigate]);
 
-  // ---- derived state ----
-
   const currentStage = run?.current_stage ?? "IDEA_READY";
   const isFailed = run?.status === "failed";
-  const showScriptComposer = true; // Always show script editor (JSON) when run exists
+  const showScriptComposer = true;
   const isFinalReview = FINAL_REVIEW_STAGES.has(currentStage);
   const previewVideo = (preview as Record<string, unknown> | null)?.video;
   const previewVideoPath =
     previewVideo && typeof previewVideo === "object"
       ? (previewVideo as Record<string, unknown>).path
       : null;
-
   const maxWidth = run ? 1200 : 960;
-
   const showGoBack =
     Boolean(run) &&
     Boolean(STAGE_BACK_LABELS[currentStage]) &&
     !(currentStage === "SCRIPT_REVIEW" && project?.source_type !== "idea");
 
-  // ---- render ----
-
-  // Invalid project ID
   if (Number.isNaN(numericProjectId)) {
     return (
       <div style={{ maxWidth: 720, margin: "0 auto", padding: 24 }}>
@@ -573,7 +351,6 @@ export default function ProjectPage() {
     );
   }
 
-  // Loading
   if (loading) {
     return (
       <div
@@ -587,12 +364,11 @@ export default function ProjectPage() {
           color: "#6b7280",
         }}
       >
-        Loading project\u2026
+        Loading project…
       </div>
     );
   }
 
-  // Error
   if (error) {
     return (
       <div style={{ maxWidth: 720, margin: "0 auto", padding: 24 }}>
@@ -617,7 +393,6 @@ export default function ProjectPage() {
     );
   }
 
-  // No project
   if (!project) {
     return (
       <div style={{ maxWidth: 720, margin: "0 auto", padding: 24 }}>
@@ -629,127 +404,29 @@ export default function ProjectPage() {
     );
   }
 
+  void isFailed;
+
   return (
     <div style={{ maxWidth, margin: "0 auto", padding: 24 }}>
-      {/* Header */}
-      <div style={{ marginBottom: 16 }}>
-        <Link
-          to="/runs"
-          style={{ color: "#6b7280", fontSize: 12, textDecoration: "none" }}
-        >
-          \u2190 Projects
-        </Link>
-        <input
-          data-testid="project-title"
-          value={titleDraft}
-          onChange={(e) => setTitleDraft(e.target.value)}
-          onBlur={() => void handleTitleSave()}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.currentTarget.blur();
-            }
-          }}
-          disabled={savingTitle}
-          placeholder="Untitled Project"
-          style={{
-            fontSize: 22,
-            fontWeight: 700,
-            margin: "8px 0 4px",
-            padding: "2px 8px",
-            border: "1px solid transparent",
-            borderRadius: 6,
-            background: "transparent",
-            outline: "none",
-            width: "100%",
-            transition: "border-color 0.15s, background 0.15s",
-            cursor: "text",
-          }}
-          onFocus={(e) => {
-            e.currentTarget.style.borderColor = "#d1d5db";
-            e.currentTarget.style.background = "#fff";
-          }}
-          onMouseEnter={(e) => {
-            if (document.activeElement !== e.currentTarget) {
-              e.currentTarget.style.borderColor = "#e5e7eb";
-            }
-          }}
-          onMouseLeave={(e) => {
-            if (document.activeElement !== e.currentTarget) {
-              e.currentTarget.style.borderColor = "transparent";
-              e.currentTarget.style.background = "transparent";
-            }
-          }}
-        />
-        <span style={{ fontSize: 12, color: "#6b7280" }}>
-          Source: {project.source_type} \u00b7 Status:{" "}
-          {run ? run.status : project.status}
-          {run ? ` \u00b7 Stage: ${currentStage}` : ""}
-        </span>
+      <ProjectHeader
+        project={project}
+        run={run}
+        titleDraft={titleDraft}
+        setTitleDraft={setTitleDraft}
+        savingTitle={savingTitle}
+        onTitleSave={handleTitleSave}
+        stopping={stopping}
+        resuming={resuming}
+        deleting={deleting}
+        confirmAction={confirmAction}
+        setConfirmAction={setConfirmAction}
+        onStop={handleStop}
+        onResume={handleResume}
+        onDelete={handleDeleteProject}
+        onNavigateBack={() => navigate("/runs")}
+        currentStage={currentStage}
+      />
 
-        {/* Stop / Resume / Delete actions */}
-        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-          {run && run.status === "running" && (
-            <button
-              type="button"
-              onClick={() => setConfirmAction("stop")}
-              disabled={stopping}
-              style={{
-                padding: "6px 14px",
-                border: "1px solid #dc2626",
-                borderRadius: 6,
-                background: "#fff",
-                color: "#dc2626",
-                fontSize: 12,
-                fontWeight: 600,
-                cursor: stopping ? "not-allowed" : "pointer",
-              }}
-            >
-              {stopping ? "Stopping\u2026" : "\u23f9 Stop"}
-            </button>
-          )}
-          {run &&
-            (run.status === "cancelled" ||
-              run.status === "failed" ||
-              run.status === "paused") && (
-              <button
-                type="button"
-                onClick={() => setConfirmAction("resume")}
-                disabled={resuming}
-                style={{
-                  padding: "6px 14px",
-                  border: "1px solid #16a34a",
-                  borderRadius: 6,
-                  background: "#fff",
-                  color: "#16a34a",
-                  fontSize: 12,
-                  fontWeight: 600,
-                  cursor: resuming ? "not-allowed" : "pointer",
-                }}
-              >
-                {resuming ? "Resuming\u2026" : "\u25b6 Resume"}
-              </button>
-            )}
-          <button
-            type="button"
-            onClick={() => setConfirmAction("delete")}
-            disabled={deleting}
-            style={{
-              padding: "6px 14px",
-              border: "1px solid #dc2626",
-              borderRadius: 6,
-              background: "#fff",
-              color: "#dc2626",
-              fontSize: 12,
-              fontWeight: 600,
-              cursor: deleting ? "not-allowed" : "pointer",
-            }}
-          >
-            {deleting ? "Deleting\u2026" : "\ud83d\uddd1 Delete Project"}
-          </button>
-        </div>
-      </div>
-
-      {/* No run state */}
       {!run && (
         <div
           data-testid="no-run"
@@ -771,134 +448,43 @@ export default function ProjectPage() {
       )}
 
       {run && showScriptComposer && (
-        <div style={{ marginBottom: 24 }}>
-          <ScriptComposer
-            runId={run.id}
-            currentStage={currentStage}
-            sourceType={project.source_type as "idea" | "markdown" | "json" | "pasted_json" | "url"}
-            selectedScriptModel={modelSelection.script_model}
-            onModelChange={handleModelChange}
-            onConfirm={handleApprove}
-            onGenerate={handleGenerate}
-            onRegenerate={handleRestart}
-            onScriptChange={() => setScriptVersion((v) => v + 1)}
-            onStatusMessage={setStatusMessage}
-            disabled={approving || generating || restarting}
-          />
-        </div>
+        <ScriptSection
+          runId={run.id}
+          currentStage={currentStage}
+          sourceType={project.source_type as SourceType}
+          selectedScriptModel={modelSelection.script_model}
+          onModelChange={onModelChange}
+          onConfirm={handleApprove}
+          onGenerate={handleGenerate}
+          onRegenerate={handleRestart}
+          onScriptChange={() => setScriptVersion((v) => v + 1)}
+          onStatusMessage={(message) => setStatusMessage(message)}
+          disabled={approving || generating || restarting}
+        />
       )}
 
       {run && (
-        <div style={{ marginBottom: 24 }}>
-          <UnifiedSceneWorkspace
-            runId={run.id}
-            currentStage={currentStage}
-            refreshTrigger={scriptVersion}
-            ttsModel={modelSelection.tts_model}
-            subtitleModel={modelSelection.subtitle_model}
-            imageModel={modelSelection.image_model}
-            onStatusMessage={setStatusMessage}
-            onRender={handleRender}
-            rendering={generating}
-            stageActionLoading={approving || generating || restarting}
-            onGenerateVisualPlan={handleGenerateVisualPlan}
-            onApproveVisualPlan={handleApproveVisualPlan}
-            onRegenerateVisualPlan={handleRestartVisualPlan}
-          />
-
-          {/* Final review extras — review link + video path */}
-          {isFinalReview && (
-            <div
-              data-testid="final-review-section"
-              style={{
-                textAlign: "center",
-                padding: 24,
-                marginTop: 16,
-                background: "#f0fdf4",
-                borderRadius: 8,
-                border: "1px solid #bbf7d0",
-                color: "#166534",
-              }}
-            >
-              <p
-                style={{
-                  margin: "0 0 8px",
-                  fontWeight: 600,
-                  fontSize: 16,
-                }}
-              >
-                Pipeline Complete
-              </p>
-              <p style={{ margin: "0 0 16px", fontSize: 13 }}>
-                All stages are done. Review the final output or restart from
-                any stage.
-              </p>
-              {typeof previewVideoPath === "string" && (
-                <p
-                  style={{
-                    margin: "0 0 8px",
-                    fontSize: 13,
-                    color: "#374151",
-                  }}
-                >
-                  Video: {previewVideoPath}
-                </p>
-              )}
-              <Link
-                to={`/review/${run.id}`}
-                data-testid="review-link"
-                style={{
-                  display: "inline-block",
-                  padding: "8px 24px",
-                  background: "#166534",
-                  color: "#fff",
-                  borderRadius: 6,
-                  textDecoration: "none",
-                  fontWeight: 600,
-                  fontSize: 14,
-                }}
-              >
-                Open Review Page \u2192
-              </Link>
-            </div>
-          )}
-        </div>
+        <WorkspaceSection
+          run={run}
+          currentStage={currentStage}
+          refreshTrigger={scriptVersion}
+          modelSelection={modelSelection}
+          onStatusMessage={(message) => setStatusMessage(message)}
+          onRender={handleRender}
+          rendering={generating}
+          stageActionLoading={approving || generating || restarting}
+          onGenerateVisualPlan={handleGenerateVisualPlan}
+          onApproveVisualPlan={handleApproveVisualPlan}
+          onRegenerateVisualPlan={handleRestartVisualPlan}
+          isFinalReview={isFinalReview}
+          previewVideoPath={typeof previewVideoPath === "string" ? previewVideoPath : null}
+          showGoBack={showGoBack}
+          onGoBack={handleGoBack}
+          goingBack={goingBack}
+          goBackLabel={STAGE_BACK_LABELS[currentStage]}
+        />
       )}
 
-      {/* Back navigation button */}
-      {showGoBack && (
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "flex-start",
-            padding: "8px 0",
-          }}
-        >
-          <button
-            type="button"
-            data-testid="go-back-btn"
-            disabled={goingBack}
-            onClick={handleGoBack}
-            style={{
-              padding: "6px 16px",
-              fontSize: 13,
-              fontWeight: 500,
-              border: "1px solid #d1d5db",
-              borderRadius: 6,
-              background: "#fff",
-              color: "#374151",
-              cursor: goingBack ? "not-allowed" : "pointer",
-              opacity: goingBack ? 0.6 : 1,
-            }}
-          >
-            {goingBack
-              ? "Going back\u2026"
-              : STAGE_BACK_LABELS[currentStage]}
-          </button>
-        </div>
-      )}
-
-      {/* Status toast */}
       {statusMessage && (
         <div
           data-testid="status-toast"
@@ -920,47 +506,6 @@ export default function ProjectPage() {
           {statusMessage}
         </div>
       )}
-
-      {/* Confirm dialog for stop / resume / delete */}
-      <ConfirmDialog
-        open={confirmAction !== null}
-        title={
-          confirmAction === "stop"
-            ? "Stop Run?"
-            : confirmAction === "resume"
-              ? "Resume Run?"
-              : "Delete Project?"
-        }
-        message={
-          confirmAction === "stop"
-            ? "This will cancel the current generation task and stop the pipeline run."
-            : confirmAction === "resume"
-              ? "This will resume the stopped/failed run from where it left off."
-              : "This will permanently delete the project and all its runs, assets, and generated content. This action cannot be undone."
-        }
-        variant={
-          confirmAction === "stop"
-            ? "warning"
-            : confirmAction === "resume"
-              ? "info"
-              : "danger"
-        }
-        confirmLabel={
-          confirmAction === "stop"
-            ? "Stop Run"
-            : confirmAction === "resume"
-              ? "Resume"
-              : "Delete Forever"
-        }
-        loading={stopping || resuming || deleting}
-        onConfirm={async () => {
-          if (confirmAction === "stop") await handleStop();
-          else if (confirmAction === "resume") await handleResume();
-          else if (confirmAction === "delete") await handleDeleteProject();
-          setConfirmAction(null);
-        }}
-        onCancel={() => setConfirmAction(null)}
-      />
     </div>
   );
 }

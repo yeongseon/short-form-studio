@@ -7,11 +7,10 @@ the same async service-facing interface.
 
 from __future__ import annotations
 
-
-from creator_domain.models.project import Project
-
 from datetime import datetime, timezone
 from typing import Any, Literal, Protocol
+
+from creator_domain.models.project import Project
 
 LatestRunSummary = dict[str, int | str | None]
 

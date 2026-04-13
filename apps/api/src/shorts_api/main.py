@@ -2,25 +2,51 @@
 import logging
 import os
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
+from creator_service.db import close_pool
+from creator_service.logging_config import setup_json_logging
 from creator_service.model_health_service import ModelHealthService
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.staticfiles import StaticFiles
-from creator_service.logging_config import setup_json_logging
+
+from shorts_api.auth import ApiKeyMiddleware
 from shorts_api.routes.creator_models import router as models_router
 from shorts_api.routes.creator_projects import router as projects_router
-from shorts_api.routes.creator_runs import router as runs_router
-from shorts_api.routes.creator_script import router as script_router, run_script_router
+from shorts_api.routes.creator_runs_core import router as runs_core_router
+from shorts_api.routes.creator_runs_lifecycle import router as runs_lifecycle_router
+from shorts_api.routes.creator_runs_scene_assets import router as runs_scene_assets_router
+from shorts_api.routes.creator_runs_storyboard import router as runs_storyboard_router
+from shorts_api.routes.creator_runs_visuals import router as runs_visuals_router
+from shorts_api.routes.creator_script import router as script_router
+from shorts_api.routes.creator_script import run_script_router
 from shorts_api.routes.creator_settings import router as settings_router
 from shorts_api.routes.creator_visual_plan import router as visual_plan_router
+
+# Combined runs router for backward compatibility (used by tests)
+runs_router = APIRouter()
+runs_router.include_router(runs_core_router)
+runs_router.include_router(runs_visuals_router)
+runs_router.include_router(runs_scene_assets_router)
+runs_router.include_router(runs_storyboard_router)
+runs_router.include_router(runs_lifecycle_router)
 
 # Configure structured JSON logging
 setup_json_logging(service_name="api", level="INFO")
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="short-form-studio API")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    yield
+    await close_pool()
+
+
+app = FastAPI(title="short-form-studio API", lifespan=lifespan)
 
 cors_origins_env = os.getenv("CORS_ORIGINS")
 cors_origins = [
@@ -34,8 +60,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
+app.add_middleware(ApiKeyMiddleware)
 
 @app.middleware("http")
 async def request_logging_middleware(request: Request, call_next):
@@ -68,7 +93,11 @@ async def global_exception_handler(request: Request, _exc: Exception) -> JSONRes
 
 app.include_router(models_router, prefix="/api/creator")
 app.include_router(projects_router, prefix="/api/creator")
-app.include_router(runs_router, prefix="/api/creator")
+app.include_router(runs_core_router, prefix="/api/creator")
+app.include_router(runs_visuals_router, prefix="/api/creator")
+app.include_router(runs_scene_assets_router, prefix="/api/creator")
+app.include_router(runs_storyboard_router, prefix="/api/creator")
+app.include_router(runs_lifecycle_router, prefix="/api/creator")
 app.include_router(script_router, prefix="/api/creator")
 app.include_router(run_script_router, prefix="/api/creator")
 app.include_router(visual_plan_router, prefix="/api/creator")

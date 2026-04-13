@@ -49,7 +49,7 @@ function mockFetch(responses: Record<string, { status?: number; body: unknown }>
 // --------------- tests ---------------
 
 describe("VisualAssetGrid", () => {
-  beforeEach(() => vi.restoreAllMocks());
+  beforeEach(() => { vi.restoreAllMocks(); });
 
   it("shows loading state initially", () => {
     globalThis.fetch = vi.fn(() => new Promise(() => {})) as unknown as typeof fetch;
@@ -261,7 +261,7 @@ describe("VisualAssetGrid", () => {
 
     // Verify POST was called
     const postCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.find(
-      ([, init]: [string, RequestInit | undefined]) => init?.method === "POST",
+      (call: any[]) => (call[1] as RequestInit | undefined)?.method === "POST",
     );
     expect(postCall).toBeDefined();
     expect(postCall![0]).toContain("/select/41");

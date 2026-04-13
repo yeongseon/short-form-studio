@@ -1,6 +1,6 @@
 import subprocess
-from pathlib import Path
 from dataclasses import dataclass
+from pathlib import Path
 
 from .render_profile import RenderProfile
 
@@ -49,7 +49,7 @@ class FFmpegService:
         # --- inputs --------------------------------------------------------
         filter_parts: list[str] = []
         for i, (img, dur) in enumerate(
-            zip(input_data.image_paths, input_data.scene_durations),
+            zip(input_data.image_paths, input_data.scene_durations, strict=False),
         ):
             cmd.extend(["-loop", "1", "-t", str(dur), "-i", str(img)])
             # Scale + pad each input to target resolution
@@ -196,7 +196,7 @@ class FFmpegService:
         entry_index = 1
         cumulative_offset = 0.0
 
-        for srt_path, dur in zip(subtitle_paths, durations):
+        for srt_path, dur in zip(subtitle_paths, durations, strict=False):
             path = Path(srt_path)
             if not path.exists():
                 cumulative_offset += dur

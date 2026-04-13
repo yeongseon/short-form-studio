@@ -1,5 +1,4 @@
 import pytest
-
 from creator_domain.models import (
     GENERATING_STAGES,
     REVIEW_STAGES,

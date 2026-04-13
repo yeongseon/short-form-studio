@@ -2,8 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 
 import ConfirmDialog from "../components/creator/ConfirmDialog";
-
-const API_BASE = "/api/creator";
+import { API_BASE } from "../types/api";
 
 interface ProjectSummary {
   id: number;
@@ -121,6 +120,7 @@ export default function RunsPage() {
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
         <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>Projects</h1>
         <button
+          type="button"
           onClick={() => navigate("/create")}
           style={{
             padding: "8px 16px",
@@ -153,6 +153,7 @@ export default function RunsPage() {
         >
           {error}
           <button
+            type="button"
             onClick={() => fetchProjects(offset)}
             style={{
               marginLeft: 12,
@@ -206,6 +207,7 @@ export default function RunsPage() {
             Create your first short-form video project to get started.
           </p>
           <button
+            type="button"
             onClick={() => navigate("/create")}
             style={{
               padding: "8px 16px",
@@ -263,7 +265,6 @@ export default function RunsPage() {
                 return (
                   <tr
                     key={proj.id}
-                    role="link"
                     tabIndex={0}
                     onClick={() => navigate(`/projects/${proj.id}`)}
                     onKeyDown={(e) => {
@@ -352,6 +353,7 @@ export default function RunsPage() {
               </span>
               <div style={{ display: "flex", gap: 8 }}>
                 <button
+                  type="button"
                   disabled={currentPage <= 1}
                   onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}
                   aria-label="Previous page"
@@ -368,6 +370,7 @@ export default function RunsPage() {
                   Previous
                 </button>
                 <button
+                  type="button"
                   disabled={currentPage >= totalPages}
                   onClick={() => setOffset(offset + PAGE_SIZE)}
                   aria-label="Next page"

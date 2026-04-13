@@ -1,8 +1,6 @@
 """Routes for creator script management."""
 import json
 
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, ValidationError
 from creator_domain.models import RunStage
 from creator_domain.models.script_draft import ScriptSection
 from creator_service.json_script_parser import parse_json_scenes
@@ -10,6 +8,8 @@ from creator_service.markdown_parser import parse_markdown
 from creator_service.project_service import project_service
 from creator_service.run_service import run_service
 from creator_service.script_service import script_service
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, ValidationError
 
 router = APIRouter(prefix="/projects/{project_id}/script", tags=["script"])
 run_script_router = APIRouter(prefix="/runs/{run_id}/script", tags=["script"])
@@ -71,6 +71,8 @@ async def import_json(project_id: int, request: ImportJsonRequest) -> dict[str, 
     try:
         sections = parse_json_scenes(request.json_script)
     except (json.JSONDecodeError, ValueError, ValidationError) as exc:
+        if isinstance(exc, ValidationError):
+            raise HTTPException(status_code=400, detail=exc.errors()) from exc
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     # Build markdown from sections for backward compatibility
@@ -252,7 +254,7 @@ async def update_script_structured(run_id: int, request: UpdateStructuredRequest
     try:
         sections = [ScriptSection.model_validate(section) for section in request.sections]
     except ValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=exc.errors()) from exc
 
     rebuilt_markdown = "\n\n".join([f"## {section.type}\n\n{section.text}" for section in sections])
 
@@ -281,6 +283,8 @@ async def update_script_json(run_id: int, request: UpdateJsonScriptRequest) -> d
     try:
         sections = parse_json_scenes(request.json_script)
     except (json.JSONDecodeError, ValueError, ValidationError) as exc:
+        if isinstance(exc, ValidationError):
+            raise HTTPException(status_code=400, detail=exc.errors()) from exc
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     rebuilt_markdown = "\n\n".join([f"## {s.type}\n\n{s.text}" for s in sections])

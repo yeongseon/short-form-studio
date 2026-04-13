@@ -8,8 +8,8 @@ vi.mock("../api/storyboard", () => ({
   fetchStoryboard: vi.fn(),
   generateParagraphAudio: vi.fn(),
   generateParagraphSubtitles: vi.fn(),
-  generateAllParagraphAudio: vi.fn().mockResolvedValue({ dispatched: 3 }),
-  generateAllParagraphSubtitles: vi.fn().mockResolvedValue({ dispatched: 3 }),
+  generateAllParagraphAudio: vi.fn().mockResolvedValue({ run_id: 1, tasks: [], total: 3 }),
+  generateAllParagraphSubtitles: vi.fn().mockResolvedValue({ run_id: 1, tasks: [], total: 3 }),
 }));
 
 import { fetchStoryboard } from "../api/storyboard";

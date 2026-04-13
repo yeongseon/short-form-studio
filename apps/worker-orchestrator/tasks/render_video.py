@@ -12,9 +12,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
@@ -23,10 +24,10 @@ from creator_service.ffmpeg_service import FFmpegService, RenderInput
 from creator_service.render_profile import RenderProfile
 from creator_service.render_service import render_service as _render_service
 from creator_service.run_service import run_service as _run_service
+from creator_service.script_service import script_service as _script_service
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
 from creator_service.visual_asset_service import visual_asset_service as _visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
-from creator_service.script_service import script_service as _script_service
 
 logger = logging.getLogger(__name__)
 

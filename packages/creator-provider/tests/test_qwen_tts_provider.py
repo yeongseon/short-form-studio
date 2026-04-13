@@ -54,7 +54,7 @@ class TestQwenTTSProviderGenerate(unittest.TestCase):
         mock_client_cls.return_value = mock_ctx
 
         provider = QwenTTSProvider(endpoint="http://tts:8100", model_key="qwen3-tts")
-        result = self._run(provider.generate("Hello", voice="default", params={"output_path": "/tmp/test.wav"}))
+        self._run(provider.generate("Hello", voice="default", params={"output_path": "/tmp/test.wav"}))
 
         mock_client.post.assert_called_once()
         call_args = mock_client.post.call_args

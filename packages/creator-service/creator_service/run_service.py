@@ -4,7 +4,15 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from creator_domain.models import ModelSelection, PipelineRun, RunStage, REVIEW_STAGES, GENERATING_STAGES, STAGE_BEFORE_GENERATING, STAGE_BACK, can_transition
+from creator_domain.models import (
+    GENERATING_STAGES,
+    STAGE_BACK,
+    STAGE_BEFORE_GENERATING,
+    PipelineRun,
+    RunStage,
+    can_transition,
+)
+
 
 class RunStorageBackend(Protocol):
     async def create_run(self, row: dict[str, Any]) -> dict[str, Any]:

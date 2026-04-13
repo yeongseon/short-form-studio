@@ -2,6 +2,7 @@ import { useState, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import ModelSelector from "../components/creator/ModelSelector";
 import IdeaForm, { type IdeaFormData } from "../components/creator/IdeaForm";
+import { API_BASE } from "../types/api";
 
 type Tab = "idea" | "json";
 
@@ -10,7 +11,6 @@ interface JsonFormState {
   jsonScript: string;
 }
 
-const API_BASE = "/api/creator";
 const RENDER_PROFILE_OPTIONS = [
   { value: "shorts_default", label: "Shorts Default" },
   { value: "high_quality", label: "High Quality" },
@@ -241,6 +241,7 @@ export default function CreatePage() {
       {/* Tab list */}
       <div role="tablist" style={{ display: "flex", gap: 4, marginBottom: 16, borderBottom: "2px solid #ddd" }}>
         <button
+          type="button"
           role="tab"
           id="tab-idea"
           aria-selected={activeTab === "idea"}
@@ -260,6 +261,7 @@ export default function CreatePage() {
           Start from Idea
         </button>
         <button
+          type="button"
           role="tab"
           id="tab-json"
           aria-selected={activeTab === "json"}

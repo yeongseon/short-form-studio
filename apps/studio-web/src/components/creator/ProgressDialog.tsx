@@ -15,7 +15,7 @@
  * - onClose:       Called when the user manually dismisses the dialog.
  */
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useId } from "react";
 
 const DEFAULT_API = "/api/creator";
 const DEFAULT_POLL_MS = 3000;
@@ -67,6 +67,10 @@ export default function ProgressDialog({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [pollCount, setPollCount] = useState(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const titleId = useId();
+  const descId = useId();
 
   // ---- classify run state ----
 
@@ -150,6 +154,53 @@ export default function ProgressDialog({
     };
   }, [open, runId, apiBase, pollInterval, classify, onComplete, onFailed]);
 
+  // ---- focus management + Escape handler ----
+
+  useEffect(() => {
+    if (!open) return;
+
+    // Store previously focused element to restore on close
+    previousFocusRef.current = document.activeElement as HTMLElement | null;
+
+    // Focus the close button on open
+    const dialog = dialogRef.current;
+    if (dialog) {
+      const closeBtn = dialog.querySelector<HTMLElement>("button[data-testid='progress-close']");
+      closeBtn?.focus();
+    }
+
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onClose?.();
+        return;
+      }
+
+      // Focus trap: keep Tab within dialog
+      if (e.key === "Tab" && dialog) {
+        const focusable = dialog.querySelectorAll<HTMLElement>("button:not([disabled])");
+        if (focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      // Restore focus
+      previousFocusRef.current?.focus();
+    };
+  }, [open, onClose]);
+
   // ---- don't render when closed ----
 
   if (!open) return null;
@@ -181,9 +232,12 @@ export default function ProgressDialog({
       }}
     >
       <div
+        ref={dialogRef}
         data-testid="progress-dialog"
         role="dialog"
-        aria-label="Generation progress"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descId}
         style={{
           background: "#fff",
           borderRadius: 12,
@@ -196,6 +250,7 @@ export default function ProgressDialog({
       >
         {/* Stage label */}
         <h3
+          id={titleId}
           data-testid="progress-stage"
           style={{ margin: "0 0 8px", fontSize: 18, fontWeight: 600, color: "#111827" }}
         >
@@ -204,6 +259,7 @@ export default function ProgressDialog({
 
         {/* Status line */}
         <p
+          id={descId}
           data-testid="progress-status"
           style={{ margin: "0 0 16px", fontSize: 13, color: "#6b7280" }}
         >

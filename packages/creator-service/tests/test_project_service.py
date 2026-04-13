@@ -2,9 +2,9 @@ import asyncio
 from typing import Any, cast
 
 import pytest
-
 from creator_service.project_service import InMemoryProjectStorage, ProjectService
 from creator_service.run_service import InMemoryRunStorage, RunService
+
 
 def run(coro):
     return asyncio.run(coro)

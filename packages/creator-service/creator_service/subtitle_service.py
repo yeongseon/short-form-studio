@@ -15,7 +15,6 @@ from typing import Any, Protocol
 
 from creator_domain.models.subtitle_artifact import SubtitleArtifact
 
-
 # ---------------------------------------------------------------------------
 # Storage Protocol
 # ---------------------------------------------------------------------------

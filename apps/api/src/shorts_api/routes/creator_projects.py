@@ -1,10 +1,10 @@
 """Routes for creator project management."""
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
 from creator_service.project_service import project_service
 from creator_service.run_service import run_service
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -75,7 +75,7 @@ async def delete_project(project_id: int) -> dict[str, object]:
     runs = await run_service.list_runs_by_project(project_id)
     for r in runs:
         if r.active_task_id:
-            from shorts_api.routes.creator_runs import _revoke_active_tasks
+            from shorts_api.routes.creator_runs_utils import _revoke_active_tasks
             _revoke_active_tasks(r.active_task_id)
 
     # Collect run IDs for artifact cleanup before DB cascade deletes them
@@ -86,7 +86,8 @@ async def delete_project(project_id: int) -> dict[str, object]:
         raise HTTPException(status_code=404, detail="Project not found")
 
     # Best-effort artifact cleanup for all runs
-    import os, shutil
+    import os
+    import shutil
     artifact_root = os.getenv("ARTIFACT_ROOT", "data/artifacts")
     for rid in run_ids:
         run_dir = os.path.join(artifact_root, str(rid))

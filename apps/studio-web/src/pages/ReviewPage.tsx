@@ -15,23 +15,12 @@ import { useParams, Link } from "react-router-dom";
 
 import PipelineStepper from "../components/creator/PipelineStepper";
 import StoryboardView from "../components/creator/StoryboardView";
-
-const API_BASE = "/api/creator";
+import { API_BASE, type RunDetail, type VisualPlanScene } from "../types/api";
 
 /** Convert API artifact path → browser-accessible URL via Vite proxy. */
 function artifactUrl(path: string): string {
   const match = path.match(/data\/artifacts\/(.*)/);
   return match ? `/artifacts/${match[1]}` : `/artifacts/${path}`;
-}
-
-// --------------- types ---------------
-
-interface RunDetail {
-  id: number;
-  project_id: number;
-  current_stage: string;
-  status: string;
-  restart_from: string | null;
 }
 
 interface PreviewData {
@@ -62,11 +51,10 @@ interface ScriptData {
   structured_script: Record<string, unknown> | null;
 }
 
-interface VisualPlanScene {
-  scene_id: string;
-  description: string;
-  image_prompt: string;
-}
+type LegacyVisualPlanScene = VisualPlanScene & {
+  description?: string;
+  image_prompt?: string;
+};
 
 // Stages that have passed script
 const POST_SCRIPT_STAGES = new Set([
@@ -164,7 +152,7 @@ export default function ReviewPage() {
   const [run, setRun] = useState<RunDetail | null>(null);
   const [preview, setPreview] = useState<PreviewData | null>(null);
   const [script, setScript] = useState<ScriptData | null>(null);
-  const [scenes, setScenes] = useState<VisualPlanScene[]>([]);
+  const [scenes, setScenes] = useState<LegacyVisualPlanScene[]>([]);
   const [assets, setAssets] = useState<Record<string, { asset_path: string; model_used: string; is_active: boolean }[]>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -345,9 +333,9 @@ export default function ReviewPage() {
                   {scene.scene_id}
                 </div>
                 <div style={{ fontSize: 13, color: "#374151", marginBottom: 4 }}>
-                  {scene.description}
+                  {scene.original_text || scene.description || ""}
                 </div>
-                <div style={metaStyle}>Prompt: {scene.image_prompt}</div>
+                <div style={metaStyle}>Prompt: {scene.prompt || scene.image_prompt || ""}</div>
               </div>
             ))}
           </div>
@@ -368,7 +356,7 @@ export default function ReviewPage() {
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 8 }}>
                   {sceneAssets.map((asset, idx) => (
                     <div
-                      key={idx}
+                      key={asset.asset_path}
                       style={{
                         background: asset.is_active ? "#f0fdf4" : "#f9fafb",
                         borderRadius: 6,
@@ -440,7 +428,9 @@ export default function ReviewPage() {
               marginBottom: 8,
             }}
             src={artifactUrl(preview.video.path)}
-          />
+          >
+            <track kind="captions" />
+          </video>
           <div style={{ fontSize: 13 }}>
             <div><strong>Profile:</strong> {preview.video.render_profile ?? "default"}</div>
             <div style={metaStyle}>Created: {new Date(preview.video.created_at).toLocaleString()}</div>

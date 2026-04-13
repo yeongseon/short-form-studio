@@ -14,7 +14,6 @@ from typing import Any, Protocol
 
 from creator_domain.models.visual_plan import VisualPlan, VisualScene
 
-
 # ---------------------------------------------------------------------------
 # Patchable field allowlist
 # ---------------------------------------------------------------------------

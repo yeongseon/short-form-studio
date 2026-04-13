@@ -5,8 +5,8 @@ from typing import Literal
 
 import pytest
 from pydantic import BaseModel
-
-from shorts_api.routes.creator_script import router as script_router, run_script_router
+from shorts_api.routes.creator_script import router as script_router
+from shorts_api.routes.creator_script import run_script_router
 
 
 class StubProject(BaseModel):

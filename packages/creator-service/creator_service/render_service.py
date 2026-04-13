@@ -17,7 +17,6 @@ from creator_domain.models.video_artifact import VideoArtifact
 
 from .render_profile import RenderProfile
 
-
 # ---------------------------------------------------------------------------
 # Storage Protocol
 # ---------------------------------------------------------------------------

@@ -2,7 +2,6 @@
 import json
 
 import pytest
-
 from creator_service.json_script_parser import parse_json_scenes
 
 

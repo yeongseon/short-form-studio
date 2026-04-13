@@ -54,9 +54,8 @@ class TestOpenAIProvider:
             from creator_provider.llm.openai_provider import OpenAIProvider
 
             provider = OpenAIProvider(endpoint="https://api.openai.com", model_key="gpt-4o-mini")
-            with mock.patch("httpx.AsyncClient.post", return_value=mock_response):
-                with pytest.raises(RuntimeError, match="OpenAI API request failed"):
-                    await provider.generate("test prompt")
+            with mock.patch("httpx.AsyncClient.post", return_value=mock_response), pytest.raises(RuntimeError, match="OpenAI API request failed"):
+                await provider.generate("test prompt")
 
     @pytest.mark.asyncio
     async def test_generate_empty_choices_raises(self):
@@ -68,9 +67,8 @@ class TestOpenAIProvider:
             from creator_provider.llm.openai_provider import OpenAIProvider
 
             provider = OpenAIProvider(endpoint="https://api.openai.com", model_key="gpt-4o-mini")
-            with mock.patch("httpx.AsyncClient.post", return_value=mock_response):
-                with pytest.raises(RuntimeError, match="no choices"):
-                    await provider.generate("test prompt")
+            with mock.patch("httpx.AsyncClient.post", return_value=mock_response), pytest.raises(RuntimeError, match="no choices"):
+                await provider.generate("test prompt")
 
 
 class TestAnthropicProvider:
@@ -131,9 +129,8 @@ class TestAnthropicProvider:
                 endpoint="https://api.anthropic.com",
                 model_key="claude-sonnet-4-20250514",
             )
-            with mock.patch("httpx.AsyncClient.post", return_value=mock_response):
-                with pytest.raises(RuntimeError, match="Anthropic API request failed"):
-                    await provider.generate("test prompt")
+            with mock.patch("httpx.AsyncClient.post", return_value=mock_response), pytest.raises(RuntimeError, match="Anthropic API request failed"):
+                await provider.generate("test prompt")
 
     @pytest.mark.asyncio
     async def test_generate_empty_content_raises(self):
@@ -148,9 +145,8 @@ class TestAnthropicProvider:
                 endpoint="https://api.anthropic.com",
                 model_key="claude-sonnet-4-20250514",
             )
-            with mock.patch("httpx.AsyncClient.post", return_value=mock_response):
-                with pytest.raises(RuntimeError, match="no content blocks"):
-                    await provider.generate("test prompt")
+            with mock.patch("httpx.AsyncClient.post", return_value=mock_response), pytest.raises(RuntimeError, match="no content blocks"):
+                await provider.generate("test prompt")
 
 
 class TestGeminiProvider:
@@ -214,9 +210,8 @@ class TestGeminiProvider:
                 endpoint="https://generativelanguage.googleapis.com",
                 model_key="gemini-2.0-flash",
             )
-            with mock.patch("httpx.AsyncClient.post", return_value=mock_response):
-                with pytest.raises(RuntimeError, match="Gemini API request failed"):
-                    await provider.generate("test prompt")
+            with mock.patch("httpx.AsyncClient.post", return_value=mock_response), pytest.raises(RuntimeError, match="Gemini API request failed"):
+                await provider.generate("test prompt")
 
     @pytest.mark.asyncio
     async def test_generate_no_candidates_raises(self):
@@ -231,6 +226,5 @@ class TestGeminiProvider:
                 endpoint="https://generativelanguage.googleapis.com",
                 model_key="gemini-2.0-flash",
             )
-            with mock.patch("httpx.AsyncClient.post", return_value=mock_response):
-                with pytest.raises(RuntimeError, match="no candidates"):
-                    await provider.generate("test prompt")
+            with mock.patch("httpx.AsyncClient.post", return_value=mock_response), pytest.raises(RuntimeError, match="no candidates"):
+                await provider.generate("test prompt")

@@ -12,8 +12,7 @@ class PostgresVisualAssetStorage:
         is_active = bool(row.get("is_active", False))
 
         pool = await get_pool()
-        async with pool.acquire() as connection:
-            async with connection.transaction():
+        async with pool.acquire() as connection, connection.transaction():
                 await connection.execute(
                     "SELECT pg_advisory_xact_lock($1::int, hashtext($2))",
                     run_id,
@@ -97,8 +96,7 @@ class PostgresVisualAssetStorage:
 
     async def set_active(self, run_id: int, scene_id: str, asset_id: int) -> bool:
         pool = await get_pool()
-        async with pool.acquire() as connection:
-            async with connection.transaction():
+        async with pool.acquire() as connection, connection.transaction():
                 await connection.execute(
                     "SELECT pg_advisory_xact_lock($1::int, hashtext($2))",
                     run_id,

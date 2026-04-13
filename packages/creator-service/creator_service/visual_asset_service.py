@@ -16,7 +16,6 @@ from typing import Any, Protocol
 
 from creator_domain.models.visual_asset import VisualAsset
 
-
 # ---------------------------------------------------------------------------
 # Storage Protocol
 # ---------------------------------------------------------------------------

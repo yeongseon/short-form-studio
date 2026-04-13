@@ -1,13 +1,12 @@
 """Model health check service for monitoring model serving containers."""
 
 import asyncio
-from dataclasses import dataclass
-from enum import Enum
 import os
 import time
+from dataclasses import dataclass
+from enum import Enum
 
 import httpx
-
 
 _REMOTE_PROVIDERS: dict[str, str] = {
     "api.openai.com": "OPENAI_API_KEY",

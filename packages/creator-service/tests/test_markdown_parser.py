@@ -1,5 +1,6 @@
 from creator_service.markdown_parser import parse_markdown
 
+
 def test_parse_standard_markdown_headings():
     markdown = """## hook
 Grab attention now.

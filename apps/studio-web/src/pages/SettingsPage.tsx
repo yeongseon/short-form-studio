@@ -1,11 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-
-interface ApiKeyStatus {
-  provider: string;
-  label: string;
-  configured: boolean;
-  masked: string;
-}
+import type { ApiKeyStatus } from "../types/api";
 
 const PROVIDERS: Array<{ provider: string; label: string }> = [
   { provider: "openai", label: "OpenAI" },
@@ -44,10 +38,6 @@ export default function SettingsPage() {
   const [apiKeys, setApiKeys] = useState<ApiKeyStatus[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [editingProvider, setEditingProvider] = useState<string | null>(null);
-  const [draftKey, setDraftKey] = useState("");
-  const [savingProvider, setSavingProvider] = useState<string | null>(null);
-
   const fetchApiKeys = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -63,8 +53,9 @@ export default function SettingsPage() {
         return {
           provider,
           label,
+          env_var: found?.env_var ?? "",
           configured: found?.configured ?? false,
-          masked: found?.masked ?? "",
+          masked: found?.masked ?? null,
         };
       });
       setApiKeys(normalized);
@@ -74,8 +65,9 @@ export default function SettingsPage() {
         PROVIDERS.map(({ provider, label }) => ({
           provider,
           label,
+          env_var: "",
           configured: false,
-          masked: "",
+          masked: null,
         })),
       );
     } finally {
@@ -86,40 +78,6 @@ export default function SettingsPage() {
   useEffect(() => {
     fetchApiKeys();
   }, [fetchApiKeys]);
-
-  const handleEdit = useCallback((provider: string) => {
-    setEditingProvider(provider);
-    setDraftKey("");
-    setError(null);
-  }, []);
-
-  const handleCancel = useCallback(() => {
-    setEditingProvider(null);
-    setDraftKey("");
-  }, []);
-
-  const handleSave = useCallback(async (provider: string) => {
-    setSavingProvider(provider);
-    setError(null);
-    try {
-      const res = await fetch("/api/creator/settings/api-keys", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider, api_key: draftKey }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null) as { detail?: string } | null;
-        throw new Error(body?.detail ?? `Failed to save API key (${res.status})`);
-      }
-      setEditingProvider(null);
-      setDraftKey("");
-      await fetchApiKeys();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error");
-    } finally {
-      setSavingProvider(null);
-    }
-  }, [draftKey, fetchApiKeys]);
 
   return (
     <div style={{ maxWidth: 900, margin: "0 auto", padding: 24 }}>
@@ -138,8 +96,6 @@ export default function SettingsPage() {
         ) : (
           <div>
             {apiKeys.map((entry, index) => {
-              const isEditing = editingProvider === entry.provider;
-              const isSaving = savingProvider === entry.provider;
               return (
                 <div
                   key={entry.provider}
@@ -148,7 +104,7 @@ export default function SettingsPage() {
                     borderBottom: index < apiKeys.length - 1 ? "1px solid #f3f4f6" : "none",
                   }}
                 >
-                  <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: isEditing ? 12 : 0 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                     <div style={{ minWidth: 220 }}>
                       <div style={{ fontSize: 14, fontWeight: 600, color: "#111827" }}>{entry.label}</div>
                       <div
@@ -159,7 +115,7 @@ export default function SettingsPage() {
                           fontFamily: "'JetBrains Mono', monospace",
                         }}
                       >
-                        {entry.configured ? entry.masked : "Not configured"}
+                        {entry.configured ? entry.masked : `Set ${entry.env_var} in the server environment`}
                       </div>
                     </div>
 
@@ -169,80 +125,8 @@ export default function SettingsPage() {
 
                     <div style={{ flex: 1 }} />
 
-                    {!isEditing && (
-                      <button
-                        type="button"
-                        onClick={() => handleEdit(entry.provider)}
-                        style={{
-                          border: "1px solid #d1d5db",
-                          borderRadius: 6,
-                          background: "#fff",
-                          color: "#111827",
-                          padding: "6px 12px",
-                          fontSize: 13,
-                          fontWeight: 500,
-                          cursor: "pointer",
-                        }}
-                      >
-                        Edit
-                      </button>
-                    )}
                   </div>
 
-                  {isEditing && (
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <input
-                        type="password"
-                        value={draftKey}
-                        onChange={(e) => setDraftKey(e.target.value)}
-                        placeholder={`Enter ${entry.label} API key`}
-                        autoComplete="off"
-                        style={{
-                          flex: 1,
-                          minWidth: 260,
-                          padding: "8px 10px",
-                          border: "1px solid #d1d5db",
-                          borderRadius: 6,
-                          fontSize: 13,
-                          boxSizing: "border-box",
-                        }}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => void handleSave(entry.provider)}
-                        disabled={isSaving}
-                        style={{
-                          border: "1px solid #2563eb",
-                          borderRadius: 6,
-                          background: isSaving ? "#93c5fd" : "#3b82f6",
-                          color: "#fff",
-                          padding: "8px 12px",
-                          fontSize: 13,
-                          fontWeight: 600,
-                          cursor: isSaving ? "not-allowed" : "pointer",
-                        }}
-                      >
-                        {isSaving ? "Saving..." : "Save"}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleCancel}
-                        disabled={isSaving}
-                        style={{
-                          border: "1px solid #d1d5db",
-                          borderRadius: 6,
-                          background: "#fff",
-                          color: "#374151",
-                          padding: "8px 12px",
-                          fontSize: 13,
-                          fontWeight: 500,
-                          cursor: isSaving ? "not-allowed" : "pointer",
-                        }}
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  )}
                 </div>
               );
             })}

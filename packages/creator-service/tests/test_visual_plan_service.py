@@ -1,7 +1,6 @@
 import asyncio
 
 import pytest
-
 from creator_domain.models.visual_plan import VisualScene
 from creator_service.visual_plan_service import (
     DataIntegrityError,
@@ -9,6 +8,7 @@ from creator_service.visual_plan_service import (
     VersionConflictError,
     VisualPlanService,
 )
+
 
 def run(coro):
     return asyncio.run(coro)

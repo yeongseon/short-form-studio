@@ -3,10 +3,10 @@
 from unittest.mock import AsyncMock
 
 import pytest
-
+from creator_provider.registry import ProviderRegistry
 from creator_service.model_catalog_service import ModelCatalogService
 from creator_service.model_health_service import ModelHealthResult, ModelStatus
-from creator_provider.registry import ProviderRegistry
+
 
 @pytest.fixture
 def registry():

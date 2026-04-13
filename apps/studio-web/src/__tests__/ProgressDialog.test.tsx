@@ -454,3 +454,131 @@ describe("ProgressDialog", () => {
     expect(screen.getByTestId("progress-error")).toHaveTextContent("Network failure");
   });
 });
+
+describe("ProgressDialog accessibility", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function renderOpen(overrides: Partial<{ onClose: () => void }> = {}) {
+    globalThis.fetch = mockFetch({
+      [`/runs/${RUN_ID}`]: {
+        body: { current_stage: "SCRIPT_GENERATING", status: "running" },
+      },
+    });
+    return render(
+      <ProgressDialog
+        open={true}
+        runId={RUN_ID}
+        expectedStage="SCRIPT_GENERATING"
+        apiBase={API}
+        onClose={overrides.onClose}
+      />,
+    );
+  }
+
+  it('has role="dialog" and aria-modal="true"', async () => {
+    renderOpen();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toBeInTheDocument();
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+  });
+
+  it("has aria-labelledby pointing to the stage heading", async () => {
+    renderOpen();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const dialog = screen.getByRole("dialog");
+    const labelId = dialog.getAttribute("aria-labelledby");
+    expect(labelId).toBeTruthy();
+    const titleEl = document.getElementById(labelId!);
+    expect(titleEl).toHaveTextContent("Generating script");
+  });
+
+  it("has aria-describedby pointing to the status paragraph", async () => {
+    renderOpen();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const dialog = screen.getByRole("dialog");
+    const descAttr = dialog.getAttribute("aria-describedby");
+    expect(descAttr).toBeTruthy();
+    const descEl = document.getElementById(descAttr!);
+    expect(descEl).toHaveTextContent("Status: running");
+  });
+
+  it("calls onClose when Escape is pressed", async () => {
+    const onClose = vi.fn();
+    renderOpen({ onClose });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("traps focus within dialog (Tab wraps around)", async () => {
+    renderOpen();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    const dialog = screen.getByTestId("progress-dialog");
+    const buttons = dialog.querySelectorAll<HTMLElement>("button:not([disabled])");
+    expect(buttons.length).toBeGreaterThanOrEqual(1);
+
+    const last = buttons[buttons.length - 1];
+    const first = buttons[0];
+    last.focus();
+    fireEvent.keyDown(document, { key: "Tab" });
+    expect(document.activeElement).toBe(first);
+
+    first.focus();
+    fireEvent.keyDown(document, { key: "Tab", shiftKey: true });
+    expect(document.activeElement).toBe(last);
+  });
+
+  it("restores focus to previously focused element on close", async () => {
+    const trigger = document.createElement("button");
+    trigger.textContent = "Open";
+    document.body.appendChild(trigger);
+    trigger.focus();
+    expect(document.activeElement).toBe(trigger);
+
+    const { rerender } = render(
+      <ProgressDialog
+        open={true}
+        runId={RUN_ID}
+        expectedStage="SCRIPT_GENERATING"
+        apiBase={API}
+      />,
+    );
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(document.activeElement).not.toBe(trigger);
+
+    await act(async () => {
+      rerender(
+        <ProgressDialog
+          open={false}
+          runId={RUN_ID}
+          expectedStage="SCRIPT_GENERATING"
+          apiBase={API}
+        />,
+      );
+    });
+
+    expect(document.activeElement).toBe(trigger);
+    document.body.removeChild(trigger);
+  });
+});

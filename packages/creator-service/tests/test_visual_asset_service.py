@@ -1,11 +1,11 @@
 import asyncio
 
 import pytest
-
 from creator_service.visual_asset_service import (
     InMemoryVisualAssetStorage,
     VisualAssetService,
 )
+
 
 def run(coro):
     return asyncio.run(coro)

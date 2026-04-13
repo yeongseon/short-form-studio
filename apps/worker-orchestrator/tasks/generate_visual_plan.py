@@ -126,7 +126,7 @@ def _parse_llm_response(
             original_text=text,
             prompt=section.get("image_prompt") or llm_data.get("prompt", f"Visual representation of: {text[:200]}"),
             prompt_edited=bool(section.get("image_prompt")),
-            prompt_source="user_provided" if section.get("image_prompt") else "auto_generated",
+            prompt_source="user_edited" if section.get("image_prompt") else "auto_generated",
             style_tags=section.get("style_tags") or llm_data.get("style_tags", []),
             mood=section.get("mood") or llm_data.get("mood"),
             composition=section.get("composition") or llm_data.get("composition"),
