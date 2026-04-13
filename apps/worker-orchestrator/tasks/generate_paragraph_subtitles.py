@@ -13,7 +13,7 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
 redis: Any  # optional dependency; may be None at runtime
 try:
@@ -49,7 +49,7 @@ def generate_paragraph_subtitles(
     section_id: str,
     audio_path: str,
     subtitle_model: str = "whisper-small",
-    subtitle_format: str = "srt",
+    subtitle_format: Literal["srt", "vtt"] = "srt",
 ) -> dict[str, object]:
     """Generate subtitles for a single paragraph's audio.
 
@@ -80,6 +80,9 @@ def generate_paragraph_subtitles(
     async def _run_task() -> dict[str, object]:
         nonlocal provider_type, endpoint, gpu_lock_acquired_at, gpu_lock_released_at
         nonlocal redis_client, lock_acquired
+
+        if subtitle_format not in ("srt", "vtt"):
+            raise ValueError(f"Invalid subtitle_format: {subtitle_format!r}. Must be 'srt' or 'vtt'.")
 
         if not os.path.exists(audio_path):
             raise RuntimeError(f"Audio file not found: {audio_path}")

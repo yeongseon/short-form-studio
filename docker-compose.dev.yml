@@ -1,0 +1,23 @@
+# Development overrides — use with: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+services:
+  api:
+    build:
+      target: dev
+    volumes:
+      - ./apps/api/src:/app/src
+      - ./apps/worker-orchestrator/tasks:/app/tasks
+      - ./apps/worker-orchestrator/celery_app.py:/app/celery_app.py
+      - ./packages/creator-service/creator_service:/usr/local/lib/python3.12/site-packages/creator_service
+      - ./packages/creator-provider/creator_provider:/usr/local/lib/python3.12/site-packages/creator_provider
+      - ./packages/creator-domain/creator_domain:/usr/local/lib/python3.12/site-packages/creator_domain
+
+  worker:
+    build:
+      target: dev
+    command: ["sh", "-c", "watchfiles --filter python 'celery -A celery_app.celery_app worker --loglevel=info --pool=solo' /app/tasks /app/celery_app.py"]
+    volumes:
+      - ./apps/worker-orchestrator/tasks:/app/tasks
+      - ./apps/worker-orchestrator/celery_app.py:/app/celery_app.py
+      - ./packages/creator-service/creator_service:/usr/local/lib/python3.12/site-packages/creator_service
+      - ./packages/creator-provider/creator_provider:/usr/local/lib/python3.12/site-packages/creator_provider
+      - ./packages/creator-domain/creator_domain:/usr/local/lib/python3.12/site-packages/creator_domain

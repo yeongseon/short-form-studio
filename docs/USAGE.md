@@ -255,7 +255,7 @@ data/artifacts/<run_id>/
 
 ### Worker
 
-- The default Docker Compose worker may restart on file changes due to `watchfiles`
+- The development Docker Compose override (`docker-compose.dev.yml`) uses `watchfiles` which may restart the worker on file changes
 - For stable execution, use a standalone worker:
 
 ```bash

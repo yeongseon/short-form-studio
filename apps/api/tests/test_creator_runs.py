@@ -5,8 +5,13 @@ from datetime import datetime, timezone
 from typing import Literal
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from shorts_api.main import runs_router
+from shorts_api.routes.creator_runs_core import GenerateSubtitlesRequest
+from shorts_api.routes.creator_runs_storyboard import (
+    BulkParagraphSubtitlesRequest,
+    ParagraphSubtitlesRequest,
+)
 
 
 class StubPipelineRun(BaseModel):
@@ -2637,3 +2642,23 @@ async def test_preview_run_not_found(client, stub_preview_services):
 
     assert response.status_code == 404
     assert "not found" in response.json()["detail"].lower()
+
+
+def test_subtitle_format_validation_rejects_invalid_values() -> None:
+    with pytest.raises(ValidationError):
+        GenerateSubtitlesRequest(subtitle_format="../../evil")
+
+    assert GenerateSubtitlesRequest(subtitle_format="srt").subtitle_format == "srt"
+    assert GenerateSubtitlesRequest(subtitle_format="vtt").subtitle_format == "vtt"
+
+    with pytest.raises(ValidationError):
+        ParagraphSubtitlesRequest(subtitle_format="../../evil")
+
+    assert ParagraphSubtitlesRequest(subtitle_format="srt").subtitle_format == "srt"
+    assert ParagraphSubtitlesRequest(subtitle_format="vtt").subtitle_format == "vtt"
+
+    with pytest.raises(ValidationError):
+        BulkParagraphSubtitlesRequest(subtitle_format="../../evil")
+
+    assert BulkParagraphSubtitlesRequest(subtitle_format="srt").subtitle_format == "srt"
+    assert BulkParagraphSubtitlesRequest(subtitle_format="vtt").subtitle_format == "vtt"

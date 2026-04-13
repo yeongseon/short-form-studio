@@ -72,6 +72,7 @@ docker compose --profile gpu up -d
 
 > **Note:** GPU services require an NVIDIA GPU with the Container Toolkit installed.
 > Without a GPU, configure remote AI providers via API keys in `.env` instead.
+> **Development:** For live-reload during development, use `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d`.
 
 ### 3. Run database migrations
 

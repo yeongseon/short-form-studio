@@ -142,7 +142,7 @@ docker compose --profile monitoring up -d flower
 
 ```bash
 # API health
-curl -f http://localhost:8000/health
+curl -f http://localhost:8000/healthz
 
 # Studio Web
 curl -sf http://localhost:5174/ | head -1

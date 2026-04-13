@@ -1,5 +1,7 @@
 """Core run CRUD, approvals, and script trigger routes."""
 
+from typing import Literal
+
 from creator_service.project_service import project_service
 from creator_service.run_service import run_service
 from creator_service.stage_review_service import stage_review_service
@@ -56,7 +58,7 @@ class GenerateAudioRequest(BaseModel):
 
 class GenerateSubtitlesRequest(BaseModel):
     subtitle_model: str = "whisper-small"
-    subtitle_format: str = "srt"
+    subtitle_format: Literal["srt", "vtt"] = "srt"
 
 
 class RenderRequest(BaseModel):

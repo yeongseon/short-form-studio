@@ -1,7 +1,7 @@
 """Storyboard assembly and paragraph operation routes."""
 
 import logging
-from typing import Any
+from typing import Any, Literal
 
 from creator_service.audio_service import audio_service
 from creator_service.run_service import run_service
@@ -38,7 +38,7 @@ class ParagraphAudioRequest(BaseModel):
 
 class ParagraphSubtitlesRequest(BaseModel):
     subtitle_model: str = "whisper-small"
-    subtitle_format: str = "srt"
+    subtitle_format: Literal["srt", "vtt"] = "srt"
 
 
 class BulkParagraphAudioRequest(BaseModel):
@@ -48,7 +48,7 @@ class BulkParagraphAudioRequest(BaseModel):
 
 class BulkParagraphSubtitlesRequest(BaseModel):
     subtitle_model: str = "whisper-small"
-    subtitle_format: str = "srt"
+    subtitle_format: Literal["srt", "vtt"] = "srt"
 
 
 @router.get("/runs/{run_id}/storyboard")
