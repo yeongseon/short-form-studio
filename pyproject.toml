@@ -15,7 +15,7 @@ members = [
 ]
 
 [tool.basedpyright]
-typeCheckingMode = "basic"
+typeCheckingMode = "standard"
 reportMissingTypeStubs = false
 reportUnknownMemberType = false
 extraPaths = [

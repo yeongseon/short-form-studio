@@ -69,7 +69,7 @@ jobs:
         run: cd apps/studio-web && npx tsc --noEmit
       - name: Typecheck Python (basedpyright)
         run: |
-          pip install basedpyright
+          pip install basedpyright==1.29.2
           basedpyright apps packages
 
   docker:
