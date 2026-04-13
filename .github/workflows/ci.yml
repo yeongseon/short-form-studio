@@ -18,12 +18,12 @@ jobs:
         with:
           node-version: "20"
       - name: Install Python dependencies
-        run: python3 -m pip install -r apps/api/requirements.txt -r apps/api/requirements-dev.txt -r apps/worker-orchestrator/requirements.txt -r apps/worker-orchestrator/requirements-dev.txt
+        run: python3 -m pip install -c constraints.txt -r apps/api/requirements.txt -r apps/api/requirements-dev.txt -r apps/worker-orchestrator/requirements.txt -r apps/worker-orchestrator/requirements-dev.txt
       - name: Install packages in editable mode
         run: |
-          pip install -e packages/creator-domain
-          pip install -e packages/creator-provider
-          pip install -e packages/creator-service
+          pip install -c constraints.txt -e packages/creator-domain
+          pip install -c constraints.txt -e packages/creator-provider
+          pip install -c constraints.txt -e packages/creator-service
       - name: Install Node dependencies
         run: npm --prefix apps/studio-web ci
       - name: Lint Python
@@ -44,12 +44,12 @@ jobs:
         with:
           node-version: "20"
       - name: Install Python dependencies
-        run: python3 -m pip install -r apps/api/requirements.txt -r apps/api/requirements-dev.txt -r apps/worker-orchestrator/requirements.txt -r apps/worker-orchestrator/requirements-dev.txt
+        run: python3 -m pip install -c constraints.txt -r apps/api/requirements.txt -r apps/api/requirements-dev.txt -r apps/worker-orchestrator/requirements.txt -r apps/worker-orchestrator/requirements-dev.txt
       - name: Install packages in editable mode
         run: |
-          pip install -e packages/creator-domain
-          pip install -e packages/creator-provider
-          pip install -e packages/creator-service
+          pip install -c constraints.txt -e packages/creator-domain
+          pip install -c constraints.txt -e packages/creator-provider
+          pip install -c constraints.txt -e packages/creator-service
       - name: Install Node dependencies
         run: npm --prefix apps/studio-web ci
       - name: Test Packages (with coverage)

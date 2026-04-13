@@ -159,6 +159,10 @@ python3 -m ruff check apps packages
 cd apps/api && uvicorn shorts_api.main:app --reload
 ```
 
+> **Reproducibility:** The repository includes a `constraints.txt` file that pins all
+> transitive Python dependencies. CI and Docker builds install against it. To regenerate
+> after updating dependencies: `pip freeze > constraints.txt`.
+
 ### Frontend
 
 ```bash

@@ -4,7 +4,8 @@ WORKDIR /build
 RUN pip install --no-cache-dir --upgrade pip
 COPY packages ./packages
 COPY apps/api/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt \
+COPY constraints.txt ./constraints.txt
+RUN pip install --no-cache-dir --prefix=/install -c constraints.txt -r requirements.txt \
     ./packages/creator-domain \
     ./packages/creator-service \
     ./packages/creator-provider
