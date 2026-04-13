@@ -69,7 +69,7 @@ services:
       dockerfile: apps/studio-web/Dockerfile
       target: runtime
     ports:
-      - "5174:8080"
+      - "127.0.0.1:5174:8080"
     environment:
       API_KEY: ${API_KEY:-}
     depends_on:

@@ -3,6 +3,11 @@ server {
     root /usr/share/nginx/html;
     index index.html;
 
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "DENY" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; frame-ancestors 'none';" always;
+
     # SPA fallback — serve index.html for all non-file routes
     location / {
         try_files $uri $uri/ /index.html;
@@ -10,6 +15,17 @@ server {
 
     # Proxy API requests to the backend
     location /api/ {
+        set $csrf_check 0;
+        if ($http_origin = "$scheme://$host") {
+            set $csrf_check 1;
+        }
+        if ($request_method !~ ^(GET|HEAD|OPTIONS)$) {
+            set $csrf_check "${csrf_check}m";
+        }
+        if ($csrf_check = "0m") {
+            return 403;
+        }
+
         proxy_pass http://api:8000;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;

@@ -78,6 +78,9 @@ docker compose --profile gpu up -d
 > Without a GPU, configure remote AI providers via API keys in `.env` instead.
 > **Development:** For live-reload during development, use `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d`.
 
+> **Security:** `studio-web` binds to `127.0.0.1:5174` by default so the UI is not exposed on the local network.
+> For public deployments, keep this behind an authenticated reverse proxy and add proper application authentication.
+
 ### 3. Run database migrations
 
 ```bash
