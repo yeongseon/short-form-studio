@@ -86,7 +86,7 @@ jobs:
         run: docker build --target runtime -f apps/worker-orchestrator/Dockerfile .
       - name: Smoke-test compose up
         run: |
-          docker compose up -d postgres redis api studio-web
+          docker compose up -d postgres redis api studio-web worker
           # Wait for API health endpoint
           timeout 60 bash -c 'until curl -sf http://localhost:8000/healthz; do sleep 2; done'
           # Verify API responds
@@ -95,4 +95,6 @@ jobs:
           timeout 60 bash -c 'until curl -sf http://localhost:5174/; do sleep 2; done'
           # Verify frontend responds
           curl -sf http://localhost:5174/
+          # Verify worker container is running
+          docker compose ps worker --format json | grep -q running
           docker compose down
