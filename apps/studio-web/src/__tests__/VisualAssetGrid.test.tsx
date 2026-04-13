@@ -261,7 +261,7 @@ describe("VisualAssetGrid", () => {
 
     // Verify POST was called
     const postCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.find(
-      (call: any[]) => (call[1] as RequestInit | undefined)?.method === "POST",
+      (call: unknown[]) => (call[1] as RequestInit | undefined)?.method === "POST",
     );
     expect(postCall).toBeDefined();
     expect(postCall![0]).toContain("/select/41");

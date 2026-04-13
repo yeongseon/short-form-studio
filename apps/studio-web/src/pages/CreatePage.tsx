@@ -89,6 +89,7 @@ export default function CreatePage() {
   modelDefaultsRef.current = modelDefaults;
   const stylePresetRef = useRef(stylePreset);
   stylePresetRef.current = stylePreset;
+  const ideaFormRef = useRef<HTMLDivElement>(null);
 
   const handleModelChange = useCallback((category: string, modelKey: string) => {
     const fieldMap: Record<string, string> = {
@@ -284,7 +285,7 @@ export default function CreatePage() {
 
       {/* Idea tab panel */}
       {activeTab === "idea" && (
-        <div role="tabpanel" id="tabpanel-idea" aria-labelledby="tab-idea">
+        <div ref={ideaFormRef} role="tabpanel" id="tabpanel-idea" aria-labelledby="tab-idea">
           <IdeaForm onSubmit={handleIdeaSubmit} submitting={submitting} error={error} />
         </div>
       )}
@@ -403,7 +404,7 @@ export default function CreatePage() {
           type="button"
           disabled={submitting}
           onClick={activeTab === "idea" ? () => {
-            const form = document.querySelector<HTMLFormElement>('[data-testid="idea-form"]');
+            const form = ideaFormRef.current?.querySelector<HTMLFormElement>('form');
             form?.requestSubmit();
           } : handleJsonSubmit}
           style={{

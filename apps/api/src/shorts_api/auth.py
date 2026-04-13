@@ -15,7 +15,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.responses import Response
 
 # Paths that never require authentication
-_PUBLIC_PATHS = frozenset({"/health", "/healthz", "/docs", "/openapi.json", "/redoc"})
+_PUBLIC_PATHS = frozenset({"/health", "/healthz"})
 
 
 class ApiKeyMiddleware(BaseHTTPMiddleware):
@@ -35,6 +35,9 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         # Always allow public paths
         if request.url.path in _PUBLIC_PATHS:
             return await call_next(request)
+
+        # Docs paths go through normal auth when API_KEY is set
+        # (they were removed from _PUBLIC_PATHS so they're not auto-allowed)
 
         # Check header only (never accept keys via query params to avoid log leakage)
         provided = request.headers.get("X-API-Key")

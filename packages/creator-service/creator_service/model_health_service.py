@@ -79,11 +79,12 @@ class ModelHealthService:
                     status=ModelStatus.HEALTHY,
                 )
 
+            # Remote provider without API key: skip (not configured, not unhealthy)
             return ModelHealthResult(
                 model_name=model_name,
                 endpoint=model_name,
-                status=ModelStatus.UNHEALTHY,
-                error="API key not configured",
+                status=ModelStatus.UNKNOWN,
+                error="API key not configured (optional)",
             )
         
         health_path = self.health_paths.get(model_name, "/")

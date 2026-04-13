@@ -22,8 +22,7 @@ Thank you for your interest in contributing! This guide will help you get starte
 
 ```bash
 # Install dependencies
-cd apps/api && pip install -r requirements.txt
-
+cd apps/api && pip install -r requirements.txt -r requirements-dev.txt
 # Install local packages
 pip install -e packages/creator-domain packages/creator-service packages/creator-provider
 

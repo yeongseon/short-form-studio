@@ -129,8 +129,8 @@ export function useProjectData(projectId: number): UseProjectDataResult {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ [field]: modelKey }),
-        }).catch(() => {
-          return;
+        }).catch((err: unknown) => {
+          console.error('Failed to persist model-default change', err);
         });
       }
     },

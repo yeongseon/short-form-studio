@@ -215,7 +215,7 @@ describe("ModelSelector", () => {
       expect(onChange).toHaveBeenCalledWith("script", "qwen3-4b");
       expect(onChange).toHaveBeenCalledWith("image", "sd15");
     });
-    const initialCallCount = onChange.mock.calls.length;
+    // initialCallCount used to be checked here; onChange.mockClear() below is sufficient
     onChange.mockClear();
 
     // Rerender with a NEW array reference but same content

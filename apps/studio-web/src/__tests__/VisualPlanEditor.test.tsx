@@ -180,7 +180,7 @@ describe("VisualPlanEditor", () => {
 
     // Verify PATCH was called with expected payload
     const patchCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.find(
-      (call: any[]) => {
+      (call: unknown[]) => {
         const url = call[0] as string;
         const init = call[1] as RequestInit | undefined;
         return url.includes("scenes/scene-1") && init?.method === "PATCH";

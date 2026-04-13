@@ -101,21 +101,26 @@ docker compose run --rm api alembic upgrade head
 | 010 | `widen_active_task_id` | Widens `active_task_id` column type |
 | 011 | `add_pasted_json_source_type` | `pasted_json` source type + `json_script` column |
 
-### Step 4: Pull Ollama Model
+### Step 4: (Optional) Pull Ollama Model
+
+Only needed when using the `gpu` profile for local AI inference.
 
 ```bash
-docker compose up -d ollama
+docker compose --profile gpu up -d ollama
 # Wait for health check to pass, then:
 docker compose exec ollama ollama pull qwen3:4b
 ```
 
-### Step 5: Start AI Services
+### Step 5: (Optional) Start GPU AI Services
+
+GPU-based AI services are gated behind the `gpu` Docker Compose profile.
+Skip this step if you only use remote API providers.
 
 ```bash
-docker compose up -d stable-diffusion tts-qwen3 stt-whisper
+docker compose --profile gpu up -d
 ```
 
-> **Note:** AI services require the NVIDIA GPU. Only one model runs inference at a time (GPU lock via Redis).
+> **Note:** Requires NVIDIA GPU + Container Toolkit. Only one model runs inference at a time (GPU lock via Redis).
 
 ### Step 6: Start Application
 
@@ -224,18 +229,20 @@ Each `*_REVIEW` stage requires explicit approval before advancing.
 
 ## Service Ports
 
-| Service | Port | Protocol |
-|---|---|---|
-| API (FastAPI) | 8000 | HTTP |
-| Studio Web (Vite) | 5174 | HTTP |
-| PostgreSQL | 5432 | TCP |
-| Redis | 6379 | TCP |
-| Ollama | 11434 | HTTP |
-| Stable Diffusion | 7860 | HTTP |
-| TTS (Qwen) | 8100 | HTTP |
-| STT (Whisper) | 9000 | HTTP |
-| Flower | 5555 | HTTP |
+| Service | Bind Address | Port | Protocol | Notes |
+|---|---|---|---|---|
+| API (FastAPI) | 127.0.0.1 | 8000 | HTTP | Internal only |
+| Studio Web (Vite) | 0.0.0.0 | 5174 | HTTP | Public-facing |
+| PostgreSQL | 127.0.0.1 | 5432 | TCP | Internal only |
+| Redis | 127.0.0.1 | 6379 | TCP | Internal only |
+| Ollama | 127.0.0.1 | 11434 | HTTP | GPU profile only |
+| Stable Diffusion | 127.0.0.1 | 7860 | HTTP | GPU profile only |
+| TTS (Qwen) | 127.0.0.1 | 8100 | HTTP | GPU profile only |
+| STT (Whisper) | 127.0.0.1 | 9000 | HTTP | GPU profile only |
+| Flower | 127.0.0.1 | 5555 | HTTP | Monitoring profile |
 
+> **Security note:** All internal services bind to `127.0.0.1` to prevent
+> accidental exposure. Only Studio Web is accessible from external hosts.
 ---
 
 ## GPU Constraints

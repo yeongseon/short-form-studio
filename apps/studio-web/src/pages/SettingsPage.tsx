@@ -84,7 +84,7 @@ export default function SettingsPage() {
     <div style={{ maxWidth: 900, margin: "0 auto", padding: 24 }}>
       <h1 style={{ fontSize: 24, fontWeight: 700, margin: "0 0 8px" }}>Settings</h1>
       <p style={{ margin: "0 0 24px", color: "#6b7280", fontSize: 14 }}>
-        Configure remote provider credentials used by model-backed generation.
+        View the remote provider credentials used by model-backed generation.
       </p>
 
       <section style={{ border: "1px solid #e5e7eb", borderRadius: 8, background: "#fff" }}>

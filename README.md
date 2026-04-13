@@ -62,6 +62,17 @@ cp .env.example .env
 docker compose up -d
 ```
 
+This starts the core services (API, worker, frontend, database, Redis). Local GPU-based AI
+services (Ollama, Stable Diffusion, TTS, STT) are optional and gated behind a Docker Compose
+profile. To start them alongside the core stack:
+
+```bash
+docker compose --profile gpu up -d
+```
+
+> **Note:** GPU services require an NVIDIA GPU with the Container Toolkit installed.
+> Without a GPU, configure remote AI providers via API keys in `.env` instead.
+
 ### 3. Run database migrations
 
 ```bash

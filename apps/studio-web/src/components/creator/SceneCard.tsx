@@ -142,18 +142,6 @@ const sectionLabelStyle: React.CSSProperties = {
   marginBottom: 1,
 };
 
-const scriptTextStyle: React.CSSProperties = {
-  fontSize: 13,
-  lineHeight: 1.55,
-  color: "#1f2937",
-  whiteSpace: "pre-wrap",
-  wordBreak: "break-word",
-  padding: "6px 8px",
-  background: "#f8fafc",
-  borderRadius: 6,
-  border: "1px solid #f1f5f9",
-};
-
 const promptTextStyle: React.CSSProperties = {
   fontSize: 12,
   lineHeight: 1.45,
@@ -195,12 +183,6 @@ const slotsRowStyle: React.CSSProperties = {
 const slotItemStyle: React.CSSProperties = {
   flex: "1 1 0",
   minWidth: 120,
-};
-
-const actionRowStyle: React.CSSProperties = {
-  display: "flex",
-  gap: 4,
-  flexWrap: "wrap",
 };
 
 const actionBtnStyle: React.CSSProperties = {
@@ -299,7 +281,6 @@ export default function SceneCard({
   );
 
   // Visual plan metadata to show inline (read-only display)
-  const hasVisualMeta = Boolean(visualFields || p.image_prompt);
   const displayPrompt = visualFields?.prompt || p.image_prompt;
   const displayMood = visualFields?.mood;
   const displayComposition = visualFields?.composition;

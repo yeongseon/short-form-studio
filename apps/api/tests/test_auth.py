@@ -83,16 +83,30 @@ async def test_health_always_public(authed_client):
 
 
 @pytest.mark.asyncio
-async def test_docs_always_public(authed_client):
-    """Docs endpoints should be accessible without auth."""
+async def test_docs_require_auth_when_api_key_set(authed_client):
+    """Docs endpoints should require auth when API_KEY is configured."""
     response = await authed_client.get("/docs")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_openapi_requires_auth_when_api_key_set(authed_client):
+    """OpenAPI JSON should require auth when API_KEY is configured."""
+    response = await authed_client.get("/openapi.json")
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_docs_accessible_with_valid_api_key(authed_client, api_key):
+    """Docs endpoints should be accessible with a valid API key."""
+    response = await authed_client.get("/docs", headers={"X-API-Key": api_key})
     assert response.status_code == 200
 
 
 @pytest.mark.asyncio
-async def test_openapi_always_public(authed_client):
-    """OpenAPI JSON should be accessible without auth."""
-    response = await authed_client.get("/openapi.json")
+async def test_openapi_accessible_with_valid_api_key(authed_client, api_key):
+    """OpenAPI JSON should be accessible with a valid API key."""
+    response = await authed_client.get("/openapi.json", headers={"X-API-Key": api_key})
     assert response.status_code == 200
 
 

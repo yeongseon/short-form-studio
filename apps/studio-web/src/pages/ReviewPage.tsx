@@ -454,7 +454,7 @@ export default function ReviewPage() {
         >
           <p style={{ margin: "0 0 8px", fontWeight: 600 }}>No outputs yet</p>
           <p style={{ margin: 0, fontSize: 13 }}>
-            This run hasn't generated any content to review.{" "}
+            This run hasn&apos;t generated any content to review.{" "}
             <Link to={editUrl} style={{ color: "#4285f4" }}>Go to editor</Link>
           </p>
         </div>
