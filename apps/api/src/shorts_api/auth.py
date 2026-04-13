@@ -6,6 +6,7 @@ checks) must carry a matching key via the ``X-API-Key`` header or the standard
 middleware is a transparent pass-through so local development stays frictionless.
 """
 
+import hmac
 import os
 
 from fastapi import Request
@@ -42,7 +43,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             auth_header = request.headers.get("Authorization", "")
             if auth_header.startswith("Bearer "):
                 provided = auth_header[7:]  # len("Bearer ") == 7
-        if provided != self._api_key:
+        if not provided or not hmac.compare_digest(provided, self._api_key):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Invalid or missing API key"},

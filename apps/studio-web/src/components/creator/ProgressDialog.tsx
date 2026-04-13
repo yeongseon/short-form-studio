@@ -50,6 +50,24 @@ const STAGE_LABELS: Record<string, string> = {
   RENDER_GENERATING: "Rendering video…",
 };
 
+// Pipeline stage ordering for progress classification.
+// A stage change is "completed" only if the new stage is ahead of the expected one.
+const STAGE_ORDER: string[] = [
+  "IDEA_READY",
+  "SCRIPT_GENERATING",
+  "SCRIPT_REVIEW",
+  "VISUAL_PLAN_SETUP",
+  "VISUAL_PLAN_GENERATING",
+  "VISUAL_PLAN_REVIEW",
+  "VISUAL_ASSET_GENERATING",
+  "VISUAL_ASSET_REVIEW",
+  "AUDIO_GENERATING",
+  "SUBTITLE_GENERATING",
+  "RENDER_GENERATING",
+  "FINAL_REVIEW",
+  "PUBLISHED",
+];
+
 // --------------- component ---------------
 
 export default function ProgressDialog({
@@ -77,8 +95,12 @@ export default function ProgressDialog({
   const classify = useCallback(
     (run: RunSnapshot): Outcome => {
       if (run.status === "failed") return "failed";
-      // If stage moved past expectedStage, generation completed
-      if (run.current_stage !== expectedStage) return "completed";
+      if (run.current_stage === expectedStage) return "running";
+      // Stage changed — only treat as completed if it moved forward in the pipeline
+      const expectedIdx = STAGE_ORDER.indexOf(expectedStage);
+      const currentIdx = STAGE_ORDER.indexOf(run.current_stage);
+      if (currentIdx > expectedIdx) return "completed";
+      // Stage rolled back (stopped/cancelled) or is unrecognised — keep running
       return "running";
     },
     [expectedStage],

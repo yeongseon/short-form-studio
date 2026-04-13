@@ -11,11 +11,11 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 
 class CreateProjectRequest(BaseModel):
     title: str
-    source_type: Literal["idea", "markdown", "pasted_json"]
+    source_type: Literal["idea", "markdown", "pasted_json", "url"]
     idea_brief: str | None = None
     markdown_source: str | None = None
     json_script: str | None = None
-
+    url_source: str | None = None
 
 @router.post("", status_code=201)
 async def create_project(request: CreateProjectRequest) -> dict[str, object]:
@@ -26,6 +26,7 @@ async def create_project(request: CreateProjectRequest) -> dict[str, object]:
             idea_brief=request.idea_brief,
             markdown_source=request.markdown_source,
             json_script=request.json_script,
+            url_source=request.url_source,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

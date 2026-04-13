@@ -117,6 +117,8 @@ services:
 
   stable-diffusion:
     image: shorts-automation-stable-diffusion:latest
+    # Locally built image — tag with a version when deploying to production
+    # e.g. docker build -t shorts-automation-stable-diffusion:1.0.0 -f docker/stable-diffusion/Dockerfile .
     command: ["python", "launch.py", "--api", "--nowebui", "--listen", "--port", "7860", "--medvram", "--xformers", "--no-half", "--no-half-vae", "--skip-torch-cuda-test", "--skip-version-check", "--skip-python-version-check", "--skip-install"]
     ports:
       - "7860:7860"
@@ -137,6 +139,7 @@ services:
 
   tts-qwen3:
     image: shorts-automation-tts-qwen3:latest
+    # Locally built image — tag with a version when deploying to production
     ports:
       - "8100:8100"
     deploy:
@@ -156,6 +159,7 @@ services:
 
   stt-whisper:
     image: shorts-automation-stt-whisper:latest
+    # Locally built image — tag with a version when deploying to production
     ports:
       - "9000:8200"
     deploy:

@@ -165,13 +165,13 @@ async def test_create_project_invalid_source_type(client):
 
 
 @pytest.mark.asyncio
-async def test_create_project_url_source_is_not_publicly_supported(client):
+async def test_create_project_url_source_type(client, stub_project_service: StubProjectService):
     response = await client.post(
         "/api/creator/projects",
         json={"title": "URL", "source_type": "url", "url_source": "https://example.com"},
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 201
 
 
 @pytest.mark.asyncio

@@ -131,7 +131,7 @@ cd apps/api && uvicorn shorts_api.main:app --reload
 
 ```bash
 cd apps/studio-web
-npm install
+npm ci
 npm run dev      # Development server
 npm run build    # Production build
 npm test         # Run tests

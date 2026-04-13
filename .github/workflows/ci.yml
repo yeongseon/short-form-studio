@@ -26,7 +26,6 @@ jobs:
           pip install -e packages/creator-service
       - name: Install Node dependencies
         run: npm --prefix apps/studio-web ci
-        run: npm --prefix apps/studio-web install
       - name: Lint Python
         run: |
           ruff check apps packages
@@ -53,7 +52,6 @@ jobs:
           pip install -e packages/creator-service
       - name: Install Node dependencies
         run: npm --prefix apps/studio-web ci
-        run: npm --prefix apps/studio-web install
       - name: Test Packages (with coverage)
         run: |
           python3 -m pytest packages/creator-domain/tests/ -v --cov=creator_domain --cov-report=term-missing
@@ -63,6 +61,5 @@ jobs:
         run: cd apps/api && python3 -m pytest tests/ -v --cov=shorts_api --cov-report=term-missing --cov-fail-under=60
       - name: Test Worker (with coverage)
         run: cd apps/worker-orchestrator && python3 -m pytest tests/ -v --cov=tasks --cov-report=term-missing --cov-fail-under=40
-        run: cd apps/worker-orchestrator && python3 -m pytest tests/ -v
       - name: Test Frontend (with coverage)
         run: npm --prefix apps/studio-web run test -- --coverage --coverage.thresholds.lines=60

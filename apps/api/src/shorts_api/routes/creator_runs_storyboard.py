@@ -118,6 +118,8 @@ async def get_storyboard(run_id: int) -> dict[str, object]:
         if has_image and has_audio and has_subtitles:
             status = "ready"
             ready_count += 1
+        elif run.current_stage == "VISUAL_ASSET_GENERATING" and not has_image:
+            status = "generating_image"
         elif run.current_stage == "AUDIO_GENERATING" and has_image and not has_audio:
             status = "generating_audio"
         elif run.current_stage == "SUBTITLE_GENERATING" and has_audio and not has_subtitles:
