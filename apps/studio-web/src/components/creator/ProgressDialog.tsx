@@ -16,6 +16,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback, useId } from "react";
+import { apiFetch } from "../../api/client";
 
 const DEFAULT_API = "/api/creator";
 const DEFAULT_POLL_MS = 3000;
@@ -126,7 +127,7 @@ export default function ProgressDialog({
 
     const poll = async () => {
       try {
-        const res = await fetch(`${apiBase}/runs/${runId}`);
+        const res = await apiFetch(`${apiBase}/runs/${runId}`);
         if (cancelled) return;
         if (!res.ok) {
           const body = await res.json().catch(() => null);

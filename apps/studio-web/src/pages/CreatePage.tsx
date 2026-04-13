@@ -1,8 +1,8 @@
 import { useState, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
+import { apiFetch, API_BASE } from "../api/client";
 import ModelSelector from "../components/creator/ModelSelector";
 import IdeaForm, { type IdeaFormData } from "../components/creator/IdeaForm";
-import { API_BASE } from "../types/api";
 
 type Tab = "idea" | "json";
 
@@ -127,7 +127,7 @@ export default function CreatePage() {
 
       try {
         // 1. Create project
-        const projRes = await fetch(`${API_BASE}/projects`, {
+        const projRes = await apiFetch(`${API_BASE}/projects`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -145,7 +145,7 @@ export default function CreatePage() {
         const project = await projRes.json();
 
         // 2. Create run
-        const runRes = await fetch(`${API_BASE}/projects/${project.id}/runs`, {
+        const runRes = await apiFetch(`${API_BASE}/projects/${project.id}/runs`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -192,7 +192,7 @@ export default function CreatePage() {
 
     try {
       // 1. Create project
-      const projRes = await fetch(`${API_BASE}/projects`, {
+      const projRes = await apiFetch(`${API_BASE}/projects`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -210,7 +210,7 @@ export default function CreatePage() {
       const project = await projRes.json();
 
       // 2. Import JSON (creates run + saves structured draft in one call)
-      const importRes = await fetch(`${API_BASE}/projects/${project.id}/script/import-json`, {
+      const importRes = await apiFetch(`${API_BASE}/projects/${project.id}/script/import-json`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

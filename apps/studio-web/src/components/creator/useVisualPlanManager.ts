@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { API_BASE, type VisualScene } from "../../types/api";
+import { apiFetch, API_BASE } from "../../api/client";
+import { type VisualScene } from "../../types/api";
 
 export type { VisualScene } from "../../types/api";
 
@@ -50,7 +51,7 @@ export function useVisualPlanManager(
     }
 
     try {
-      const res = await fetch(`${API_BASE}/runs/${runId}/visual-plan`);
+      const res = await apiFetch(`${API_BASE}/runs/${runId}/visual-plan`);
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         const detail = body?.detail as string | undefined;
@@ -144,7 +145,7 @@ export function useVisualPlanManager(
       setSavingVisualSceneId(sceneId);
       setVisualError(null);
       try {
-        const res = await fetch(`${API_BASE}/runs/${runId}/visual-plan/scenes/${sceneId}`, {
+        const res = await apiFetch(`${API_BASE}/runs/${runId}/visual-plan/scenes/${sceneId}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(updates),

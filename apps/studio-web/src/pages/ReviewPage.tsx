@@ -13,9 +13,10 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
 
+import { apiFetch, API_BASE } from "../api/client";
 import PipelineStepper from "../components/creator/PipelineStepper";
 import StoryboardView from "../components/creator/StoryboardView";
-import { API_BASE, type RunDetail, type VisualPlanScene } from "../types/api";
+import { type RunDetail, type VisualPlanScene } from "../types/api";
 
 /** Convert API artifact path → browser-accessible URL via Vite proxy. */
 function artifactUrl(path: string): string {
@@ -162,7 +163,7 @@ export default function ReviewPage() {
     setError(null);
     try {
       // Fetch run detail
-      const runRes = await fetch(`${API_BASE}/runs/${numericRunId}`);
+      const runRes = await apiFetch(`${API_BASE}/runs/${numericRunId}`);
       if (!runRes.ok) {
         if (runRes.status === 404) throw new Error("Run not found");
         throw new Error(`Failed to load run (${runRes.status})`);
@@ -174,7 +175,7 @@ export default function ReviewPage() {
 
       // Fetch script if past idea
       if (POST_SCRIPT_STAGES.has(stage)) {
-        const scriptRes = await fetch(`${API_BASE}/runs/${numericRunId}/script`);
+        const scriptRes = await apiFetch(`${API_BASE}/runs/${numericRunId}/script`);
         if (scriptRes.ok) {
           setScript(await scriptRes.json());
         }
@@ -182,7 +183,7 @@ export default function ReviewPage() {
 
       // Fetch visual plan if past script
       if (POST_VISUAL_PLAN_STAGES.has(stage)) {
-        const vpRes = await fetch(`${API_BASE}/runs/${numericRunId}/visual-plan`);
+        const vpRes = await apiFetch(`${API_BASE}/runs/${numericRunId}/visual-plan`);
         if (vpRes.ok) {
           const vpData = await vpRes.json();
           setScenes(vpData.scenes ?? []);
@@ -191,7 +192,7 @@ export default function ReviewPage() {
 
       // Fetch visual assets if past visual plan
       if (POST_VISUAL_ASSET_STAGES.has(stage)) {
-        const assetsRes = await fetch(`${API_BASE}/runs/${numericRunId}/visual-assets`);
+        const assetsRes = await apiFetch(`${API_BASE}/runs/${numericRunId}/visual-assets`);
         if (assetsRes.ok) {
           const assetsData = await assetsRes.json();
           setAssets(assetsData.scenes ?? {});
@@ -200,7 +201,7 @@ export default function ReviewPage() {
 
       // Fetch preview (audio/subtitle/video) if past visual assets
       if (POST_AUDIO_STAGES.has(stage)) {
-        const previewRes = await fetch(`${API_BASE}/runs/${numericRunId}/preview`);
+        const previewRes = await apiFetch(`${API_BASE}/runs/${numericRunId}/preview`);
         if (previewRes.ok) {
           setPreview(await previewRes.json());
         }

@@ -207,28 +207,50 @@ export default function AssetSlot({
   // ---- empty ----
   if (status === "empty") {
     const canGenerate = Boolean(onGenerate) && !disabled;
-    return (
-      <div
-        style={{
-          ...emptyStyle,
-          cursor: canGenerate ? "pointer" : "default",
-          ...(canGenerate && hovered ? { borderColor: "#93c5fd", background: "#eff6ff" } : {}),
-        }}
-        data-testid={`asset-slot-${type}`}
-        data-status="empty"
-        role={canGenerate ? "button" : undefined}
-        tabIndex={canGenerate ? 0 : undefined}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-        onClick={canGenerate ? onGenerate : undefined}
-      >
+    const content = (
+      <>
         <span style={iconStyle}>{ICONS[type]}</span>
-        <span style={{
-          ...labelStyle,
-          ...(canGenerate ? { color: "#1d4ed8", fontWeight: 600 } : {}),
-        }}>
+        <span
+          style={{
+            ...labelStyle,
+            ...(canGenerate ? { color: "#1d4ed8", fontWeight: 600 } : {}),
+          }}
+        >
           {canGenerate ? `Generate ${LABELS[type]}` : LABELS[type]}
         </span>
+      </>
+    );
+
+    if (canGenerate) {
+      return (
+        <button
+          type="button"
+          style={{
+            ...emptyStyle,
+            cursor: "pointer",
+            ...(hovered ? { borderColor: "#93c5fd", background: "#eff6ff" } : {}),
+            width: "100%",
+            textAlign: "left",
+            appearance: "none",
+          }}
+          data-testid={`asset-slot-${type}`}
+          data-status="empty"
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          onClick={onGenerate}
+        >
+          {content}
+        </button>
+      );
+    }
+
+    return (
+      <div
+        style={emptyStyle}
+        data-testid={`asset-slot-${type}`}
+        data-status="empty"
+      >
+        {content}
       </div>
     );
   }
@@ -257,22 +279,10 @@ export default function AssetSlot({
     }
     return "✓ Ready";
   })();
+  const canPreview = !disabled && (type === "audio" || Boolean(onPreview));
 
-  return (
-    <div
-      style={{
-        ...readyStyle,
-        cursor: status === "ready" && (type === "audio" || onPreview) ? "pointer" : "default",
-      }}
-      data-testid={`asset-slot-${type}`}
-      data-status="ready"
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      onClick={handleClick}
-      role={type === "audio" || onPreview ? "button" : undefined}
-      tabIndex={type === "audio" || onPreview ? 0 : undefined}
-    >
-      {/* Thumbnail for image */}
+  const readyContent = (
+    <>
       {type === "image" && resolvedUrl && (
         <img
           src={resolvedUrl}
@@ -285,7 +295,6 @@ export default function AssetSlot({
 
       <span style={readyLabelStyle}>{readyLabel}</span>
 
-      {/* Hidden audio element for inline play */}
       {type === "audio" && resolvedUrl && (
         <audio
           ref={audioRef}
@@ -293,24 +302,72 @@ export default function AssetSlot({
           preload="none"
           onEnded={() => setPlaying(false)}
           data-testid={`audio-element-${type}`}
-        />
+        >
+          <track kind="captions" />
+        </audio>
       )}
+    </>
+  );
 
-      {/* Regenerate button on hover */}
-      {onRegenerate && !disabled && (
+  const regenButton =
+    onRegenerate && !disabled ? (
+      <button
+        type="button"
+        style={{ ...regenBtnStyle, opacity: canPreview ? (hovered ? 1 : 0) : 1 }}
+        onClick={(e) => {
+          e.stopPropagation();
+          onRegenerate();
+        }}
+        title={`Regenerate ${LABELS[type].toLowerCase()}`}
+        data-testid={`regen-${type}`}
+      >
+        ↻
+      </button>
+    ) : null;
+
+  if (canPreview) {
+    return (
+      <div
+        style={{
+          ...readyStyle,
+          cursor: "pointer",
+        }}
+      >
         <button
           type="button"
-          style={{ ...regenBtnStyle, opacity: hovered ? 1 : 0 }}
-          onClick={(e) => {
-            e.stopPropagation();
-            onRegenerate();
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            width: "100%",
+            minHeight: 36,
+            border: "none",
+            background: "transparent",
+            padding: 0,
+            textAlign: "left",
+            cursor: "pointer",
           }}
-          title={`Regenerate ${LABELS[type].toLowerCase()}`}
-          data-testid={`regen-${type}`}
+          data-testid={`asset-slot-${type}`}
+          data-status="ready"
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          onClick={handleClick}
         >
-          ↻
+          {readyContent}
         </button>
-      )}
+        {regenButton}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={readyStyle}
+      data-testid={`asset-slot-${type}`}
+      data-status="ready"
+    >
+      {readyContent}
+      {regenButton}
     </div>
   );
 }

@@ -11,12 +11,14 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt \
 
 # --- runtime stage ---
 FROM python:3.12-slim AS runtime
+RUN groupadd --gid 1000 appuser && useradd --uid 1000 --gid appuser --create-home appuser
 WORKDIR /app
 COPY --from=builder /install /usr/local
-COPY apps/api/src ./src
-COPY apps/api/alembic.ini ./alembic.ini
-COPY apps/api/migrations ./migrations
+COPY --chown=appuser:appuser apps/api/src ./src
+COPY --chown=appuser:appuser apps/api/alembic.ini ./alembic.ini
+COPY --chown=appuser:appuser apps/api/migrations ./migrations
 ENV PYTHONPATH=/app/src
+USER appuser
 EXPOSE 8000
 CMD ["uvicorn", "shorts_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
 

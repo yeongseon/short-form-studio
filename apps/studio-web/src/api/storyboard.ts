@@ -4,7 +4,7 @@
  *
  * Mirrors backend models in creator_domain.models.storyboard.
  */
-import { API_BASE } from "../types/api";
+import { apiFetch, API_BASE } from "./client";
 
 // --------------- types ---------------
 
@@ -87,7 +87,7 @@ export interface ParagraphSubtitlesParams {
  * script sections + visual plan + images + audio + subtitles.
  */
 export async function fetchStoryboard(runId: number): Promise<StoryboardResponse> {
-  const res = await fetch(`${API_BASE}/runs/${runId}/storyboard`);
+  const res = await apiFetch(`${API_BASE}/runs/${runId}/storyboard`);
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     throw new Error(body?.detail ?? `Failed to fetch storyboard (${res.status})`);
@@ -103,17 +103,15 @@ export async function generateParagraphAudio(
   sectionId: string,
   params: ParagraphAudioParams = {},
 ): Promise<{ task_id: string }> {
-  const res = await fetch(
-    `${API_BASE}/runs/${runId}/storyboard/paragraphs/${sectionId}/generate-audio`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        tts_model: params.tts_model ?? "qwen3-tts",
-        voice: params.voice ?? "default",
-      }),
-    },
-  );
+  const res = await apiFetch(`${API_BASE}/runs/${runId}/storyboard/paragraphs/${sectionId}/generate-audio`,
+  {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      tts_model: params.tts_model ?? "qwen3-tts",
+      voice: params.voice ?? "default",
+    }),
+  },);
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     throw new Error(body?.detail ?? `Generate audio failed (${res.status})`);
@@ -130,17 +128,15 @@ export async function generateParagraphSubtitles(
   sectionId: string,
   params: ParagraphSubtitlesParams = {},
 ): Promise<{ task_id: string }> {
-  const res = await fetch(
-    `${API_BASE}/runs/${runId}/storyboard/paragraphs/${sectionId}/generate-subtitles`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        subtitle_model: params.subtitle_model ?? "whisper-small",
-        subtitle_format: params.subtitle_format ?? "srt",
-      }),
-    },
-  );
+  const res = await apiFetch(`${API_BASE}/runs/${runId}/storyboard/paragraphs/${sectionId}/generate-subtitles`,
+  {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      subtitle_model: params.subtitle_model ?? "whisper-small",
+      subtitle_format: params.subtitle_format ?? "srt",
+    }),
+  },);
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     throw new Error(body?.detail ?? `Generate subtitles failed (${res.status})`);
@@ -155,17 +151,15 @@ export async function generateAllParagraphAudio(
   runId: number,
   params: ParagraphAudioParams = {},
 ): Promise<BulkDispatchResponse> {
-  const res = await fetch(
-    `${API_BASE}/runs/${runId}/storyboard/generate-all-audio`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        tts_model: params.tts_model ?? "qwen3-tts",
-        voice: params.voice ?? "default",
-      }),
-    },
-  );
+  const res = await apiFetch(`${API_BASE}/runs/${runId}/storyboard/generate-all-audio`,
+  {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      tts_model: params.tts_model ?? "qwen3-tts",
+      voice: params.voice ?? "default",
+    }),
+  },);
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     throw new Error(body?.detail ?? `Bulk audio generation failed (${res.status})`);
@@ -180,17 +174,15 @@ export async function generateAllParagraphSubtitles(
   runId: number,
   params: ParagraphSubtitlesParams = {},
 ): Promise<BulkDispatchResponse> {
-  const res = await fetch(
-    `${API_BASE}/runs/${runId}/storyboard/generate-all-subtitles`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        subtitle_model: params.subtitle_model ?? "whisper-small",
-        subtitle_format: params.subtitle_format ?? "srt",
-      }),
-    },
-  );
+  const res = await apiFetch(`${API_BASE}/runs/${runId}/storyboard/generate-all-subtitles`,
+  {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      subtitle_model: params.subtitle_model ?? "whisper-small",
+      subtitle_format: params.subtitle_format ?? "srt",
+    }),
+  },);
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     throw new Error(body?.detail ?? `Bulk subtitle generation failed (${res.status})`);

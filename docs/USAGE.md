@@ -198,13 +198,10 @@ IDEA_READY → SCRIPT_GENERATING → SCRIPT_REVIEW
 
 ### API 키 설정 방법
 
-#### 방법 1: Settings 페이지 (권장)
+현재 Settings 페이지는 **API 키 편집/저장 기능이 없는 읽기 전용 상태 페이지**입니다.
+`/settings`에서 각 프로바이더 키의 설정 여부만 확인할 수 있으며, 실제 키 값은 서버 환경 변수에서 관리합니다.
 
-1. Studio Web UI에서 **Settings** 페이지로 이동합니다
-2. 원하는 프로바이더의 API 키를 입력합니다
-3. **Save** 클릭으로 저장합니다
-
-#### 방법 2: .env 파일 직접 편집
+#### .env 파일 편집
 
 `.env` 파일에 API 키를 추가합니다:
 
@@ -216,7 +213,7 @@ STABILITY_API_KEY=sk-your-stability-key
 ELEVENLABS_API_KEY=your-elevenlabs-key
 ```
 
-> ⚠️ API 키를 설정한 후 워커를 재시작해야 합니다: `docker compose restart worker`
+> ⚠️ API 키를 설정/변경한 후 API/워커를 재시작해야 반영됩니다: `docker compose restart api worker`
 
 ### 모델 선택
 

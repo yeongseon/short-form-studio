@@ -188,7 +188,7 @@ async def generate_script_trigger(run_id: int, request: GenerateScriptRequest) -
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    allowed_stages = frozenset({"IDEA_READY", "SCRIPT_REVIEW"})
+    allowed_stages = frozenset({"IDEA_READY", "SCRIPT_REVIEW", "SCRIPT_GENERATING"})
     if run.current_stage not in allowed_stages:
         raise HTTPException(
             status_code=400,

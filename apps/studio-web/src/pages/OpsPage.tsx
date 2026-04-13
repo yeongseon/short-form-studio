@@ -1,5 +1,3 @@
-import { Link } from "react-router-dom";
-
 const OPS_TOOLS = [
   {
     id: "monitoring",
@@ -8,14 +6,6 @@ const OPS_TOOLS = [
     link: "/flower/",
     external: true,
     icon: "📊",
-  },
-  {
-    id: "library",
-    title: "Asset Library",
-    description: "Browse generated assets, templates, and reusable components.",
-    link: "/ops/library",
-    external: false,
-    icon: "📁",
   },
   {
     id: "health",
@@ -42,7 +32,7 @@ export default function OpsPage() {
         Operations
       </h1>
       <p style={{ fontSize: 14, color: "#6b7280", marginBottom: 24 }}>
-        System monitoring, asset management, and operational tools.
+        System monitoring and operational tools.
       </p>
 
       <div
@@ -71,33 +61,19 @@ export default function OpsPage() {
             <p style={{ fontSize: 13, color: "#6b7280", margin: "0 0 12px" }}>
               {tool.description}
             </p>
-            {tool.external ? (
-              <a
-                href={tool.link}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{
-                  fontSize: 13,
-                  color: "#4285f4",
-                  textDecoration: "none",
-                  fontWeight: 500,
-                }}
-              >
-                Open →
-              </a>
-            ) : (
-              <Link
-                to={tool.link}
-                style={{
-                  fontSize: 13,
-                  color: "#4285f4",
-                  textDecoration: "none",
-                  fontWeight: 500,
-                }}
-              >
-                Open →
-              </Link>
-            )}
+            <a
+              href={tool.link}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                fontSize: 13,
+                color: "#4285f4",
+                textDecoration: "none",
+                fontWeight: 500,
+              }}
+            >
+              Open →
+            </a>
           </div>
         ))}
       </div>

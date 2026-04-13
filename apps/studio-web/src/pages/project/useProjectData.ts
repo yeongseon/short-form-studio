@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
+import { apiFetch, API_BASE } from "../../api/client";
 import {
-  API_BASE,
   FINAL_REVIEW_STAGES,
   type ModelDefaults,
   type ProjectDetail,
@@ -33,7 +33,7 @@ export function useProjectData(projectId: number): UseProjectDataResult {
     setLoading(true);
     setError(null);
     try {
-      const projRes = await fetch(`${API_BASE}/projects/${projectId}`);
+      const projRes = await apiFetch(`${API_BASE}/projects/${projectId}`);
       if (!projRes.ok) {
         if (projRes.status === 404) throw new Error("Project not found");
         const body = await projRes.json().catch(() => null);
@@ -42,7 +42,7 @@ export function useProjectData(projectId: number): UseProjectDataResult {
       const projData: ProjectDetail = await projRes.json();
       setProject(projData);
 
-      const runsRes = await fetch(`${API_BASE}/projects/${projectId}/runs`);
+      const runsRes = await apiFetch(`${API_BASE}/projects/${projectId}/runs`);
       if (runsRes.ok) {
         const runsData: { runs: RunDetail[]; total: number } = await runsRes.json();
         setRun(runsData.runs.length > 0 ? runsData.runs[0] : null);
@@ -64,7 +64,7 @@ export function useProjectData(projectId: number): UseProjectDataResult {
 
   const refreshRun = useCallback(async (runId: number) => {
     try {
-      const res = await fetch(`${API_BASE}/runs/${runId}`);
+      const res = await apiFetch(`${API_BASE}/runs/${runId}`);
       if (res.ok) {
         const data: RunDetail = await res.json();
         setRun(data);
@@ -89,7 +89,7 @@ export function useProjectData(projectId: number): UseProjectDataResult {
     }
     (async () => {
       try {
-        const res = await fetch(`${API_BASE}/runs/${run.id}/preview`);
+        const res = await apiFetch(`${API_BASE}/runs/${run.id}/preview`);
         if (res.ok) {
           const data = await res.json();
           setPreview(data);
@@ -125,7 +125,7 @@ export function useProjectData(projectId: number): UseProjectDataResult {
       setModelSelection((prev) => ({ ...prev, [field]: modelKey }));
 
       if (run) {
-        fetch(`${API_BASE}/runs/${run.id}/model-defaults`, {
+        apiFetch(`${API_BASE}/runs/${run.id}/model-defaults`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ [field]: modelKey }),

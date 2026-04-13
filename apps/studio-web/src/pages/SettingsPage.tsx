@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { apiFetch } from "../api/client";
 import type { ApiKeyStatus } from "../types/api";
 
 const PROVIDERS: Array<{ provider: string; label: string }> = [
@@ -42,7 +43,7 @@ export default function SettingsPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/creator/settings/api-keys");
+      const res = await apiFetch("/api/creator/settings/api-keys");
       if (!res.ok) {
         throw new Error(`Failed to load API keys (${res.status})`);
       }

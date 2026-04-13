@@ -7,6 +7,7 @@
  */
 
 import { useState, useEffect, useCallback } from "react";
+import { apiFetch } from "../../api/client";
 
 // --------------- types ---------------
 
@@ -72,7 +73,7 @@ export default function JsonScriptEditor({
       if (showLoading) setLoading(true);
       setError(null);
       try {
-        const res = await fetch(`${apiBase}/runs/${runId}/script/json`);
+        const res = await apiFetch(`${apiBase}/runs/${runId}/script/json`);
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
           const detail = body.detail ?? `Failed to load (${res.status})`;
@@ -131,7 +132,7 @@ export default function JsonScriptEditor({
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`${apiBase}/runs/${runId}/script/json`, {
+      const res = await apiFetch(`${apiBase}/runs/${runId}/script/json`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ json_script: jsonText }),

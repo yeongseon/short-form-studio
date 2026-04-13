@@ -778,17 +778,17 @@ async def test_generate_script_run_not_found(client, stub_generate_services):
 
 @pytest.mark.asyncio
 async def test_generate_script_wrong_stage_generating(client, stub_generate_services):
-    run_svc, _, _ = stub_generate_services
+    """SCRIPT_GENERATING is now an allowed stage (supports re-generation)."""
+    run_svc, project_svc, dispatcher = stub_generate_services
     run_svc.runs[14] = _make_run(14, "SCRIPT_GENERATING")
+    project_svc.projects[1] = _make_project(1, "Re-gen idea")
 
     response = await client.post(
         "/api/creator/runs/14/generate-script",
         json={},
     )
 
-    assert response.status_code == 400
-    assert "SCRIPT_GENERATING" in response.json()["detail"]
-
+    assert response.status_code == 202
 
 @pytest.mark.asyncio
 async def test_generate_script_wrong_stage_visual(client, stub_generate_services):

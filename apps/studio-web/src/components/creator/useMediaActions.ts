@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { API_BASE } from "../../types/api";
+import { apiFetch, API_BASE } from "../../api/client";
 
 import type {
   StoryboardResponse,
@@ -38,7 +38,7 @@ export function useMediaActions({
   const onGenerateImage = useCallback(
     async (sceneId: string) => {
       try {
-        const res = await fetch(`${API_BASE}/runs/${runId}/visual-plan/scenes/${sceneId}/generate-image`, {
+        const res = await apiFetch(`${API_BASE}/runs/${runId}/visual-plan/scenes/${sceneId}/generate-image`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ model_key: imageModel || "sd15" }),
@@ -115,7 +115,7 @@ export function useMediaActions({
   const onBulkImages = useCallback(async () => {
     setBulkGenerating(true);
     try {
-      const res = await fetch(`${API_BASE}/runs/${runId}/generate-visual-assets`, {
+      const res = await apiFetch(`${API_BASE}/runs/${runId}/generate-visual-assets`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model_key: imageModel || "sd15" }),

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
+import { apiFetch } from "../api/client";
 import ProjectHeader from "./project/ProjectHeader";
 import ScriptSection from "./project/ScriptSection";
 import {
@@ -52,7 +53,7 @@ export default function ProjectPage() {
     if (!trimmed || trimmed === project?.title) return;
     setSavingTitle(true);
     try {
-      const res = await fetch(`${API_BASE}/projects/${numericProjectId}`, {
+      const res = await apiFetch(`${API_BASE}/projects/${numericProjectId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: trimmed }),
@@ -81,7 +82,7 @@ export default function ProjectPage() {
     setGoingBack(true);
     setStatusMessage(null);
     try {
-      const res = await fetch(`${API_BASE}/runs/${run.id}/go-back`, {
+      const res = await apiFetch(`${API_BASE}/runs/${run.id}/go-back`, {
         method: "POST",
       });
       if (!res.ok) {
@@ -102,7 +103,7 @@ export default function ProjectPage() {
     setApproving(true);
     setStatusMessage(null);
     try {
-      const res = await fetch(`${API_BASE}/runs/${run.id}/approve-script`, {
+      const res = await apiFetch(`${API_BASE}/runs/${run.id}/approve-script`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reviewer: "agent" }),
@@ -125,7 +126,7 @@ export default function ProjectPage() {
     setGenerating(true);
     setStatusMessage(null);
     try {
-      const res = await fetch(`${API_BASE}/runs/${run.id}/generate-script`, {
+      const res = await apiFetch(`${API_BASE}/runs/${run.id}/generate-script`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -150,7 +151,7 @@ export default function ProjectPage() {
     setRestarting(true);
     setStatusMessage(null);
     try {
-      const restartRes = await fetch(`${API_BASE}/runs/${run.id}/restart`, {
+      const restartRes = await apiFetch(`${API_BASE}/runs/${run.id}/restart`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ stage: "SCRIPT_GENERATING" }),
@@ -160,7 +161,7 @@ export default function ProjectPage() {
         throw new Error(body?.detail ?? `Restart failed (${restartRes.status})`);
       }
       // Dispatch script generation task after stage reset
-      const genRes = await fetch(`${API_BASE}/runs/${run.id}/generate-script`, {
+      const genRes = await apiFetch(`${API_BASE}/runs/${run.id}/generate-script`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -185,7 +186,7 @@ export default function ProjectPage() {
     setApproving(true);
     setStatusMessage(null);
     try {
-      const res = await fetch(`${API_BASE}/runs/${run.id}/approve-visual-plan`, {
+      const res = await apiFetch(`${API_BASE}/runs/${run.id}/approve-visual-plan`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reviewer: "agent" }),
@@ -208,7 +209,7 @@ export default function ProjectPage() {
     setGenerating(true);
     setStatusMessage(null);
     try {
-      const res = await fetch(`${API_BASE}/runs/${run.id}/generate-visual-plan`, {
+      const res = await apiFetch(`${API_BASE}/runs/${run.id}/generate-visual-plan`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -233,7 +234,7 @@ export default function ProjectPage() {
     setRestarting(true);
     setStatusMessage(null);
     try {
-      const restartRes = await fetch(`${API_BASE}/runs/${run.id}/restart`, {
+      const restartRes = await apiFetch(`${API_BASE}/runs/${run.id}/restart`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ stage: "VISUAL_PLAN_GENERATING" }),
@@ -243,7 +244,7 @@ export default function ProjectPage() {
         throw new Error(body?.detail ?? `Restart failed (${restartRes.status})`);
       }
       // Dispatch visual plan generation task after stage reset
-      const genRes = await fetch(`${API_BASE}/runs/${run.id}/generate-visual-plan`, {
+      const genRes = await apiFetch(`${API_BASE}/runs/${run.id}/generate-visual-plan`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -268,7 +269,7 @@ export default function ProjectPage() {
     setGenerating(true);
     setStatusMessage(null);
     try {
-      const res = await fetch(`${API_BASE}/runs/${run.id}/render`, {
+      const res = await apiFetch(`${API_BASE}/runs/${run.id}/render`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -293,7 +294,7 @@ export default function ProjectPage() {
     setStopping(true);
     setStatusMessage(null);
     try {
-      const res = await fetch(`${API_BASE}/runs/${run.id}/stop`, {
+      const res = await apiFetch(`${API_BASE}/runs/${run.id}/stop`, {
         method: "POST",
       });
       if (!res.ok) {
@@ -314,7 +315,7 @@ export default function ProjectPage() {
     setResuming(true);
     setStatusMessage(null);
     try {
-      const res = await fetch(`${API_BASE}/runs/${run.id}/resume`, {
+      const res = await apiFetch(`${API_BASE}/runs/${run.id}/resume`, {
         method: "POST",
       });
       if (!res.ok) {
@@ -334,7 +335,7 @@ export default function ProjectPage() {
     setDeleting(true);
     setStatusMessage(null);
     try {
-      const res = await fetch(`${API_BASE}/projects/${numericProjectId}`, {
+      const res = await apiFetch(`${API_BASE}/projects/${numericProjectId}`, {
         method: "DELETE",
       });
       if (!res.ok) {

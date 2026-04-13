@@ -1,20 +1,9 @@
-/**
- * Route coexistence smoke tests (Issue #73)
- *
- * Verify that creator routes (/create, /projects/:id, /review/:id, /runs)
- * and ops routes (/ops, /ops/library) coexist in one build without conflicts.
- *
- * These are shallow render tests — they confirm each route resolves to the
- * correct page component and the nav shell is present. Deep component
- * behavior is covered by per-page test suites.
- */
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Navigate, Route, Routes } from "react-router-dom";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import AppShell from "../components/layout/AppShell";
 
-// ---- Stub pages (avoids fetch side-effects in smoke tests) ----
 vi.mock("../pages/CreatePage", () => ({
   default: () => <div data-testid="page-create">CreatePage</div>,
 }));
@@ -30,14 +19,7 @@ vi.mock("../pages/RunsPage", () => ({
 vi.mock("../pages/OpsPage", () => ({
   default: () => <div data-testid="page-ops">OpsPage</div>,
 }));
-vi.mock("../pages/LibraryPage", () => ({
-  default: () => <div data-testid="page-library">LibraryPage</div>,
-}));
 
-/**
- * Renders the full App route tree at the given path.
- * Mirrors App.tsx route config exactly.
- */
 function renderApp(path: string) {
   return render(
     <MemoryRouter initialEntries={[path]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
@@ -54,12 +36,8 @@ function renderApp(path: string) {
           />
           <Route path="/runs" element={<StubPage testId="page-runs" />} />
           <Route
-            path="/library"
-            element={<Navigate replace to="/ops/library" />}
-          />
-          <Route
-            path="/ops/library"
-            element={<StubPage testId="page-library" />}
+            path="/settings"
+            element={<StubPage testId="page-settings" />}
           />
           <Route path="/ops" element={<StubPage testId="page-ops" />} />
           <Route path="*" element={<Navigate replace to="/create" />} />
@@ -77,8 +55,6 @@ describe("Route coexistence smoke tests", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
   });
-
-  // ---------- Creator routes ----------
 
   it("renders CreatePage at /create with nav shell", () => {
     renderApp("/create");
@@ -104,21 +80,17 @@ describe("Route coexistence smoke tests", () => {
     expect(screen.getByTestId("page-runs")).toBeInTheDocument();
   });
 
-  // ---------- Ops routes ----------
-
   it("renders OpsPage at /ops", () => {
     renderApp("/ops");
     expect(screen.getByTestId("app-nav")).toBeInTheDocument();
     expect(screen.getByTestId("page-ops")).toBeInTheDocument();
   });
 
-  it("renders LibraryPage at /ops/library", () => {
-    renderApp("/ops/library");
+  it("renders SettingsPage at /settings", () => {
+    renderApp("/settings");
     expect(screen.getByTestId("app-nav")).toBeInTheDocument();
-    expect(screen.getByTestId("page-library")).toBeInTheDocument();
+    expect(screen.getByTestId("page-settings")).toBeInTheDocument();
   });
-
-  // ---------- Redirects ----------
 
   it("redirects / to /create", () => {
     renderApp("/");
@@ -129,13 +101,6 @@ describe("Route coexistence smoke tests", () => {
     renderApp("/nonexistent");
     expect(screen.getByTestId("page-create")).toBeInTheDocument();
   });
-
-  it("redirects legacy /library to /ops/library", () => {
-    renderApp("/library");
-    expect(screen.getByTestId("page-library")).toBeInTheDocument();
-  });
-
-  // ---------- Nav coexistence ----------
 
   it("shows both creator and ops nav sections on creator route", () => {
     renderApp("/create");
@@ -148,8 +113,6 @@ describe("Route coexistence smoke tests", () => {
     expect(screen.getByTestId("creator-nav")).toBeInTheDocument();
     expect(screen.getByTestId("ops-nav")).toBeInTheDocument();
   });
-
-  // ---------- Route isolation ----------
 
   it("does not render ops content when on creator route", () => {
     renderApp("/create");

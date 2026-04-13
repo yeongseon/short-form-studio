@@ -32,19 +32,20 @@ Operator-facing guide for deploying and verifying the short-form-studio system.
    | `POSTGRES_PASSWORD` | Yes | **Change from default** |
    | `REDIS_URL` | Yes | Default: `redis://redis:6379/0` |
    | `API_HOST` / `API_PORT` | Yes | Default: `0.0.0.0:8000` |
-   | `CORS_ALLOWED_ORIGINS` | Yes | Default: `http://localhost:5173` (internal), exposed as `5174` on host |
+   | `CORS_ORIGINS` | Yes | Default: `http://localhost:5174` |
    | `ARTIFACT_ROOT` | Yes | Default: `./data/artifacts` |
    | `OLLAMA_BASE_URL` | Yes | Default: `http://ollama:11434` |
    | `OLLAMA_DEFAULT_MODEL` | Yes | Default: `qwen3:4b` |
    | `STABLE_DIFFUSION_BASE_URL` | Yes | Default: `http://stable-diffusion:7860` |
 | `TTS_QWEN3_BASE_URL` | Yes | Default: `http://tts-qwen3:8100` |
-   | `STT_WHISPER_BASE_URL` | Yes | Default: `http://stt-whisper:9000` |
+| `STT_WHISPER_BASE_URL` | Yes | Default: `http://stt-whisper:8200` |
    | `GPU_LOCK_KEY` | Yes | Default: `gpu:lock` |
    | `GPU_LOCK_TIMEOUT_SECONDS` | Yes | Default: `600` |
-   | `OPENAI_API_KEY` | No | External LLM fallback |
-   | `REPLICATE_API_TOKEN` | No | External image generation fallback |
-   | `AZURE_SPEECH_KEY` | No | External TTS fallback |
-   | `ELEVENLABS_API_KEY` | No | External TTS fallback |
+| `OPENAI_API_KEY` | No | External LLM/Image/TTS provider |
+| `ANTHROPIC_API_KEY` | No | External LLM provider |
+| `GOOGLE_API_KEY` | No | External LLM/Image provider |
+| `STABILITY_API_KEY` | No | External image provider |
+| `ELEVENLABS_API_KEY` | No | External TTS fallback |
 
 3. **Ensure AI model images exist** (pre-built from shorts-automation project)
 
@@ -139,7 +140,7 @@ docker compose --profile monitoring up -d flower
 curl -f http://localhost:8000/api/health
 
 # Studio Web
-curl -sf http://localhost:5173/ | head -1
+curl -sf http://localhost:5174/ | head -1
 
 # Flower (if monitoring profile enabled)
 curl -sf http://localhost:5555/
@@ -155,17 +156,16 @@ curl -f http://localhost:7860/sdapi/v1/options
 
 | Route | Expected |
 |---|---|
-| `http://localhost:5173/` | Redirects to `/create` |
-| `http://localhost:5173/create` | Create New Project form |
-| `http://localhost:5173/runs` | Project list (empty initially) |
-| `http://localhost:5173/ops` | Operations dashboard |
-| `http://localhost:5173/ops/library` | Asset Library page |
-| `http://localhost:5173/library` | Redirects to `/ops/library` |
-| `http://localhost:5173/nonexistent` | Redirects to `/create` |
+| `http://localhost:5174/` | Redirects to `/create` |
+| `http://localhost:5174/create` | Create New Project form |
+| `http://localhost:5174/runs` | Project list (empty initially) |
+| `http://localhost:5174/ops` | Operations dashboard |
+| `http://localhost:5174/settings` | Provider API key status page |
+| `http://localhost:5174/nonexistent` | Redirects to `/create` |
 
 ### End-to-End Smoke Test
 
-1. Navigate to `http://localhost:5173/create`
+1. Navigate to `http://localhost:5174/create`
 2. Enter an idea (e.g., "Test video about coding")
 3. Submit → Project created, redirects to `/projects/:id`
 4. Verify stage progression: `IDEA_READY` shown in Project page
@@ -198,11 +198,10 @@ Creator Flow:
 
 Ops Flow:
   /ops                 → OpsPage (monitoring, tools, system info)
-  /ops/library         → LibraryPage (asset browser)
+  /settings            → SettingsPage (provider API key status)
 
 Redirects:
   /                    → /create
-  /library             → /ops/library (legacy redirect)
   /*                   → /create (catch-all)
 ```
 
@@ -228,12 +227,12 @@ Each `*_REVIEW` stage requires explicit approval before advancing.
 | Service | Port | Protocol |
 |---|---|---|
 | API (FastAPI) | 8000 | HTTP |
-| Studio Web (Vite) | 5173 | HTTP |
+| Studio Web (Vite) | 5174 | HTTP |
 | PostgreSQL | 5432 | TCP |
 | Redis | 6379 | TCP |
 | Ollama | 11434 | HTTP |
 | Stable Diffusion | 7860 | HTTP |
-| TTS (Piper) | 5000 | HTTP |
+| TTS (Qwen) | 8100 | HTTP |
 | STT (Whisper) | 9000 | HTTP |
 | Flower | 5555 | HTTP |
 
@@ -296,7 +295,7 @@ docker compose run --rm api alembic downgrade <revision>
 | Migration fails | DB not ready | Wait for `postgres` health check |
 | GPU lock stuck | Previous task crashed | `docker compose exec redis redis-cli DEL gpu:lock` |
 | Ollama model not found | Model not pulled | `docker compose exec ollama ollama pull qwen3:4b` |
-| CORS errors in browser | Wrong `CORS_ALLOWED_ORIGINS` | Set to `http://localhost:5173` |
+| CORS errors in browser | Wrong `CORS_ORIGINS` | Set to `http://localhost:5174` |
 | Worker not processing | Celery not connected to Redis | Check `REDIS_URL` in `.env` |
 | Studio Web blank page | API not running | Check `docker compose ps api` |
 | AI service unhealthy | GPU not available | Check `nvidia-smi`, verify NVIDIA Container Toolkit |

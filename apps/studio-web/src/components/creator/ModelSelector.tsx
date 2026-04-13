@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
+import { apiFetch } from "../../api/client";
 import type { ApiKeyStatus } from "../../types/api";
 
 /** Shape of a single model entry returned by GET /api/creator/models. */
@@ -97,8 +98,8 @@ export default function ModelSelector({
       setError(null);
       try {
         const [modelsRes, apiKeysRes] = await Promise.all([
-          fetch(`${apiBase}/api/creator/models`),
-          fetch(`${apiBase}/api/creator/settings/api-keys`),
+          apiFetch(`${apiBase}/api/creator/models`),
+          apiFetch(`${apiBase}/api/creator/settings/api-keys`),
         ]);
 
         if (!modelsRes.ok) {
