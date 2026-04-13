@@ -78,3 +78,5 @@ jobs:
         run: docker build --target runtime -f apps/api/Dockerfile .
       - name: Build Studio Web runtime image
         run: docker build --target runtime -f apps/studio-web/Dockerfile .
+      - name: Build Worker runtime image
+        run: docker build --target runtime -f apps/worker-orchestrator/Dockerfile .

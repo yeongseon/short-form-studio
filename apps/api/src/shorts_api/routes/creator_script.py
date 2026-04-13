@@ -9,14 +9,14 @@ from creator_service.project_service import project_service
 from creator_service.run_service import run_service
 from creator_service.script_service import script_service
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 router = APIRouter(prefix="/projects/{project_id}/script", tags=["script"])
 run_script_router = APIRouter(prefix="/runs/{run_id}/script", tags=["script"])
 
 
 class ImportMarkdownRequest(BaseModel):
-    markdown: str
+    markdown: str = Field(..., max_length=500_000)
     model_defaults: dict[str, str] | None = None
     style_preset: str = "default"
 
@@ -54,7 +54,7 @@ async def import_markdown(project_id: int, request: ImportMarkdownRequest) -> di
 
 
 class ImportJsonRequest(BaseModel):
-    json_script: str
+    json_script: str = Field(..., max_length=500_000)
     model_defaults: dict[str, str] | None = None
     style_preset: str = "default"
 
@@ -103,15 +103,15 @@ async def import_json(project_id: int, request: ImportJsonRequest) -> dict[str, 
 
 
 class UpdateMarkdownRequest(BaseModel):
-    markdown: str
+    markdown: str = Field(..., max_length=500_000)
 
 
 class UpdateStructuredRequest(BaseModel):
-    sections: list[dict[str, object]]
+    sections: list[dict[str, object]] = Field(..., max_length=200)
 
 
 class UpdateJsonScriptRequest(BaseModel):
-    json_script: str
+    json_script: str = Field(..., max_length=500_000)
 
 
 @run_script_router.get("/markdown")

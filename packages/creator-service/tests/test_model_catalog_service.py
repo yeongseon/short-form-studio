@@ -189,3 +189,54 @@ class TestModelCatalogService:
             "api.stability.ai", "api.elevenlabs.io",
         }
         assert called_keys == expected_keys
+
+    @pytest.mark.asyncio
+    async def test_configured_remote_providers_are_available(self, registry, health_service: AsyncMock):
+        """Remote providers returning CONFIGURED should map to 'available', not crash."""
+        # Override health_service to return CONFIGURED for a remote provider
+        original_side_effect = health_service.check_model.side_effect
+
+        async def check_with_configured(name: str) -> ModelHealthResult:
+            if name == "api.openai.com":
+                return ModelHealthResult(
+                    model_name=name,
+                    endpoint=f"http://{name}:1234",
+                    status=ModelStatus.CONFIGURED,
+                )
+            return await original_side_effect(name)
+
+        health_service.check_model.side_effect = check_with_configured
+        service = ModelCatalogService(registry, health_service)
+
+        result = await service.list_models()
+
+        # OpenAI models should be available, not crash with KeyError
+        openai_models = [m for m in result["script_models"] if m["provider_type"] == "openai_llm"]
+        assert len(openai_models) > 0
+        assert openai_models[0]["status"] == "available"
+
+    @pytest.mark.asyncio
+    async def test_get_status_configured_provider_is_healthy(self, registry, health_service: AsyncMock):
+        """get_status() should treat CONFIGURED as healthy, not unhealthy."""
+        original_side_effect = health_service.check_model.side_effect
+
+        async def check_with_configured(name: str) -> ModelHealthResult:
+            if name == "api.openai.com":
+                return ModelHealthResult(
+                    model_name=name,
+                    endpoint=f"http://{name}:1234",
+                    status=ModelStatus.CONFIGURED,
+                )
+            return await original_side_effect(name)
+
+        health_service.check_model.side_effect = check_with_configured
+        service = ModelCatalogService(registry, health_service)
+
+        result = await service.get_status()
+
+        openai_provider = next(
+            (p for p in result["providers"] if p["name"] == "api.openai.com"),
+            None,
+        )
+        assert openai_provider is not None
+        assert openai_provider["healthy"] is True

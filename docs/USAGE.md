@@ -18,7 +18,7 @@
 
 ### 접속 URL
 
-- **Studio Web UI**: `http://localhost:5174` (로컬) / `http://<LAN_IP>:5174` (외부)
+- **Studio Web UI**: `http://localhost:5174`
 - **API**: `http://localhost:8000` (내부 prefix: `/api/creator`)
 
 ### 서비스 실행
@@ -28,7 +28,7 @@ cd short-form-studio
 docker compose up -d
 ```
 
-필수 서비스: `postgres`, `redis`, `api`, `worker`, `studio-web`, `ollama`
+필수 서비스: `postgres`, `redis`, `api`, `worker`, `studio-web`
 
 선택 서비스 (GPU 필요):
 - `stable-diffusion` — 이미지 생성 (6GB+ VRAM)
@@ -276,7 +276,7 @@ docker compose run -d --name sfp-worker-direct --no-deps \
 ### 네트워크
 
 - Studio Web과 API는 같은 Docker 네트워크에서 실행됩니다
-- 외부 접근: `http://<LAN_IP>:5174` (Studio Web), `http://<LAN_IP>:8000` (API)
+- 외부 접근: `http://<LAN_IP>:5174` (Studio Web)
 - Vite 프록시가 `/api` 경로를 API 서버로 자동 전달합니다
 
 ### 렌더링

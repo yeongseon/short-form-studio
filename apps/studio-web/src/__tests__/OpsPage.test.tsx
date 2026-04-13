@@ -56,4 +56,20 @@ describe("OpsPage", () => {
     expect(link?.getAttribute("href")).toBe("/flower/");
   });
 
+  it("links health card to /health", () => {
+    renderPage();
+    const card = screen.getByTestId("ops-tool-health");
+    const link = card.querySelector("a");
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute("href")).toBe("/health");
+  });
+
+  it("links docs card to /docs", () => {
+    renderPage();
+    const card = screen.getByTestId("ops-tool-docs");
+    const link = card.querySelector("a");
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute("href")).toBe("/docs");
+  });
+
 });
