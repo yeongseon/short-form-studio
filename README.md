@@ -54,6 +54,10 @@ git clone https://github.com/yeongseon/short-form-studio.git
 cd short-form-studio
 cp .env.example .env
 # Edit .env as needed
+
+> **Security:** The `.env.example` file contains placeholder passwords. Always change
+> `POSTGRES_PASSWORD` and `DATABASE_URL` credentials before running in any shared or
+> production environment.
 ```
 
 ### 2. Start services
