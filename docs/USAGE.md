@@ -30,6 +30,13 @@ docker compose up -d
 
 Required services: `postgres`, `redis`, `api`, `worker`, `studio-web`
 
+For frontend live-reload during development, run the frontend directly:
+
+```bash
+cd apps/studio-web
+npm run dev
+```
+
 Optional services (GPU required):
 - `stable-diffusion` — Image generation (6GB+ VRAM)
 - `tts-qwen3` — TTS voice generation
@@ -276,7 +283,7 @@ docker compose run -d --name sfp-worker-direct --no-deps \
 ### Networking
 
 - Studio Web and API run on the same Docker network
-- External access: `http://<LAN_IP>:5174` (Studio Web)
+- Studio Web is bound to localhost by default: `http://localhost:5174`
 - The Vite proxy automatically forwards `/api` requests to the API server
 
 ### Rendering

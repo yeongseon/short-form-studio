@@ -76,7 +76,14 @@ docker compose --profile gpu up -d
 
 > **Note:** GPU services require an NVIDIA GPU with the Container Toolkit installed.
 > Without a GPU, configure remote AI providers via API keys in `.env` instead.
-> **Development:** For live-reload during development, use `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d`.
+> The `stable-diffusion`, `tts-qwen3`, and `stt-whisper` GPU services are optional and
+> require pre-built local images that are not currently shipped in this repository.
+> Expected image names are `shorts-automation-stable-diffusion`,
+> `shorts-automation-tts-qwen3`, and `shorts-automation-stt-whisper` with tags like
+> `:latest` for local iteration or versioned tags such as `:1.0.0` for reproducible deploys.
+> **Development:** `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d`
+> enables backend/worker source mounting, but does not provide frontend live-reload.
+> For frontend development, run `cd apps/studio-web && npm run dev` directly.
 
 > **Security:** `studio-web` binds to `127.0.0.1:5174` by default so the UI is not exposed on the local network.
 > For public deployments, keep this behind an authenticated reverse proxy and add proper application authentication.
