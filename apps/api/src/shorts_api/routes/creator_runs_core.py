@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from shorts_api.routes.creator_runs_utils import (
     cas_dispatch_with_rollback,
     dispatch_generate_script,
+    validate_model_key,
 )
 
 router = APIRouter(tags=["runs"])
@@ -203,6 +204,7 @@ async def generate_script_trigger(run_id: int, request: GenerateScriptRequest) -
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    validate_model_key(request.model_key)
     idea_brief = project.idea_brief or project.title or ""
 
     return await cas_dispatch_with_rollback(

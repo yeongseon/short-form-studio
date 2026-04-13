@@ -12,6 +12,7 @@ from shorts_api.routes.creator_runs_utils import (
     cas_dispatch_with_rollback,
     dispatch_generate_scene_image,
     dispatch_generate_visual_plan,
+    validate_model_key,
 )
 
 router = APIRouter(tags=["runs"])
@@ -57,6 +58,7 @@ async def generate_visual_plan_trigger(run_id: int, request: GenerateVisualPlanR
             f"expected one of {sorted(allowed_stages)}",
         )
 
+    validate_model_key(request.model_key)
     return await cas_dispatch_with_rollback(
         run_id=run_id,
         expected_stages=allowed_stages,
@@ -90,6 +92,7 @@ async def generate_visual_assets_trigger(
             f"expected one of {sorted(allowed_stages)}",
         )
 
+    validate_model_key(request.model_key)
     return await cas_dispatch_with_rollback(
         run_id=run_id,
         expected_stages=allowed_stages,

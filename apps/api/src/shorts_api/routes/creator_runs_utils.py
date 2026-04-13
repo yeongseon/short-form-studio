@@ -11,6 +11,39 @@ from fastapi import HTTPException
 logger = logging.getLogger(__name__)
 
 
+def validate_model_key(model_key: str) -> None:
+    try:
+        from creator_provider.registry import ProviderRegistry
+
+        registry = ProviderRegistry.create_default()
+        registry.resolve(model_key)
+    except KeyError:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unknown model key '{model_key}'. "
+                "Use GET /api/creator/models to list available models."
+            ),
+        ) from None
+
+
+def validate_render_profile(profile_name: str) -> None:
+    try:
+        __import__("creator_service.render_profile")
+    except ImportError:
+        return
+
+    known_profiles = {"shorts_default", "high_quality", "fast_preview"}
+    if profile_name not in known_profiles:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Unknown render profile '{profile_name}'. "
+                f"Available profiles: {sorted(known_profiles)}."
+            ),
+        )
+
+
 def dispatch_generate_script(
     run_id: int, idea_brief: str, model_key: str, instructions: str | None
 ) -> str:

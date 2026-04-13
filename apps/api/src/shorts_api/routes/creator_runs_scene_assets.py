@@ -21,6 +21,8 @@ from shorts_api.routes.creator_runs_utils import (
     dispatch_generate_scene_image,
     dispatch_generate_subtitles,
     dispatch_render_video,
+    validate_model_key,
+    validate_render_profile,
 )
 from shorts_api.routes.creator_runs_visuals import ImageTuningParams
 
@@ -58,6 +60,7 @@ async def generate_scene_image_endpoint(
             f"expected one of {sorted(allowed_stages)}",
         )
 
+    validate_model_key(effective_request.model_key)
     try:
         task_id = dispatch_generate_scene_image(
             run_id=run_id,
@@ -101,6 +104,7 @@ async def regenerate_scene_image_endpoint(
             f"expected one of {sorted(allowed_stages)}",
         )
 
+    validate_model_key(request.model_key)
     try:
         task_id = dispatch_generate_scene_image(
             run_id=run_id,
@@ -197,6 +201,7 @@ async def generate_audio_trigger(run_id: int, request: GenerateAudioRequest) -> 
             f"expected one of {sorted(allowed_stages)}",
         )
 
+    validate_model_key(request.tts_model)
     return await cas_dispatch_with_rollback(
         run_id=run_id,
         expected_stages=allowed_stages,
@@ -228,6 +233,7 @@ async def generate_subtitles_trigger(run_id: int, request: GenerateSubtitlesRequ
             f"expected one of {sorted(allowed_stages)}",
         )
 
+    validate_model_key(request.subtitle_model)
     return await cas_dispatch_with_rollback(
         run_id=run_id,
         expected_stages=allowed_stages,
@@ -259,6 +265,7 @@ async def render_trigger(run_id: int, request: RenderRequest) -> dict[str, objec
             f"expected one of {sorted(allowed_stages)}",
         )
 
+    validate_render_profile(request.render_profile)
     return await cas_dispatch_with_rollback(
         run_id=run_id,
         expected_stages=allowed_stages,
