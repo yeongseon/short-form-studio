@@ -16,6 +16,7 @@ from shorts_api.routes.creator_runs_utils import (
     _append_task_id,
     dispatch_paragraph_audio,
     dispatch_paragraph_subtitles,
+    validate_model_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -201,6 +202,8 @@ async def generate_paragraph_audio_endpoint(
     if section_text is None:
         raise HTTPException(status_code=404, detail=f"Section '{section_id}' not found")
 
+    validate_model_key(effective.tts_model)
+
     try:
         task_id = dispatch_paragraph_audio(
             run_id=run_id,
@@ -249,6 +252,8 @@ async def generate_paragraph_subtitles_endpoint(
             detail=f"No audio found for section '{section_id}'. Generate audio first.",
         )
 
+    validate_model_key(effective.subtitle_model)
+
     try:
         task_id = dispatch_paragraph_subtitles(
             run_id=run_id,
@@ -290,6 +295,8 @@ async def generate_all_paragraph_audio(
     draft = await script_service.get_active_draft(run_id)
     if draft is None or not draft.structured_script:
         raise HTTPException(status_code=400, detail="No script available")
+
+    validate_model_key(effective.tts_model)
 
     task_ids: list[dict[str, str]] = []
     for section in draft.structured_script:
@@ -336,6 +343,8 @@ async def generate_all_paragraph_subtitles(
     audio_artifacts = await audio_service.list_paragraph_audio(run_id)
     if not audio_artifacts:
         raise HTTPException(status_code=400, detail="No paragraph audio found. Generate audio first.")
+
+    validate_model_key(effective.subtitle_model)
 
     # Deduplicate by section_id — only dispatch for the first (latest) audio
     # artifact per section to avoid redundant subtitle generation on regeneration.
