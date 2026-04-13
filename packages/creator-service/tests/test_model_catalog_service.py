@@ -131,6 +131,7 @@ class TestModelCatalogService:
 
         provider = result["providers"][0]
         assert set(provider.keys()) == {"name", "provider_type", "healthy", "loaded_model", "gpu_locked"}
+        assert "endpoint" not in provider, "endpoint must not be exposed in status response"
         assert provider["loaded_model"] is None
         assert provider["gpu_locked"] is False
 

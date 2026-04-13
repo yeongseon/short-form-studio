@@ -73,7 +73,6 @@ class StubModelCatalogService:
             "providers": [
                 {
                     "name": "ollama",
-                    "endpoint": "http://ollama:11434",
                     "healthy": True,
                     "loaded_model": "qwen3-4b",
                     "gpu_locked": False,
@@ -143,4 +142,8 @@ async def test_model_status_returns_provider_and_gpu_lock(client, stub_catalog_s
     assert "gpu_lock" in body
     assert isinstance(body["providers"], list)
     assert isinstance(body["gpu_lock"], dict)
+    for provider_entry in body["providers"]:
+        assert "endpoint" not in provider_entry, (
+            f"Provider '{provider_entry.get('name')}' leaks 'endpoint' field"
+        )
     assert stub_catalog_service.status_calls == 1
