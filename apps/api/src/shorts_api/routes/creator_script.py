@@ -11,6 +11,8 @@ from creator_service.script_service import script_service
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, ValidationError
 
+from shorts_api.routes.creator_runs_utils import validate_model_defaults
+
 _SCRIPT_EDIT_STAGES = frozenset({
     RunStage.IDEA_READY.value,
     RunStage.SCRIPT_REVIEW.value,
@@ -35,6 +37,8 @@ async def import_markdown(project_id: int, request: ImportMarkdownRequest) -> di
     project = await project_service.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    validate_model_defaults(request.model_defaults)
 
     try:
         run = await run_service.create_run(
@@ -73,6 +77,8 @@ async def import_json(project_id: int, request: ImportJsonRequest) -> dict[str, 
     project = await project_service.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    validate_model_defaults(request.model_defaults)
 
     try:
         sections = parse_json_scenes(request.json_script)
@@ -267,6 +273,14 @@ async def update_script_markdown(run_id: int, request: UpdateMarkdownRequest) ->
     run = await run_service.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    if run.current_stage not in _SCRIPT_EDIT_STAGES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cannot modify script in stage '{run.current_stage}'; "
+                f"allowed stages: {sorted(_SCRIPT_EDIT_STAGES)}"
+            ),
+        )
 
     try:
         draft = await script_service.save_draft(
@@ -288,6 +302,14 @@ async def update_script_structured(run_id: int, request: UpdateStructuredRequest
     run = await run_service.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    if run.current_stage not in _SCRIPT_EDIT_STAGES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cannot modify script in stage '{run.current_stage}'; "
+                f"allowed stages: {sorted(_SCRIPT_EDIT_STAGES)}"
+            ),
+        )
 
     try:
         sections = [ScriptSection.model_validate(section) for section in request.sections]
@@ -317,6 +339,14 @@ async def update_script_json(run_id: int, request: UpdateJsonScriptRequest) -> d
     run = await run_service.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    if run.current_stage not in _SCRIPT_EDIT_STAGES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cannot modify script in stage '{run.current_stage}'; "
+                f"allowed stages: {sorted(_SCRIPT_EDIT_STAGES)}"
+            ),
+        )
 
     try:
         sections = parse_json_scenes(request.json_script)
@@ -345,6 +375,14 @@ async def parse_script_markdown(run_id: int) -> dict[str, object]:
     run = await run_service.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    if run.current_stage not in _SCRIPT_EDIT_STAGES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cannot modify script in stage '{run.current_stage}'; "
+                f"allowed stages: {sorted(_SCRIPT_EDIT_STAGES)}"
+            ),
+        )
 
     draft = await script_service.get_active_draft(run_id)
     if draft is None:

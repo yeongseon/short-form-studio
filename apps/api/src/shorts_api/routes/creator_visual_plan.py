@@ -97,6 +97,14 @@ async def patch_scene(
     run = await run_service.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    if run.current_stage not in _VISUAL_PLAN_EDIT_STAGES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cannot modify visual plan in stage '{run.current_stage}'; "
+                f"allowed stages: {sorted(_VISUAL_PLAN_EDIT_STAGES)}"
+            ),
+        )
 
     # Build updates dict from non-None fields (exclude expected_version)
     updates = {

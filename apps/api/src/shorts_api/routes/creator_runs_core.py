@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from shorts_api.routes.creator_runs_utils import (
     cas_dispatch_with_rollback,
     dispatch_generate_script,
+    validate_model_defaults,
     validate_model_key,
 )
 
@@ -80,6 +81,8 @@ async def create_run(project_id: int, request: CreateRunRequest) -> dict[str, ob
     project = await project_service.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
+
+    validate_model_defaults(request.model_defaults)
 
     run = await run_service.create_run(
         project_id=project_id,

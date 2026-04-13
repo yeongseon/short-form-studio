@@ -454,6 +454,20 @@ async def test_patch_scene_run_not_found(client, stub_visual_plan_services):
 
 
 @pytest.mark.asyncio
+async def test_patch_scene_rejects_wrong_stage(client, stub_visual_plan_services):
+    run_svc, _vp_svc = stub_visual_plan_services
+    run_svc.runs[39] = _make_run(39, stage="SCRIPT_REVIEW")
+
+    response = await client.patch(
+        "/api/creator/runs/39/visual-plan/scenes/scene-1",
+        json={"prompt": "x"},
+    )
+
+    assert response.status_code == 409
+    assert "Cannot modify visual plan in stage" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
 async def test_patch_scene_no_plan(client, stub_visual_plan_services):
     """PATCH returns 404 when run has no visual plan."""
     run_svc, _ = stub_visual_plan_services

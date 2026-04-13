@@ -7,7 +7,11 @@ from creator_service.run_service import run_service
 from fastapi import APIRouter, HTTPException
 
 from shorts_api.routes.creator_runs_core import UpdateModelDefaultsRequest
-from shorts_api.routes.creator_runs_utils import _append_task_id, _revoke_active_tasks
+from shorts_api.routes.creator_runs_utils import (
+    _append_task_id,
+    _revoke_active_tasks,
+    validate_model_defaults,
+)
 
 router = APIRouter(tags=["runs"])
 _APPEND_TASK_ID_HELPER = _append_task_id
@@ -64,6 +68,7 @@ async def update_model_defaults(run_id: int, request: UpdateModelDefaultsRequest
     updates = {k: v for k, v in request.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(status_code=400, detail="No model defaults to update")
+    validate_model_defaults(updates)
     try:
         run = await run_service.update_model_defaults(run_id, updates)
         return run.model_dump(mode="json")

@@ -43,6 +43,7 @@ class StubRunService:
         self.get_run_calls: list[int] = []
         self.restart_run_calls: list[dict[str, object]] = []
         self.advance_stage_calls: list[dict[str, object]] = []
+        self.update_model_defaults_calls: list[dict[str, object]] = []
         self.runs: dict[int, StubPipelineRun] = {}
         self.storage = StubRunStorage(self)
         self._next_id = 1
@@ -120,6 +121,16 @@ class StubRunService:
             key=lambda r: r.id,
             reverse=True,
         )
+
+    async def update_model_defaults(self, run_id: int, updates: dict[str, str]) -> StubPipelineRun:
+        self.update_model_defaults_calls.append({"run_id": run_id, "updates": updates})
+        run = self.runs.get(run_id)
+        if run is None:
+            raise ValueError(f"Run {run_id} not found")
+        next_defaults = {**(run.model_defaults or {}), **updates}
+        updated = run.model_copy(update={"model_defaults": next_defaults})
+        self.runs[run_id] = updated
+        return updated
 
 
 class StubRunStorage:
@@ -306,6 +317,66 @@ async def test_create_run_project_not_found(client, stub_run_service: StubRunSer
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Project not found"}
+
+
+@pytest.mark.asyncio
+async def test_create_run_rejects_unknown_model_default_key(client, stub_run_service: StubRunService):
+    _ = stub_run_service
+    response = await client.post(
+        "/api/creator/projects/7/runs",
+        json={
+            "model_defaults": {
+                "unknown_key": "value",
+            },
+            "style_preset": "default",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Unknown model default key" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_create_run_rejects_invalid_render_profile(client, stub_run_service: StubRunService):
+    _ = stub_run_service
+    response = await client.post(
+        "/api/creator/projects/7/runs",
+        json={
+            "model_defaults": {
+                "render_profile": "ultra_quality",
+            },
+            "style_preset": "default",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Unknown render profile" in response.json()["detail"]
+
+
+@pytest.fixture
+def stub_model_defaults_services(monkeypatch: pytest.MonkeyPatch) -> StubRunService:
+    run_svc = StubRunService()
+
+    for route in _iter_api_routes(runs_router.routes):
+        if route.name == "update_model_defaults":
+            monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
+
+    return run_svc
+
+
+@pytest.mark.asyncio
+async def test_update_model_defaults_rejects_invalid_render_profile(client, stub_model_defaults_services):
+    run_svc = stub_model_defaults_services
+    run_svc.runs[501] = _make_run(501, stage="SCRIPT_REVIEW")
+
+    response = await client.patch(
+        "/api/creator/runs/501/model-defaults",
+        json={"render_profile": "ultra_quality"},
+    )
+
+    assert response.status_code == 400
+    assert "Unknown render profile" in response.json()["detail"]
+    assert run_svc.update_model_defaults_calls == []
 
 
 @pytest.mark.asyncio

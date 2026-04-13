@@ -44,6 +44,31 @@ def validate_render_profile(profile_name: str) -> None:
         )
 
 
+def validate_model_defaults(model_defaults: Mapping[str, str] | None) -> None:
+    if not model_defaults:
+        return
+
+    validators = {
+        "script_model": validate_model_key,
+        "image_model": validate_model_key,
+        "tts_model": validate_model_key,
+        "subtitle_model": validate_model_key,
+        "render_profile": validate_render_profile,
+    }
+
+    for key, value in model_defaults.items():
+        validator = validators.get(key)
+        if validator is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Unknown model default key '{key}'. "
+                    f"Allowed keys: {sorted(validators)}."
+                ),
+            )
+        validator(value)
+
+
 def dispatch_generate_script(
     run_id: int, idea_brief: str, model_key: str, instructions: str | None
 ) -> str:

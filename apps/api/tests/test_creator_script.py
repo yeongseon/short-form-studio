@@ -252,9 +252,9 @@ async def test_import_markdown_with_model_defaults(client, stub_services):
         json={
             "markdown": "# Styled script",
             "model_defaults": {
-                "script_model": "manual",
-                "image_model": "sdxl-base",
-                "tts_model": "edge-alloy",
+                "script_model": "qwen3-4b",
+                "image_model": "sd15",
+                "tts_model": "qwen3-tts",
             },
             "style_preset": "cinematic",
         },
@@ -265,9 +265,9 @@ async def test_import_markdown_with_model_defaults(client, stub_services):
         {
             "project_id": 21,
             "model_defaults": {
-                "script_model": "manual",
-                "image_model": "sdxl-base",
-                "tts_model": "edge-alloy",
+                "script_model": "qwen3-4b",
+                "image_model": "sd15",
+                "tts_model": "qwen3-tts",
             },
             "style_preset": "cinematic",
             "metadata": None,
@@ -275,6 +275,27 @@ async def test_import_markdown_with_model_defaults(client, stub_services):
             "status": "running",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_import_markdown_rejects_unknown_model_default_key(client, stub_services):
+    project_service, run_service, script_service = stub_services
+    project_service.projects[22] = StubProject(id=22, title="Project 22")
+
+    response = await client.post(
+        "/api/creator/projects/22/script/import-markdown",
+        json={
+            "markdown": "# Styled script",
+            "model_defaults": {
+                "unknown_key": "value",
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Unknown model default key" in response.json()["detail"]
+    assert run_service.create_run_calls == []
+    assert script_service.save_draft_calls == []
 
 
 @pytest.mark.asyncio
@@ -424,6 +445,21 @@ async def test_update_script_markdown_run_not_found(client, stub_run_script_serv
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Run 77 not found"}
+    assert script_service.save_draft_calls == []
+
+
+@pytest.mark.asyncio
+async def test_update_script_markdown_rejects_wrong_stage(client, stub_run_script_services):
+    run_service, script_service = stub_run_script_services
+    run_service.runs[78] = StubPipelineRun(id=78, project_id=1, current_stage="VISUAL_PLAN_REVIEW")
+
+    response = await client.put(
+        "/api/creator/runs/78/script/markdown",
+        json={"markdown": "# Fresh draft"},
+    )
+
+    assert response.status_code == 409
+    assert "Cannot modify script in stage" in response.json()["detail"]
     assert script_service.save_draft_calls == []
 
 
