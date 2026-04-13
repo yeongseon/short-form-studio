@@ -101,7 +101,7 @@ class ModelCatalogService:
             providers.append(
                 {
                     "name": self._health_key(entry),
-                    "endpoint": entry.endpoint,
+                    "provider_type": entry.provider_type,
                     "healthy": health_result.status in {ModelStatus.HEALTHY, ModelStatus.CONFIGURED},
                     "loaded_model": None,
                     "gpu_locked": False,

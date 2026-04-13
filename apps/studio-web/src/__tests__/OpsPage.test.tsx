@@ -53,23 +53,23 @@ describe("OpsPage", () => {
     const link = monitoringCard.querySelector("a");
     expect(link).not.toBeNull();
     expect(link?.getAttribute("target")).toBe("_blank");
-    expect(link?.getAttribute("href")).toBe("/flower/");
+    expect(link?.getAttribute("href")).toBe("http://localhost:5555");
   });
 
-  it("links health card to /health", () => {
+  it("links health card to API health endpoint", () => {
     renderPage();
     const card = screen.getByTestId("ops-tool-health");
     const link = card.querySelector("a");
     expect(link).not.toBeNull();
-    expect(link?.getAttribute("href")).toBe("/health");
+    expect(link?.getAttribute("href")).toBe("http://localhost:8000/health");
   });
 
-  it("links docs card to /docs", () => {
+  it("links docs card to API docs endpoint", () => {
     renderPage();
     const card = screen.getByTestId("ops-tool-docs");
     const link = card.querySelector("a");
     expect(link).not.toBeNull();
-    expect(link?.getAttribute("href")).toBe("/docs");
+    expect(link?.getAttribute("href")).toBe("http://localhost:8000/docs");
   });
 
 });

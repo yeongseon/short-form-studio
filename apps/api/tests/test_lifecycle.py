@@ -1,12 +1,14 @@
 # pyright: reportMissingImports=false
 
 import os
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Literal
 
 import pytest
 import shorts_api.routes.creator_runs_lifecycle as creator_runs_lifecycle
 import shorts_api.routes.creator_runs_utils as creator_runs_utils
+from fastapi.routing import APIRoute
 from pydantic import BaseModel
 from shorts_api.main import projects_router, runs_router
 
@@ -133,6 +135,10 @@ class StubRevokeTasks:
             self.calls.append(active_task_id)
 
 
+def _iter_api_routes(routes: Sequence[object]) -> list[APIRoute]:
+    return [route for route in routes if isinstance(route, APIRoute)]
+
+
 @pytest.fixture
 def stub_lifecycle_services(
     monkeypatch: pytest.MonkeyPatch,
@@ -141,12 +147,12 @@ def stub_lifecycle_services(
     project_svc = StubProjectService()
     revoke_tasks = StubRevokeTasks()
 
-    for route in runs_router.routes:
+    for route in _iter_api_routes(runs_router.routes):
         if route.name in {"stop_run", "resume_run", "go_back", "update_model_defaults", "delete_run"}:
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "_revoke_active_tasks", revoke_tasks)
 
-    for route in projects_router.routes:
+    for route in _iter_api_routes(projects_router.routes):
         if route.name == "delete_project":
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "project_service", project_svc)

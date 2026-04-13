@@ -22,4 +22,6 @@ extraPaths = [
   "packages/creator-domain",
   "packages/creator-service",
   "packages/creator-provider",
+  "apps/api/src",
+  "apps/worker-orchestrator",
 ]

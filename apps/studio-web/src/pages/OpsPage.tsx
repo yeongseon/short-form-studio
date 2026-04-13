@@ -1,9 +1,13 @@
+const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL ||
+  `${window.location.protocol}//${window.location.hostname}:8000`;
+
 const OPS_TOOLS = [
   {
     id: "monitoring",
     title: "Task Monitoring",
-    description: "View Celery task queue, worker status, and task history via Flower.",
-    link: "/flower/",
+    description: "View Celery task queue, worker status, and task history via Flower (internal service URL).",
+    link: `${window.location.protocol}//${window.location.hostname}:5555`,
     external: true,
     icon: "📊",
   },
@@ -11,7 +15,7 @@ const OPS_TOOLS = [
     id: "health",
     title: "System Health",
     description: "Check API, database, Redis, and worker connectivity status.",
-    link: "/health",
+    link: `${API_BASE_URL}/health`,
     external: true,
     icon: "🩺",
   },
@@ -19,7 +23,7 @@ const OPS_TOOLS = [
     id: "docs",
     title: "API Documentation",
     description: "Interactive API reference for all creator endpoints.",
-    link: "/docs",
+    link: `${API_BASE_URL}/docs`,
     external: true,
     icon: "📖",
   },
@@ -32,7 +36,7 @@ export default function OpsPage() {
         Operations
       </h1>
       <p style={{ fontSize: 14, color: "#6b7280", marginBottom: 24 }}>
-        System monitoring and operational tools.
+        System monitoring and operational tools. Links open internal service endpoints.
       </p>
 
       <div

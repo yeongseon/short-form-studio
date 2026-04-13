@@ -66,7 +66,7 @@ jobs:
       - name: Build Frontend
         run: npm --prefix apps/studio-web run build
       - name: Typecheck Frontend
-        run: npx --prefix apps/studio-web tsc --noEmit
+        run: cd apps/studio-web && npx tsc --noEmit
       - name: Typecheck Python (basedpyright)
         run: |
           pip install basedpyright
@@ -86,9 +86,13 @@ jobs:
         run: docker build --target runtime -f apps/worker-orchestrator/Dockerfile .
       - name: Smoke-test compose up
         run: |
-          docker compose up -d postgres redis api
+          docker compose up -d postgres redis api studio-web
           # Wait for API health endpoint
           timeout 60 bash -c 'until curl -sf http://localhost:8000/healthz; do sleep 2; done'
           # Verify API responds
           curl -sf http://localhost:8000/healthz
+          # Wait for frontend endpoint
+          timeout 60 bash -c 'until curl -sf http://localhost:5174/; do sleep 2; done'
+          # Verify frontend responds
+          curl -sf http://localhost:5174/
           docker compose down

@@ -1,7 +1,11 @@
-try:
+from __future__ import annotations
+
+import sys
+from enum import Enum
+
+if sys.version_info >= (3, 11):  # noqa: UP036
     from enum import StrEnum
-except ImportError:
-    from enum import Enum
+else:
 
     class StrEnum(str, Enum):  # noqa: UP042
         def __str__(self) -> str:
@@ -22,6 +26,15 @@ class RunStage(StrEnum):
     FINAL_REVIEW = "FINAL_REVIEW"
     PUBLISHED = "PUBLISHED"
     FAILED = "FAILED"
+
+
+TRIGGER_POLICY: dict[str, frozenset[RunStage]] = {
+    "generate_script": frozenset({RunStage.IDEA_READY, RunStage.SCRIPT_REVIEW, RunStage.SCRIPT_GENERATING}),
+    "generate_visual_plan": frozenset({RunStage.VISUAL_PLAN_SETUP, RunStage.VISUAL_PLAN_GENERATING}),
+    "generate_visual_assets": frozenset({RunStage.VISUAL_PLAN_REVIEW, RunStage.VISUAL_ASSET_GENERATING, RunStage.VISUAL_ASSET_REVIEW}),
+    "generate_audio": frozenset({RunStage.VISUAL_ASSET_REVIEW, RunStage.AUDIO_GENERATING}),
+    "render_video": frozenset({RunStage.RENDER_GENERATING}),
+}
 
 
 TRANSITIONS: dict[RunStage, tuple[RunStage, ...]] = {

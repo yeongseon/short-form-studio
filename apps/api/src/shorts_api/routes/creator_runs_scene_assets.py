@@ -1,5 +1,6 @@
 """Scene image, asset listing, media generation, and preview routes."""
 
+from creator_domain.models import TRIGGER_POLICY
 from creator_service.audio_service import audio_service
 from creator_service.render_service import render_service
 from creator_service.run_service import run_service
@@ -188,7 +189,7 @@ async def generate_audio_trigger(run_id: int, request: GenerateAudioRequest) -> 
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    allowed_stages = frozenset({"VISUAL_ASSET_REVIEW", "AUDIO_GENERATING"})
+    allowed_stages = frozenset(stage.value for stage in TRIGGER_POLICY["generate_audio"])
     if run.current_stage not in allowed_stages:
         raise HTTPException(
             status_code=400,

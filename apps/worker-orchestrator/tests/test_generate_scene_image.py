@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from tasks import generate_scene_image as generate_scene_image_module
@@ -847,7 +847,7 @@ def test_scene_results_contain_asset_info(monkeypatch: pytest.MonkeyPatch) -> No
     result = _invoke_task(run_id=702)
 
     assert result["status"] == "success"
-    scene_results = result["scene_results"]
+    scene_results = cast(list[dict[str, object]], result["scene_results"])
     assert len(scene_results) == 1
     sr = scene_results[0]
     assert sr["status"] == "success"
@@ -871,8 +871,10 @@ def test_regeneration_uses_unique_asset_paths(monkeypatch: pytest.MonkeyPatch) -
     first = _invoke_task(run_id=703, scene_id="scene-sec-0")
     second = _invoke_task(run_id=703, scene_id="scene-sec-0", prompt_override="New prompt")
 
-    first_path = first["scene_results"][0]["asset_path"]
-    second_path = second["scene_results"][0]["asset_path"]
+    first_results = cast(list[dict[str, object]], first["scene_results"])
+    second_results = cast(list[dict[str, object]], second["scene_results"])
+    first_path = first_results[0]["asset_path"]
+    second_path = second_results[0]["asset_path"]
 
     assert first_path != second_path
     assert va_service.calls[0]["asset_path"] != va_service.calls[1]["asset_path"]

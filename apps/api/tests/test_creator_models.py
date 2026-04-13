@@ -1,6 +1,9 @@
 # pyright: reportMissingImports=false
 
+from collections.abc import Sequence
+
 import pytest
+from fastapi.routing import APIRoute
 from shorts_api.main import models_router
 
 
@@ -84,11 +87,15 @@ class StubModelCatalogService:
         }
 
 
+def _iter_api_routes(routes: Sequence[object]) -> list[APIRoute]:
+    return [route for route in routes if isinstance(route, APIRoute)]
+
+
 @pytest.fixture
 def stub_catalog_service(monkeypatch: pytest.MonkeyPatch) -> StubModelCatalogService:
     service = StubModelCatalogService()
 
-    for route in models_router.routes:
+    for route in _iter_api_routes(models_router.routes):
         if route.name in {"list_models", "get_model_status"}:
             monkeypatch.setitem(route.endpoint.__globals__, "model_catalog_service", service)
 

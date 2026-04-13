@@ -15,7 +15,7 @@ except ImportError:
     redis = None
 
 from celery_app import celery_app
-from creator_domain.models.stage import RunStage
+from creator_domain.models.stage import TRIGGER_POLICY, RunStage
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.run_service import run_service as _run_service
@@ -23,7 +23,9 @@ from creator_service.script_service import script_service as _script_service
 
 logger = logging.getLogger(__name__)
 
-_ALLOWED_STAGES = frozenset({RunStage.IDEA_READY, RunStage.SCRIPT_GENERATING})
+_ALLOWED_STAGES = frozenset(
+    stage for stage in TRIGGER_POLICY["generate_script"] if stage is not RunStage.SCRIPT_REVIEW
+)
 
 # Stages where writing SCRIPT_REVIEW or FAILED is safe — the run hasn't
 # advanced past generation. The task may start directly from IDEA_READY
@@ -65,11 +67,13 @@ def _get_redis_client() -> Any | None:
 
 
 async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
-    remover = getattr(_run_service.storage, "remove_active_task_id", None)
+    remover: Any = getattr(_run_service.storage, "remove_active_task_id", None)
     if not callable(remover):
         return
     try:
-        await remover(run_id, task_id)
+        maybe_result = remover(run_id, task_id)
+        if asyncio.iscoroutine(maybe_result):
+            await maybe_result
     except Exception:
         logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
 

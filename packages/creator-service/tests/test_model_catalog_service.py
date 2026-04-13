@@ -1,5 +1,6 @@
 # pyright: reportMissingImports=false
 
+from typing import cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -129,7 +130,7 @@ class TestModelCatalogService:
         assert len(result["providers"]) == len(unique_providers)
 
         provider = result["providers"][0]
-        assert set(provider.keys()) == {"name", "endpoint", "healthy", "loaded_model", "gpu_locked"}
+        assert set(provider.keys()) == {"name", "provider_type", "healthy", "loaded_model", "gpu_locked"}
         assert provider["loaded_model"] is None
         assert provider["gpu_locked"] is False
 
@@ -233,9 +234,10 @@ class TestModelCatalogService:
         service = ModelCatalogService(registry, health_service)
 
         result = await service.get_status()
+        providers = cast(list[dict[str, object]], result["providers"])
 
         openai_provider = next(
-            (p for p in result["providers"] if p["name"] == "api.openai.com"),
+            (p for p in providers if p["name"] == "api.openai.com"),
             None,
         )
         assert openai_provider is not None

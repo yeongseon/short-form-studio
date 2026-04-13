@@ -2,6 +2,7 @@
 
 from typing import Literal
 
+from creator_domain.models import TRIGGER_POLICY
 from creator_service.project_service import project_service
 from creator_service.run_service import run_service
 from creator_service.stage_review_service import stage_review_service
@@ -190,7 +191,7 @@ async def generate_script_trigger(run_id: int, request: GenerateScriptRequest) -
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    allowed_stages = frozenset({"IDEA_READY", "SCRIPT_REVIEW", "SCRIPT_GENERATING"})
+    allowed_stages = frozenset(stage.value for stage in TRIGGER_POLICY["generate_script"])
     if run.current_stage not in allowed_stages:
         raise HTTPException(
             status_code=400,

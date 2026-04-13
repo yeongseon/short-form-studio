@@ -21,7 +21,7 @@ except ImportError:
     redis = None
 
 from celery_app import celery_app
-from creator_domain.models.stage import RunStage
+from creator_domain.models.stage import TRIGGER_POLICY, RunStage
 from creator_domain.models.visual_plan import VisualScene
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
@@ -31,7 +31,7 @@ from creator_service.visual_plan_service import visual_plan_service as _visual_p
 
 logger = logging.getLogger(__name__)
 
-_ALLOWED_STAGES = frozenset({RunStage.VISUAL_PLAN_SETUP, RunStage.VISUAL_PLAN_GENERATING})
+_ALLOWED_STAGES = TRIGGER_POLICY["generate_visual_plan"]
 
 # Stages where writing VISUAL_PLAN_REVIEW or FAILED is safe — the run
 # hasn't advanced past visual plan generation.
@@ -146,11 +146,13 @@ def _get_redis_client() -> Any | None:
 
 
 async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
-    remover = getattr(_run_service.storage, "remove_active_task_id", None)
+    remover: Any = getattr(_run_service.storage, "remove_active_task_id", None)
     if not callable(remover):
         return
     try:
-        await remover(run_id, task_id)
+        maybe_result = remover(run_id, task_id)
+        if asyncio.iscoroutine(maybe_result):
+            await maybe_result
     except Exception:
         logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
 

@@ -2,6 +2,7 @@
 
 from typing import Annotated
 
+from creator_domain.models import TRIGGER_POLICY
 from creator_service.run_service import run_service
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
@@ -48,7 +49,7 @@ async def generate_visual_plan_trigger(run_id: int, request: GenerateVisualPlanR
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    allowed_stages = frozenset({"VISUAL_PLAN_SETUP", "VISUAL_PLAN_GENERATING"})
+    allowed_stages = frozenset(stage.value for stage in TRIGGER_POLICY["generate_visual_plan"])
     if run.current_stage not in allowed_stages:
         raise HTTPException(
             status_code=400,
@@ -81,7 +82,7 @@ async def generate_visual_assets_trigger(
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    allowed_stages = frozenset({"VISUAL_PLAN_REVIEW", "VISUAL_ASSET_GENERATING"})
+    allowed_stages = frozenset(stage.value for stage in TRIGGER_POLICY["generate_visual_assets"])
     if run.current_stage not in allowed_stages:
         raise HTTPException(
             status_code=400,

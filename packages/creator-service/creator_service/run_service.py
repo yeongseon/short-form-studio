@@ -387,6 +387,8 @@ class RunService:
             raise RuntimeError(
                 f"Stage conflict: expected '{current.value}' but run is at '{row.get('current_stage')}'"
             )
+        if row is None:
+            raise ValueError(f"Run {run_id} not found")
         return PipelineRun.from_row(row)
 
     async def update_model_defaults(self, run_id: int, updates: dict[str, str]) -> PipelineRun:

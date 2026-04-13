@@ -1,9 +1,11 @@
 # pyright: reportMissingImports=false
 
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Literal, cast
 
 import pytest
+from fastapi.routing import APIRoute
 from pydantic import BaseModel
 from shorts_api.main import projects_router
 
@@ -115,11 +117,15 @@ class StubProjectService:
     async def count_projects(self) -> int:
         return len(self._projects)
 
+def _iter_api_routes(routes: Sequence[object]) -> list[APIRoute]:
+    return [route for route in routes if isinstance(route, APIRoute)]
+
+
 @pytest.fixture
 def stub_project_service(monkeypatch: pytest.MonkeyPatch) -> StubProjectService:
     service = StubProjectService()
 
-    for route in projects_router.routes:
+    for route in _iter_api_routes(projects_router.routes):
         if route.name in {"create_project", "get_project_detail", "list_projects"}:
             monkeypatch.setitem(route.endpoint.__globals__, "project_service", service)
 

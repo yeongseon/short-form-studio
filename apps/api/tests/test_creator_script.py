@@ -1,9 +1,11 @@
 # pyright: reportMissingImports=false
 
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Literal
 
 import pytest
+from fastapi.routing import APIRoute
 from pydantic import BaseModel
 from shorts_api.routes.creator_script import router as script_router
 from shorts_api.routes.creator_script import run_script_router
@@ -143,13 +145,17 @@ class StubScriptService:
         return draft
 
 
+def _iter_api_routes(routes: Sequence[object]) -> list[APIRoute]:
+    return [route for route in routes if isinstance(route, APIRoute)]
+
+
 @pytest.fixture
 def stub_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubProjectService, StubRunService, StubScriptService]:
     project = StubProjectService()
     run = StubRunService()
     script = StubScriptService()
 
-    for route in script_router.routes:
+    for route in _iter_api_routes(script_router.routes):
         monkeypatch.setitem(route.endpoint.__globals__, "project_service", project)
         monkeypatch.setitem(route.endpoint.__globals__, "run_service", run)
         monkeypatch.setitem(route.endpoint.__globals__, "script_service", script)
@@ -162,7 +168,7 @@ def stub_run_script_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunSe
     run = StubRunServiceRead()
     script = StubScriptService()
 
-    for route in run_script_router.routes:
+    for route in _iter_api_routes(run_script_router.routes):
         monkeypatch.setitem(route.endpoint.__globals__, "run_service", run)
         monkeypatch.setitem(route.endpoint.__globals__, "script_service", script)
 
@@ -690,7 +696,7 @@ def stub_parse_markdown_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubR
             ))
         return sections
 
-    for route in run_script_router.routes:
+    for route in _iter_api_routes(run_script_router.routes):
         monkeypatch.setitem(route.endpoint.__globals__, "run_service", run)
         monkeypatch.setitem(route.endpoint.__globals__, "script_service", script)
         monkeypatch.setitem(route.endpoint.__globals__, "parse_markdown", fake_parse_markdown)
