@@ -232,7 +232,7 @@ Each `*_REVIEW` stage requires explicit approval before advancing.
 | Service | Bind Address | Port | Protocol | Notes |
 |---|---|---|---|---|
 | API (FastAPI) | 127.0.0.1 | 8000 | HTTP | Internal only |
-| Studio Web (nginx) | 0.0.0.0 | 5174→8080 | HTTP | Public-facing, SPA + reverse proxy |
+| Studio Web (nginx) | 127.0.0.1 | 5174→8080 | HTTP | Local only; put behind authenticated reverse proxy for public access |
 | PostgreSQL | 127.0.0.1 | 5432 | TCP | Internal only |
 | Redis | 127.0.0.1 | 6379 | TCP | Internal only |
 | Ollama | 127.0.0.1 | 11434 | HTTP | GPU profile only |
@@ -241,8 +241,9 @@ Each `*_REVIEW` stage requires explicit approval before advancing.
 | STT (Whisper) | 127.0.0.1 | 9000 | HTTP | GPU profile only |
 | Flower | 127.0.0.1 | 5555 | HTTP | Monitoring profile |
 
-> **Security note:** All internal services bind to `127.0.0.1` to prevent
-> accidental exposure. Only Studio Web is accessible from external hosts.
+> **Security note:** All services bind to `127.0.0.1` by default to prevent
+> accidental exposure. For public access, place `studio-web` behind an
+> authenticated reverse proxy — do **not** change its bind address to `0.0.0.0`.
 ---
 
 ## GPU Constraints
