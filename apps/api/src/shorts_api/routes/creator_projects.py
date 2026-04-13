@@ -4,18 +4,18 @@ from typing import Literal
 from creator_service.project_service import project_service
 from creator_service.run_service import run_service
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
 
 class CreateProjectRequest(BaseModel):
-    title: str
+    title: str = Field(max_length=200)
     source_type: Literal["idea", "markdown", "pasted_json", "url"]
-    idea_brief: str | None = None
-    markdown_source: str | None = None
-    json_script: str | None = None
-    url_source: str | None = None
+    idea_brief: str | None = Field(default=None, max_length=5000)
+    markdown_source: str | None = Field(default=None, max_length=50000)
+    json_script: str | None = Field(default=None, max_length=200000)
+    url_source: str | None = Field(default=None, max_length=2000)
 
 @router.post("", status_code=201)
 async def create_project(request: CreateProjectRequest) -> dict[str, object]:
@@ -37,7 +37,7 @@ async def create_project(request: CreateProjectRequest) -> dict[str, object]:
 
 
 class UpdateProjectRequest(BaseModel):
-    title: str
+    title: str = Field(max_length=200)
 
 
 @router.patch("/{project_id}")

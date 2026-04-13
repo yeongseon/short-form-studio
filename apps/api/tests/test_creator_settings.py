@@ -46,7 +46,6 @@ async def test_list_api_keys_unconfigured(client, monkeypatch):
     data = response.json()
     for item in data:
         assert item["configured"] is False
-        assert item["masked"] is None
 
 
 @pytest.mark.asyncio
@@ -58,8 +57,6 @@ async def test_list_api_keys_configured(client, monkeypatch):
     data = response.json()
     openai_entry = next(item for item in data if item["provider"] == "openai")
     assert openai_entry["configured"] is True
-    assert openai_entry["masked"] == "••••cdef"
-    assert openai_entry["env_var"] == "OPENAI_API_KEY"
     assert openai_entry["label"] == "OpenAI"
 
 
@@ -71,7 +68,6 @@ async def test_list_api_keys_short_key_masked(client, monkeypatch):
     data = response.json()
     openai_entry = next(item for item in data if item["provider"] == "openai")
     assert openai_entry["configured"] is True
-    assert openai_entry["masked"] == "••••"
 
 
 @pytest.mark.asyncio
@@ -92,9 +88,7 @@ async def test_api_keys_response_structure(client):
     for item in data:
         assert "provider" in item
         assert "label" in item
-        assert "env_var" in item
         assert "configured" in item
-        assert "masked" in item
 
 
 @pytest.mark.asyncio

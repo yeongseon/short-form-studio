@@ -21,6 +21,7 @@ class ModelStatus(Enum):
     """Status of a model container."""
     HEALTHY = "healthy"
     UNHEALTHY = "unhealthy"
+    CONFIGURED = "configured"
     UNKNOWN = "unknown"
 
 
@@ -76,7 +77,7 @@ class ModelHealthService:
                 return ModelHealthResult(
                     model_name=model_name,
                     endpoint=model_name,
-                    status=ModelStatus.HEALTHY,
+                    status=ModelStatus.CONFIGURED,
                 )
 
             # Remote provider without API key: skip (not configured, not unhealthy)

@@ -373,6 +373,16 @@ describe("CreatePage", () => {
     });
     expect(screen.getByTestId("idea-form-error").textContent).toBe("Internal error");
     expect(mockNavigate).not.toHaveBeenCalled();
+
+    // Verify orphan cleanup: DELETE /projects/42 was called
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const deleteCall = fetchMock.mock.calls.find(
+      (c: unknown[]) =>
+        typeof c[0] === "string" &&
+        c[0].includes("/projects/42") &&
+        (c[1] as RequestInit)?.method === "DELETE",
+    );
+    expect(deleteCall).toBeTruthy();
   });
 
   it("shows 'Creating…' on submit button while submitting", async () => {
@@ -525,6 +535,16 @@ describe("CreatePage", () => {
     });
     expect(screen.getByTestId("json-form-error").textContent).toBe("JSON content must not be empty");
     expect(mockNavigate).not.toHaveBeenCalled();
+
+    // Verify orphan cleanup: DELETE /projects/42 was called
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const deleteCall = fetchMock.mock.calls.find(
+      (c: unknown[]) =>
+        typeof c[0] === "string" &&
+        c[0].includes("/projects/42") &&
+        (c[1] as RequestInit)?.method === "DELETE",
+    );
+    expect(deleteCall).toBeTruthy();
   });
 
   it("uses 'Untitled' when JSON title is empty", async () => {

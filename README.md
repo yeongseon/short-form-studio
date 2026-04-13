@@ -23,7 +23,7 @@ The project is a monorepo with these main components:
 |---|---|---|
 | **API** | `apps/api/` | FastAPI REST API -- orchestrates the pipeline |
 | **Worker** | `apps/worker-orchestrator/` | Celery worker -- runs async AI tasks |
-| **Studio Web** | `apps/studio-web/` | React + TypeScript frontend (Vite) |
+| **Studio Web** | `apps/studio-web/` | React + TypeScript frontend (Vite dev / nginx production) |
 | **Domain** | `packages/creator-domain/` | Shared domain models (Pydantic) |
 | **Service** | `packages/creator-service/` | Business logic and database layer |
 | **Providers** | `packages/creator-provider/` | LLM, Image, TTS, STT provider adapters |
@@ -169,7 +169,7 @@ cd apps/studio-web && npm test
 | Service | Port | Protocol |
 |---|---|---|
 | API (FastAPI) | 8000 | HTTP |
-| Studio Web (Vite) | 5174 | HTTP |
+| Studio Web (Vite dev / nginx prod) | 5174 | HTTP |
 | PostgreSQL | 5432 | TCP |
 | Redis | 6379 | TCP |
 | Ollama | 11434 | HTTP |

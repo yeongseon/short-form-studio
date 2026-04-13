@@ -4,6 +4,7 @@
 
 import pytest
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from httpx import ASGITransport, AsyncClient
 from shorts_api.auth import ApiKeyMiddleware
 
@@ -11,6 +12,13 @@ from shorts_api.auth import ApiKeyMiddleware
 def _make_app(api_key: str | None = None) -> FastAPI:
     """Create a minimal FastAPI app with the auth middleware."""
     test_app = FastAPI()
+    test_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:5174"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     test_app.add_middleware(ApiKeyMiddleware, api_key=api_key)
 
     @test_app.get("/health")
@@ -208,7 +216,8 @@ async def test_cors_preflight_bypasses_auth(authed_client):
             "Access-Control-Request-Method": "GET",
         },
     )
-    assert response.status_code != 401
+    assert response.status_code in (200, 204)
+    assert response.headers.get("access-control-allow-origin") == "http://localhost:5174"
 
 
 @pytest.mark.asyncio

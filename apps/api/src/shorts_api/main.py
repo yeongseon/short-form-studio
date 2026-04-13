@@ -117,12 +117,12 @@ async def health() -> dict[str, object]:
     Only returns model name, status, and response time.
     """
     results = await model_health.check_all()
-    # Only consider providers with a definitive status (healthy/unhealthy) for
-    # overall readiness.  UNKNOWN means "not configured" and should not
+    # Only consider providers with a definitive status (healthy/unhealthy/configured)
+    # for overall readiness.  UNKNOWN means "not configured" and should not
     # degrade a correctly-configured deployment.
-    definitive = [r for r in results if r.status != ModelStatus.UNKNOWN]
+    definitive = [r for r in results if r.status not in (ModelStatus.UNKNOWN,)]
     all_healthy = len(definitive) > 0 and all(
-        r.status == ModelStatus.HEALTHY for r in definitive
+        r.status in (ModelStatus.HEALTHY, ModelStatus.CONFIGURED) for r in definitive
     )
     return {
         "status": "ok" if all_healthy else "degraded",

@@ -54,9 +54,7 @@ export default function SettingsPage() {
         return {
           provider,
           label,
-          env_var: found?.env_var ?? "",
           configured: found?.configured ?? false,
-          masked: found?.masked ?? null,
         };
       });
       setApiKeys(normalized);
@@ -66,9 +64,7 @@ export default function SettingsPage() {
         PROVIDERS.map(({ provider, label }) => ({
           provider,
           label,
-          env_var: "",
           configured: false,
-          masked: null,
         })),
       );
     } finally {
@@ -116,7 +112,7 @@ export default function SettingsPage() {
                           fontFamily: "'JetBrains Mono', monospace",
                         }}
                       >
-                        {entry.configured ? entry.masked : `Set ${entry.env_var} in the server environment`}
+                        {entry.configured ? "Active" : "Not configured — set env var on the server"}
                       </div>
                     </div>
 

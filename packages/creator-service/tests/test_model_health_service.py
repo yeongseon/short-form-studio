@@ -50,7 +50,7 @@ async def test_remote_provider_healthy_when_api_key_configured(
 
     result = await health_service.check_model("api.openai.com")
 
-    assert result.status == ModelStatus.HEALTHY
+    assert result.status == ModelStatus.CONFIGURED
     assert result.endpoint == "api.openai.com"
     assert result.error is None
 

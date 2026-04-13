@@ -27,17 +27,7 @@ _PROVIDER_LABELS: dict[str, str] = {
 class ApiKeyStatus(BaseModel):
     provider: str
     label: str
-    env_var: str
     configured: bool
-    masked: str | None = None
-
-
-def _mask_key(key: str) -> str:
-    if not key or len(key) < 8:
-        return "••••" if key else ""
-    return "••••" + key[-4:]
-
-
 
 
 @router.get("/settings/api-keys")
@@ -49,9 +39,7 @@ async def list_api_keys() -> list[ApiKeyStatus]:
             ApiKeyStatus(
                 provider=provider,
                 label=_PROVIDER_LABELS.get(provider, provider.title()),
-                env_var=env_var,
                 configured=bool(value),
-                masked=_mask_key(value) if value else None,
             )
         )
     return result

@@ -17,7 +17,10 @@ COPY --from=builder /install /usr/local
 COPY --chown=appuser:appuser apps/api/src ./src
 COPY --chown=appuser:appuser apps/api/alembic.ini ./alembic.ini
 COPY --chown=appuser:appuser apps/api/migrations ./migrations
-ENV PYTHONPATH=/app/src
+# Worker task modules needed by API for Celery task dispatch (import_module)
+COPY --chown=appuser:appuser apps/worker-orchestrator/tasks ./tasks
+COPY --chown=appuser:appuser apps/worker-orchestrator/celery_app.py ./celery_app.py
+ENV PYTHONPATH=/app/src:/app
 USER appuser
 EXPOSE 8000
 CMD ["uvicorn", "shorts_api.main:app", "--host", "0.0.0.0", "--port", "8000"]

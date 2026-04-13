@@ -67,3 +67,14 @@ jobs:
         run: npm --prefix apps/studio-web run build
       - name: Typecheck Frontend
         run: npx --prefix apps/studio-web tsc --noEmit
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate docker-compose config
+        run: docker compose config --quiet
+      - name: Build API runtime image
+        run: docker build --target runtime -f apps/api/Dockerfile .
+      - name: Build Studio Web runtime image
+        run: docker build --target runtime -f apps/studio-web/Dockerfile .

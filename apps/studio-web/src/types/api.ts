@@ -64,9 +64,7 @@ export interface VisualScene {
 export interface ApiKeyStatus {
   provider: string;
   label: string;
-  env_var: string;
   configured: boolean;
-  masked: string | null;
 }
 
 export const FINAL_REVIEW_STAGES = new Set(["FINAL_REVIEW"]);
