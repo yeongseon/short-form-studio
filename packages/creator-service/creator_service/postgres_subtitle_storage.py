@@ -50,7 +50,7 @@ class PostgresSubtitleStorage:
             """
             SELECT *
             FROM creator_artifacts
-            WHERE run_id = $1 AND artifact_type = 'subtitle'
+            WHERE run_id = $1 AND artifact_type = 'subtitle' AND scene_id IS NULL
             ORDER BY created_at DESC
             """,
             run_id,
@@ -61,7 +61,7 @@ class PostgresSubtitleStorage:
             """
             SELECT *
             FROM creator_artifacts
-            WHERE run_id = $1 AND artifact_type = 'subtitle'
+            WHERE run_id = $1 AND artifact_type = 'subtitle' AND scene_id IS NULL
             ORDER BY created_at DESC
             LIMIT 1
             """,

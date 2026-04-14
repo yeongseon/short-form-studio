@@ -85,7 +85,11 @@ class InMemoryAudioStorage:
         return None
 
     async def list_by_run(self, run_id: int) -> list[dict[str, Any]]:
-        run_artifacts = [a for a in self._artifacts if a["run_id"] == run_id]
+        run_artifacts = [
+            a
+            for a in self._artifacts
+            if a["run_id"] == run_id and a.get("scene_id") is None
+        ]
         return [
             dict(a)
             for a in sorted(run_artifacts, key=lambda x: x["created_at"], reverse=True)
