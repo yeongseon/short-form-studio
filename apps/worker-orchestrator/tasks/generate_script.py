@@ -15,7 +15,7 @@ except ImportError:
     redis = None
 
 from celery_app import celery_app
-from creator_domain.models.stage import TRIGGER_POLICY, RunStage
+from creator_domain.models.stage import RunStage
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.run_service import run_service as _run_service
@@ -23,9 +23,7 @@ from creator_service.script_service import script_service as _script_service
 
 logger = logging.getLogger(__name__)
 
-_ALLOWED_STAGES = frozenset(
-    stage for stage in TRIGGER_POLICY["generate_script"] if stage is not RunStage.SCRIPT_REVIEW
-)
+_ALLOWED_STAGES = frozenset({RunStage.IDEA_READY, RunStage.SCRIPT_GENERATING})
 
 # Stages where writing SCRIPT_REVIEW or FAILED is safe — the run hasn't
 # advanced past generation. The task may start directly from IDEA_READY
@@ -118,6 +116,8 @@ def generate_script(
                     f"Run {run_id} is in stage {current.value}, "
                     f"expected one of {', '.join(s.value for s in _ALLOWED_STAGES)}"
                 )
+            if run.get("status") == "cancelled":
+                raise _StageGuardError(f"Run {run_id} is cancelled")
 
             # 2. Provider resolution (sync — blocks briefly, fine in Celery worker).
             registry = ProviderRegistry.create_default()

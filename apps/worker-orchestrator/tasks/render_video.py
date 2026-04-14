@@ -93,6 +93,8 @@ def render_video(
                     f"Run {run_id} is in stage {current.value}, "
                     f"expected one of {', '.join(s for s in _ALLOWED_STAGES)}"
                 )
+            if run.get("status") == "cancelled":
+                raise _StageGuardError(f"Run {run_id} is cancelled")
 
             manifest = await _render_service.build_render_manifest(
                 run_id,

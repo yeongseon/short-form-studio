@@ -21,7 +21,7 @@ except ImportError:
     redis = None
 
 from celery_app import celery_app
-from creator_domain.models.stage import TRIGGER_POLICY, RunStage
+from creator_domain.models.stage import RunStage
 from creator_domain.models.visual_plan import VisualScene
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
@@ -31,7 +31,7 @@ from creator_service.visual_plan_service import visual_plan_service as _visual_p
 
 logger = logging.getLogger(__name__)
 
-_ALLOWED_STAGES = TRIGGER_POLICY["generate_visual_plan"]
+_ALLOWED_STAGES = frozenset({RunStage.VISUAL_PLAN_SETUP, RunStage.VISUAL_PLAN_GENERATING})
 
 # Stages where writing VISUAL_PLAN_REVIEW or FAILED is safe — the run
 # hasn't advanced past visual plan generation.
@@ -195,6 +195,8 @@ def generate_visual_plan(
                     f"Run {run_id} is in stage {current.value}, "
                     f"expected one of {', '.join(s.value for s in _ALLOWED_STAGES)}"
                 )
+            if run.get("status") == "cancelled":
+                raise _StageGuardError(f"Run {run_id} is cancelled")
 
             # 2. Fetch approved script draft.
             draft = await _script_service.get_active_draft(run_id)

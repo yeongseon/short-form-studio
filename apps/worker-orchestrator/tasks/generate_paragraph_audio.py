@@ -26,10 +26,15 @@ from creator_domain.sanitize import sanitize_path_component
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.audio_service import audio_service as _audio_service
+from creator_service.run_service import run_service as _run_service
 
 logger = logging.getLogger(__name__)
 
 _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
+
+
+class _StageGuardError(ValueError):
+    """Raised when a run is not in an acceptable state for paragraph audio generation."""
 
 
 def _utc_now_iso() -> str:
@@ -80,6 +85,10 @@ def generate_paragraph_audio(
     async def _run_task() -> dict[str, object]:
         nonlocal provider_type, endpoint, gpu_lock_acquired_at, gpu_lock_released_at
         nonlocal redis_client, lock_acquired
+
+        run = await _run_service.storage.get_run(run_id)
+        if run is not None and run.get("status") == "cancelled":
+            raise _StageGuardError(f"Run {run_id} is cancelled")
 
         # 1. Provider resolution
         registry = ProviderRegistry.create_default()
@@ -149,6 +158,8 @@ def generate_paragraph_audio(
 
     try:
         return asyncio.run(_run_task())
+    except _StageGuardError:
+        raise
     except Exception:
         logger.exception(
             "Failed to generate paragraph audio for run %d section %s",

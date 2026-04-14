@@ -24,7 +24,7 @@ except ImportError:
     redis = None
 
 from celery_app import celery_app
-from creator_domain.models.stage import TRIGGER_POLICY, RunStage
+from creator_domain.models.stage import RunStage
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.audio_service import audio_service as _audio_service
@@ -33,7 +33,7 @@ from creator_service.script_service import script_service as _script_service
 
 logger = logging.getLogger(__name__)
 
-_ALLOWED_STAGES = TRIGGER_POLICY["generate_audio"]
+_ALLOWED_STAGES = frozenset({RunStage.VISUAL_ASSET_REVIEW, RunStage.AUDIO_GENERATING})
 _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
 
 # Stages where writing SUBTITLE_GENERATING or FAILED is safe — the run
@@ -113,6 +113,8 @@ def generate_audio(
                     f"Run {run_id} is in stage {current.value}, "
                     f"expected one of {', '.join(s for s in _ALLOWED_STAGES)}"
                 )
+            if run.get("status") == "cancelled":
+                raise _StageGuardError(f"Run {run_id} is cancelled")
 
             # 2. Fetch approved script draft.
             draft = await _script_service.get_active_draft(run_id)
