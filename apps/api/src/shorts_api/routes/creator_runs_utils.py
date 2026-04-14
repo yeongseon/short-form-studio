@@ -218,6 +218,21 @@ def _revoke_active_tasks(active_task_id: str | None) -> None:
         logger.warning("Failed to revoke active tasks (task_id=%s)", active_task_id, exc_info=True)
 
 
+def _has_active_tasks(active_task_id: str | None) -> bool:
+    """Return True when active_task_id stores at least one non-empty task id."""
+    if not active_task_id:
+        return False
+    try:
+        parsed = json.loads(active_task_id)
+    except (ValueError, TypeError):
+        return bool(str(active_task_id).strip())
+    if isinstance(parsed, list):
+        return any(str(task_id).strip() for task_id in parsed)
+    if isinstance(parsed, str):
+        return bool(parsed.strip())
+    return False
+
+
 async def _append_task_id(run_id: int, task_id: str, *, run_service: Any | None = None) -> None:
     """Atomically append a task id via the configured run storage backend."""
     if run_service is None:

@@ -16,6 +16,7 @@ from shorts_api.routes.creator_runs_core import (
 )
 from shorts_api.routes.creator_runs_utils import (
     _append_task_id,
+    _has_active_tasks,
     cas_dispatch_with_rollback,
     dispatch_generate_audio,
     dispatch_generate_scene_image,
@@ -192,6 +193,8 @@ async def generate_audio_trigger(run_id: int, request: GenerateAudioRequest) -> 
     run = await run_service.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
+    if run.current_stage == "AUDIO_GENERATING" and _has_active_tasks(run.active_task_id):
+        raise HTTPException(status_code=409, detail="Audio generation already in progress")
 
     allowed_stages = frozenset(stage.value for stage in TRIGGER_POLICY["generate_audio"])
     if run.current_stage not in allowed_stages:
@@ -224,6 +227,8 @@ async def generate_subtitles_trigger(run_id: int, request: GenerateSubtitlesRequ
     run = await run_service.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
+    if run.current_stage == "SUBTITLE_GENERATING" and _has_active_tasks(run.active_task_id):
+        raise HTTPException(status_code=409, detail="Subtitle generation already in progress")
 
     allowed_stages = frozenset({"AUDIO_GENERATING", "SUBTITLE_GENERATING"})
     if run.current_stage not in allowed_stages:
@@ -256,6 +261,8 @@ async def render_trigger(run_id: int, request: RenderRequest) -> dict[str, objec
     run = await run_service.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
+    if run.current_stage == "RENDER_GENERATING" and _has_active_tasks(run.active_task_id):
+        raise HTTPException(status_code=409, detail="Render already in progress")
 
     allowed_stages = frozenset({"SUBTITLE_GENERATING", "RENDER_GENERATING"})
     if run.current_stage not in allowed_stages:

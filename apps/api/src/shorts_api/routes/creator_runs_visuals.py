@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from shorts_api.routes.creator_runs_core import GenerateVisualPlanRequest
 from shorts_api.routes.creator_runs_utils import (
+    _has_active_tasks,
     cas_dispatch_with_rollback,
     dispatch_generate_scene_image,
     dispatch_generate_visual_plan,
@@ -49,6 +50,8 @@ async def generate_visual_plan_trigger(run_id: int, request: GenerateVisualPlanR
     run = await run_service.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
+    if run.current_stage == "VISUAL_PLAN_GENERATING" and _has_active_tasks(run.active_task_id):
+        raise HTTPException(status_code=409, detail="Visual plan generation already in progress")
 
     allowed_stages = frozenset(stage.value for stage in TRIGGER_POLICY["generate_visual_plan"])
     if run.current_stage not in allowed_stages:
@@ -83,6 +86,8 @@ async def generate_visual_assets_trigger(
     run = await run_service.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
+    if run.current_stage == "VISUAL_ASSET_GENERATING" and _has_active_tasks(run.active_task_id):
+        raise HTTPException(status_code=409, detail="Visual asset generation already in progress")
 
     allowed_stages = frozenset(stage.value for stage in TRIGGER_POLICY["generate_visual_assets"])
     if run.current_stage not in allowed_stages:
