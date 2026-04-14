@@ -19,6 +19,7 @@ class StubPipelineRun(BaseModel):
     project_id: int
     current_stage: str
     status: str = "running"
+    active_task_id: str | None = None
     created_at: datetime
     updated_at: datetime
 

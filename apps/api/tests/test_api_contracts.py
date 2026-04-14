@@ -19,6 +19,7 @@ class StubRun(BaseModel):
     project_id: int
     current_stage: str
     status: str = "running"
+    active_task_id: str | None = None
     model_defaults: dict[str, str] | None = None
     created_at: datetime
     updated_at: datetime
@@ -212,6 +213,9 @@ async def test_storyboard_response_contract(client, contract_services):
 async def test_bulk_audio_dispatch_contract(client, contract_services):
     run_svc, script_svc, audio_svc = contract_services
     _seed_storyboard_data(run_svc, script_svc, audio_svc)
+    # Clear pre-seeded audio so bulk dispatch actually enqueues tasks
+    # (the endpoint now skips sections that already have audio).
+    audio_svc.paragraph_audio.pop(101, None)
 
     response = await client.post("/api/creator/runs/101/storyboard/generate-all-audio", json={})
     assert response.status_code == 202
@@ -223,7 +227,6 @@ async def test_bulk_audio_dispatch_contract(client, contract_services):
     assert isinstance(body["failed"], int)
     assert isinstance(body["tasks"], list)
     assert set(body["tasks"][0]) == {"section_id", "task_id"}
-
 
 @pytest.mark.asyncio
 async def test_bulk_subtitles_dispatch_contract(client, contract_services):

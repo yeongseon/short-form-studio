@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from shorts_api.routes.creator_runs_utils import (
     _append_task_id,
+    _has_active_tasks,
     dispatch_paragraph_audio,
     dispatch_paragraph_subtitles,
     validate_model_key,
@@ -90,6 +91,14 @@ async def get_storyboard(run_id: int) -> dict[str, object]:
         if s.section_id and s.section_id not in subtitle_by_section:
             subtitle_by_section[s.section_id] = s
 
+    # Detect paragraph-level generation via active_task_id.
+    # Paragraph tasks do not change run.current_stage, so we check whether
+    # there are still active Celery tasks tracked on the run.  When tasks
+    # are active inside a storyboard-allowed stage we infer per-section
+    # generating status from the missing asset type.
+    has_active = _has_active_tasks(run.active_task_id)
+    in_storyboard_stage = run.current_stage in STORYBOARD_ALLOWED_STAGES
+
     paragraphs: list[dict[str, object]] = []
     ready_count = 0
 
@@ -124,9 +133,9 @@ async def get_storyboard(run_id: int) -> dict[str, object]:
             ready_count += 1
         elif run.current_stage == "VISUAL_ASSET_GENERATING" and not has_image:
             status = "generating_image"
-        elif run.current_stage == "AUDIO_GENERATING" and has_image and not has_audio:
+        elif (run.current_stage == "AUDIO_GENERATING" or (has_active and in_storyboard_stage)) and has_image and not has_audio:
             status = "generating_audio"
-        elif run.current_stage == "SUBTITLE_GENERATING" and has_audio and not has_subtitles:
+        elif (run.current_stage == "SUBTITLE_GENERATING" or (has_active and in_storyboard_stage)) and has_audio and not has_subtitles:
             status = "generating_subtitles"
         elif not has_image and not has_audio and not has_subtitles:
             status = "idle"
@@ -298,8 +307,17 @@ async def generate_all_paragraph_audio(
 
     validate_model_key(effective.tts_model)
 
+    # Skip sections that already have audio artifacts.
+    existing_audio = await audio_service.list_paragraph_audio(run_id)
+    sections_with_audio: set[str] = set()
+    for a in existing_audio:
+        if a.section_id:
+            sections_with_audio.add(a.section_id)
+
     task_ids: list[dict[str, str]] = []
     for section in draft.structured_script:
+        if section.section_id in sections_with_audio:
+            continue
         try:
             tid = dispatch_paragraph_audio(
                 run_id=run_id,
@@ -313,7 +331,6 @@ async def generate_all_paragraph_audio(
         except Exception:
             logger.exception("Failed to dispatch audio task for section %s of run %s", section.section_id, run_id)
             task_ids.append({"section_id": section.section_id, "task_id": "", "error": "dispatch_failed"})
-
     failed_count = sum(1 for t in task_ids if "error" in t)
     return {
         "run_id": run_id,
@@ -348,12 +365,21 @@ async def generate_all_paragraph_subtitles(
 
     # Deduplicate by section_id — only dispatch for the first (latest) audio
     # artifact per section to avoid redundant subtitle generation on regeneration.
+    # Also skip sections that already have subtitle artifacts.
+    existing_subtitles = await subtitle_service.list_paragraph_subtitles(run_id)
+    sections_with_subtitles: set[str] = set()
+    for s in existing_subtitles:
+        if s.section_id:
+            sections_with_subtitles.add(s.section_id)
+
     seen_sections: set[str] = set()
     task_ids: list[dict[str, str]] = []
     for audio in audio_artifacts:
         if not audio.section_id or audio.section_id in seen_sections:
             continue
         seen_sections.add(audio.section_id)
+        if audio.section_id in sections_with_subtitles:
+            continue
         try:
             tid = dispatch_paragraph_subtitles(
                 run_id=run_id,
@@ -367,7 +393,6 @@ async def generate_all_paragraph_subtitles(
         except Exception:
             logger.exception("Failed to dispatch subtitle task for section %s of run %s", audio.section_id, run_id)
             task_ids.append({"section_id": audio.section_id, "task_id": "", "error": "dispatch_failed"})
-
     failed_count = sum(1 for t in task_ids if "error" in t)
     return {
         "run_id": run_id,
