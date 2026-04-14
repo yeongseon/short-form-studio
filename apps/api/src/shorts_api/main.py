@@ -5,13 +5,14 @@ import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+from creator_domain.sanitize import UnsafePathComponent, sanitize_path_component
 from creator_service.db import close_pool
 from creator_service.logging_config import setup_json_logging
 from creator_service.model_health_service import ModelHealthService, ModelStatus
-from fastapi import APIRouter, FastAPI, Request
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from starlette.staticfiles import StaticFiles
+from starlette.responses import FileResponse
 
 from shorts_api.auth import ApiKeyMiddleware
 from shorts_api.routes.creator_models import router as models_router
@@ -136,8 +137,25 @@ async def health() -> dict[str, object]:
     }
 
 
-app.mount(
-    "/artifacts",
-    StaticFiles(directory=os.getenv("ARTIFACT_ROOT", "data/artifacts"), check_dir=False),
-    name="artifacts",
-)
+@app.get("/artifacts/{artifact_path:path}")
+async def serve_artifact(artifact_path: str) -> FileResponse:
+    artifact_root = os.path.realpath(os.getenv("ARTIFACT_ROOT", "data/artifacts"))
+    path_components = artifact_path.split("/")
+    if not artifact_path or any(component in {"", ".", ".."} for component in path_components):
+        raise HTTPException(status_code=400, detail="Invalid artifact path")
+
+    try:
+        safe_components = [
+            sanitize_path_component(component, label=f"artifact_path[{index}]")
+            for index, component in enumerate(path_components)
+        ]
+    except UnsafePathComponent as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    resolved_path = os.path.realpath(os.path.join(artifact_root, *safe_components))
+    if os.path.commonpath([artifact_root, resolved_path]) != artifact_root:
+        raise HTTPException(status_code=400, detail="Path traversal detected")
+    if not os.path.isfile(resolved_path):
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+    return FileResponse(resolved_path)
