@@ -10,6 +10,7 @@ import { useMemo, useState } from "react";
 import AssetSlot from "./AssetSlot";
 import type { AssetStatus } from "./AssetSlot";
 import type { StoryboardParagraph } from "../../api/storyboard";
+import { STAGE_ORDER } from "../../types/api";
 
 // --------------- helpers ---------------
 
@@ -242,21 +243,6 @@ export default function SceneCard({
   const [visualExpanded, setVisualExpanded] = useState(false);
 
   const stageIndex = useMemo(() => {
-    const STAGE_ORDER = [
-      "IDEA_READY",
-      "SCRIPT_GENERATING",
-      "SCRIPT_REVIEW",
-      "VISUAL_PLAN_SETUP",
-      "VISUAL_PLAN_GENERATING",
-      "VISUAL_PLAN_REVIEW",
-      "VISUAL_ASSET_GENERATING",
-      "VISUAL_ASSET_REVIEW",
-      "AUDIO_GENERATING",
-      "SUBTITLE_GENERATING",
-      "RENDER_GENERATING",
-      "FINAL_REVIEW",
-      "PUBLISHED",
-    ];
     return STAGE_ORDER.indexOf(currentStage);
   }, [currentStage]);
 

@@ -17,6 +17,7 @@
 
 import { useState, useEffect, useRef, useCallback, useId } from "react";
 import { apiFetch } from "../../api/client";
+import { STAGE_ORDER } from "../../types/api";
 
 const DEFAULT_API = "/api/creator";
 const DEFAULT_POLL_MS = 3000;
@@ -50,24 +51,6 @@ const STAGE_LABELS: Record<string, string> = {
   SUBTITLE_GENERATING: "Generating subtitles…",
   RENDER_GENERATING: "Rendering video…",
 };
-
-// Pipeline stage ordering for progress classification.
-// A stage change is "completed" only if the new stage is ahead of the expected one.
-const STAGE_ORDER: string[] = [
-  "IDEA_READY",
-  "SCRIPT_GENERATING",
-  "SCRIPT_REVIEW",
-  "VISUAL_PLAN_SETUP",
-  "VISUAL_PLAN_GENERATING",
-  "VISUAL_PLAN_REVIEW",
-  "VISUAL_ASSET_GENERATING",
-  "VISUAL_ASSET_REVIEW",
-  "AUDIO_GENERATING",
-  "SUBTITLE_GENERATING",
-  "RENDER_GENERATING",
-  "FINAL_REVIEW",
-  "PUBLISHED",
-];
 
 // --------------- component ---------------
 
