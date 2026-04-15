@@ -28,6 +28,92 @@ The project is a monorepo with these main components:
 | **Service** | `packages/creator-service/` | Business logic and database layer |
 | **Providers** | `packages/creator-provider/` | LLM, Image, TTS, STT provider adapters |
 
+### System Architecture
+
+```mermaid
+graph TB
+    subgraph Frontend
+        WEB[Studio Web<br/>React + TypeScript]
+    end
+
+    subgraph Backend
+        API[API Server<br/>FastAPI]
+        WORKER[Worker<br/>Celery]
+    end
+
+    subgraph Packages
+        DOMAIN[creator-domain<br/>Entities & Value Objects]
+        SERVICE[creator-service<br/>Use Cases & Storage]
+        PROVIDER[creator-provider<br/>LLM / Image / TTS / STT]
+    end
+
+    subgraph Infrastructure
+        PG[(PostgreSQL)]
+        REDIS[(Redis)]
+        S3[Artifact Storage<br/>Local / S3]
+    end
+
+    subgraph AI Services [AI Services - Optional GPU]
+        OLLAMA[Ollama<br/>LLM]
+        SD[Stable Diffusion<br/>Image Gen]
+        TTS[Qwen TTS<br/>Speech]
+        STT[Whisper<br/>Subtitles]
+    end
+
+    WEB -- REST --> API
+    API -- task queue --> REDIS
+    REDIS -- consume --> WORKER
+    API --> SERVICE
+    WORKER --> SERVICE
+    SERVICE --> DOMAIN
+    SERVICE --> PROVIDER
+    PROVIDER --> OLLAMA
+    PROVIDER --> SD
+    PROVIDER --> TTS
+    PROVIDER --> STT
+    SERVICE --> PG
+    SERVICE --> S3
+```
+
+### Pipeline Flow
+
+```mermaid
+flowchart LR
+    A[Idea / Script] --> B[Script Generation<br/>LLM]
+    B --> C{Human Review}
+    C -- approve --> D[Visual Plan<br/>LLM]
+    D --> E{Human Review}
+    E -- approve --> F[Image Generation<br/>SD / DALL-E]
+    F --> G{Human Review}
+    G -- approve --> H[TTS Audio<br/>Qwen / ElevenLabs]
+    H --> I[Subtitles<br/>Whisper]
+    I --> J[Video Render<br/>FFmpeg]
+    J --> K{Final Review}
+    K -- approve --> L[Published]
+    C -- restart --> B
+    E -- restart --> D
+    G -- restart --> F
+    K -- restart --> J
+```
+
+### Package Dependencies
+
+```mermaid
+graph BT
+    DOMAIN[creator-domain<br/>Entities, Value Objects, Ports]
+    SERVICE[creator-service<br/>Use Cases, Storage Adapters]
+    PROVIDER[creator-provider<br/>LLM, Image, TTS, STT Adapters]
+    API[apps/api<br/>REST Routes]
+    WORKER[apps/worker-orchestrator<br/>Celery Tasks]
+
+    SERVICE --> DOMAIN
+    PROVIDER --> DOMAIN
+    API --> SERVICE
+    API --> PROVIDER
+    WORKER --> SERVICE
+    WORKER --> PROVIDER
+```
+
 ## Pipeline Stages
 
 ```
