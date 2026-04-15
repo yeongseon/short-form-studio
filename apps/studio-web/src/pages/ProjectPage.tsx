@@ -47,8 +47,8 @@ export default function ProjectPage() {
     deleting,
     savingTitle,
     goingBack,
-    statusMessage,
-    setStatusMessage,
+    toast,
+    showToast,
     confirmAction,
     setConfirmAction,
     titleDraft,
@@ -198,7 +198,7 @@ export default function ProjectPage() {
           onGenerate={handleGenerate}
           onRegenerate={handleRestart}
           onScriptChange={() => setScriptVersion((v) => v + 1)}
-          onStatusMessage={(message) => setStatusMessage(message)}
+          onStatusMessage={(message) => showToast(message)}
           disabled={approving || generating || restarting}
         />
       )}
@@ -209,7 +209,7 @@ export default function ProjectPage() {
           currentStage={currentStage}
           refreshTrigger={scriptVersion}
           modelSelection={modelSelection}
-          onStatusMessage={(message) => setStatusMessage(message)}
+          onStatusMessage={(message) => showToast(message)}
           onRender={handleRender}
           rendering={generating}
           stageActionLoading={approving || generating || restarting}
@@ -225,7 +225,7 @@ export default function ProjectPage() {
         />
       )}
 
-      {statusMessage && (
+      {toast && (
         <div
           data-testid="status-toast"
           style={{
@@ -243,7 +243,7 @@ export default function ProjectPage() {
             zIndex: 1000,
           }}
         >
-          {statusMessage}
+          {toast.message}
         </div>
       )}
     </div>

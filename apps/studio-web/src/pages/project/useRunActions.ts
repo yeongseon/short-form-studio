@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { apiFetch } from "../../api/client";
 import { API_BASE, type ModelDefaults, type ProjectDetail, type RunDetail } from "./types";
+import { useToast } from "../../contexts/ToastContext";
 
 interface UseRunActionsParams {
   run: RunDetail | null;
@@ -33,7 +34,7 @@ export function useRunActions({
     null,
   );
 
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const { showToast, toast } = useToast();
   const [scriptVersion, setScriptVersion] = useState(0);
   const [titleDraft, setTitleDraft] = useState("");
   const [savingTitle, setSavingTitle] = useState(false);
@@ -56,7 +57,7 @@ export function useRunActions({
       const data = await res.json();
       setProject((prev) => (prev ? { ...prev, title: data.title } : prev));
     } catch (err) {
-      setStatusMessage(err instanceof Error ? err.message : "Rename failed");
+      showToast(err instanceof Error ? err.message : "Rename failed", "error");
     } finally {
       setSavingTitle(false);
     }
@@ -71,7 +72,6 @@ export function useRunActions({
   const handleGoBack = useCallback(async () => {
     if (!run) return;
     setGoingBack(true);
-    setStatusMessage(null);
     try {
       const res = await apiFetch(`${API_BASE}/runs/${run.id}/go-back`, {
         method: "POST",
@@ -80,10 +80,10 @@ export function useRunActions({
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Go back failed (${res.status})`);
       }
-      setStatusMessage("Navigated back");
+      showToast("Navigated back");
       await refreshRun(run.id);
     } catch (err) {
-      setStatusMessage(err instanceof Error ? err.message : "Go back failed");
+      showToast(err instanceof Error ? err.message : "Go back failed", "error");
     } finally {
       setGoingBack(false);
     }
@@ -92,7 +92,6 @@ export function useRunActions({
   const handleApprove = useCallback(async () => {
     if (!run) return;
     setApproving(true);
-    setStatusMessage(null);
     try {
       const res = await apiFetch(`${API_BASE}/runs/${run.id}/approve-script`, {
         method: "POST",
@@ -103,10 +102,10 @@ export function useRunActions({
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Approve failed (${res.status})`);
       }
-      setStatusMessage("Script approved");
+      showToast("Script approved", "success");
       await refreshRun(run.id);
     } catch (err) {
-      setStatusMessage(err instanceof Error ? err.message : "Approve failed");
+      showToast(err instanceof Error ? err.message : "Approve failed", "error");
     } finally {
       setApproving(false);
     }
@@ -115,7 +114,6 @@ export function useRunActions({
   const handleGenerate = useCallback(async () => {
     if (!run) return;
     setGenerating(true);
-    setStatusMessage(null);
     try {
       const res = await apiFetch(`${API_BASE}/runs/${run.id}/generate-script`, {
         method: "POST",
@@ -128,10 +126,10 @@ export function useRunActions({
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Generate failed (${res.status})`);
       }
-      setStatusMessage("Script generation started");
+      showToast("Script generation started");
       setTimeout(() => refreshRun(run.id), 2000);
     } catch (err) {
-      setStatusMessage(err instanceof Error ? err.message : "Generate failed");
+      showToast(err instanceof Error ? err.message : "Generate failed", "error");
     } finally {
       setGenerating(false);
     }
@@ -140,7 +138,6 @@ export function useRunActions({
   const handleRestart = useCallback(async () => {
     if (!run) return;
     setRestarting(true);
-    setStatusMessage(null);
     try {
       const restartRes = await apiFetch(`${API_BASE}/runs/${run.id}/restart`, {
         method: "POST",
@@ -163,10 +160,10 @@ export function useRunActions({
         const body = await genRes.json().catch(() => null);
         throw new Error(body?.detail ?? `Generate failed (${genRes.status})`);
       }
-      setStatusMessage("Restarting script generation\u2026");
+      showToast("Restarting script generation\u2026");
       setTimeout(() => refreshRun(run.id), 2000);
     } catch (err) {
-      setStatusMessage(err instanceof Error ? err.message : "Restart failed");
+      showToast(err instanceof Error ? err.message : "Restart failed", "error");
     } finally {
       setRestarting(false);
     }
@@ -175,7 +172,6 @@ export function useRunActions({
   const handleApproveVisualPlan = useCallback(async () => {
     if (!run) return;
     setApproving(true);
-    setStatusMessage(null);
     try {
       const res = await apiFetch(`${API_BASE}/runs/${run.id}/approve-visual-plan`, {
         method: "POST",
@@ -186,10 +182,10 @@ export function useRunActions({
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Approve failed (${res.status})`);
       }
-      setStatusMessage("Visual plan approved");
+      showToast("Visual plan approved", "success");
       await refreshRun(run.id);
     } catch (err) {
-      setStatusMessage(err instanceof Error ? err.message : "Approve failed");
+      showToast(err instanceof Error ? err.message : "Approve failed", "error");
     } finally {
       setApproving(false);
     }
@@ -198,7 +194,6 @@ export function useRunActions({
   const handleGenerateVisualPlan = useCallback(async () => {
     if (!run) return;
     setGenerating(true);
-    setStatusMessage(null);
     try {
       const res = await apiFetch(`${API_BASE}/runs/${run.id}/generate-visual-plan`, {
         method: "POST",
@@ -211,10 +206,10 @@ export function useRunActions({
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Generate failed (${res.status})`);
       }
-      setStatusMessage("Visual plan generation started");
+      showToast("Visual plan generation started");
       setTimeout(() => refreshRun(run.id), 2000);
     } catch (err) {
-      setStatusMessage(err instanceof Error ? err.message : "Generate failed");
+      showToast(err instanceof Error ? err.message : "Generate failed", "error");
     } finally {
       setGenerating(false);
     }
@@ -223,7 +218,6 @@ export function useRunActions({
   const handleRestartVisualPlan = useCallback(async () => {
     if (!run) return;
     setRestarting(true);
-    setStatusMessage(null);
     try {
       const restartRes = await apiFetch(`${API_BASE}/runs/${run.id}/restart`, {
         method: "POST",
@@ -246,10 +240,10 @@ export function useRunActions({
         const body = await genRes.json().catch(() => null);
         throw new Error(body?.detail ?? `Generate failed (${genRes.status})`);
       }
-      setStatusMessage("Restarting visual plan generation\u2026");
+      showToast("Restarting visual plan generation\u2026");
       setTimeout(() => refreshRun(run.id), 2000);
     } catch (err) {
-      setStatusMessage(err instanceof Error ? err.message : "Restart failed");
+      showToast(err instanceof Error ? err.message : "Restart failed", "error");
     } finally {
       setRestarting(false);
     }
@@ -258,7 +252,6 @@ export function useRunActions({
   const handleRender = useCallback(async () => {
     if (!run) return;
     setGenerating(true);
-    setStatusMessage(null);
     try {
       const res = await apiFetch(`${API_BASE}/runs/${run.id}/render`, {
         method: "POST",
@@ -271,10 +264,10 @@ export function useRunActions({
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Render failed (${res.status})`);
       }
-      setStatusMessage("Render started");
+      showToast("Render started");
       await refreshRun(run.id);
     } catch (err) {
-      setStatusMessage(err instanceof Error ? err.message : "Render failed");
+      showToast(err instanceof Error ? err.message : "Render failed", "error");
     } finally {
       setGenerating(false);
     }
@@ -283,7 +276,6 @@ export function useRunActions({
   const handleStop = useCallback(async () => {
     if (!run) return;
     setStopping(true);
-    setStatusMessage(null);
     try {
       const res = await apiFetch(`${API_BASE}/runs/${run.id}/stop`, {
         method: "POST",
@@ -292,10 +284,10 @@ export function useRunActions({
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Stop failed (${res.status})`);
       }
-      setStatusMessage("Run stopped");
+      showToast("Run stopped");
       await refreshRun(run.id);
     } catch (err) {
-      setStatusMessage(err instanceof Error ? err.message : "Stop failed");
+      showToast(err instanceof Error ? err.message : "Stop failed", "error");
     } finally {
       setStopping(false);
     }
@@ -304,7 +296,6 @@ export function useRunActions({
   const handleResume = useCallback(async () => {
     if (!run) return;
     setResuming(true);
-    setStatusMessage(null);
     try {
       const res = await apiFetch(`${API_BASE}/runs/${run.id}/resume`, {
         method: "POST",
@@ -313,10 +304,10 @@ export function useRunActions({
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Resume failed (${res.status})`);
       }
-      setStatusMessage("Run resumed");
+      showToast("Run resumed");
       await refreshRun(run.id);
     } catch (err) {
-      setStatusMessage(err instanceof Error ? err.message : "Resume failed");
+      showToast(err instanceof Error ? err.message : "Resume failed", "error");
     } finally {
       setResuming(false);
     }
@@ -324,7 +315,6 @@ export function useRunActions({
 
   const handleDeleteProject = useCallback(async () => {
     setDeleting(true);
-    setStatusMessage(null);
     try {
       const res = await apiFetch(`${API_BASE}/projects/${numericProjectId}`, {
         method: "DELETE",
@@ -335,7 +325,7 @@ export function useRunActions({
       }
       navigate("/runs");
     } catch (err) {
-      setStatusMessage(err instanceof Error ? err.message : "Delete failed");
+      showToast(err instanceof Error ? err.message : "Delete failed", "error");
     } finally {
       setDeleting(false);
     }
@@ -365,8 +355,8 @@ export function useRunActions({
     savingTitle,
     goingBack,
     // UI states
-    statusMessage,
-    setStatusMessage,
+    toast,
+    showToast,
     confirmAction,
     setConfirmAction,
     titleDraft,
