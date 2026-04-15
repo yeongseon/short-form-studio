@@ -1,10 +1,14 @@
 """Routes for creator project management."""
+import os
+import shutil
 from typing import Literal
 
 from creator_service.project_service import project_service
 from creator_service.run_service import run_service
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
+
+from shorts_api.routes import creator_runs_utils
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -69,30 +73,33 @@ async def list_projects(
     }
 
 
-@router.delete("/{project_id}")
-async def delete_project(project_id: int) -> dict[str, object]:
-    """Delete a project and all associated runs (FK cascade)."""
-    # First stop any active tasks on runs belonging to this project
+async def _cleanup_project_resources(project_id: int) -> list[int]:
+    """Revoke active tasks and collect run IDs before project deletion."""
     runs = await run_service.list_runs_by_project(project_id)
     for r in runs:
         if r.active_task_id:
-            from shorts_api.routes.creator_runs_utils import _revoke_active_tasks
-            _revoke_active_tasks(r.active_task_id)
+            creator_runs_utils._revoke_active_tasks(r.active_task_id)
+    return [r.id for r in runs]
 
-    # Collect run IDs for artifact cleanup before DB cascade deletes them
-    run_ids = [r.id for r in runs]
 
-    deleted = await project_service.delete_project(project_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Project not found")
-
-    # Best-effort artifact cleanup for all runs
-    import os
-    import shutil
+def _remove_run_artifacts(run_ids: list[int]) -> None:
+    """Best-effort artifact cleanup for the given run IDs."""
     artifact_root = os.getenv("ARTIFACT_ROOT", "data/artifacts")
     for rid in run_ids:
         run_dir = os.path.join(artifact_root, str(rid))
         if os.path.isdir(run_dir):
             shutil.rmtree(run_dir, ignore_errors=True)
+
+
+@router.delete("/{project_id}")
+async def delete_project(project_id: int) -> dict[str, object]:
+    """Delete a project and all associated runs (FK cascade)."""
+    run_ids = await _cleanup_project_resources(project_id)
+
+    deleted = await project_service.delete_project(project_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    _remove_run_artifacts(run_ids)
 
     return {"deleted": True, "project_id": project_id}
