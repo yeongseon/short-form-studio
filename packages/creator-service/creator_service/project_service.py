@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal, Protocol
 
+import creator_service.run_service as _run_svc_mod
+
 from creator_domain.models.project import Project
 
 LatestRunSummary = dict[str, int | str | None]
@@ -115,12 +117,10 @@ class InMemoryProjectStorage:
             }
 
         # In real local/dev flow, runs are created through RunService, not via
-        # this storage's insert_run helper. Fall back to the shared in-memory
+        # this storage's insert_run helper.  Fall back to the shared in-memory
         # run service so latest_run stays accurate outside Postgres mode.
         try:
-            from creator_service.run_service import run_service
-
-            persisted_runs = await run_service.list_runs_by_project(project_id)
+            persisted_runs = await _run_svc_mod.run_service.list_runs_by_project(project_id)
         except Exception:
             return None
         if not persisted_runs:
