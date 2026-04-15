@@ -6,6 +6,7 @@ import { FINAL_REVIEW_STAGES, STAGE_BACK_LABELS } from "./project/types";
 import { useProjectData } from "./project/useProjectData";
 import { useRunActions } from "./project/useRunActions";
 import WorkspaceSection from "./project/WorkspaceSection";
+import Card from "../components/ui/Card";
 
 type SourceType = "idea" | "markdown" | "json" | "pasted_json" | "url";
 
@@ -167,25 +168,17 @@ export default function ProjectPage() {
         currentStage={currentStage}
       />
 
-      {!run && (
-        <div
+        <Card
+          variant="dashed"
+          padding="lg"
           data-testid="no-run"
-          style={{
-            textAlign: "center",
-            padding: 32,
-            background: "#f9fafb",
-            borderRadius: 8,
-            border: "1px dashed #d1d5db",
-            color: "#6b7280",
-            marginBottom: 24,
-          }}
+          style={{ textAlign: "center", color: "#6b7280", marginBottom: 24 }}
         >
           <p style={{ margin: "0 0 8px", fontWeight: 600 }}>No runs yet</p>
           <p style={{ margin: 0, fontSize: 13 }}>
             This project has no pipeline runs. Go back to create a new one.
           </p>
-        </div>
-      )}
+        </Card>
 
       {run && showScriptComposer && (
         <ScriptSection
