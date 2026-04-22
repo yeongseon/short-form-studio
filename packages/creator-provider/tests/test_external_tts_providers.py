@@ -76,9 +76,8 @@ class TestElevenLabsProvider:
                 endpoint="https://api.elevenlabs.io",
                 model_key="elevenlabs-multilingual-v2",
             )
-            with mock.patch("httpx.AsyncClient.post", return_value=mock_response):
-                with pytest.raises(RuntimeError, match="ElevenLabs API request failed"):
-                    await provider.generate("test text")
+            with mock.patch("httpx.AsyncClient.post", return_value=mock_response), pytest.raises(RuntimeError, match="ElevenLabs API request failed"):
+                await provider.generate("test text")
 
     @pytest.mark.asyncio
     async def test_generate_empty_response_raises(self):
@@ -93,9 +92,8 @@ class TestElevenLabsProvider:
                 endpoint="https://api.elevenlabs.io",
                 model_key="elevenlabs-multilingual-v2",
             )
-            with mock.patch("httpx.AsyncClient.post", return_value=mock_response):
-                with pytest.raises(RuntimeError, match="empty response"):
-                    await provider.generate("test text")
+            with mock.patch("httpx.AsyncClient.post", return_value=mock_response), pytest.raises(RuntimeError, match="empty response"):
+                await provider.generate("test text")
 
 
 class TestOpenAITTSProvider:
@@ -154,9 +152,8 @@ class TestOpenAITTSProvider:
             from creator_provider.tts.openai_tts_provider import OpenAITTSProvider
 
             provider = OpenAITTSProvider(endpoint="https://api.openai.com", model_key="openai-tts-1")
-            with mock.patch("httpx.AsyncClient.post", return_value=mock_response):
-                with pytest.raises(RuntimeError, match="OpenAI TTS API request failed"):
-                    await provider.generate("test text")
+            with mock.patch("httpx.AsyncClient.post", return_value=mock_response), pytest.raises(RuntimeError, match="OpenAI TTS API request failed"):
+                await provider.generate("test text")
 
     @pytest.mark.asyncio
     async def test_generate_empty_response_raises(self):
@@ -168,6 +165,5 @@ class TestOpenAITTSProvider:
             from creator_provider.tts.openai_tts_provider import OpenAITTSProvider
 
             provider = OpenAITTSProvider(endpoint="https://api.openai.com", model_key="openai-tts-1")
-            with mock.patch("httpx.AsyncClient.post", return_value=mock_response):
-                with pytest.raises(RuntimeError, match="empty response"):
-                    await provider.generate("test text")
+            with mock.patch("httpx.AsyncClient.post", return_value=mock_response), pytest.raises(RuntimeError, match="empty response"):
+                await provider.generate("test text")

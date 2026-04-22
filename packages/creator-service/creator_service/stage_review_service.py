@@ -5,7 +5,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from creator_domain.models import RunStage, REVIEW_STAGES, can_transition
+from creator_domain.models import REVIEW_STAGES, RunStage, can_transition
+
 
 class StageReviewStorageBackend(Protocol):
     async def create_review(self, row: dict[str, Any]) -> dict[str, Any]:

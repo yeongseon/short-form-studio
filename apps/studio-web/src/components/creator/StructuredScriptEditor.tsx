@@ -8,6 +8,7 @@
  */
 
 import { useState, useEffect, useCallback } from "react";
+import { apiFetch } from "../../api/client";
 
 // --------------- types ---------------
 
@@ -267,7 +268,7 @@ export default function StructuredScriptEditor({
       if (showLoading) setLoading(true);
       setError(null);
       try {
-        const res = await fetch(`${apiBase}/runs/${runId}/script/structured`);
+        const res = await apiFetch(`${apiBase}/runs/${runId}/script/structured`);
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
           const detail = body.detail ?? `Failed to load (${res.status})`;
@@ -360,7 +361,7 @@ export default function StructuredScriptEditor({
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`${apiBase}/runs/${runId}/script/structured`, {
+      const res = await apiFetch(`${apiBase}/runs/${runId}/script/structured`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sections }),
@@ -430,7 +431,7 @@ export default function StructuredScriptEditor({
 
       {sections.length === 0 ? (
         <p data-testid="structured-empty" style={{ color: "#6c757d", fontSize: 13 }}>
-          No sections yet. Use the Markdown editor to write content, then parse it into sections.
+          No sections yet. Use the JSON editor to define scenes, then save to generate sections.
         </p>
       ) : (
         <div data-testid="structured-sections">

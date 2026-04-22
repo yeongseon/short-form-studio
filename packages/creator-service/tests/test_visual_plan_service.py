@@ -1,7 +1,7 @@
 import asyncio
+from typing import cast
 
 import pytest
-
 from creator_domain.models.visual_plan import VisualScene
 from creator_service.visual_plan_service import (
     DataIntegrityError,
@@ -9,6 +9,7 @@ from creator_service.visual_plan_service import (
     VersionConflictError,
     VisualPlanService,
 )
+
 
 def run(coro):
     return asyncio.run(coro)
@@ -387,7 +388,7 @@ def test_different_runs_have_independent_versions(service: VisualPlanService) ->
 
 def test_parse_scenes_raises_on_invalid_json(service: VisualPlanService) -> None:
     """Malformed JSON in scenes_json raises DataIntegrityError, not silent []."""
-    storage = service.storage
+    storage = cast(InMemoryVisualPlanStorage, service.storage)
     # Manually inject a corrupt row
     import asyncio as _aio
 
@@ -409,7 +410,7 @@ def test_parse_scenes_raises_on_invalid_json(service: VisualPlanService) -> None
 
 def test_parse_scenes_raises_on_non_array_json(service: VisualPlanService) -> None:
     """scenes_json that is valid JSON but not an array raises DataIntegrityError."""
-    storage = service.storage
+    storage = cast(InMemoryVisualPlanStorage, service.storage)
     import asyncio as _aio
 
     async def _inject():
@@ -430,7 +431,7 @@ def test_parse_scenes_raises_on_non_array_json(service: VisualPlanService) -> No
 
 def test_parse_scenes_raises_on_invalid_scene_data(service: VisualPlanService) -> None:
     """scenes_json with array of invalid scene objects raises DataIntegrityError."""
-    storage = service.storage
+    storage = cast(InMemoryVisualPlanStorage, service.storage)
     import asyncio as _aio
 
     async def _inject():

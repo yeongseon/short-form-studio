@@ -9,24 +9,10 @@
  */
 
 import { useState, useEffect, useCallback } from "react";
+import { apiFetch } from "../../api/client";
+import type { SceneData } from "../../types/api";
 
-// --------------- types ---------------
-
-export interface SceneData {
-  scene_id: string;
-  section_id: string;
-  scene_index: number;
-  section_type: string;
-  original_text: string;
-  prompt: string;
-  prompt_edited: boolean;
-  prompt_source: "auto_generated" | "user_edited" | "model_suggested";
-  style_tags: string[];
-  mood: string | null;
-  composition: string | null;
-  generation_status: "pending" | "generating" | "completed" | "failed";
-  latest_asset_id: number | null;
-}
+export type { SceneData } from "../../types/api";
 
 export interface VisualPlanEditorProps {
   apiBase?: string;
@@ -317,7 +303,7 @@ export default function VisualPlanEditor({
       if (showLoading) setLoading(true);
       setError(null);
       try {
-        const res = await fetch(`${apiBase}/runs/${runId}/visual-plan`);
+        const res = await apiFetch(`${apiBase}/runs/${runId}/visual-plan`);
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
           const detail = body.detail ?? `Failed to load (${res.status})`;
@@ -443,14 +429,12 @@ export default function VisualPlanEditor({
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(
-        `${apiBase}/runs/${runId}/visual-plan/scenes/${sceneId}`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(updates),
-        }
-      );
+      const res = await apiFetch(`${apiBase}/runs/${runId}/visual-plan/scenes/${sceneId}`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updates),
+      });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.detail ?? `Save failed (${res.status})`);

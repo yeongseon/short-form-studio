@@ -1,10 +1,10 @@
 """Routes for creator model management."""
 import logging
 
-from fastapi import APIRouter, HTTPException, Query
 from creator_provider.registry import ProviderRegistry
 from creator_service.model_catalog_service import ModelCatalogService
 from creator_service.model_health_service import ModelHealthService
+from fastapi import APIRouter, HTTPException, Query
 
 logger = logging.getLogger(__name__)
 

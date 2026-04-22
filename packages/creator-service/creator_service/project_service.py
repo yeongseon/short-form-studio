@@ -7,11 +7,12 @@ the same async service-facing interface.
 
 from __future__ import annotations
 
-
-from creator_domain.models.project import Project
-
 from datetime import datetime, timezone
 from typing import Any, Literal, Protocol
+
+import creator_service.run_service as _run_svc_mod
+
+from creator_domain.models.project import Project
 
 LatestRunSummary = dict[str, int | str | None]
 
@@ -32,6 +33,10 @@ class ProjectStorageBackend(Protocol):
         ...
 
     async def count_projects(self) -> int:
+        ...
+
+    async def update_project(self, project_id: int, updates: dict[str, Any]) -> dict[str, Any] | None:
+        """Update project fields. Returns updated row or None if not found."""
         ...
 
     async def delete_project(self, project_id: int) -> bool:
@@ -60,6 +65,7 @@ class InMemoryProjectStorage:
             "idea_brief": payload.get("idea_brief"),
             "markdown_source": payload.get("markdown_source"),
             "url_source": payload.get("url_source"),
+            "json_script": payload.get("json_script"),
             "status": payload.get("status", "draft"),
             "created_at": now,
             "updated_at": now,
@@ -84,6 +90,15 @@ class InMemoryProjectStorage:
     async def count_projects(self) -> int:
         return len(self._projects)
 
+    async def update_project(self, project_id: int, updates: dict[str, Any]) -> dict[str, Any] | None:
+        row = self._projects.get(project_id)
+        if row is None:
+            return None
+        for key, value in updates.items():
+            row[key] = value
+        row["updated_at"] = datetime.now(timezone.utc)
+        return dict(row)
+
     async def delete_project(self, project_id: int) -> bool:
         if project_id in self._projects:
             del self._projects[project_id]
@@ -102,12 +117,10 @@ class InMemoryProjectStorage:
             }
 
         # In real local/dev flow, runs are created through RunService, not via
-        # this storage's insert_run helper. Fall back to the shared in-memory
+        # this storage's insert_run helper.  Fall back to the shared in-memory
         # run service so latest_run stays accurate outside Postgres mode.
         try:
-            from creator_service.run_service import run_service
-
-            persisted_runs = await run_service.list_runs_by_project(project_id)
+            persisted_runs = await _run_svc_mod.run_service.list_runs_by_project(project_id)
         except Exception:
             return None
         if not persisted_runs:
@@ -143,7 +156,7 @@ class ProjectWithLatestRun(Project):
 
 
 class ProjectService:
-    _ALLOWED_SOURCE_TYPES = {"idea", "markdown", "url"}
+    _ALLOWED_SOURCE_TYPES = {"idea", "markdown", "url", "pasted_json"}
 
     def __init__(self, db: ProjectStorageBackend | None = None) -> None:
         self.db = db if db is not None else InMemoryProjectStorage()
@@ -151,10 +164,11 @@ class ProjectService:
     async def create_project(
         self,
         title: str,
-        source_type: Literal["idea", "markdown", "url"],
+        source_type: Literal["idea", "markdown", "url", "pasted_json"],
         idea_brief: str | None = None,
         markdown_source: str | None = None,
         url_source: str | None = None,
+        json_script: str | None = None,
     ) -> Project:
         if source_type not in self._ALLOWED_SOURCE_TYPES:
             raise ValueError(f"Unsupported source_type '{source_type}'")
@@ -175,6 +189,13 @@ class ProjectService:
         if source_type == "url" and (idea_brief is not None or markdown_source is not None):
             raise ValueError("source_type='url' cannot have idea_brief or markdown_source set")
 
+        if source_type == "pasted_json" and json_script is None:
+            raise ValueError("source_type='pasted_json' requires json_script to be provided")
+        if source_type == "pasted_json" and (idea_brief is not None or markdown_source is not None or url_source is not None):
+            raise ValueError("source_type='pasted_json' cannot have idea_brief, markdown_source, or url_source set")
+        if source_type != "pasted_json" and json_script is not None:
+            raise ValueError(f"source_type='{source_type}' cannot have json_script set")
+
         row = await self.db.insert_project(
             {
                 "title": title,
@@ -182,6 +203,7 @@ class ProjectService:
                 "idea_brief": idea_brief,
                 "markdown_source": markdown_source,
                 "url_source": url_source,
+                "json_script": json_script,
                 "status": "draft",
             }
         )
@@ -210,6 +232,14 @@ class ProjectService:
 
     async def count_projects(self) -> int:
         return await self.db.count_projects()
+
+    async def update_project(self, project_id: int, title: str) -> Project | None:
+        """Update project title."""
+        row = await self.db.update_project(project_id, {"title": title})
+        if row is None:
+            return None
+        latest_run = await self.db.fetch_latest_run_summary(project_id)
+        return ProjectWithLatestRun.model_validate({**row, "latest_run": latest_run})
 
     async def delete_project(self, project_id: int) -> bool:
         """Delete a project. FK cascade handles associated runs."""

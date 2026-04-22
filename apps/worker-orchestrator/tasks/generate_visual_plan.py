@@ -14,10 +14,11 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
+redis: Any  # optional dependency; may be None at runtime
 try:
     import redis
 except ImportError:
-    redis = None  # type: ignore[assignment]
+    redis = None
 
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
@@ -124,12 +125,12 @@ def _parse_llm_response(
             scene_index=idx,
             section_type=section_type,
             original_text=text,
-            prompt=llm_data.get("prompt", f"Visual representation of: {text[:200]}"),
-            prompt_edited=False,
-            prompt_source="auto_generated",
-            style_tags=llm_data.get("style_tags", []),
-            mood=llm_data.get("mood"),
-            composition=llm_data.get("composition"),
+            prompt=section.get("image_prompt") or llm_data.get("prompt", f"Visual representation of: {text[:200]}"),
+            prompt_edited=bool(section.get("image_prompt")),
+            prompt_source="user_edited" if section.get("image_prompt") else "auto_generated",
+            style_tags=section.get("style_tags") or llm_data.get("style_tags", []),
+            mood=section.get("mood") or llm_data.get("mood"),
+            composition=section.get("composition") or llm_data.get("composition"),
             generation_status="pending",
             latest_asset_id=None,
         )
@@ -145,11 +146,13 @@ def _get_redis_client() -> Any | None:
 
 
 async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
-    remover = getattr(_run_service.storage, "remove_active_task_id", None)
+    remover: Any = getattr(_run_service.storage, "remove_active_task_id", None)
     if not callable(remover):
         return
     try:
-        await remover(run_id, task_id)
+        maybe_result = remover(run_id, task_id)
+        if asyncio.iscoroutine(maybe_result):
+            await maybe_result
     except Exception:
         logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
 
@@ -192,6 +195,8 @@ def generate_visual_plan(
                     f"Run {run_id} is in stage {current.value}, "
                     f"expected one of {', '.join(s.value for s in _ALLOWED_STAGES)}"
                 )
+            if run.get("status") == "cancelled":
+                raise _StageGuardError(f"Run {run_id} is cancelled")
 
             # 2. Fetch approved script draft.
             draft = await _script_service.get_active_draft(run_id)

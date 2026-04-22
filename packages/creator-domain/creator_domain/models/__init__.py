@@ -5,20 +5,21 @@ from .project import Project
 from .script_draft import ScriptDraft, ScriptSection, VisualOverride
 from .stage import (
     GENERATING_STAGES,
+    REVIEW_STAGES,
     STAGE_BACK,
     STAGE_BEFORE_GENERATING,
-    REVIEW_STAGES,
     TRANSITIONS,
+    TRIGGER_POLICY,
     RunStage,
     advance,
     can_transition,
     next_stages,
 )
+from .storyboard import ParagraphStatus, StaleFlags, StoryboardParagraph, StoryboardResponse
 from .subtitle_artifact import SubtitleArtifact
 from .video_artifact import VideoArtifact
 from .visual_asset import VisualAsset
 from .visual_plan import VisualPlan, VisualScene
-from .storyboard import ParagraphStatus, StaleFlags, StoryboardParagraph, StoryboardResponse
 
 __all__ = [
     "Project",
@@ -33,6 +34,7 @@ __all__ = [
     "GENERATING_STAGES",
     "STAGE_BACK",
     "STAGE_BEFORE_GENERATING",
+    "TRIGGER_POLICY",
     "can_transition",
     "next_stages",
     "advance",

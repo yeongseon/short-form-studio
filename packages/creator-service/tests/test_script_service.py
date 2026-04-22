@@ -1,10 +1,10 @@
 import asyncio
 
 import pytest
-
+from creator_domain.models.script_draft import ScriptSection
 from creator_service.markdown_parser import parse_markdown
 from creator_service.script_service import InMemoryScriptStorage, ScriptService
-from creator_domain.models.script_draft import ScriptSection
+
 
 def run(coro):
     return asyncio.run(coro)

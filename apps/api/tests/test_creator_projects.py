@@ -1,9 +1,11 @@
 # pyright: reportMissingImports=false
 
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Literal, cast
 
 import pytest
+from fastapi.routing import APIRoute
 from pydantic import BaseModel
 from shorts_api.main import projects_router
 
@@ -11,7 +13,7 @@ from shorts_api.main import projects_router
 class StubProject(BaseModel):
     id: int
     title: str
-    source_type: Literal["idea", "markdown", "url"]
+    source_type: Literal["idea", "markdown", "url", "pasted_json"]
     idea_brief: str | None = None
     markdown_source: str | None = None
     url_source: str | None = None
@@ -59,6 +61,7 @@ class StubProjectService:
         idea_brief: str | None = None,
         markdown_source: str | None = None,
         url_source: str | None = None,
+        json_script: str | None = None,
     ) -> StubProject:
         self.create_project_calls.append(
             {
@@ -67,10 +70,11 @@ class StubProjectService:
                 "idea_brief": idea_brief,
                 "markdown_source": markdown_source,
                 "url_source": url_source,
+                "json_script": json_script,
             }
         )
 
-        if source_type not in {"idea", "markdown", "url"}:
+        if source_type not in {"idea", "markdown", "url", "pasted_json"}:
             raise ValueError(f"Unsupported source_type '{source_type}'")
         if source_type == "idea" and idea_brief is None:
             raise ValueError("source_type='idea' requires idea_brief to be provided")
@@ -78,8 +82,10 @@ class StubProjectService:
             raise ValueError("source_type='markdown' requires markdown_source to be provided")
         if source_type == "url" and url_source is None:
             raise ValueError("source_type='url' requires url_source to be provided")
+        if source_type == "pasted_json" and json_script is None:
+            raise ValueError("source_type='pasted_json' requires json_script to be provided")
 
-        resolved_source_type = cast(Literal["idea", "markdown", "url"], source_type)
+        resolved_source_type = cast(Literal["idea", "markdown", "url", "pasted_json"], source_type)
 
         now = datetime.now(timezone.utc)
         project = StubProject(
@@ -111,11 +117,15 @@ class StubProjectService:
     async def count_projects(self) -> int:
         return len(self._projects)
 
+def _iter_api_routes(routes: Sequence[object]) -> list[APIRoute]:
+    return [route for route in routes if isinstance(route, APIRoute)]
+
+
 @pytest.fixture
 def stub_project_service(monkeypatch: pytest.MonkeyPatch) -> StubProjectService:
     service = StubProjectService()
 
-    for route in projects_router.routes:
+    for route in _iter_api_routes(projects_router.routes):
         if route.name in {"create_project", "get_project_detail", "list_projects"}:
             monkeypatch.setitem(route.endpoint.__globals__, "project_service", service)
 
@@ -161,13 +171,13 @@ async def test_create_project_invalid_source_type(client):
 
 
 @pytest.mark.asyncio
-async def test_create_project_url_source_is_not_publicly_supported(client):
+async def test_create_project_url_source_type(client, stub_project_service: StubProjectService):
     response = await client.post(
         "/api/creator/projects",
         json={"title": "URL", "source_type": "url", "url_source": "https://example.com"},
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 201
 
 
 @pytest.mark.asyncio
@@ -221,3 +231,29 @@ async def test_list_projects_with_pagination(client, stub_project_service: StubP
     assert len(body["projects"]) == 1
     assert body["total"] == 2  # total count, not page size
     assert stub_project_service.list_projects_calls == [(1, 1)]
+
+
+@pytest.mark.asyncio
+async def test_create_project_pasted_json(client, stub_project_service: StubProjectService):
+    json_script = '{"scenes": [{"type": "hook", "text": "Hello world"}]}'
+    response = await client.post(
+        "/api/creator/projects",
+        json={"title": "JSON Project", "source_type": "pasted_json", "json_script": json_script},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["source_type"] == "pasted_json"
+    assert stub_project_service.create_project_calls[0]["source_type"] == "pasted_json"
+    assert stub_project_service.create_project_calls[0]["json_script"] == json_script
+
+
+@pytest.mark.asyncio
+async def test_create_project_pasted_json_missing_script(client, stub_project_service: StubProjectService):
+    response = await client.post(
+        "/api/creator/projects",
+        json={"title": "Missing JSON", "source_type": "pasted_json"},
+    )
+
+    assert response.status_code == 400
+    assert "requires json_script" in response.json()["detail"]

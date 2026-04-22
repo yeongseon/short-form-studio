@@ -12,9 +12,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
@@ -23,10 +24,10 @@ from creator_service.ffmpeg_service import FFmpegService, RenderInput
 from creator_service.render_profile import RenderProfile
 from creator_service.render_service import render_service as _render_service
 from creator_service.run_service import run_service as _run_service
+from creator_service.script_service import script_service as _script_service
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
 from creator_service.visual_asset_service import visual_asset_service as _visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
-from creator_service.script_service import script_service as _script_service
 
 logger = logging.getLogger(__name__)
 
@@ -55,11 +56,13 @@ def _resolve_profile(name: str) -> RenderProfile:
 
 
 async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
-    remover = getattr(_run_service.storage, "remove_active_task_id", None)
+    remover: Any = getattr(_run_service.storage, "remove_active_task_id", None)
     if not callable(remover):
         return
     try:
-        await remover(run_id, task_id)
+        maybe_result = remover(run_id, task_id)
+        if asyncio.iscoroutine(maybe_result):
+            await maybe_result
     except Exception:
         logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
 
@@ -90,6 +93,8 @@ def render_video(
                     f"Run {run_id} is in stage {current.value}, "
                     f"expected one of {', '.join(s for s in _ALLOWED_STAGES)}"
                 )
+            if run.get("status") == "cancelled":
+                raise _StageGuardError(f"Run {run_id} is cancelled")
 
             manifest = await _render_service.build_render_manifest(
                 run_id,
@@ -126,6 +131,8 @@ def render_video(
 
             paragraph_audio = await _audio_service.list_paragraph_audio(run_id)
             paragraph_subtitles = await _subtitle_service.list_paragraph_subtitles(run_id)
+            run_audio_path = manifest["audio_path"]
+            run_sub_path = manifest["subtitle_path"]
 
             audio_path: Path | None = None
             subtitle_path: Path | None = None
@@ -143,12 +150,14 @@ def render_video(
                 else:
                     ordered_sections = list(audio_by_section.keys())
 
-                ordered_audio_paths: list[str] = []
-                duration_by_section: dict[str, float] = {}
-                for sid in ordered_sections:
-                    art = audio_by_section.get(sid)
-                    if art:
-                        ordered_audio_paths.append(art.path)
+                all_audio_covered = bool(ordered_sections) and all(
+                    sid in audio_by_section for sid in ordered_sections
+                )
+                if all_audio_covered:
+                    ordered_audio_paths = [audio_by_section[sid].path for sid in ordered_sections]
+                    duration_by_section: dict[str, float] = {}
+                    for sid in ordered_sections:
+                        art = audio_by_section[sid]
                         try:
                             duration_by_section[sid] = ffmpeg.get_audio_duration(art.path)
                         except Exception:
@@ -158,7 +167,6 @@ def render_video(
                             )
                             duration_by_section[sid] = 5.0
 
-                if ordered_audio_paths:
                     concat_path = f"{_ARTIFACT_ROOT}/{run_id}/render/audio_concat.wav"
                     ffmpeg.concatenate_audio(ordered_audio_paths, concat_path)
                     audio_path = Path(concat_path)
@@ -166,7 +174,6 @@ def render_video(
                     scene_durations = [
                         duration_by_section[sid]
                         for sid in ordered_sections
-                        if sid in duration_by_section
                     ][:scene_count]
                     if len(scene_durations) < scene_count:
                         total_known = sum(scene_durations)
@@ -174,34 +181,45 @@ def render_video(
                         missing = scene_count - len(scene_durations)
                         pad_dur = remaining / missing if missing > 0 else 5.0
                         scene_durations.extend([pad_dur] * missing)
+
+                    subtitle_path = Path(run_sub_path) if run_sub_path else None
+                    if paragraph_subtitles:
+                        sub_by_section: dict[str, Any] = {}
+                        for s in paragraph_subtitles:
+                            if s.section_id and s.section_id not in sub_by_section:
+                                sub_by_section[s.section_id] = s
+
+                        all_subtitles_covered = bool(ordered_sections) and all(
+                            sid in sub_by_section for sid in ordered_sections
+                        )
+                        if all_subtitles_covered:
+                            ordered_sub_paths = [sub_by_section[sid].path for sid in ordered_sections]
+                            ordered_sub_durations = [duration_by_section[sid] for sid in ordered_sections]
+                            merged_sub_path = f"{_ARTIFACT_ROOT}/{run_id}/render/subtitles_merged.srt"
+                            ffmpeg.merge_subtitles(
+                                ordered_sub_paths, ordered_sub_durations, merged_sub_path
+                            )
+                            subtitle_path = Path(merged_sub_path)
+                        else:
+                            logger.warning(
+                                "Run %d: paragraph subtitles incomplete (%d/%d sections), falling back to run-level subtitles",
+                                run_id,
+                                len(sub_by_section),
+                                len(ordered_sections),
+                            )
                 else:
+                    logger.warning(
+                        "Run %d: paragraph audio incomplete (%d/%d sections), falling back to run-level audio",
+                        run_id,
+                        len(audio_by_section),
+                        len(ordered_sections),
+                    )
+                    audio_path = Path(run_audio_path) if run_audio_path else None
+                    subtitle_path = Path(run_sub_path) if run_sub_path else None
                     scene_duration = profile_data["max_duration_seconds"] / scene_count
                     scene_durations = [scene_duration] * scene_count
-
-                if paragraph_subtitles:
-                    sub_by_section: dict[str, Any] = {}
-                    for s in paragraph_subtitles:
-                        if s.section_id and s.section_id not in sub_by_section:
-                            sub_by_section[s.section_id] = s
-
-                    ordered_sub_paths: list[str] = []
-                    ordered_sub_durations: list[float] = []
-                    for sid in ordered_sections:
-                        sub = sub_by_section.get(sid)
-                        if sub:
-                            ordered_sub_paths.append(sub.path)
-                            ordered_sub_durations.append(duration_by_section.get(sid, 5.0))
-
-                    if ordered_sub_paths:
-                        merged_sub_path = f"{_ARTIFACT_ROOT}/{run_id}/render/subtitles_merged.srt"
-                        ffmpeg.merge_subtitles(
-                            ordered_sub_paths, ordered_sub_durations, merged_sub_path
-                        )
-                        subtitle_path = Path(merged_sub_path)
             else:
-                run_audio_path = manifest["audio_path"]
                 audio_path = Path(run_audio_path) if run_audio_path else None
-                run_sub_path = manifest["subtitle_path"]
                 subtitle_path = Path(run_sub_path) if run_sub_path else None
                 scene_duration = profile_data["max_duration_seconds"] / scene_count
                 scene_durations = [scene_duration] * scene_count
@@ -247,8 +265,8 @@ def render_video(
                 "video_artifact_id": artifact.id,
                 "video_path": artifact.path,
                 "scene_count": len(manifest["scenes"]),
-                "audio_path": manifest["audio_path"],
-                "subtitle_path": manifest["subtitle_path"],
+                "audio_path": str(audio_path) if audio_path else None,
+                "subtitle_path": str(subtitle_path) if subtitle_path else None,
                 "start_time": start_iso,
                 "end_time": end_time.isoformat(),
                 "duration_seconds": duration_seconds,

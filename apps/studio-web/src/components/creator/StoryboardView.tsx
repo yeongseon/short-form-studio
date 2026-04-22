@@ -195,14 +195,20 @@ export default function StoryboardView({
     setBulkGenerating(true);
     try {
       const result = await generateAllParagraphAudio(runId, { tts_model: ttsModel });
-      onStatusMessage?.(`Audio generation started for ${result.dispatched} paragraphs`);
-      // Mark all paragraphs as generating
+      const successIds = new Set(
+        result.tasks.filter((t) => !t.error).map((t) => t.section_id),
+      );
+      const failedCount = result.tasks.filter((t) => t.error).length;
+      const msg = failedCount > 0
+        ? `Audio generation started for ${successIds.size} paragraphs (${failedCount} failed)`
+        : `Audio generation started for ${result.total} paragraphs`;
+      onStatusMessage?.(msg);
       setStoryboard((prev) => {
         if (!prev) return prev;
         return {
           ...prev,
           paragraphs: prev.paragraphs.map((p) =>
-            !p.audio_url
+            successIds.has(p.section_id) && !p.audio_url
               ? { ...p, status: "generating_audio" as const }
               : p,
           ),
@@ -219,13 +225,20 @@ export default function StoryboardView({
     setBulkGenerating(true);
     try {
       const result = await generateAllParagraphSubtitles(runId, { subtitle_model: subtitleModel });
-      onStatusMessage?.(`Subtitle generation started for ${result.dispatched} paragraphs`);
+      const successIds = new Set(
+        result.tasks.filter((t) => !t.error).map((t) => t.section_id),
+      );
+      const failedCount = result.tasks.filter((t) => t.error).length;
+      const msg = failedCount > 0
+        ? `Subtitle generation started for ${successIds.size} paragraphs (${failedCount} failed)`
+        : `Subtitle generation started for ${result.total} paragraphs`;
+      onStatusMessage?.(msg);
       setStoryboard((prev) => {
         if (!prev) return prev;
         return {
           ...prev,
           paragraphs: prev.paragraphs.map((p) =>
-            p.audio_url && !p.subtitles_url
+            successIds.has(p.section_id) && p.audio_url && !p.subtitles_url
               ? { ...p, status: "generating_subtitles" as const }
               : p,
           ),

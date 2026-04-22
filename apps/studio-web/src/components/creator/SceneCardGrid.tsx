@@ -1,8 +1,8 @@
 /**
- * SceneCardGrid — displays ALL scene cards in a responsive grid.
+ * SceneCardGrid — displays ALL scene cards in a vertical list.
  *
+ * Full-width horizontal cards, one per row.
  * All scenes visible at once — no pagination, no virtual scroll.
- * Compact cards fit 5-10+ scenes on a typical 1080p screen.
  */
 
 import SceneCard from "./SceneCard";
@@ -12,6 +12,23 @@ import type { StoryboardParagraph } from "../../api/storyboard";
 
 export interface SceneCardGridProps {
   paragraphs: StoryboardParagraph[];
+  currentStage: string;
+  visualFieldBySceneId?: Record<string, {
+    prompt: string;
+    mood: string | null;
+    composition: string | null;
+    style_tags: string[];
+    prompt_source: "auto_generated" | "user_edited" | "model_suggested";
+    generation_status: "pending" | "generating" | "completed" | "failed";
+    dirty?: boolean;
+    saving?: boolean;
+  }>;
+  onVisualFieldChange?: (
+    sceneId: string,
+    field: "prompt" | "mood" | "composition" | "style_tags",
+    value: string,
+  ) => void;
+  onSaveVisualFields?: (sceneId: string) => void;
   onGenerateImage?: (sceneId: string) => void;
   onGenerateAudio?: (sectionId: string) => void;
   onGenerateSubtitles?: (sectionId: string) => void;
@@ -21,9 +38,9 @@ export interface SceneCardGridProps {
 
 // --------------- styles ---------------
 
-const gridStyle: React.CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
+const listStyle: React.CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
   gap: 12,
 };
 
@@ -41,6 +58,10 @@ const emptyStyle: React.CSSProperties = {
 
 export default function SceneCardGrid({
   paragraphs,
+  currentStage,
+  visualFieldBySceneId,
+  onVisualFieldChange,
+  onSaveVisualFields,
   onGenerateImage,
   onGenerateAudio,
   onGenerateSubtitles,
@@ -55,11 +76,15 @@ export default function SceneCardGrid({
   }
 
   return (
-    <div style={gridStyle} data-testid="scene-card-grid">
+    <div style={listStyle} data-testid="scene-card-grid">
       {paragraphs.map((p) => (
         <SceneCard
           key={p.section_id}
           paragraph={p}
+          currentStage={currentStage}
+          visualFields={p.scene_id ? visualFieldBySceneId?.[p.scene_id] : undefined}
+          onVisualFieldChange={onVisualFieldChange}
+          onSaveVisualFields={onSaveVisualFields}
           onGenerateImage={onGenerateImage}
           onGenerateAudio={onGenerateAudio}
           onGenerateSubtitles={onGenerateSubtitles}

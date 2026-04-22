@@ -1,8 +1,8 @@
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import AppShell from "./components/layout/AppShell";
+import { ToastProvider } from "./contexts/ToastContext";
 import CreatePage from "./pages/CreatePage";
-import LibraryPage from "./pages/LibraryPage";
 import OpsPage from "./pages/OpsPage";
 import ProjectPage from "./pages/ProjectPage";
 import ReviewPage from "./pages/ReviewPage";
@@ -12,22 +12,21 @@ import SettingsPage from "./pages/SettingsPage";
 export default function App() {
   return (
     <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-      <Routes>
-        <Route element={<AppShell />}>
-          <Route path="/create" element={<CreatePage />} />
-          <Route path="/projects/:projectId" element={<ProjectPage />} />
-          <Route path="/review/:runId" element={<ReviewPage />} />
-          <Route path="/runs" element={<RunsPage />} />
-          {/* Legacy /library redirects into ops-scoped route */}
-          <Route path="/library" element={<Navigate replace to="/ops/library" />} />
-          <Route path="/ops/library" element={<LibraryPage />} />
+      <ToastProvider>
+        <Routes>
+          <Route element={<AppShell />}>
+            <Route path="/create" element={<CreatePage />} />
+            <Route path="/projects/:projectId" element={<ProjectPage />} />
+            <Route path="/review/:runId" element={<ReviewPage />} />
+            <Route path="/runs" element={<RunsPage />} />
 
-          <Route path="/ops" element={<OpsPage />} />
-          <Route path="/settings" element={<SettingsPage />} />
+            <Route path="/ops" element={<OpsPage />} />
+            <Route path="/settings" element={<SettingsPage />} />
 
-          <Route path="*" element={<Navigate replace to="/create" />} />
-        </Route>
-      </Routes>
+            <Route path="*" element={<Navigate replace to="/create" />} />
+          </Route>
+        </Routes>
+      </ToastProvider>
     </BrowserRouter>
   );
 }

@@ -28,8 +28,36 @@ const MOCK_SCRIPT = {
 
 const MOCK_SCENES = {
   scenes: [
-    { scene_id: "scene-0", description: "Tokyo skyline", image_prompt: "panoramic tokyo" },
-    { scene_id: "scene-1", description: "Cherry blossoms", image_prompt: "sakura trees" },
+    {
+      scene_id: "scene-0",
+      section_id: "sec-0",
+      scene_index: 0,
+      section_type: "hook",
+      original_text: "Tokyo skyline",
+      prompt: "panoramic tokyo",
+      prompt_edited: false,
+      prompt_source: "auto_generated" as const,
+      style_tags: [],
+      mood: null,
+      composition: null,
+      generation_status: "completed" as const,
+      latest_asset_id: null,
+    },
+    {
+      scene_id: "scene-1",
+      section_id: "sec-1",
+      scene_index: 1,
+      section_type: "body",
+      original_text: "Cherry blossoms",
+      prompt: "sakura trees",
+      prompt_edited: false,
+      prompt_source: "auto_generated" as const,
+      style_tags: [],
+      mood: null,
+      composition: null,
+      generation_status: "completed" as const,
+      latest_asset_id: null,
+    },
   ],
 };
 
@@ -130,7 +158,7 @@ function mockFetchAll(
     // GET /runs/:id/visual-assets
     if (url.includes("/visual-assets")) {
       if (!opts.assets) return Promise.resolve({ ok: true, json: () => Promise.resolve({ run_id: run?.id ?? 0, scenes: {}, total_scenes: 0, total_assets: 0 }) } as Response);
-      return Promise.resolve({ ok: true, json: () => Promise.resolve({ run_id: run?.id ?? 0, scenes: opts.assets, total_scenes: Object.keys(opts.assets).length, total_assets: Object.values(opts.assets).flat().length }) } as Response);
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ run_id: run?.id ?? 0, scenes: opts.assets, total_scenes: Object.keys(opts.assets!).length, total_assets: Object.values(opts.assets!).flat().length }) } as Response);
     }
     // GET /runs/:id/visual-plan
     if (url.includes("/visual-plan")) {

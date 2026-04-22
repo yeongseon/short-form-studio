@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any
@@ -82,7 +83,7 @@ class ProviderRegistry:
             ModelCatalogEntry(
                 model_key="qwen3-4b",
                 provider_type="ollama",
-                endpoint="http://ollama:11434",
+                endpoint=os.getenv("OLLAMA_BASE_URL", "http://ollama:11434"),
                 category=ProviderCategory.LLM,
                 requires_gpu=True,
                 is_local=True,
@@ -92,7 +93,7 @@ class ProviderRegistry:
             ModelCatalogEntry(
                 model_key="sd15",
                 provider_type="sd_local",
-                endpoint="http://stable-diffusion:7860",
+                endpoint=os.getenv("STABLE_DIFFUSION_BASE_URL", "http://stable-diffusion:7860"),
                 category=ProviderCategory.IMAGE,
                 requires_gpu=True,
                 is_local=True,
@@ -112,7 +113,7 @@ class ProviderRegistry:
             ModelCatalogEntry(
                 model_key="qwen3-tts",
                 provider_type="qwen_tts",
-                endpoint="http://tts-qwen3:8100",
+                endpoint=os.getenv("TTS_QWEN3_BASE_URL", "http://tts-qwen3:8100"),
                 category=ProviderCategory.TTS,
                 requires_gpu=True,
                 is_local=True,
@@ -143,7 +144,7 @@ class ProviderRegistry:
             ModelCatalogEntry(
                 model_key="whisper-small",
                 provider_type="whisper",
-                endpoint="http://stt-whisper:8200",
+                endpoint=os.getenv("STT_WHISPER_BASE_URL", "http://stt-whisper:8200"),
                 category=ProviderCategory.STT,
                 requires_gpu=True,
                 is_local=True,

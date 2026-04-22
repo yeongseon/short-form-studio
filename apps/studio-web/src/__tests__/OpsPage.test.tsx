@@ -22,10 +22,9 @@ describe("OpsPage", () => {
     expect(screen.getByTestId("ops-tools-grid")).toBeInTheDocument();
   });
 
-  it("renders all four tool cards", () => {
+  it("renders all three tool cards", () => {
     renderPage();
     expect(screen.getByTestId("ops-tool-monitoring")).toBeInTheDocument();
-    expect(screen.getByTestId("ops-tool-library")).toBeInTheDocument();
     expect(screen.getByTestId("ops-tool-health")).toBeInTheDocument();
     expect(screen.getByTestId("ops-tool-docs")).toBeInTheDocument();
   });
@@ -33,7 +32,6 @@ describe("OpsPage", () => {
   it("renders tool titles", () => {
     renderPage();
     expect(screen.getByText("Task Monitoring")).toBeInTheDocument();
-    expect(screen.getByText("Asset Library")).toBeInTheDocument();
     expect(screen.getByText("System Health")).toBeInTheDocument();
     expect(screen.getByText("API Documentation")).toBeInTheDocument();
   });
@@ -55,16 +53,23 @@ describe("OpsPage", () => {
     const link = monitoringCard.querySelector("a");
     expect(link).not.toBeNull();
     expect(link?.getAttribute("target")).toBe("_blank");
-    expect(link?.getAttribute("href")).toBe("/flower/");
+    expect(link?.getAttribute("href")).toBe("http://localhost:5555");
   });
 
-  it("renders internal library link as router Link", () => {
+  it("links health card to API health endpoint", () => {
     renderPage();
-    const libraryCard = screen.getByTestId("ops-tool-library");
-    const link = libraryCard.querySelector("a");
+    const card = screen.getByTestId("ops-tool-health");
+    const link = card.querySelector("a");
     expect(link).not.toBeNull();
-    expect(link?.getAttribute("href")).toBe("/ops/library");
-    // Internal links don't have target=_blank
-    expect(link?.getAttribute("target")).toBeNull();
+    expect(link?.getAttribute("href")).toBe("/health");
   });
+
+  it("links docs card to API docs endpoint", () => {
+    renderPage();
+    const card = screen.getByTestId("ops-tool-docs");
+    const link = card.querySelector("a");
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute("href")).toBe("/docs");
+  });
+
 });

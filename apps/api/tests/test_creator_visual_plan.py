@@ -1,10 +1,12 @@
 # pyright: reportMissingImports=false
 
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any, Literal
 
 import pytest
 from creator_domain.models import VisualScene
+from fastapi.routing import APIRoute
 from pydantic import BaseModel
 from shorts_api.main import visual_plan_router
 
@@ -137,12 +139,16 @@ def _make_scene(scene_id: str = "scene-1", index: int = 0) -> VisualScene:
     )
 
 
+def _iter_api_routes(routes: Sequence[object]) -> list[APIRoute]:
+    return [route for route in routes if isinstance(route, APIRoute)]
+
+
 @pytest.fixture
 def stub_visual_plan_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubVisualPlanService]:
     run_svc = StubRunService()
     vp_svc = StubVisualPlanService()
 
-    for route in visual_plan_router.routes:
+    for route in _iter_api_routes(visual_plan_router.routes):
         if route.name in {"get_visual_plan", "replace_visual_plan", "patch_scene"}:
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "visual_plan_service", vp_svc)
@@ -445,6 +451,20 @@ async def test_patch_scene_run_not_found(client, stub_visual_plan_services):
 
     assert response.status_code == 404
     assert "not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_patch_scene_rejects_wrong_stage(client, stub_visual_plan_services):
+    run_svc, _vp_svc = stub_visual_plan_services
+    run_svc.runs[39] = _make_run(39, stage="SCRIPT_REVIEW")
+
+    response = await client.patch(
+        "/api/creator/runs/39/visual-plan/scenes/scene-1",
+        json={"prompt": "x"},
+    )
+
+    assert response.status_code == 409
+    assert "Cannot modify visual plan in stage" in response.json()["detail"]
 
 
 @pytest.mark.asyncio

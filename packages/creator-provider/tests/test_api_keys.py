@@ -5,7 +5,6 @@ import os
 from unittest import mock
 
 import pytest
-
 from creator_provider.api_keys import list_configured_providers, resolve_api_key
 
 
@@ -19,14 +18,12 @@ class TestResolveApiKey:
             assert resolve_api_key("openai") == "sk-test123"
 
     def test_resolve_missing_key_required(self):
-        with mock.patch.dict(os.environ, {}, clear=True):
-            with pytest.raises(ValueError, match="not configured"):
-                _ = resolve_api_key("openai")
+        with mock.patch.dict(os.environ, {}, clear=True), pytest.raises(ValueError, match="not configured"):
+            _ = resolve_api_key("openai")
 
     def test_resolve_empty_key_required(self):
-        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": ""}):
-            with pytest.raises(ValueError, match="not configured"):
-                _ = resolve_api_key("openai")
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": ""}), pytest.raises(ValueError, match="not configured"):
+            _ = resolve_api_key("openai")
 
     def test_resolve_missing_key_not_required(self):
         with mock.patch.dict(os.environ, {}, clear=True):

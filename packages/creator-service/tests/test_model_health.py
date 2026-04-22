@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 from creator_service.model_health_service import (
-    ModelHealthService,
     ModelHealthResult,
+    ModelHealthService,
     ModelStatus,
 )
 

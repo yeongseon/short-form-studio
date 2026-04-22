@@ -17,10 +17,11 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
+redis: Any  # optional dependency; may be None at runtime
 try:
-    import redis
+    import redis  # noqa: F811
 except ImportError:
-    redis = None  # type: ignore[assignment]
+    redis = None
 
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
@@ -63,11 +64,13 @@ def _get_redis_client() -> Any | None:
 
 
 async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
-    remover = getattr(_run_service.storage, "remove_active_task_id", None)
+    remover: Any = getattr(_run_service.storage, "remove_active_task_id", None)
     if not callable(remover):
         return
     try:
-        await remover(run_id, task_id)
+        maybe_result = remover(run_id, task_id)
+        if asyncio.iscoroutine(maybe_result):
+            await maybe_result
     except Exception:
         logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
 
@@ -110,6 +113,8 @@ def generate_audio(
                     f"Run {run_id} is in stage {current.value}, "
                     f"expected one of {', '.join(s for s in _ALLOWED_STAGES)}"
                 )
+            if run.get("status") == "cancelled":
+                raise _StageGuardError(f"Run {run_id} is cancelled")
 
             # 2. Fetch approved script draft.
             draft = await _script_service.get_active_draft(run_id)

@@ -702,17 +702,6 @@ def test_render_video_handles_sparse_paragraph_artifacts(
 
     assert result["status"] == "success"
     render_input, _ = fake_ffmpeg.calls[0]
-    assert render_input.scene_durations == [7.5, 22.5]
-    assert fake_ffmpeg.concatenate_calls == [
-        (
-            ["data/artifacts/210/audio/sec-2.wav"],
-            "data/artifacts/210/render/audio_concat.wav",
-        )
-    ]
-    assert fake_ffmpeg.merge_calls == [
-        (
-            ["data/artifacts/210/subtitles/sec-2.srt"],
-            [7.5],
-            "data/artifacts/210/render/subtitles_merged.srt",
-        )
-    ]
+    assert render_input.scene_durations == [15.0, 15.0]
+    assert fake_ffmpeg.concatenate_calls == []
+    assert fake_ffmpeg.merge_calls == []

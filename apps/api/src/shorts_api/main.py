@@ -2,25 +2,52 @@
 import logging
 import os
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
-from creator_service.model_health_service import ModelHealthService
-from fastapi import FastAPI, Request
+from creator_domain.sanitize import UnsafePathComponent, sanitize_path_component
+from creator_service.db import close_pool
+from creator_service.logging_config import setup_json_logging
+from creator_service.model_health_service import ModelHealthService, ModelStatus
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from starlette.staticfiles import StaticFiles
-from creator_service.logging_config import setup_json_logging
+from starlette.responses import FileResponse
+
+from shorts_api.auth import ApiKeyMiddleware
 from shorts_api.routes.creator_models import router as models_router
 from shorts_api.routes.creator_projects import router as projects_router
-from shorts_api.routes.creator_runs import router as runs_router
-from shorts_api.routes.creator_script import router as script_router, run_script_router
+from shorts_api.routes.creator_runs_core import router as runs_core_router
+from shorts_api.routes.creator_runs_lifecycle import router as runs_lifecycle_router
+from shorts_api.routes.creator_runs_scene_assets import router as runs_scene_assets_router
+from shorts_api.routes.creator_runs_storyboard import router as runs_storyboard_router
+from shorts_api.routes.creator_runs_visuals import router as runs_visuals_router
+from shorts_api.routes.creator_script import router as script_router
+from shorts_api.routes.creator_script import run_script_router
 from shorts_api.routes.creator_settings import router as settings_router
 from shorts_api.routes.creator_visual_plan import router as visual_plan_router
+
+# Combined runs router for backward compatibility (used by tests)
+runs_router = APIRouter()
+runs_router.include_router(runs_core_router)
+runs_router.include_router(runs_visuals_router)
+runs_router.include_router(runs_scene_assets_router)
+runs_router.include_router(runs_storyboard_router)
+runs_router.include_router(runs_lifecycle_router)
 
 # Configure structured JSON logging
 setup_json_logging(service_name="api", level="INFO")
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="short-form-pipeline API")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    yield
+    await close_pool()
+
+
+app = FastAPI(title="short-form-studio API", lifespan=lifespan)
 
 cors_origins_env = os.getenv("CORS_ORIGINS")
 cors_origins = [
@@ -34,8 +61,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
+app.add_middleware(ApiKeyMiddleware)
 
 @app.middleware("http")
 async def request_logging_middleware(request: Request, call_next):
@@ -68,33 +94,68 @@ async def global_exception_handler(request: Request, _exc: Exception) -> JSONRes
 
 app.include_router(models_router, prefix="/api/creator")
 app.include_router(projects_router, prefix="/api/creator")
-app.include_router(runs_router, prefix="/api/creator")
+app.include_router(runs_core_router, prefix="/api/creator")
+app.include_router(runs_visuals_router, prefix="/api/creator")
+app.include_router(runs_scene_assets_router, prefix="/api/creator")
+app.include_router(runs_storyboard_router, prefix="/api/creator")
+app.include_router(runs_lifecycle_router, prefix="/api/creator")
 app.include_router(script_router, prefix="/api/creator")
 app.include_router(run_script_router, prefix="/api/creator")
 app.include_router(visual_plan_router, prefix="/api/creator")
 app.include_router(settings_router, prefix="/api/creator")
 
 
+@app.get("/healthz")
+async def healthz() -> dict[str, str]:
+    """Lightweight liveness probe — no auth required."""
+    return {"status": "ok"}
+
+
 @app.get("/health")
 async def health() -> dict[str, object]:
+    """Detailed model health — endpoint URLs and error details are stripped.
+
+    Only returns model name, status, and response time.
+    """
     results = await model_health.check_all()
-    all_healthy = all(r.status.value == "healthy" for r in results)
+    # Only consider providers with a definitive status (healthy/unhealthy/configured)
+    # for overall readiness.  UNKNOWN means "not configured" and should not
+    # degrade a correctly-configured deployment.
+    definitive = [r for r in results if r.status not in (ModelStatus.UNKNOWN,)]
+    all_healthy = len(definitive) > 0 and all(
+        r.status in (ModelStatus.HEALTHY, ModelStatus.CONFIGURED) for r in definitive
+    )
     return {
         "status": "ok" if all_healthy else "degraded",
         "models": {
             r.model_name: {
                 "status": r.status.value,
-                "endpoint": r.endpoint,
                 "response_time_ms": r.response_time_ms,
-                "error": r.error,
             }
             for r in results
         },
     }
 
 
-app.mount(
-    "/artifacts",
-    StaticFiles(directory=os.getenv("ARTIFACT_ROOT", "data/artifacts"), check_dir=False),
-    name="artifacts",
-)
+@app.get("/artifacts/{artifact_path:path}")
+async def serve_artifact(artifact_path: str) -> FileResponse:
+    artifact_root = os.path.realpath(os.getenv("ARTIFACT_ROOT", "data/artifacts"))
+    path_components = artifact_path.split("/")
+    if not artifact_path or any(component in {"", ".", ".."} for component in path_components):
+        raise HTTPException(status_code=400, detail="Invalid artifact path")
+
+    try:
+        safe_components = [
+            sanitize_path_component(component, label=f"artifact_path[{index}]")
+            for index, component in enumerate(path_components)
+        ]
+    except UnsafePathComponent as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    resolved_path = os.path.realpath(os.path.join(artifact_root, *safe_components))
+    if os.path.commonpath([artifact_root, resolved_path]) != artifact_root:
+        raise HTTPException(status_code=400, detail="Path traversal detected")
+    if not os.path.isfile(resolved_path):
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+    return FileResponse(resolved_path)

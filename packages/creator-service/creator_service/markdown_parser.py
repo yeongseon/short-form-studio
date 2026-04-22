@@ -3,7 +3,7 @@ import re
 from creator_domain.models import ScriptSection
 
 _LEVEL_TWO_HEADING_RE = re.compile(r"^\s{0,3}##(?!#)\s*(.*?)\s*$")
-_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+_NON_ALNUM_RE = re.compile(r"[^\w]+", re.UNICODE)
 
 
 def _normalize_section_type(raw_heading: str) -> str:

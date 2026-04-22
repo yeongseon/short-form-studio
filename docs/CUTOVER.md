@@ -1,6 +1,6 @@
 # Cutover Checklist & Deployment Notes
 
-Operator-facing guide for deploying and verifying the short-form-pipeline system.
+Operator-facing guide for deploying and verifying the short-form-studio system.
 
 ---
 
@@ -32,19 +32,20 @@ Operator-facing guide for deploying and verifying the short-form-pipeline system
    | `POSTGRES_PASSWORD` | Yes | **Change from default** |
    | `REDIS_URL` | Yes | Default: `redis://redis:6379/0` |
    | `API_HOST` / `API_PORT` | Yes | Default: `0.0.0.0:8000` |
-   | `CORS_ALLOWED_ORIGINS` | Yes | Default: `http://localhost:5173` |
+   | `CORS_ORIGINS` | Yes | Default: `http://localhost:5174` |
    | `ARTIFACT_ROOT` | Yes | Default: `./data/artifacts` |
    | `OLLAMA_BASE_URL` | Yes | Default: `http://ollama:11434` |
    | `OLLAMA_DEFAULT_MODEL` | Yes | Default: `qwen3:4b` |
    | `STABLE_DIFFUSION_BASE_URL` | Yes | Default: `http://stable-diffusion:7860` |
 | `TTS_QWEN3_BASE_URL` | Yes | Default: `http://tts-qwen3:8100` |
-   | `STT_WHISPER_BASE_URL` | Yes | Default: `http://stt-whisper:9000` |
+| `STT_WHISPER_BASE_URL` | Yes | Default: `http://stt-whisper:8200` |
    | `GPU_LOCK_KEY` | Yes | Default: `gpu:lock` |
    | `GPU_LOCK_TIMEOUT_SECONDS` | Yes | Default: `600` |
-   | `OPENAI_API_KEY` | No | External LLM fallback |
-   | `REPLICATE_API_TOKEN` | No | External image generation fallback |
-   | `AZURE_SPEECH_KEY` | No | External TTS fallback |
-   | `ELEVENLABS_API_KEY` | No | External TTS fallback |
+| `OPENAI_API_KEY` | No | External LLM/Image/TTS provider |
+| `ANTHROPIC_API_KEY` | No | External LLM provider |
+| `GOOGLE_API_KEY` | No | External LLM/Image provider |
+| `STABILITY_API_KEY` | No | External image provider |
+| `ELEVENLABS_API_KEY` | No | External TTS fallback |
 
 3. **Ensure AI model images exist** (pre-built from shorts-automation project)
 
@@ -93,22 +94,33 @@ docker compose run --rm api alembic upgrade head
 | 003 | `create_creator_stage_reviews` | `creator_stage_reviews` table |
 | 004 | `create_creator_scene_assets` | `creator_scene_assets` table |
 | 005 | `expand_artifact_typing_and_indexes` | `creator_artifacts` table + indexes |
+| 006 | `create_creator_script_drafts` | `creator_script_drafts` table |
+| 007 | `create_creator_visual_plans` | `creator_visual_plans` table |
+| 008 | `add_paragraph_artifact_index` | Paragraph artifact index |
+| 009 | `add_active_task_id` | `active_task_id` column on runs |
+| 010 | `widen_active_task_id` | Widens `active_task_id` column type |
+| 011 | `add_pasted_json_source_type` | `pasted_json` source type + `json_script` column |
 
-### Step 4: Pull Ollama Model
+### Step 4: (Optional) Pull Ollama Model
+
+Only needed when using the `gpu` profile for local AI inference.
 
 ```bash
-docker compose up -d ollama
+docker compose --profile gpu up -d ollama
 # Wait for health check to pass, then:
 docker compose exec ollama ollama pull qwen3:4b
 ```
 
-### Step 5: Start AI Services
+### Step 5: (Optional) Start GPU AI Services
+
+GPU-based AI services are gated behind the `gpu` Docker Compose profile.
+Skip this step if you only use remote API providers.
 
 ```bash
-docker compose up -d stable-diffusion tts-qwen3 stt-whisper
+docker compose --profile gpu up -d
 ```
 
-> **Note:** AI services require the NVIDIA GPU. Only one model runs inference at a time (GPU lock via Redis).
+> **Note:** Requires NVIDIA GPU + Container Toolkit. Only one model runs inference at a time (GPU lock via Redis).
 
 ### Step 6: Start Application
 
@@ -130,18 +142,18 @@ docker compose --profile monitoring up -d flower
 
 ```bash
 # API health
-curl -f http://localhost:8000/api/health
+curl -f http://localhost:8000/healthz
 
 # Studio Web
-curl -sf http://localhost:5173/ | head -1
+curl -sf http://localhost:5174/ | head -1
 
 # Flower (if monitoring profile enabled)
 curl -sf http://localhost:5555/
 
-# Ollama
+# Ollama (GPU profile only)
 curl -f http://localhost:11434/api/tags
 
-# Stable Diffusion
+# Stable Diffusion (GPU profile only)
 curl -f http://localhost:7860/sdapi/v1/options
 ```
 
@@ -149,17 +161,16 @@ curl -f http://localhost:7860/sdapi/v1/options
 
 | Route | Expected |
 |---|---|
-| `http://localhost:5173/` | Redirects to `/create` |
-| `http://localhost:5173/create` | Create New Project form |
-| `http://localhost:5173/runs` | Project list (empty initially) |
-| `http://localhost:5173/ops` | Operations dashboard |
-| `http://localhost:5173/ops/library` | Asset Library page |
-| `http://localhost:5173/library` | Redirects to `/ops/library` |
-| `http://localhost:5173/nonexistent` | Redirects to `/create` |
+| `http://localhost:5174/` | Redirects to `/create` |
+| `http://localhost:5174/create` | Create New Project form |
+| `http://localhost:5174/runs` | Project list (empty initially) |
+| `http://localhost:5174/ops` | Operations dashboard |
+| `http://localhost:5174/settings` | Provider API key status page |
+| `http://localhost:5174/nonexistent` | Redirects to `/create` |
 
 ### End-to-End Smoke Test
 
-1. Navigate to `http://localhost:5173/create`
+1. Navigate to `http://localhost:5174/create`
 2. Enter an idea (e.g., "Test video about coding")
 3. Submit → Project created, redirects to `/projects/:id`
 4. Verify stage progression: `IDEA_READY` shown in Project page
@@ -192,11 +203,10 @@ Creator Flow:
 
 Ops Flow:
   /ops                 → OpsPage (monitoring, tools, system info)
-  /ops/library         → LibraryPage (asset browser)
+  /settings            → SettingsPage (provider API key status)
 
 Redirects:
   /                    → /create
-  /library             → /ops/library (legacy redirect)
   /*                   → /create (catch-all)
 ```
 
@@ -219,18 +229,21 @@ Each `*_REVIEW` stage requires explicit approval before advancing.
 
 ## Service Ports
 
-| Service | Port | Protocol |
-|---|---|---|
-| API (FastAPI) | 8000 | HTTP |
-| Studio Web (Vite) | 5173 | HTTP |
-| PostgreSQL | 5432 | TCP |
-| Redis | 6379 | TCP |
-| Ollama | 11434 | HTTP |
-| Stable Diffusion | 7860 | HTTP |
-| TTS (Piper) | 5000 | HTTP |
-| STT (Whisper) | 9000 | HTTP |
-| Flower | 5555 | HTTP |
+| Service | Bind Address | Port | Protocol | Notes |
+|---|---|---|---|---|
+| API (FastAPI) | 127.0.0.1 | 8000 | HTTP | Internal only |
+| Studio Web (nginx) | 127.0.0.1 | 5174→8080 | HTTP | Local only; put behind authenticated reverse proxy for public access |
+| PostgreSQL | 127.0.0.1 | 5432 | TCP | Internal only |
+| Redis | 127.0.0.1 | 6379 | TCP | Internal only |
+| Ollama | 127.0.0.1 | 11434 | HTTP | GPU profile only |
+| Stable Diffusion | 127.0.0.1 | 7860 | HTTP | GPU profile only |
+| TTS (Qwen) | 127.0.0.1 | 8100 | HTTP | GPU profile only |
+| STT (Whisper) | 127.0.0.1 | 9000 | HTTP | GPU profile only |
+| Flower | 127.0.0.1 | 5555 | HTTP | Monitoring profile |
 
+> **Security note:** All services bind to `127.0.0.1` by default to prevent
+> accidental exposure. For public access, place `studio-web` behind an
+> authenticated reverse proxy — do **not** change its bind address to `0.0.0.0`.
 ---
 
 ## GPU Constraints
@@ -245,7 +258,7 @@ Each `*_REVIEW` stage requires explicit approval before advancing.
 
 ## Artifact Storage
 
-- Path: `data/artifacts/{project_id}/{run_id}/`
+- Path: `data/artifacts/{run_id}/`
 - Stored locally on host filesystem
 - Mounted into worker container via Docker volume
 - Types: `idea`, `script`, `visual_plan`, `visual_asset`, `audio`, `subtitle`, `video`, `render_manifest`
@@ -290,7 +303,7 @@ docker compose run --rm api alembic downgrade <revision>
 | Migration fails | DB not ready | Wait for `postgres` health check |
 | GPU lock stuck | Previous task crashed | `docker compose exec redis redis-cli DEL gpu:lock` |
 | Ollama model not found | Model not pulled | `docker compose exec ollama ollama pull qwen3:4b` |
-| CORS errors in browser | Wrong `CORS_ALLOWED_ORIGINS` | Set to `http://localhost:5173` |
+| CORS errors in browser | Wrong `CORS_ORIGINS` | Set to `http://localhost:5174` |
 | Worker not processing | Celery not connected to Redis | Check `REDIS_URL` in `.env` |
 | Studio Web blank page | API not running | Check `docker compose ps api` |
 | AI service unhealthy | GPU not available | Check `nvidia-smi`, verify NVIDIA Container Toolkit |

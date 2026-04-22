@@ -46,7 +46,7 @@ function mockFetch(responses: Record<string, { status?: number; body: unknown }>
 // --------------- tests ---------------
 
 describe("StructuredScriptEditor", () => {
-  beforeEach(() => vi.restoreAllMocks());
+  beforeEach(() => { vi.restoreAllMocks(); });
 
   it("shows loading state initially", () => {
     globalThis.fetch = vi.fn(() => new Promise(() => {})) as unknown as typeof fetch;

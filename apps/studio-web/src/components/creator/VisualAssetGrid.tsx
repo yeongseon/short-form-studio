@@ -10,6 +10,7 @@
  */
 
 import { useState, useEffect, useCallback } from "react";
+import { apiFetch } from "../../api/client";
 
 const DEFAULT_API = "/api/creator";
 
@@ -63,7 +64,7 @@ export default function VisualAssetGrid({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${apiBase}/runs/${runId}/visual-assets`);
+      const res = await apiFetch(`${apiBase}/runs/${runId}/visual-assets`);
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         const msg = body?.detail ?? `Failed to load assets (${res.status})`;
@@ -92,10 +93,8 @@ export default function VisualAssetGrid({
     async (sceneId: string, assetId: number) => {
       setSelecting(assetId);
       try {
-        const res = await fetch(
-          `${apiBase}/runs/${runId}/visual-assets/${sceneId}/select/${assetId}`,
-          { method: "POST" },
-        );
+        const res = await apiFetch(`${apiBase}/runs/${runId}/visual-assets/${sceneId}/select/${assetId}`,
+        { method: "POST" },);
         if (!res.ok) {
           const body = await res.json().catch(() => null);
           const msg = body?.detail ?? `Select failed (${res.status})`;

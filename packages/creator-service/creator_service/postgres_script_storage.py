@@ -9,8 +9,7 @@ class PostgresScriptStorage:
     async def save_draft(self, row: dict[str, Any]) -> dict[str, Any]:
         run_id = row["run_id"]
         pool = await get_pool()
-        async with pool.acquire() as connection:
-            async with connection.transaction():
+        async with pool.acquire() as connection, connection.transaction():
                 await connection.execute(
                     "SELECT pg_advisory_xact_lock($1::int, $2::int)",
                     6101,

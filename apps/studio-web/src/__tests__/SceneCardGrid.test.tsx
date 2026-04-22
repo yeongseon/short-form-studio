@@ -21,6 +21,11 @@ function makeParagraph(overrides: Partial<StoryboardParagraph> = {}): Storyboard
     image_asset_id: null,
     audio_artifact_id: null,
     subtitle_artifact_id: null,
+    section_type: null,
+    speaker: null,
+    duration: null,
+    turn_kind: null,
+    visual_override: null,
     ...overrides,
   };
 }
@@ -33,26 +38,26 @@ function makeNParagraphs(n: number): StoryboardParagraph[] {
 
 describe("SceneCardGrid", () => {
   it("shows empty state when no paragraphs", () => {
-    render(<SceneCardGrid paragraphs={[]} />);
+    render(<SceneCardGrid paragraphs={[]} currentStage="SCRIPT_REVIEW" />);
     expect(screen.getByTestId("scene-card-grid-empty")).toBeInTheDocument();
     expect(screen.getByTestId("scene-card-grid-empty")).toHaveTextContent("No scenes");
   });
 
   it("renders 1 scene card", () => {
-    render(<SceneCardGrid paragraphs={makeNParagraphs(1)} />);
+    render(<SceneCardGrid paragraphs={makeNParagraphs(1)} currentStage="SCRIPT_REVIEW" />);
     expect(screen.getByTestId("scene-card-grid")).toBeInTheDocument();
     expect(screen.getByTestId("scene-card-sec-0")).toBeInTheDocument();
   });
 
   it("renders 5 scene cards", () => {
-    render(<SceneCardGrid paragraphs={makeNParagraphs(5)} />);
+    render(<SceneCardGrid paragraphs={makeNParagraphs(5)} currentStage="SCRIPT_REVIEW" />);
     for (let i = 0; i < 5; i++) {
       expect(screen.getByTestId(`scene-card-sec-${i}`)).toBeInTheDocument();
     }
   });
 
   it("renders 10 scene cards", () => {
-    render(<SceneCardGrid paragraphs={makeNParagraphs(10)} />);
+    render(<SceneCardGrid paragraphs={makeNParagraphs(10)} currentStage="SCRIPT_REVIEW" />);
     const grid = screen.getByTestId("scene-card-grid");
     expect(grid.children).toHaveLength(10);
   });
@@ -63,6 +68,7 @@ describe("SceneCardGrid", () => {
     render(
       <SceneCardGrid
         paragraphs={paragraphs}
+        currentStage="SCRIPT_REVIEW"
         onGenerateImage={onGenImage}
         disabled
       />,
@@ -72,7 +78,7 @@ describe("SceneCardGrid", () => {
   });
 
   it("renders grid container with correct test id", () => {
-    render(<SceneCardGrid paragraphs={makeNParagraphs(3)} />);
+    render(<SceneCardGrid paragraphs={makeNParagraphs(3)} currentStage="SCRIPT_REVIEW" />);
     expect(screen.getByTestId("scene-card-grid")).toBeInTheDocument();
   });
 });

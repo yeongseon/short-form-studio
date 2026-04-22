@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from creator_provider.registry import ModelCatalogEntry, ProviderCategory, ProviderRegistry
 
@@ -97,6 +98,33 @@ class ProviderRegistryTests(unittest.TestCase):
 
         with self.assertRaises(KeyError):
             registry.get_provider("test-llm")
+
+    def test_create_default_uses_default_local_endpoints_when_env_unset(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            registry = ProviderRegistry.create_default()
+
+        self.assertEqual(registry.resolve("qwen3-4b").endpoint, "http://ollama:11434")
+        self.assertEqual(registry.resolve("sd15").endpoint, "http://stable-diffusion:7860")
+        self.assertEqual(registry.resolve("qwen3-tts").endpoint, "http://tts-qwen3:8100")
+        self.assertEqual(registry.resolve("whisper-small").endpoint, "http://stt-whisper:8200")
+
+    def test_create_default_uses_env_local_endpoints(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "OLLAMA_BASE_URL": "http://example-ollama:1234",
+                "STABLE_DIFFUSION_BASE_URL": "http://example-sd:5678",
+                "TTS_QWEN3_BASE_URL": "http://example-tts:9012",
+                "STT_WHISPER_BASE_URL": "http://example-stt:3456",
+            },
+            clear=False,
+        ):
+            registry = ProviderRegistry.create_default()
+
+        self.assertEqual(registry.resolve("qwen3-4b").endpoint, "http://example-ollama:1234")
+        self.assertEqual(registry.resolve("sd15").endpoint, "http://example-sd:5678")
+        self.assertEqual(registry.resolve("qwen3-tts").endpoint, "http://example-tts:9012")
+        self.assertEqual(registry.resolve("whisper-small").endpoint, "http://example-stt:3456")
 
 
 if __name__ == "__main__":

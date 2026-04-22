@@ -1,8 +1,2 @@
-celery
-redis
-watchfiles
-
-
-# Dev dependencies
-ruff
-pytest
+celery==5.6.3
+redis==6.4.0

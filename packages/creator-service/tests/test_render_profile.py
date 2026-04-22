@@ -1,11 +1,9 @@
 import unittest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from creator_service.render_profile import (
-    RenderProfile, Codec, AudioCodec, TransitionStyle
-)
 from creator_service.ffmpeg_service import FFmpegService, RenderInput
+from creator_service.render_profile import AudioCodec, Codec, RenderProfile, TransitionStyle
 
 
 class TestRenderProfile(unittest.TestCase):

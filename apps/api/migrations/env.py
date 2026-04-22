@@ -1,8 +1,9 @@
 """Alembic environment configuration."""
-from logging.config import fileConfig
-from sqlalchemy import engine_from_config, pool
-from alembic import context
 import os
+from logging.config import fileConfig
+
+from alembic import context
+from sqlalchemy import engine_from_config, pool
 
 config = context.config
 
@@ -12,14 +13,18 @@ if config.config_file_name is not None:
 # Override URL from environment if available
 db_url = os.getenv("DATABASE_URL")
 if not db_url:
+    password = os.getenv("POSTGRES_PASSWORD")
+    if not password:
+        raise RuntimeError(
+            "Set DATABASE_URL or POSTGRES_PASSWORD before running migrations. "
+            "See .env.example for reference values."
+        )
     user = os.getenv("POSTGRES_USER", "short_form_user")
-    password = os.getenv("POSTGRES_PASSWORD", "short_form_password")
     host = os.getenv("POSTGRES_HOST", "postgres")
     port = os.getenv("POSTGRES_PORT", "5432")
-    db = os.getenv("POSTGRES_DB", "short_form_pipeline")
+    db = os.getenv("POSTGRES_DB", "short_form_studio")
     db_url = f"postgresql://{user}:{password}@{host}:{port}/{db}"
-if db_url:
-    config.set_main_option("sqlalchemy.url", db_url)
+config.set_main_option("sqlalchemy.url", db_url)
 
 target_metadata = None
 

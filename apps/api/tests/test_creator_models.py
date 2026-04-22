@@ -1,6 +1,9 @@
 # pyright: reportMissingImports=false
 
+from collections.abc import Sequence
+
 import pytest
+from fastapi.routing import APIRoute
 from shorts_api.main import models_router
 
 
@@ -70,7 +73,6 @@ class StubModelCatalogService:
             "providers": [
                 {
                     "name": "ollama",
-                    "endpoint": "http://ollama:11434",
                     "healthy": True,
                     "loaded_model": "qwen3-4b",
                     "gpu_locked": False,
@@ -84,11 +86,15 @@ class StubModelCatalogService:
         }
 
 
+def _iter_api_routes(routes: Sequence[object]) -> list[APIRoute]:
+    return [route for route in routes if isinstance(route, APIRoute)]
+
+
 @pytest.fixture
 def stub_catalog_service(monkeypatch: pytest.MonkeyPatch) -> StubModelCatalogService:
     service = StubModelCatalogService()
 
-    for route in models_router.routes:
+    for route in _iter_api_routes(models_router.routes):
         if route.name in {"list_models", "get_model_status"}:
             monkeypatch.setitem(route.endpoint.__globals__, "model_catalog_service", service)
 
@@ -136,4 +142,8 @@ async def test_model_status_returns_provider_and_gpu_lock(client, stub_catalog_s
     assert "gpu_lock" in body
     assert isinstance(body["providers"], list)
     assert isinstance(body["gpu_lock"], dict)
+    for provider_entry in body["providers"]:
+        assert "endpoint" not in provider_entry, (
+            f"Provider '{provider_entry.get('name')}' leaks 'endpoint' field"
+        )
     assert stub_catalog_service.status_calls == 1

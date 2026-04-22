@@ -2,9 +2,9 @@ import asyncio
 import json
 
 import pytest
-
-from creator_service.run_service import InMemoryRunStorage, RunService
 from creator_domain.models import ModelSelection, RunStage
+from creator_service.run_service import InMemoryRunStorage, RunService
+
 
 def test_create_run_with_model_defaults_and_style_preset() -> None:
     service = RunService(InMemoryRunStorage())

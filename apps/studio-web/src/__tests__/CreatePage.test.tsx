@@ -74,8 +74,8 @@ describe("CreatePage", () => {
     const ideaTab = screen.getByRole("tab", { name: "Start from Idea" });
     expect(ideaTab).toHaveAttribute("aria-selected", "true");
 
-    const mdTab = screen.getByRole("tab", { name: "Start from Markdown" });
-    expect(mdTab).toHaveAttribute("aria-selected", "false");
+    const jsonTab = screen.getByRole("tab", { name: "Start from JSON" });
+    expect(jsonTab).toHaveAttribute("aria-selected", "false");
   });
 
   it("shows idea form fields on the default tab", () => {
@@ -86,16 +86,16 @@ describe("CreatePage", () => {
     expect(screen.getByLabelText(/Content Goal/)).toBeTruthy();
   });
 
-  it("switches to markdown tab when clicked", () => {
+  it("switches to JSON tab when clicked", () => {
     renderCreatePage();
-    const mdTab = screen.getByRole("tab", { name: "Start from Markdown" });
-    fireEvent.click(mdTab);
+    const jsonTab = screen.getByRole("tab", { name: "Start from JSON" });
+    fireEvent.click(jsonTab);
 
-    expect(mdTab).toHaveAttribute("aria-selected", "true");
+    expect(jsonTab).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Start from Idea" })).toHaveAttribute("aria-selected", "false");
 
-    // Markdown tab content should be visible
-    expect(screen.getByLabelText(/Markdown Content/)).toBeTruthy();
+    // JSON tab content should be visible
+    expect(screen.getByLabelText(/JSON Script/)).toBeTruthy();
     expect(screen.getByLabelText(/Or upload a file/)).toBeTruthy();
   });
 
@@ -119,17 +119,18 @@ describe("CreatePage", () => {
     expect(goalInput.value).toBe("educational");
   });
 
-  it("allows typing in markdown form fields", () => {
+  it("allows typing in JSON form fields", () => {
     renderCreatePage();
-    fireEvent.click(screen.getByRole("tab", { name: "Start from Markdown" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Start from JSON" }));
 
     const titleInput = screen.getByLabelText(/^Title/) as HTMLInputElement;
-    fireEvent.change(titleInput, { target: { value: "MD Project" } });
-    expect(titleInput.value).toBe("MD Project");
+    fireEvent.change(titleInput, { target: { value: "JSON Project" } });
+    expect(titleInput.value).toBe("JSON Project");
 
-    const mdTextarea = screen.getByLabelText(/Markdown Content/) as HTMLTextAreaElement;
-    fireEvent.change(mdTextarea, { target: { value: "# Scene 1\nHello" } });
-    expect(mdTextarea.value).toBe("# Scene 1\nHello");
+    const jsonTextarea = screen.getByLabelText(/JSON Script/) as HTMLTextAreaElement;
+    const testJson = '{"scenes":[{"type":"hook","text":"Hello"}]}';
+    fireEvent.change(jsonTextarea, { target: { value: testJson } });
+    expect(jsonTextarea.value).toBe(testJson);
   });
 
   it("style preset select works", () => {
@@ -160,8 +161,8 @@ describe("CreatePage", () => {
     // Idea tab
     expect(screen.getByRole("button", { name: "Create Project" })).toBeTruthy();
 
-    // Markdown tab
-    fireEvent.click(screen.getByRole("tab", { name: "Start from Markdown" }));
+    // JSON tab
+    fireEvent.click(screen.getByRole("tab", { name: "Start from JSON" }));
     expect(screen.getByRole("button", { name: "Create Project" })).toBeTruthy();
   });
 
@@ -180,9 +181,9 @@ describe("CreatePage", () => {
     expect(screen.queryByText("STT Model")).toBeNull();
   });
 
-  it("shows only image model on markdown tab", async () => {
+  it("shows only image model on JSON tab", async () => {
     renderCreatePage();
-    fireEvent.click(screen.getByRole("tab", { name: "Start from Markdown" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Start from JSON" }));
     await waitFor(() => {
       expect(screen.getByTestId("model-selector")).toBeTruthy();
     });
@@ -196,27 +197,27 @@ describe("CreatePage", () => {
     expect(screen.getByRole("tabpanel")).toBeTruthy();
   });
 
-  it("markdown file upload input is present on markdown tab", () => {
+  it("JSON file upload input is present on JSON tab", () => {
     renderCreatePage();
-    fireEvent.click(screen.getByRole("tab", { name: "Start from Markdown" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Start from JSON" }));
     const fileInput = screen.getByLabelText(/Or upload a file/) as HTMLInputElement;
     expect(fileInput).toBeTruthy();
     expect(fileInput.type).toBe("file");
-    expect(fileInput.accept).toBe(".md,.txt");
+    expect(fileInput.accept).toBe(".json,.txt");
   });
 
-  it("file upload populates markdown textarea", async () => {
+  it("file upload populates JSON textarea", async () => {
     renderCreatePage();
-    fireEvent.click(screen.getByRole("tab", { name: "Start from Markdown" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Start from JSON" }));
 
     const fileInput = screen.getByLabelText(/Or upload a file/) as HTMLInputElement;
-    const fileContent = "# Test Script\nScene one content";
-    const file = new File([fileContent], "script.md", { type: "text/markdown" });
+    const fileContent = '{"scenes":[{"type":"hook","text":"Test"}]}';
+    const file = new File([fileContent], "script.json", { type: "application/json" });
 
     fireEvent.change(fileInput, { target: { files: [file] } });
 
     await waitFor(() => {
-      const textarea = screen.getByLabelText(/Markdown Content/) as HTMLTextAreaElement;
+      const textarea = screen.getByLabelText(/JSON Script/) as HTMLTextAreaElement;
       expect(textarea.value).toBe(fileContent);
     });
   });
@@ -234,7 +235,7 @@ describe("CreatePage", () => {
     expect(options).toEqual(["default", "cinematic", "dynamic", "minimal"]);
   });
 
-  // --- New tests for Issue #33: API submission flow ---
+  // --- API submission flow tests ---
 
   it("submits idea form and navigates to project page", async () => {
     mockFetchFullFlow();
@@ -372,6 +373,16 @@ describe("CreatePage", () => {
     });
     expect(screen.getByTestId("idea-form-error").textContent).toBe("Internal error");
     expect(mockNavigate).not.toHaveBeenCalled();
+
+    // Verify orphan cleanup: DELETE /projects/42 was called
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const deleteCall = fetchMock.mock.calls.find(
+      (c: unknown[]) =>
+        typeof c[0] === "string" &&
+        c[0].includes("/projects/42") &&
+        (c[1] as RequestInit)?.method === "DELETE",
+    );
+    expect(deleteCall).toBeTruthy();
   });
 
   it("shows 'Creating…' on submit button while submitting", async () => {
@@ -406,16 +417,16 @@ describe("CreatePage", () => {
     expect(panel.contains(form)).toBe(true);
   });
 
-  // --- Markdown submission flow tests ---
+  // --- JSON submission flow tests ---
 
-  it("submits markdown form and navigates to project page", async () => {
+  it("submits JSON form and navigates to project page", async () => {
     const MOCK_IMPORT = { project_id: 42, run_id: 7, draft: {} };
     vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const url = typeof input === "string" ? input : (input as Request).url;
       if (url.includes("/models")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_MODELS) } as Response);
       }
-      if (url.includes("/import-markdown")) {
+      if (url.includes("/import-json")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_IMPORT) } as Response);
       }
       if (url.includes("/projects")) {
@@ -425,10 +436,12 @@ describe("CreatePage", () => {
     });
 
     renderCreatePage();
-    fireEvent.click(screen.getByRole("tab", { name: "Start from Markdown" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Start from JSON" }));
 
-    fireEvent.change(screen.getByLabelText(/^Title/), { target: { value: "MD Project" } });
-    fireEvent.change(screen.getByLabelText(/Markdown Content/), { target: { value: "# Scene 1\nHello world" } });
+    fireEvent.change(screen.getByLabelText(/^Title/), { target: { value: "JSON Project" } });
+    fireEvent.change(screen.getByLabelText(/JSON Script/), {
+      target: { value: '{"scenes":[{"type":"hook","text":"Hello world"}]}' },
+    });
 
     fireEvent.click(screen.getByRole("button", { name: "Create Project" }));
 
@@ -436,37 +449,38 @@ describe("CreatePage", () => {
       expect(mockNavigate).toHaveBeenCalledWith("/projects/42");
     });
 
-    // Verify project creation was called with source_type=markdown
+    // Verify project creation was called with source_type=pasted_json
     const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
     const projectCall = calls.find(
-      (c: unknown[]) => typeof c[0] === "string" && c[0].includes("/projects") && !c[0].includes("/script") && !c[0].includes("/models"),
+      (c: unknown[]) =>
+        typeof c[0] === "string" &&
+        c[0].includes("/projects") &&
+        !c[0].includes("/script") &&
+        !c[0].includes("/models"),
     );
     expect(projectCall).toBeTruthy();
     const projectBody = JSON.parse((projectCall![1] as RequestInit).body as string);
-    expect(projectBody.source_type).toBe("markdown");
-    expect(projectBody.markdown_source).toBe("# Scene 1\nHello world");
+    expect(projectBody.source_type).toBe("pasted_json");
 
-    // Verify import-markdown was called
+    // Verify import-json was called
     const importCall = calls.find(
-      (c: unknown[]) => typeof c[0] === "string" && c[0].includes("/import-markdown"),
+      (c: unknown[]) => typeof c[0] === "string" && c[0].includes("/import-json"),
     );
     expect(importCall).toBeTruthy();
     const importBody = JSON.parse((importCall![1] as RequestInit).body as string);
-    expect(importBody.markdown).toBe("# Scene 1\nHello world");
+    expect(importBody.json_script).toBe('{"scenes":[{"type":"hook","text":"Hello world"}]}');
   });
 
-  it("does not submit markdown when content is empty", async () => {
+  it("does not submit JSON when content is empty", async () => {
     mockFetchFullFlow();
     renderCreatePage();
     await waitFor(() => {
       expect(screen.getByTestId("model-selector")).toBeTruthy();
     });
-    fireEvent.click(screen.getByRole("tab", { name: "Start from Markdown" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Start from JSON" }));
 
-    // Leave markdown content empty, just set title
-    fireEvent.change(screen.getByLabelText(/^Title/), { target: { value: "My Project" } });
-    // Clear pre-filled template to test empty submission
-    fireEvent.change(screen.getByLabelText(/Markdown Content/), { target: { value: "" } });
+    // Clear pre-filled JSON template to test empty submission
+    fireEvent.change(screen.getByLabelText(/JSON Script/), { target: { value: "" } });
     fireEvent.click(screen.getByRole("button", { name: "Create Project" }));
 
     await waitFor(() => {
@@ -474,17 +488,32 @@ describe("CreatePage", () => {
     });
   });
 
-  it("shows error when import-markdown fails", async () => {
+  it("shows error for invalid JSON syntax before sending", async () => {
+    mockFetchFullFlow();
+    renderCreatePage();
+    fireEvent.click(screen.getByRole("tab", { name: "Start from JSON" }));
+
+    fireEvent.change(screen.getByLabelText(/JSON Script/), { target: { value: "{invalid json" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create Project" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("json-form-error")).toBeTruthy();
+    });
+    expect(screen.getByTestId("json-form-error").textContent).toContain("Invalid JSON");
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it("shows error when import-json fails", async () => {
     vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const url = typeof input === "string" ? input : (input as Request).url;
       if (url.includes("/models")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_MODELS) } as Response);
       }
-      if (url.includes("/import-markdown")) {
+      if (url.includes("/import-json")) {
         return Promise.resolve({
           ok: false,
           status: 400,
-          json: () => Promise.resolve({ detail: "markdown content must not be empty" }),
+          json: () => Promise.resolve({ detail: "JSON content must not be empty" }),
         } as Response);
       }
       if (url.includes("/projects")) {
@@ -494,26 +523,38 @@ describe("CreatePage", () => {
     });
 
     renderCreatePage();
-    fireEvent.click(screen.getByRole("tab", { name: "Start from Markdown" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Start from JSON" }));
 
-    fireEvent.change(screen.getByLabelText(/Markdown Content/), { target: { value: "# Test" } });
+    fireEvent.change(screen.getByLabelText(/JSON Script/), {
+      target: { value: '{"scenes":[]}' },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Create Project" }));
 
     await waitFor(() => {
-      expect(screen.getByTestId("markdown-form-error")).toBeTruthy();
+      expect(screen.getByTestId("json-form-error")).toBeTruthy();
     });
-    expect(screen.getByTestId("markdown-form-error").textContent).toBe("markdown content must not be empty");
+    expect(screen.getByTestId("json-form-error").textContent).toBe("JSON content must not be empty");
     expect(mockNavigate).not.toHaveBeenCalled();
+
+    // Verify orphan cleanup: DELETE /projects/42 was called
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    const deleteCall = fetchMock.mock.calls.find(
+      (c: unknown[]) =>
+        typeof c[0] === "string" &&
+        c[0].includes("/projects/42") &&
+        (c[1] as RequestInit)?.method === "DELETE",
+    );
+    expect(deleteCall).toBeTruthy();
   });
 
-  it("uses 'Untitled' when markdown title is empty", async () => {
+  it("uses 'Untitled' when JSON title is empty", async () => {
     const MOCK_IMPORT = { project_id: 42, run_id: 7, draft: {} };
     vi.spyOn(globalThis, "fetch").mockImplementation((input) => {
       const url = typeof input === "string" ? input : (input as Request).url;
       if (url.includes("/models")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_MODELS) } as Response);
       }
-      if (url.includes("/import-markdown")) {
+      if (url.includes("/import-json")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(MOCK_IMPORT) } as Response);
       }
       if (url.includes("/projects")) {
@@ -523,10 +564,12 @@ describe("CreatePage", () => {
     });
 
     renderCreatePage();
-    fireEvent.click(screen.getByRole("tab", { name: "Start from Markdown" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Start from JSON" }));
 
-    // No title, just markdown content
-    fireEvent.change(screen.getByLabelText(/Markdown Content/), { target: { value: "# Scene" } });
+    // No title, just JSON content
+    fireEvent.change(screen.getByLabelText(/JSON Script/), {
+      target: { value: '{"scenes":[{"type":"hook","text":"Scene"}]}' },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Create Project" }));
 
     await waitFor(() => {
@@ -535,7 +578,11 @@ describe("CreatePage", () => {
 
     const calls = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls;
     const projectCall = calls.find(
-      (c: unknown[]) => typeof c[0] === "string" && c[0].includes("/projects") && !c[0].includes("/script") && !c[0].includes("/models"),
+      (c: unknown[]) =>
+        typeof c[0] === "string" &&
+        c[0].includes("/projects") &&
+        !c[0].includes("/script") &&
+        !c[0].includes("/models"),
     );
     const projectBody = JSON.parse((projectCall![1] as RequestInit).body as string);
     expect(projectBody.title).toBe("Untitled");

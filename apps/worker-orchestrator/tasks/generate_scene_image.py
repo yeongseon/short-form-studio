@@ -22,13 +22,15 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+redis: Any  # optional dependency; may be None at runtime
 try:
     import redis
 except ImportError:
-    redis = None  # type: ignore[assignment]
+    redis = None
 
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
+from creator_domain.sanitize import sanitize_path_component
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.run_service import run_service as _run_service
@@ -89,11 +91,13 @@ def _asset_dir(run_id: int) -> Path:
 
 
 async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
-    remover = getattr(_run_service.storage, "remove_active_task_id", None)
+    remover: Any = getattr(_run_service.storage, "remove_active_task_id", None)
     if not callable(remover):
         return
     try:
-        await remover(run_id, task_id)
+        maybe_result = remover(run_id, task_id)
+        if asyncio.iscoroutine(maybe_result):
+            await maybe_result
     except Exception:
         logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
 
@@ -148,6 +152,8 @@ def generate_scene_image(
                     f"Run {run_id} is in stage {current.value}, "
                     f"expected one of {', '.join(s for s in _ALLOWED_STAGES)}"
                 )
+            if run.get("status") == "cancelled":
+                raise _StageGuardError(f"Run {run_id} is cancelled")
 
             # 2. Fetch active visual plan.
             plan = await _visual_plan_service.get_active_plan(run_id)
@@ -213,7 +219,8 @@ def generate_scene_image(
                         params = dict(entry.default_params or {})
                         if image_params:
                             params.update(image_params)
-                        target_path = str(asset_dir / f"{target_scene.scene_id}-{uuid4().hex}.png")
+                        safe_scene_id = sanitize_path_component(target_scene.scene_id, label="scene_id")
+                        target_path = str(asset_dir / f"{safe_scene_id}-{uuid4().hex}.png")
                         params["output_path"] = target_path
                         await provider.generate(effective_prompt, params)
 

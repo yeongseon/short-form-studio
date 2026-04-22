@@ -244,12 +244,12 @@ function mockFetchProjectAndRuns(
           Promise.resolve({ sections: [] }),
       } as Response);
     }
-    // GET /runs/:id/script/markdown
-    if (url.includes("/script/markdown")) {
+    // GET /runs/:id/script/json
+    if (url.includes("/script/json")) {
       return Promise.resolve({
         ok: true,
         json: () =>
-          Promise.resolve({ markdown: "# Test Script" }),
+          Promise.resolve({ json_script: '{"scenes":[]}', version: 1 }),
       } as Response);
     }
     // GET /runs/:id (for refreshRun)
@@ -318,7 +318,7 @@ describe("ProjectPage", () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, []);
     renderPage();
     await waitFor(() => {
-      expect(screen.getByText("My Short")).toBeInTheDocument();
+      expect(screen.getByTestId("project-title")).toHaveValue("My Short");
     });
     expect(screen.getByTestId("no-run")).toBeInTheDocument();
     expect(screen.getByText("No runs yet")).toBeInTheDocument();
@@ -342,14 +342,14 @@ describe("ProjectPage", () => {
     expect(screen.getByText(/Stage: SCRIPT_REVIEW/)).toBeInTheDocument();
   });
 
-  it("shows 'Untitled Project' for null title", async () => {
+  it("shows 'Untitled Project' placeholder for null title", async () => {
     mockFetchProjectAndRuns(
       { ...MOCK_PROJECT, title: null as unknown as string },
       [],
     );
     renderPage();
     await waitFor(() => {
-      expect(screen.getByText("Untitled Project")).toBeInTheDocument();
+      expect(screen.getByPlaceholderText("Untitled Project")).toBeInTheDocument();
     });
   });
 
@@ -397,26 +397,21 @@ describe("ProjectPage", () => {
     await waitFor(() => {
       expect(screen.getByTestId("script-composer")).toBeInTheDocument();
     });
-    // Stepper visible
-    expect(screen.getByText("Idea")).toBeInTheDocument();
-    expect(screen.getByText("Script")).toBeInTheDocument();
     // Generate Script button visible
     expect(
       screen.getByRole("button", { name: "Generate Script" }),
     ).toBeInTheDocument();
   });
 
-  it("shows editor tabs for SCRIPT_REVIEW via ScriptComposer", async () => {
+  it("shows JSON editor (no tabs) for SCRIPT_REVIEW via ScriptComposer", async () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
     renderPage();
     await waitFor(() => {
       expect(screen.getByTestId("script-composer")).toBeInTheDocument();
     });
-    // Editor tabs
-    expect(screen.getByRole("tab", { name: "Markdown" })).toBeInTheDocument();
-    expect(
-      screen.getByRole("tab", { name: "Structured" }),
-    ).toBeInTheDocument();
+    // JSON editor shown directly — no tab UI
+    expect(screen.getByTestId("json-editor")).toBeInTheDocument();
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
     // Confirm + Regenerate buttons visible (ScriptComposer labels)
     expect(
       screen.getByRole("button", {
@@ -428,24 +423,15 @@ describe("ProjectPage", () => {
     ).toBeInTheDocument();
   });
 
-  it("switches between markdown and structured tabs", async () => {
+  it("shows only JSON editor without structured tab", async () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_REVIEW]);
     renderPage();
     await waitFor(() => {
-      expect(
-        screen.getByRole("tab", { name: "Markdown" }),
-      ).toBeInTheDocument();
+      expect(screen.getByTestId("json-editor")).toBeInTheDocument();
     });
-
-    const mdTab = screen.getByRole("tab", { name: "Markdown" });
-    expect(mdTab.getAttribute("aria-selected")).toBe("true");
-
-    fireEvent.click(screen.getByRole("tab", { name: "Structured" }));
-    await waitFor(() => {
-      const stTab = screen.getByRole("tab", { name: "Structured" });
-      expect(stTab.getAttribute("aria-selected")).toBe("true");
-      expect(mdTab.getAttribute("aria-selected")).toBe("false");
-    });
+    // No structured tab or tablist present
+    expect(screen.queryByText("Structured")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
   });
 
   it("shows generating indicator for SCRIPT_GENERATING", async () => {
@@ -574,20 +560,18 @@ describe("ProjectPage", () => {
     renderPage();
     await waitFor(() => {
       expect(
-        screen.getByTestId("vp-generating-indicator"),
+        screen.getByTestId("visual-plan-stage-info"),
       ).toBeInTheDocument();
     });
     expect(screen.getByText(/Generating Visual Plan/i)).toBeInTheDocument();
-    expect(screen.getByText("Visual Plan Setup")).toBeInTheDocument();
+    expect(screen.getByTestId("visual-plan-stage-info")).toHaveTextContent("visual plan");
   });
 
   it("shows VisualPlanEditor and action buttons for VISUAL_PLAN_REVIEW", async () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_VP_REVIEW]);
     renderPage();
     await waitFor(() => {
-      expect(
-        screen.getByTestId("visual-plan-editor"),
-      ).toBeInTheDocument();
+      expect(screen.getByTestId("unified-scene-workspace")).toBeInTheDocument();
     });
     expect(
       screen.getByRole("button", { name: "Approve Visual Plan" }),
@@ -688,7 +672,7 @@ describe("ProjectPage", () => {
     renderPage();
     await waitFor(() => {
       expect(
-        screen.getByTestId("storyboard-workspace"),
+        screen.getByTestId("unified-scene-workspace"),
       ).toBeInTheDocument();
     });
   });
@@ -698,7 +682,7 @@ describe("ProjectPage", () => {
     renderPage();
     await waitFor(() => {
       expect(
-        screen.getByTestId("storyboard-workspace"),
+        screen.getByTestId("unified-scene-workspace"),
       ).toBeInTheDocument();
     });
   });
@@ -708,7 +692,7 @@ describe("ProjectPage", () => {
     renderPage();
     await waitFor(() => {
       expect(
-        screen.getByTestId("storyboard-workspace"),
+        screen.getByTestId("unified-scene-workspace"),
       ).toBeInTheDocument();
     });
   });
@@ -718,7 +702,7 @@ describe("ProjectPage", () => {
     renderPage();
     await waitFor(() => {
       expect(
-        screen.getByTestId("storyboard-workspace"),
+        screen.getByTestId("unified-scene-workspace"),
       ).toBeInTheDocument();
     });
   });
@@ -728,7 +712,7 @@ describe("ProjectPage", () => {
     renderPage();
     await waitFor(() => {
       expect(
-        screen.getByTestId("storyboard-workspace"),
+        screen.getByTestId("unified-scene-workspace"),
       ).toBeInTheDocument();
     });
   });
@@ -738,7 +722,7 @@ describe("ProjectPage", () => {
     renderPage();
     await waitFor(() => {
       expect(
-        screen.getByTestId("storyboard-workspace"),
+        screen.getByTestId("unified-scene-workspace"),
       ).toBeInTheDocument();
     });
     expect(screen.getByTestId("final-review-section")).toBeInTheDocument();
@@ -754,7 +738,7 @@ describe("ProjectPage", () => {
     renderPage();
     await waitFor(() => {
       expect(
-        screen.getByTestId("storyboard-workspace"),
+        screen.getByTestId("unified-scene-workspace"),
       ).toBeInTheDocument();
     });
     // The storyboard workspace should render a scene card for sec-0
@@ -849,20 +833,20 @@ describe("ProjectPage", () => {
     const { container } = renderPage();
     await waitFor(() => {
       expect(
-        screen.getByTestId("storyboard-workspace"),
+        screen.getByTestId("unified-scene-workspace"),
       ).toBeInTheDocument();
     });
     const wrapper = container.firstElementChild as HTMLElement;
     expect(wrapper.style.maxWidth).toBe("1200px");
   });
 
-  it("uses narrower max-width for script stages", async () => {
+  it("uses unified max-width for script stages", async () => {
     mockFetchProjectAndRuns(MOCK_PROJECT, [MOCK_RUN_IDEA]);
     const { container } = renderPage();
     await waitFor(() => {
       expect(screen.getByTestId("script-composer")).toBeInTheDocument();
     });
     const wrapper = container.firstElementChild as HTMLElement;
-    expect(wrapper.style.maxWidth).toBe("960px");
+    expect(wrapper.style.maxWidth).toBe("1200px");
   });
 });

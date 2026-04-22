@@ -15,12 +15,13 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
+redis: Any  # optional dependency; may be None at runtime
 try:
     import redis
 except ImportError:
-    redis = None  # type: ignore[assignment]
+    redis = None
 
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
@@ -40,8 +41,8 @@ _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
 # hasn't advanced past subtitle generation. The task may start directly
 # from AUDIO_GENERATING or from SUBTITLE_GENERATING after API-side CAS.
 _SAFE_STAGES = frozenset({
-    RunStage.AUDIO_GENERATING.value,
-    RunStage.SUBTITLE_GENERATING.value,
+    "AUDIO_GENERATING",
+    "SUBTITLE_GENERATING",
 })
 
 
@@ -68,7 +69,9 @@ async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
     if not callable(remover):
         return
     try:
-        await remover(run_id, task_id)
+        maybe_result = remover(run_id, task_id)
+        if asyncio.iscoroutine(maybe_result):
+            await maybe_result
     except Exception:
         logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
 
@@ -78,7 +81,7 @@ def generate_subtitles(
     self,
     run_id: int,
     subtitle_model: str = "whisper-small",
-    subtitle_format: str = "srt",
+    subtitle_format: Literal["srt", "vtt"] = "srt",
 ) -> dict[str, object]:
     start_time = datetime.now(timezone.utc)
     start_iso = start_time.isoformat()
@@ -95,6 +98,9 @@ def generate_subtitles(
         nonlocal provider_type, endpoint, gpu_lock_acquired_at, gpu_lock_released_at
         nonlocal redis_client, lock_acquired
         try:
+            if subtitle_format not in ("srt", "vtt"):
+                raise ValueError(f"Invalid subtitle_format: {subtitle_format!r}. Must be 'srt' or 'vtt'.")
+
             # 1. Stage guard — reject before any side effects.
             run = await _run_service.storage.get_run(run_id)
             if run is None:
@@ -111,6 +117,8 @@ def generate_subtitles(
                     f"Run {run_id} is in stage {current.value}, "
                     f"expected one of {', '.join(s for s in _ALLOWED_STAGES)}"
                 )
+            if run.get("status") == "cancelled":
+                raise _StageGuardError(f"Run {run_id} is cancelled")
 
             # 2. Fetch approved script draft.
             draft = await _script_service.get_active_draft(run_id)

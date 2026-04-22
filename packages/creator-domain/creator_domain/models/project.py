@@ -1,16 +1,17 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Project(BaseModel):
     id: int
-    title: str | None = None
-    source_type: Literal["idea", "markdown", "url"] = "idea"
+    title: str | None = Field(default=None, max_length=200)
+    source_type: Literal["idea", "markdown", "pasted_json", "url"] = "idea"
     idea_brief: str | None = None
     markdown_source: str | None = None
     url_source: str | None = None
+    json_script: str | None = None
     status: Literal["draft", "active", "completed", "archived"] = "draft"
     created_at: datetime
     updated_at: datetime

@@ -2,6 +2,8 @@
  * ConfirmDialog — reusable confirmation modal for destructive / important actions.
  */
 
+import { useEffect, useRef, useId } from "react";
+
 interface ConfirmDialogProps {
   open: boolean;
   title: string;
@@ -31,6 +33,57 @@ export default function ConfirmDialog({
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const titleId = useId();
+  const descId = useId();
+
+  // Focus trap + Escape handler
+  useEffect(() => {
+    if (!open) return;
+
+    // Store previously focused element to restore on close
+    previousFocusRef.current = document.activeElement as HTMLElement | null;
+
+    // Focus the cancel button (safe default) on open
+    const dialog = dialogRef.current;
+    if (dialog) {
+      const cancelBtn = dialog.querySelector<HTMLElement>("button[data-role='cancel']");
+      cancelBtn?.focus();
+    }
+
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        onCancel();
+        return;
+      }
+
+      // Focus trap: Tab / Shift+Tab cycles within dialog
+      if (e.key === "Tab" && dialog) {
+        const focusable = dialog.querySelectorAll<HTMLElement>("button:not([disabled])");
+        if (focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      // Restore focus
+      previousFocusRef.current?.focus();
+    };
+  }, [open, onCancel]);
+
   if (!open) return null;
 
   const colors = VARIANT_COLORS[variant] ?? VARIANT_COLORS.danger;
@@ -50,6 +103,11 @@ export default function ConfirmDialog({
       }}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        aria-describedby={descId}
         data-testid="confirm-dialog"
         onClick={(e) => e.stopPropagation()}
         style={{
@@ -61,15 +119,16 @@ export default function ConfirmDialog({
           padding: 24,
         }}
       >
-        <h3 style={{ margin: "0 0 12px", fontSize: 16, fontWeight: 700, color: "#111827" }}>
+        <h3 id={titleId} style={{ margin: "0 0 12px", fontSize: 16, fontWeight: 700, color: "#111827" }}>
           {title}
         </h3>
-        <p style={{ margin: "0 0 24px", fontSize: 14, color: "#374151", lineHeight: 1.5 }}>
+        <p id={descId} style={{ margin: "0 0 24px", fontSize: 14, color: "#374151", lineHeight: 1.5 }}>
           {message}
         </p>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           <button
             type="button"
+            data-role="cancel"
             onClick={onCancel}
             disabled={loading}
             style={{

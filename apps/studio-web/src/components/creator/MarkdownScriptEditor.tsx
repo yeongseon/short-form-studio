@@ -8,6 +8,7 @@
  */
 
 import { useState, useEffect, useCallback } from "react";
+import { apiFetch } from "../../api/client";
 
 // --------------- types ---------------
 
@@ -59,7 +60,7 @@ export default function MarkdownScriptEditor({
       if (showLoading) setLoading(true);
       setError(null);
       try {
-        const res = await fetch(`${apiBase}/runs/${runId}/script/markdown`);
+        const res = await apiFetch(`${apiBase}/runs/${runId}/script/markdown`);
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
           const detail = body.detail ?? `Failed to load (${res.status})`;
@@ -118,7 +119,7 @@ export default function MarkdownScriptEditor({
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`${apiBase}/runs/${runId}/script/markdown`, {
+      const res = await apiFetch(`${apiBase}/runs/${runId}/script/markdown`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ markdown }),
@@ -130,8 +131,23 @@ export default function MarkdownScriptEditor({
       const data = await res.json();
       const draft = (data.draft ?? {}) as Record<string, unknown>;
       setSavedMarkdown(markdown);
-      setVersion((draft.version as number) ?? version);
+      const newVersion = (draft.version as number) ?? version;
+      setVersion(newVersion);
       onSuccess?.("save", data);
+
+      // Auto-parse after successful save to sync structured data
+      try {
+        const parseRes = await apiFetch(`${apiBase}/runs/${runId}/script/parse-markdown`, {
+          method: "POST",
+        });
+        if (parseRes.ok) {
+          const parseData = await parseRes.json();
+          setVersion(parseData.version ?? newVersion);
+          onSuccess?.("parse", parseData);
+        }
+      } catch {
+        // parse failure is non-critical — structured data just stays stale
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to save";
       setError(msg);
@@ -148,7 +164,7 @@ export default function MarkdownScriptEditor({
     setParsing(true);
     setError(null);
     try {
-      const res = await fetch(`${apiBase}/runs/${runId}/script/parse-markdown`, {
+      const res = await apiFetch(`${apiBase}/runs/${runId}/script/parse-markdown`, {
         method: "POST",
       });
       if (!res.ok) {

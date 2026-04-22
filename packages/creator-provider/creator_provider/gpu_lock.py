@@ -1,8 +1,8 @@
 import os
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator
-
+from typing import Any
 
 GPU_LOCK_KEY = os.getenv("GPU_LOCK_KEY", "gpu:lock")
 

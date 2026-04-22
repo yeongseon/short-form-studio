@@ -1,11 +1,20 @@
 """Routes for creator visual plan management."""
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, ConfigDict, ValidationError
+from typing import Literal
+
+from creator_domain.models import RunStage
 from creator_domain.models.visual_plan import VisualScene
 from creator_service.run_service import run_service
 from creator_service.visual_plan_service import VersionConflictError, visual_plan_service
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 router = APIRouter(prefix="/runs/{run_id}/visual-plan", tags=["visual-plan"])
+
+_VISUAL_PLAN_EDIT_STAGES = frozenset({
+    RunStage.VISUAL_PLAN_SETUP.value,
+    RunStage.VISUAL_PLAN_REVIEW.value,
+    RunStage.VISUAL_PLAN_GENERATING.value,
+})
 
 
 class ReplaceVisualPlanRequest(BaseModel):
@@ -17,6 +26,14 @@ async def get_visual_plan(run_id: int) -> dict[str, object]:
     run = await run_service.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    if run.current_stage not in _VISUAL_PLAN_EDIT_STAGES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cannot modify visual plan in stage '{run.current_stage}'; "
+                f"allowed stages: {sorted(_VISUAL_PLAN_EDIT_STAGES)}"
+            ),
+        )
 
     plan = await visual_plan_service.get_active_plan(run_id)
     if plan is None:
@@ -38,11 +55,19 @@ async def replace_visual_plan(
     run = await run_service.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    if run.current_stage not in _VISUAL_PLAN_EDIT_STAGES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cannot modify visual plan in stage '{run.current_stage}'; "
+                f"allowed stages: {sorted(_VISUAL_PLAN_EDIT_STAGES)}"
+            ),
+        )
 
     try:
         scenes = [VisualScene.model_validate(scene) for scene in request.scenes]
     except ValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=exc.errors()) from exc
 
     plan = await visual_plan_service.save_plan(run_id, scenes)
 
@@ -58,7 +83,7 @@ class PatchSceneRequest(BaseModel):
 
     prompt: str | None = None
     prompt_edited: bool | None = None
-    prompt_source: str | None = None
+    prompt_source: Literal["auto_generated", "user_edited", "model_suggested"] | None = None
     style_tags: list[str] | None = None
     mood: str | None = None
     composition: str | None = None
@@ -72,6 +97,14 @@ async def patch_scene(
     run = await run_service.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    if run.current_stage not in _VISUAL_PLAN_EDIT_STAGES:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cannot modify visual plan in stage '{run.current_stage}'; "
+                f"allowed stages: {sorted(_VISUAL_PLAN_EDIT_STAGES)}"
+            ),
+        )
 
     # Build updates dict from non-None fields (exclude expected_version)
     updates = {
@@ -89,11 +122,10 @@ async def patch_scene(
             updates=updates,
             expected_version=request.expected_version,
         )
-    except VersionConflictError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail=str(exc),
-        ) from exc
+    except (VersionConflictError, ValidationError) as exc:
+        if isinstance(exc, VersionConflictError):
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
     except ValueError as exc:
         detail = str(exc)
         if "not found" in detail.lower() or "no active" in detail.lower():

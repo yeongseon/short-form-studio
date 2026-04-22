@@ -52,7 +52,7 @@ function mockFetch(responses: Record<string, { status?: number; body: unknown }>
 // --------------- tests ---------------
 
 describe("VisualPlanEditor", () => {
-  beforeEach(() => vi.restoreAllMocks());
+  beforeEach(() => { vi.restoreAllMocks(); });
 
   it("shows loading state initially", () => {
     globalThis.fetch = vi.fn(() => new Promise(() => {})) as unknown as typeof fetch;
@@ -180,8 +180,11 @@ describe("VisualPlanEditor", () => {
 
     // Verify PATCH was called with expected payload
     const patchCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.find(
-      ([url, init]: [string, RequestInit | undefined]) =>
-        url.includes("scenes/scene-1") && init?.method === "PATCH",
+      (call: unknown[]) => {
+        const url = call[0] as string;
+        const init = call[1] as RequestInit | undefined;
+        return url.includes("scenes/scene-1") && init?.method === "PATCH";
+      },
     );
     expect(patchCall).toBeDefined();
     const body = JSON.parse(patchCall![1].body as string);

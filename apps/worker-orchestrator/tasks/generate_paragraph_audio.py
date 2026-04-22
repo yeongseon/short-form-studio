@@ -15,19 +15,26 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
+redis: Any  # optional dependency; may be None at runtime
 try:
     import redis
 except ImportError:
-    redis = None  # type: ignore[assignment]
+    redis = None
 
 from celery_app import celery_app
+from creator_domain.sanitize import sanitize_path_component
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.audio_service import audio_service as _audio_service
+from creator_service.run_service import run_service as _run_service
 
 logger = logging.getLogger(__name__)
 
 _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
+
+
+class _StageGuardError(ValueError):
+    """Raised when a run is not in an acceptable state for paragraph audio generation."""
 
 
 def _utc_now_iso() -> str:
@@ -38,6 +45,17 @@ def _get_redis_client() -> Any | None:
     if redis is None:
         return None
     return redis.Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"))
+
+async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
+    remover: Any = getattr(_run_service.storage, "remove_active_task_id", None)
+    if not callable(remover):
+        return
+    try:
+        maybe_result = remover(run_id, task_id)
+        if asyncio.iscoroutine(maybe_result):
+            await maybe_result
+    except Exception:
+        logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
 
 
 @celery_app.task(bind=True, name="generate_paragraph_audio")
@@ -79,6 +97,10 @@ def generate_paragraph_audio(
         nonlocal provider_type, endpoint, gpu_lock_acquired_at, gpu_lock_released_at
         nonlocal redis_client, lock_acquired
 
+        run = await _run_service.storage.get_run(run_id)
+        if run is not None and run.get("status") == "cancelled":
+            raise _StageGuardError(f"Run {run_id} is cancelled")
+
         # 1. Provider resolution
         registry = ProviderRegistry.create_default()
         entry = registry.resolve(tts_model)
@@ -96,7 +118,8 @@ def generate_paragraph_audio(
             lock_acquired = True
             gpu_lock_acquired_at = _utc_now_iso()
 
-        audio_path = f"{_ARTIFACT_ROOT}/{run_id}/audio/{section_id}.wav"
+        safe_section_id = sanitize_path_component(section_id, label="section_id")
+        audio_path = f"{_ARTIFACT_ROOT}/{run_id}/audio/{safe_section_id}.wav"
 
         try:
             os.makedirs(os.path.dirname(audio_path), exist_ok=True)
@@ -146,6 +169,8 @@ def generate_paragraph_audio(
 
     try:
         return asyncio.run(_run_task())
+    except _StageGuardError:
+        raise
     except Exception:
         logger.exception(
             "Failed to generate paragraph audio for run %d section %s",
@@ -153,3 +178,11 @@ def generate_paragraph_audio(
             section_id,
         )
         raise
+    finally:
+        try:
+            asyncio.run(_remove_active_task_id_best_effort(run_id, task_id))
+        except Exception:
+            logger.warning(
+                "Could not remove active task id %s for run %d",
+                task_id, run_id, exc_info=True,
+            )

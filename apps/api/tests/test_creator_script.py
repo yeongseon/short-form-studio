@@ -1,12 +1,14 @@
 # pyright: reportMissingImports=false
 
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Literal
 
 import pytest
+from fastapi.routing import APIRoute
 from pydantic import BaseModel
-
-from shorts_api.routes.creator_script import router as script_router, run_script_router
+from shorts_api.routes.creator_script import router as script_router
+from shorts_api.routes.creator_script import run_script_router
 
 
 class StubProject(BaseModel):
@@ -143,13 +145,17 @@ class StubScriptService:
         return draft
 
 
+def _iter_api_routes(routes: Sequence[object]) -> list[APIRoute]:
+    return [route for route in routes if isinstance(route, APIRoute)]
+
+
 @pytest.fixture
 def stub_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubProjectService, StubRunService, StubScriptService]:
     project = StubProjectService()
     run = StubRunService()
     script = StubScriptService()
 
-    for route in script_router.routes:
+    for route in _iter_api_routes(script_router.routes):
         monkeypatch.setitem(route.endpoint.__globals__, "project_service", project)
         monkeypatch.setitem(route.endpoint.__globals__, "run_service", run)
         monkeypatch.setitem(route.endpoint.__globals__, "script_service", script)
@@ -162,7 +168,7 @@ def stub_run_script_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunSe
     run = StubRunServiceRead()
     script = StubScriptService()
 
-    for route in run_script_router.routes:
+    for route in _iter_api_routes(run_script_router.routes):
         monkeypatch.setitem(route.endpoint.__globals__, "run_service", run)
         monkeypatch.setitem(route.endpoint.__globals__, "script_service", script)
 
@@ -246,9 +252,9 @@ async def test_import_markdown_with_model_defaults(client, stub_services):
         json={
             "markdown": "# Styled script",
             "model_defaults": {
-                "script_model": "manual",
-                "image_model": "sdxl-base",
-                "tts_model": "edge-alloy",
+                "script_model": "qwen3-4b",
+                "image_model": "sd15",
+                "tts_model": "qwen3-tts",
             },
             "style_preset": "cinematic",
         },
@@ -259,9 +265,9 @@ async def test_import_markdown_with_model_defaults(client, stub_services):
         {
             "project_id": 21,
             "model_defaults": {
-                "script_model": "manual",
-                "image_model": "sdxl-base",
-                "tts_model": "edge-alloy",
+                "script_model": "qwen3-4b",
+                "image_model": "sd15",
+                "tts_model": "qwen3-tts",
             },
             "style_preset": "cinematic",
             "metadata": None,
@@ -269,6 +275,27 @@ async def test_import_markdown_with_model_defaults(client, stub_services):
             "status": "running",
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_import_markdown_rejects_unknown_model_default_key(client, stub_services):
+    project_service, run_service, script_service = stub_services
+    project_service.projects[22] = StubProject(id=22, title="Project 22")
+
+    response = await client.post(
+        "/api/creator/projects/22/script/import-markdown",
+        json={
+            "markdown": "# Styled script",
+            "model_defaults": {
+                "unknown_key": "value",
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Unknown model default key" in response.json()["detail"]
+    assert run_service.create_run_calls == []
+    assert script_service.save_draft_calls == []
 
 
 @pytest.mark.asyncio
@@ -422,6 +449,21 @@ async def test_update_script_markdown_run_not_found(client, stub_run_script_serv
 
 
 @pytest.mark.asyncio
+async def test_update_script_markdown_rejects_wrong_stage(client, stub_run_script_services):
+    run_service, script_service = stub_run_script_services
+    run_service.runs[78] = StubPipelineRun(id=78, project_id=1, current_stage="VISUAL_PLAN_REVIEW")
+
+    response = await client.put(
+        "/api/creator/runs/78/script/markdown",
+        json={"markdown": "# Fresh draft"},
+    )
+
+    assert response.status_code == 409
+    assert "Cannot modify script in stage" in response.json()["detail"]
+    assert script_service.save_draft_calls == []
+
+
+@pytest.mark.asyncio
 async def test_update_script_markdown_first_draft(client, stub_run_script_services):
     """PUT /markdown succeeds when run exists but no prior draft (creates first draft)."""
     run_service, script_service = stub_run_script_services
@@ -498,6 +540,10 @@ async def test_get_script_structured_success(client, stub_run_script_services):
                 "duration": None,
                 "turn_kind": None,
                 "visual_override": None,
+                "image_prompt": None,
+                "mood": None,
+                "composition": None,
+                "style_tags": [],
             },
             {
                 "section_id": "body-1",
@@ -508,6 +554,10 @@ async def test_get_script_structured_success(client, stub_run_script_services):
                 "duration": None,
                 "turn_kind": None,
                 "visual_override": None,
+                "image_prompt": None,
+                "mood": None,
+                "composition": None,
+                "style_tags": [],
             },
         ],
         "version": 1,
@@ -682,7 +732,7 @@ def stub_parse_markdown_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubR
             ))
         return sections
 
-    for route in run_script_router.routes:
+    for route in _iter_api_routes(run_script_router.routes):
         monkeypatch.setitem(route.endpoint.__globals__, "run_service", run)
         monkeypatch.setitem(route.endpoint.__globals__, "script_service", script)
         monkeypatch.setitem(route.endpoint.__globals__, "parse_markdown", fake_parse_markdown)

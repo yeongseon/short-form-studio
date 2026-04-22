@@ -1,5 +1,6 @@
 from creator_service.markdown_parser import parse_markdown
 
+
 def test_parse_standard_markdown_headings():
     markdown = """## hook
 Grab attention now.
@@ -156,3 +157,21 @@ One more thing.
     second = parse_markdown(markdown)
 
     assert [section.section_id for section in first] == [section.section_id for section in second]
+
+
+def test_parse_korean_headings():
+    markdown = """## 도입
+여러분, 안녕하세요.
+
+## 본문
+오늘 주제를 소개합니다.
+
+## 마무리
+감사합니다.
+"""
+
+    sections = parse_markdown(markdown)
+
+    assert [section.type for section in sections] == ["도입", "본문", "마무리"]
+    assert [section.section_id for section in sections] == ["도입-1", "본문-2", "마무리-3"]
+    assert sections[0].text == "여러분, 안녕하세요."

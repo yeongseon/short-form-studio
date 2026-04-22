@@ -1,11 +1,11 @@
 import asyncio
 
 import pytest
-
 from creator_service.subtitle_service import (
     InMemorySubtitleStorage,
     SubtitleService,
 )
+
 
 def run(coro):
     return asyncio.run(coro)

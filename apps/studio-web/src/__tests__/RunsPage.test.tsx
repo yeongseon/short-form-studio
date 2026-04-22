@@ -267,6 +267,7 @@ describe("RunsPage", () => {
     await waitFor(() => {
       expect(fetchSpy).toHaveBeenCalledWith(
         expect.stringContaining("offset=20"),
+        undefined,
       );
     });
   });
@@ -281,7 +282,7 @@ describe("RunsPage", () => {
     renderPage();
 
     await waitFor(() => {
-      expect(spy).toHaveBeenCalledWith("/api/creator/projects?limit=20&offset=0");
+      expect(spy).toHaveBeenCalledWith("/api/creator/projects?limit=20&offset=0", undefined);
     });
   });
 

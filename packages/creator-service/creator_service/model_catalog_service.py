@@ -30,6 +30,7 @@ class ModelCatalogService:
 
     _HEALTH_TO_CATALOG_STATUS = {
         ModelStatus.HEALTHY: "available",
+        ModelStatus.CONFIGURED: "available",
         ModelStatus.UNHEALTHY: "unavailable",
         ModelStatus.UNKNOWN: "unknown",
     }
@@ -100,8 +101,8 @@ class ModelCatalogService:
             providers.append(
                 {
                     "name": self._health_key(entry),
-                    "endpoint": entry.endpoint,
-                    "healthy": health_result.status == ModelStatus.HEALTHY,
+                    "provider_type": entry.provider_type,
+                    "healthy": health_result.status in {ModelStatus.HEALTHY, ModelStatus.CONFIGURED},
                     "loaded_model": None,
                     "gpu_locked": False,
                 }

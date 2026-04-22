@@ -1,13 +1,12 @@
 """Model health check service for monitoring model serving containers."""
 
 import asyncio
-from dataclasses import dataclass
-from enum import Enum
 import os
 import time
+from dataclasses import dataclass
+from enum import Enum
 
 import httpx
-
 
 _REMOTE_PROVIDERS: dict[str, str] = {
     "api.openai.com": "OPENAI_API_KEY",
@@ -22,6 +21,7 @@ class ModelStatus(Enum):
     """Status of a model container."""
     HEALTHY = "healthy"
     UNHEALTHY = "unhealthy"
+    CONFIGURED = "configured"
     UNKNOWN = "unknown"
 
 
@@ -77,14 +77,15 @@ class ModelHealthService:
                 return ModelHealthResult(
                     model_name=model_name,
                     endpoint=model_name,
-                    status=ModelStatus.HEALTHY,
+                    status=ModelStatus.CONFIGURED,
                 )
 
+            # Remote provider without API key: skip (not configured, not unhealthy)
             return ModelHealthResult(
                 model_name=model_name,
                 endpoint=model_name,
-                status=ModelStatus.UNHEALTHY,
-                error="API key not configured",
+                status=ModelStatus.UNKNOWN,
+                error="API key not configured (optional)",
             )
         
         health_path = self.health_paths.get(model_name, "/")

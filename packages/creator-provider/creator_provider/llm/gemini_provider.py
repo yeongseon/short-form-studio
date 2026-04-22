@@ -21,17 +21,17 @@ class GeminiProvider(LLMProvider):
         timeout = (params or {}).get("timeout", 120.0)
         max_tokens = (params or {}).get("max_tokens", 2048)
 
-        url = (
-            f"{self.endpoint}/v1beta/models/{self.model_key}"
-            f":generateContent?key={self.api_key}"
-        )
+        url = f"{self.endpoint}/v1beta/models/{self.model_key}:generateContent"
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
                 "maxOutputTokens": max_tokens,
             },
         }
-        headers = {"Content-Type": "application/json"}
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": self.api_key,
+        }
 
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:

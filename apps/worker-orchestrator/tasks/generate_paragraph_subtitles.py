@@ -13,21 +13,28 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 
+redis: Any  # optional dependency; may be None at runtime
 try:
     import redis
 except ImportError:
-    redis = None  # type: ignore[assignment]
+    redis = None
 
 from celery_app import celery_app
+from creator_domain.sanitize import sanitize_path_component
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
+from creator_service.run_service import run_service as _run_service
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
 
 logger = logging.getLogger(__name__)
 
 _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
+
+
+class _StageGuardError(ValueError):
+    """Raised when a run is not in an acceptable state for paragraph subtitle generation."""
 
 
 def _utc_now_iso() -> str:
@@ -39,6 +46,17 @@ def _get_redis_client() -> Any | None:
         return None
     return redis.Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"))
 
+async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
+    remover: Any = getattr(_run_service.storage, "remove_active_task_id", None)
+    if not callable(remover):
+        return
+    try:
+        maybe_result = remover(run_id, task_id)
+        if asyncio.iscoroutine(maybe_result):
+            await maybe_result
+    except Exception:
+        logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
+
 
 @celery_app.task(bind=True, name="generate_paragraph_subtitles")
 def generate_paragraph_subtitles(
@@ -47,7 +65,7 @@ def generate_paragraph_subtitles(
     section_id: str,
     audio_path: str,
     subtitle_model: str = "whisper-small",
-    subtitle_format: str = "srt",
+    subtitle_format: Literal["srt", "vtt"] = "srt",
 ) -> dict[str, object]:
     """Generate subtitles for a single paragraph's audio.
 
@@ -79,6 +97,13 @@ def generate_paragraph_subtitles(
         nonlocal provider_type, endpoint, gpu_lock_acquired_at, gpu_lock_released_at
         nonlocal redis_client, lock_acquired
 
+        run = await _run_service.storage.get_run(run_id)
+        if run is not None and run.get("status") == "cancelled":
+            raise _StageGuardError(f"Run {run_id} is cancelled")
+
+        if subtitle_format not in ("srt", "vtt"):
+            raise ValueError(f"Invalid subtitle_format: {subtitle_format!r}. Must be 'srt' or 'vtt'.")
+
         if not os.path.exists(audio_path):
             raise RuntimeError(f"Audio file not found: {audio_path}")
 
@@ -99,7 +124,8 @@ def generate_paragraph_subtitles(
             lock_acquired = True
             gpu_lock_acquired_at = _utc_now_iso()
 
-        subtitle_path = f"{_ARTIFACT_ROOT}/{run_id}/subtitles/{section_id}.{subtitle_format}"
+        safe_section_id = sanitize_path_component(section_id, label="section_id")
+        subtitle_path = f"{_ARTIFACT_ROOT}/{run_id}/subtitles/{safe_section_id}.{subtitle_format}"
 
         try:
             os.makedirs(os.path.dirname(subtitle_path), exist_ok=True)
@@ -151,6 +177,8 @@ def generate_paragraph_subtitles(
 
     try:
         return asyncio.run(_run_task())
+    except _StageGuardError:
+        raise
     except Exception:
         logger.exception(
             "Failed to generate paragraph subtitles for run %d section %s",
@@ -158,3 +186,11 @@ def generate_paragraph_subtitles(
             section_id,
         )
         raise
+    finally:
+        try:
+            asyncio.run(_remove_active_task_id_best_effort(run_id, task_id))
+        except Exception:
+            logger.warning(
+                "Could not remove active task id %s for run %d",
+                task_id, run_id, exc_info=True,
+            )

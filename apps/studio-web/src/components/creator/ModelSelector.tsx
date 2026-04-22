@@ -1,4 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from "react";
+import { apiFetch } from "../../api/client";
+import type { ApiKeyStatus } from "../../types/api";
 
 /** Shape of a single model entry returned by GET /api/creator/models. */
 interface ModelEntry {
@@ -16,13 +18,6 @@ interface ModelsResponse {
   image_models: ModelEntry[];
   tts_models: ModelEntry[];
   stt_models: ModelEntry[];
-}
-
-interface ApiKeyStatus {
-  provider: string;
-  label: string;
-  configured: boolean;
-  masked: string;
 }
 
 /** Category metadata for rendering. */
@@ -103,8 +98,8 @@ export default function ModelSelector({
       setError(null);
       try {
         const [modelsRes, apiKeysRes] = await Promise.all([
-          fetch(`${apiBase}/api/creator/models`),
-          fetch(`${apiBase}/api/creator/settings/api-keys`),
+          apiFetch(`${apiBase}/api/creator/models`),
+          apiFetch(`${apiBase}/api/creator/settings/api-keys`),
         ]);
 
         if (!modelsRes.ok) {
@@ -189,6 +184,7 @@ export default function ModelSelector({
   // Effect 3: Notify parent of newly-computed defaults after state has settled.
   // Runs after localSelection changes; checks the staged ref to avoid duplicate calls.
   useEffect(() => {
+    void defaultsVersion;
     const pending = pendingDefaultsRef.current;
     if (pending.length === 0) return;
     pendingDefaultsRef.current = [];

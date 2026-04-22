@@ -1,8 +1,8 @@
 services:
   postgres:
-    image: postgres:16
+    image: postgres:16.6-alpine
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -18,9 +18,9 @@ services:
     restart: unless-stopped
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -33,16 +33,9 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
-      target: dev
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
-      - ./apps/api/src:/app/src
-      - ./apps/worker-orchestrator/tasks:/app/tasks
-      - ./apps/worker-orchestrator/celery_app.py:/app/celery_app.py
-      - ./packages/creator-service/creator_service:/usr/local/lib/python3.12/site-packages/creator_service
-      - ./packages/creator-provider/creator_provider:/usr/local/lib/python3.12/site-packages/creator_provider
-      - ./packages/creator-domain/creator_domain:/usr/local/lib/python3.12/site-packages/creator_domain
       - ./data/artifacts:/app/data/artifacts
     env_file:
       - .env
@@ -59,14 +52,7 @@ services:
     build:
       context: .
       dockerfile: apps/worker-orchestrator/Dockerfile
-      target: dev
-    command: ["sh", "-c", "watchfiles --filter python 'celery -A celery_app.celery_app worker --loglevel=info --pool=solo' /app/tasks /app/celery_app.py"]
     volumes:
-      - ./apps/worker-orchestrator/tasks:/app/tasks
-      - ./apps/worker-orchestrator/celery_app.py:/app/celery_app.py
-      - ./packages/creator-service/creator_service:/usr/local/lib/python3.12/site-packages/creator_service
-      - ./packages/creator-provider/creator_provider:/usr/local/lib/python3.12/site-packages/creator_provider
-      - ./packages/creator-domain/creator_domain:/usr/local/lib/python3.12/site-packages/creator_domain
       - ./data/artifacts:/app/data/artifacts
     env_file:
       - .env
@@ -81,21 +67,20 @@ services:
     build:
       context: .
       dockerfile: apps/studio-web/Dockerfile
-      target: dev
+      target: runtime
     ports:
-      - "5174:5173"
-    volumes:
-      - ./apps/studio-web/src:/app/src
-      - ./apps/studio-web/index.html:/app/index.html
+      - "127.0.0.1:5174:8080"
+    environment:
+      API_KEY: ${API_KEY:-}
     depends_on:
       api:
         condition: service_started
     restart: unless-stopped
 
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.6.2
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     volumes:
       - ollama_data:/root/.ollama
     deploy:
@@ -111,13 +96,18 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+    profiles:
+      - gpu
     restart: unless-stopped
 
   stable-diffusion:
     image: shorts-automation-stable-diffusion:latest
+    # Optional GPU profile service: requires a pre-built local image.
+    # Dockerfile is expected at docker/stable-diffusion/Dockerfile once model code is available.
+    # Example local build/tag: shorts-automation-stable-diffusion:1.0.0
     command: ["python", "launch.py", "--api", "--nowebui", "--listen", "--port", "7860", "--medvram", "--xformers", "--no-half", "--no-half-vae", "--skip-torch-cuda-test", "--skip-version-check", "--skip-python-version-check", "--skip-install"]
     ports:
-      - "7860:7860"
+      - "127.0.0.1:7860:7860"
     deploy:
       resources:
         reservations:
@@ -131,12 +121,17 @@ services:
       timeout: 30s
       retries: 5
       start_period: 120s
+    profiles:
+      - gpu
     restart: unless-stopped
 
   tts-qwen3:
     image: shorts-automation-tts-qwen3:latest
+    # Optional GPU profile service: requires a pre-built local image.
+    # Dockerfile is expected at docker/tts-qwen3/Dockerfile once model code is available.
+    # Example local build/tag: shorts-automation-tts-qwen3:1.0.0
     ports:
-      - "8100:8100"
+      - "127.0.0.1:8100:8100"
     deploy:
       resources:
         reservations:
@@ -150,12 +145,17 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+    profiles:
+      - gpu
     restart: unless-stopped
 
   stt-whisper:
     image: shorts-automation-stt-whisper:latest
+    # Optional GPU profile service: requires a pre-built local image.
+    # Dockerfile is expected at docker/stt-whisper/Dockerfile once model code is available.
+    # Example local build/tag: shorts-automation-stt-whisper:1.0.0
     ports:
-      - "9000:8200"
+      - "127.0.0.1:9000:8200"
     deploy:
       resources:
         reservations:
@@ -169,12 +169,14 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+    profiles:
+      - gpu
     restart: unless-stopped
 
   flower:
-    image: mher/flower:2.0
+    image: mher/flower:2.0.1
     ports:
-      - "5555:5555"
+      - "127.0.0.1:5555:5555"
     environment:
       CELERY_BROKER_URL: redis://redis:6379/0
     depends_on:

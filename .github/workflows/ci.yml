@@ -18,14 +18,14 @@ jobs:
         with:
           node-version: "20"
       - name: Install Python dependencies
-        run: python3 -m pip install -r apps/api/requirements.txt -r apps/worker-orchestrator/requirements.txt
+        run: python3 -m pip install -c constraints.txt -r apps/api/requirements.txt -r apps/api/requirements-dev.txt -r apps/worker-orchestrator/requirements.txt -r apps/worker-orchestrator/requirements-dev.txt
       - name: Install packages in editable mode
         run: |
-          pip install -e packages/creator-domain
-          pip install -e packages/creator-provider
-          pip install -e packages/creator-service
+          pip install -c constraints.txt -e packages/creator-domain
+          pip install -c constraints.txt -e packages/creator-provider
+          pip install -c constraints.txt -e packages/creator-service
       - name: Install Node dependencies
-        run: npm --prefix apps/studio-web install
+        run: npm --prefix apps/studio-web ci
       - name: Lint Python
         run: |
           ruff check apps packages
@@ -44,22 +44,57 @@ jobs:
         with:
           node-version: "20"
       - name: Install Python dependencies
-        run: python3 -m pip install -r apps/api/requirements.txt -r apps/worker-orchestrator/requirements.txt
+        run: python3 -m pip install -c constraints.txt -r apps/api/requirements.txt -r apps/api/requirements-dev.txt -r apps/worker-orchestrator/requirements.txt -r apps/worker-orchestrator/requirements-dev.txt
       - name: Install packages in editable mode
         run: |
-          pip install -e packages/creator-domain
-          pip install -e packages/creator-provider
-          pip install -e packages/creator-service
+          pip install -c constraints.txt -e packages/creator-domain
+          pip install -c constraints.txt -e packages/creator-provider
+          pip install -c constraints.txt -e packages/creator-service
       - name: Install Node dependencies
-        run: npm --prefix apps/studio-web install
-      - name: Test Packages
+        run: npm --prefix apps/studio-web ci
+      - name: Test Packages (with coverage)
         run: |
-          python3 -m pytest packages/creator-domain/tests/ -v
-          python3 -m pytest packages/creator-provider/tests/ -v
-          python3 -m pytest packages/creator-service/tests/ -v
-      - name: Test API
-        run: cd apps/api && python3 -m pytest tests/ -v
-      - name: Test Worker
-        run: cd apps/worker-orchestrator && python3 -m pytest tests/ -v
-      - name: Test Frontend
-        run: npm --prefix apps/studio-web run test
+          python3 -m pytest packages/creator-domain/tests/ -v --cov=creator_domain --cov-report=term-missing --cov-fail-under=60
+          python3 -m pytest packages/creator-provider/tests/ -v --cov=creator_provider --cov-report=term-missing --cov-fail-under=60
+          python3 -m pytest packages/creator-service/tests/ -v --cov=creator_service --cov-report=term-missing --cov-fail-under=60
+      - name: Test API (with coverage)
+        run: cd apps/api && python3 -m pytest tests/ -v --cov=shorts_api --cov-report=term-missing --cov-fail-under=75
+      - name: Test Worker (with coverage)
+        run: cd apps/worker-orchestrator && python3 -m pytest tests/ -v --cov=tasks --cov-report=term-missing --cov-fail-under=60
+      - name: Test Frontend (with coverage)
+        run: npm --prefix apps/studio-web run test -- --coverage --coverage.thresholds.lines=75
+      - name: Build Frontend
+        run: npm --prefix apps/studio-web run build
+      - name: Typecheck Frontend
+        run: cd apps/studio-web && npx tsc --noEmit
+      - name: Typecheck Python (basedpyright)
+        run: |
+          pip install basedpyright==1.29.2
+          basedpyright apps packages
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate docker-compose config
+        run: docker compose config --quiet
+      - name: Build API runtime image
+        run: docker build --target runtime -f apps/api/Dockerfile .
+      - name: Build Studio Web runtime image
+        run: docker build --target runtime -f apps/studio-web/Dockerfile .
+      - name: Build Worker runtime image
+        run: docker build --target runtime -f apps/worker-orchestrator/Dockerfile .
+      - name: Smoke-test compose up
+        run: |
+          docker compose up -d postgres redis api studio-web worker
+          # Wait for API health endpoint
+          timeout 60 bash -c 'until curl -sf http://localhost:8000/healthz; do sleep 2; done'
+          # Verify API responds
+          curl -sf http://localhost:8000/healthz
+          # Wait for frontend endpoint
+          timeout 60 bash -c 'until curl -sf http://localhost:5174/; do sleep 2; done'
+          # Verify frontend responds
+          curl -sf http://localhost:5174/
+          # Verify worker container is running
+          docker compose ps worker --format json | grep -q running
+          docker compose down

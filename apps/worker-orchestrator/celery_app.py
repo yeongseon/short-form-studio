@@ -6,12 +6,11 @@ import os
 
 from celery import Celery
 from celery.signals import after_setup_logger
-
 from creator_service.logging_config import setup_json_logging
 
 redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
-celery_app = Celery("worker-orchestrator", broker=redis_url, backend=redis_url, include=["tasks.generate_script", "tasks.generate_visual_plan", "tasks.generate_scene_image", "tasks.generate_audio", "tasks.generate_subtitles", "tasks.render_video"])
+celery_app = Celery("worker-orchestrator", broker=redis_url, backend=redis_url, include=["tasks.generate_script", "tasks.generate_visual_plan", "tasks.generate_scene_image", "tasks.generate_audio", "tasks.generate_subtitles", "tasks.render_video", "tasks.generate_paragraph_audio", "tasks.generate_paragraph_subtitles"])
 celery_app.conf.task_default_queue = "creator"
 
 

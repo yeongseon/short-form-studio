@@ -2,11 +2,11 @@ import asyncio
 from dataclasses import dataclass
 
 import pytest
-
 from creator_service.render_service import (
     InMemoryRenderStorage,
     RenderService,
 )
+
 
 def run(coro):
     return asyncio.run(coro)

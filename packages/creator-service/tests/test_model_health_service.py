@@ -2,7 +2,6 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
-
 from creator_service.model_health_service import ModelHealthService, ModelStatus
 
 
@@ -51,7 +50,7 @@ async def test_remote_provider_healthy_when_api_key_configured(
 
     result = await health_service.check_model("api.openai.com")
 
-    assert result.status == ModelStatus.HEALTHY
+    assert result.status == ModelStatus.CONFIGURED
     assert result.endpoint == "api.openai.com"
     assert result.error is None
 
@@ -64,9 +63,9 @@ async def test_remote_provider_unhealthy_when_api_key_missing(
 
     result = await health_service.check_model("api.openai.com")
 
-    assert result.status == ModelStatus.UNHEALTHY
+    assert result.status == ModelStatus.UNKNOWN
     assert result.endpoint == "api.openai.com"
-    assert result.error == "API key not configured"
+    assert result.error == "API key not configured (optional)"
 
 
 @pytest.mark.asyncio

@@ -1,12 +1,23 @@
 # pyright: reportMissingImports=false
 
 import json
+from collections.abc import Sequence
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Literal, cast
 
 import pytest
-from pydantic import BaseModel
+from fastapi.routing import APIRoute
+from pydantic import BaseModel, ValidationError
 from shorts_api.main import runs_router
+from shorts_api.routes.creator_runs_core import GenerateSubtitlesRequest
+from shorts_api.routes.creator_runs_storyboard import (
+    BulkParagraphSubtitlesRequest,
+    ParagraphSubtitlesRequest,
+)
+
+
+def _iter_api_routes(routes: Sequence[object]) -> list[APIRoute]:
+    return [route for route in routes if isinstance(route, APIRoute)]
 
 
 class StubPipelineRun(BaseModel):
@@ -32,6 +43,7 @@ class StubRunService:
         self.get_run_calls: list[int] = []
         self.restart_run_calls: list[dict[str, object]] = []
         self.advance_stage_calls: list[dict[str, object]] = []
+        self.update_model_defaults_calls: list[dict[str, object]] = []
         self.runs: dict[int, StubPipelineRun] = {}
         self.storage = StubRunStorage(self)
         self._next_id = 1
@@ -109,6 +121,16 @@ class StubRunService:
             key=lambda r: r.id,
             reverse=True,
         )
+
+    async def update_model_defaults(self, run_id: int, updates: dict[str, str]) -> StubPipelineRun:
+        self.update_model_defaults_calls.append({"run_id": run_id, "updates": updates})
+        run = self.runs.get(run_id)
+        if run is None:
+            raise ValueError(f"Run {run_id} not found")
+        next_defaults = {**(run.model_defaults or {}), **updates}
+        updated = run.model_copy(update={"model_defaults": next_defaults})
+        self.runs[run_id] = updated
+        return updated
 
 
 class StubRunStorage:
@@ -230,7 +252,7 @@ def stub_run_service(monkeypatch: pytest.MonkeyPatch) -> StubRunService:
     service = StubRunService()
     project_lookup = StubProjectLookupService()
 
-    for route in runs_router.routes:
+    for route in _iter_api_routes(runs_router.routes):
         if route.name in {"create_run", "get_run_detail", "restart_run", "approve_script", "generate_script_trigger", "generate_visual_plan_trigger", "generate_audio_trigger", "generate_subtitles_trigger", "list_runs_for_project"}:
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", service)
         if route.name == "create_run":
@@ -295,6 +317,66 @@ async def test_create_run_project_not_found(client, stub_run_service: StubRunSer
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Project not found"}
+
+
+@pytest.mark.asyncio
+async def test_create_run_rejects_unknown_model_default_key(client, stub_run_service: StubRunService):
+    _ = stub_run_service
+    response = await client.post(
+        "/api/creator/projects/7/runs",
+        json={
+            "model_defaults": {
+                "unknown_key": "value",
+            },
+            "style_preset": "default",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Unknown model default key" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_create_run_rejects_invalid_render_profile(client, stub_run_service: StubRunService):
+    _ = stub_run_service
+    response = await client.post(
+        "/api/creator/projects/7/runs",
+        json={
+            "model_defaults": {
+                "render_profile": "ultra_quality",
+            },
+            "style_preset": "default",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Unknown render profile" in response.json()["detail"]
+
+
+@pytest.fixture
+def stub_model_defaults_services(monkeypatch: pytest.MonkeyPatch) -> StubRunService:
+    run_svc = StubRunService()
+
+    for route in _iter_api_routes(runs_router.routes):
+        if route.name == "update_model_defaults":
+            monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
+
+    return run_svc
+
+
+@pytest.mark.asyncio
+async def test_update_model_defaults_rejects_invalid_render_profile(client, stub_model_defaults_services):
+    run_svc = stub_model_defaults_services
+    run_svc.runs[501] = _make_run(501, stage="SCRIPT_REVIEW")
+
+    response = await client.patch(
+        "/api/creator/runs/501/model-defaults",
+        json={"render_profile": "ultra_quality"},
+    )
+
+    assert response.status_code == 400
+    assert "Unknown render profile" in response.json()["detail"]
+    assert run_svc.update_model_defaults_calls == []
 
 
 @pytest.mark.asyncio
@@ -410,7 +492,7 @@ def stub_approve_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunServi
     run_svc = StubRunService()
     review_svc = StubStageReviewService(run_svc)
 
-    for route in runs_router.routes:
+    for route in _iter_api_routes(runs_router.routes):
         if route.name == "approve_script":
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "stage_review_service", review_svc)
@@ -522,7 +604,7 @@ def stub_approve_vp_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunSe
     run_svc = StubRunService()
     review_svc = StubStageReviewService(run_svc)
 
-    for route in runs_router.routes:
+    for route in _iter_api_routes(runs_router.routes):
         if route.name == "approve_visual_plan":
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "stage_review_service", review_svc)
@@ -671,7 +753,7 @@ def stub_generate_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunServ
     project_svc = StubProjectService()
     dispatcher = StubDispatcher()
 
-    for route in runs_router.routes:
+    for route in _iter_api_routes(runs_router.routes):
         if route.name == "generate_script_trigger":
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "project_service", project_svc)
@@ -778,17 +860,17 @@ async def test_generate_script_run_not_found(client, stub_generate_services):
 
 @pytest.mark.asyncio
 async def test_generate_script_wrong_stage_generating(client, stub_generate_services):
-    run_svc, _, _ = stub_generate_services
+    """SCRIPT_GENERATING is now an allowed stage (supports re-generation)."""
+    run_svc, project_svc, dispatcher = stub_generate_services
     run_svc.runs[14] = _make_run(14, "SCRIPT_GENERATING")
+    project_svc.projects[1] = _make_project(1, "Re-gen idea")
 
     response = await client.post(
         "/api/creator/runs/14/generate-script",
         json={},
     )
 
-    assert response.status_code == 400
-    assert "SCRIPT_GENERATING" in response.json()["detail"]
-
+    assert response.status_code == 202
 
 @pytest.mark.asyncio
 async def test_generate_script_wrong_stage_visual(client, stub_generate_services):
@@ -800,7 +882,7 @@ async def test_generate_script_wrong_stage_visual(client, stub_generate_services
         json={},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "VISUAL_PLAN_GENERATING" in response.json()["detail"]
 
 
@@ -865,7 +947,7 @@ async def test_generate_script_dispatch_failure_rollback(client, stub_generate_s
 
     # Patch the dispatcher for this test
     from shorts_api.main import runs_router as _r
-    for route in _r.routes:
+    for route in _iter_api_routes(_r.routes):
         if route.name == "generate_script_trigger":
             route.endpoint.__globals__["dispatch_generate_script"] = failing_dispatcher
 
@@ -959,7 +1041,7 @@ def stub_generate_visual_plan_services(monkeypatch: pytest.MonkeyPatch) -> tuple
     run_svc = StubRunService()
     dispatcher = StubVisualPlanDispatcher()
 
-    for route in runs_router.routes:
+    for route in _iter_api_routes(runs_router.routes):
         if route.name == "generate_visual_plan_trigger":
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "dispatch_generate_visual_plan", dispatcher)
@@ -1056,7 +1138,7 @@ async def test_generate_visual_plan_wrong_stage(client, stub_generate_visual_pla
         json={},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "IDEA_READY" in response.json()["detail"]
 
 
@@ -1070,7 +1152,7 @@ async def test_generate_visual_plan_wrong_stage_visual_review(client, stub_gener
         json={},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "VISUAL_PLAN_REVIEW" in response.json()["detail"]
 
 
@@ -1105,7 +1187,7 @@ async def test_generate_visual_plan_dispatch_failure_rollback(client, stub_gener
         raise RuntimeError("Celery broker down")
 
     from shorts_api.main import runs_router as _r
-    for route in _r.routes:
+    for route in _iter_api_routes(_r.routes):
         if route.name == "generate_visual_plan_trigger":
             route.endpoint.__globals__["dispatch_generate_visual_plan"] = failing_dispatcher
 
@@ -1162,7 +1244,7 @@ def stub_generate_visual_assets_services(monkeypatch: pytest.MonkeyPatch) -> tup
     run_svc = StubRunService()
     dispatcher = StubImageDispatcher()
 
-    for route in runs_router.routes:
+    for route in _iter_api_routes(runs_router.routes):
         if route.name == "generate_visual_assets_trigger":
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "dispatch_generate_scene_image", dispatcher)
@@ -1261,7 +1343,7 @@ async def test_generate_visual_assets_wrong_stage(client, stub_generate_visual_a
         json={},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "IDEA_READY" in response.json()["detail"]
 
 
@@ -1275,7 +1357,7 @@ async def test_generate_visual_assets_wrong_stage_script_review(client, stub_gen
         json={},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "SCRIPT_REVIEW" in response.json()["detail"]
 
 
@@ -1310,7 +1392,7 @@ async def test_generate_visual_assets_dispatch_failure_rollback(client, stub_gen
         raise RuntimeError("Celery broker down")
 
     from shorts_api.main import runs_router as _r
-    for route in _r.routes:
+    for route in _iter_api_routes(_r.routes):
         if route.name == "generate_visual_assets_trigger":
             route.endpoint.__globals__["dispatch_generate_scene_image"] = failing_dispatcher
 
@@ -1344,7 +1426,7 @@ def stub_single_scene_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRun
     run_svc = StubRunService()
     dispatcher = StubImageDispatcher()
 
-    for route in runs_router.routes:
+    for route in _iter_api_routes(runs_router.routes):
         if route.name in ("generate_scene_image_endpoint", "regenerate_scene_image_endpoint"):
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "dispatch_generate_scene_image", dispatcher)
@@ -1409,7 +1491,7 @@ async def test_generate_scene_image_wrong_stage(client, stub_single_scene_servic
         "/api/creator/runs/72/visual-plan/scenes/scene-sec-0/generate-image",
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "SCRIPT_REVIEW" in response.json()["detail"]
     assert len(dispatcher.calls) == 0
 
@@ -1422,7 +1504,7 @@ async def test_generate_scene_image_dispatch_failure(client, stub_single_scene_s
     def failing_dispatcher(run_id, model_key, scene_id, prompt_override, is_active, image_params=None):
         raise RuntimeError("Celery broker down")
 
-    for route in runs_router.routes:
+    for route in _iter_api_routes(runs_router.routes):
         if route.name == "generate_scene_image_endpoint":
             route.endpoint.__globals__["dispatch_generate_scene_image"] = failing_dispatcher
 
@@ -1500,7 +1582,7 @@ async def test_regenerate_scene_image_wrong_stage(client, stub_single_scene_serv
         json={},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "VISUAL_PLAN_REVIEW" in response.json()["detail"]
     assert len(dispatcher.calls) == 0
 
@@ -1515,7 +1597,7 @@ async def test_regenerate_scene_image_wrong_stage_script(client, stub_single_sce
         json={},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert len(dispatcher.calls) == 0
 
 
@@ -1527,7 +1609,7 @@ async def test_regenerate_scene_image_dispatch_failure(client, stub_single_scene
     def failing_dispatcher(run_id, model_key, scene_id, prompt_override, is_active, image_params=None):
         raise RuntimeError("Celery broker down")
 
-    for route in runs_router.routes:
+    for route in _iter_api_routes(runs_router.routes):
         if route.name == "regenerate_scene_image_endpoint":
             route.endpoint.__globals__["dispatch_generate_scene_image"] = failing_dispatcher
 
@@ -1637,7 +1719,7 @@ def stub_listing_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunServi
     run_svc = StubRunService()
     asset_svc = StubVisualAssetService()
 
-    for route in runs_router.routes:
+    for route in _iter_api_routes(runs_router.routes):
         if route.name in ("list_visual_assets_by_run", "list_visual_assets_by_scene"):
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "visual_asset_service", asset_svc)
@@ -1800,7 +1882,7 @@ def stub_select_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunServic
     run_svc = StubRunService()
     asset_svc = StubVisualAssetService()
 
-    for route in runs_router.routes:
+    for route in _iter_api_routes(runs_router.routes):
         if route.name == "select_active_asset":
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "visual_asset_service", asset_svc)
@@ -1845,7 +1927,7 @@ async def test_select_active_asset_wrong_stage(client, stub_select_services):
     response = await client.post(
         "/api/creator/runs/101/visual-assets/scene-0/select/1"
     )
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "SCRIPT_REVIEW" in response.json()["detail"]
 
 
@@ -1910,7 +1992,7 @@ def stub_generate_audio_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubR
     run_svc = StubRunService()
     dispatcher = StubAudioDispatcher()
 
-    for route in runs_router.routes:
+    for route in _iter_api_routes(runs_router.routes):
         if route.name == "generate_audio_trigger":
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "dispatch_generate_audio", dispatcher)
@@ -2026,7 +2108,7 @@ async def test_generate_audio_wrong_stage(client, stub_generate_audio_services):
         json={},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "IDEA_READY" in response.json()["detail"]
 
 
@@ -2040,7 +2122,7 @@ async def test_generate_audio_wrong_stage_script_review(client, stub_generate_au
         json={},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "SCRIPT_REVIEW" in response.json()["detail"]
 
 
@@ -2075,7 +2157,7 @@ async def test_generate_audio_dispatch_failure_rollback(client, stub_generate_au
         raise RuntimeError("Celery broker down")
 
     from shorts_api.main import runs_router as _r
-    for route in _r.routes:
+    for route in _iter_api_routes(_r.routes):
         if route.name == "generate_audio_trigger":
             route.endpoint.__globals__["dispatch_generate_audio"] = failing_dispatcher
 
@@ -2124,7 +2206,7 @@ def stub_generate_subtitles_services(monkeypatch: pytest.MonkeyPatch) -> tuple[S
     run_svc = StubRunService()
     dispatcher = StubSubtitleDispatcher()
 
-    for route in runs_router.routes:
+    for route in _iter_api_routes(runs_router.routes):
         if route.name == "generate_subtitles_trigger":
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "dispatch_generate_subtitles", dispatcher)
@@ -2240,7 +2322,7 @@ async def test_generate_subtitles_wrong_stage(client, stub_generate_subtitles_se
         json={},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "IDEA_READY" in response.json()["detail"]
 
 
@@ -2254,7 +2336,7 @@ async def test_generate_subtitles_wrong_stage_visual(client, stub_generate_subti
         json={},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "VISUAL_ASSET_REVIEW" in response.json()["detail"]
 
 
@@ -2289,7 +2371,7 @@ async def test_generate_subtitles_dispatch_failure_rollback(client, stub_generat
         raise RuntimeError("Celery broker down")
 
     from shorts_api.main import runs_router as _r
-    for route in _r.routes:
+    for route in _iter_api_routes(_r.routes):
         if route.name == "generate_subtitles_trigger":
             route.endpoint.__globals__["dispatch_generate_subtitles"] = failing_dispatcher
 
@@ -2334,7 +2416,7 @@ def stub_generate_render_services(monkeypatch: pytest.MonkeyPatch) -> tuple[Stub
     run_svc = StubRunService()
     dispatcher = StubRenderDispatcher()
 
-    for route in runs_router.routes:
+    for route in _iter_api_routes(runs_router.routes):
         if route.name == "render_trigger":
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "dispatch_render_video", dispatcher)
@@ -2445,7 +2527,7 @@ async def test_render_wrong_stage(client, stub_generate_render_services):
         json={},
     )
 
-    assert response.status_code == 400
+    assert response.status_code == 409
     assert "IDEA_READY" in response.json()["detail"]
 
 
@@ -2478,7 +2560,7 @@ async def test_render_dispatch_failure_rollback(client, stub_generate_render_ser
         raise RuntimeError("Celery broker down")
 
     from shorts_api.main import runs_router as _r
-    for route in _r.routes:
+    for route in _iter_api_routes(_r.routes):
         if route.name == "render_trigger":
             route.endpoint.__globals__["dispatch_render_video"] = failing_dispatcher
 
@@ -2564,7 +2646,7 @@ def stub_preview_services(monkeypatch: pytest.MonkeyPatch):
         StubSubtitleArtifact(3, "data/artifacts/200/subtitles/subtitles.srt", "srt", now)
     )
 
-    for route in runs_router.routes:
+    for route in _iter_api_routes(runs_router.routes):
         if route.name == "get_preview":
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "render_service", render_svc)
@@ -2637,3 +2719,23 @@ async def test_preview_run_not_found(client, stub_preview_services):
 
     assert response.status_code == 404
     assert "not found" in response.json()["detail"].lower()
+
+
+def test_subtitle_format_validation_rejects_invalid_values() -> None:
+    with pytest.raises(ValidationError):
+        GenerateSubtitlesRequest(subtitle_format=cast(Literal["srt", "vtt"], "../../evil"))
+
+    assert GenerateSubtitlesRequest(subtitle_format="srt").subtitle_format == "srt"
+    assert GenerateSubtitlesRequest(subtitle_format="vtt").subtitle_format == "vtt"
+
+    with pytest.raises(ValidationError):
+        ParagraphSubtitlesRequest(subtitle_format=cast(Literal["srt", "vtt"], "../../evil"))
+
+    assert ParagraphSubtitlesRequest(subtitle_format="srt").subtitle_format == "srt"
+    assert ParagraphSubtitlesRequest(subtitle_format="vtt").subtitle_format == "vtt"
+
+    with pytest.raises(ValidationError):
+        BulkParagraphSubtitlesRequest(subtitle_format=cast(Literal["srt", "vtt"], "../../evil"))
+
+    assert BulkParagraphSubtitlesRequest(subtitle_format="srt").subtitle_format == "srt"
+    assert BulkParagraphSubtitlesRequest(subtitle_format="vtt").subtitle_format == "vtt"
