@@ -76,6 +76,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Create .env from example
+        run: cp .env.example .env
       - name: Validate docker-compose config
         run: docker compose config --quiet
       - name: Build API runtime image

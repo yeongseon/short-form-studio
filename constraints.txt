@@ -1,8 +1,3 @@
-# Editable install with no version control (aibc-news-tool==0.3.0)
--e /home/yeongseon/GitHub/aibc-ready-news-tool
-# Editable install with no version control (aibc-ready-news-tool==0.2.0)
--e /home/yeongseon/GitHub/aibc-ready-news-tool
--e git+https://github.com/yeongseon/aibc-reporter.git@1c375cc33a596083f2af6dab1497233972b79e71#egg=aibc_reporter_tool
 aiohappyeyeballs==2.6.1
 aiohttp==3.13.3
 aiosignal==1.4.0
@@ -22,15 +17,9 @@ Automat==20.2.0
 azure-core==1.39.0
 azure-eventhub==5.15.1
 azure-functions==1.24.0
--e git+https://github.com/yeongseon/azure-functions-db.git@6a5d527f8e345c6efbc136c558b8b4c4be71ed90#egg=azure_functions_db
--e git+https://github.com/yeongseon/azure-functions-doctor-for-python.git@8766d76ff321c9eed851af79453c15404f829f69#egg=azure_functions_doctor
 azure-functions-durable==1.5.0
--e git+https://github.com/yeongseon/azure-functions-durable-graph.git@68e9c5347322ad9ef55e70dc655b09dc476d1008#egg=azure_functions_durable_graph
-# Editable install with no version control (azure-functions-langgraph==0.1.0a0)
--e /data/GitHub/azure-functions-langgraph-new
 azure-functions-logging==0.5.0
 azure-functions-openapi==0.17.0
--e git+https://github.com/yeongseon/azure-functions-scaffold.git@f4825ddf9fdd2bc2352ea3fedb8eaab56da9ac92#egg=azure_functions_scaffold
 azure-functions-validation==0.7.0
 azure-identity==1.25.3
 azure-storage-blob==12.28.0
@@ -40,12 +29,8 @@ backports.asyncio.runner==1.2.0
 backports.zstd==1.3.0
 backrefs==6.1
 bandit==1.9.4
--e git+https://github.com/yeongseon/bar_chart_race.git@65ffd799ba1b84ab50dbe115bd23bd528a2d7952#egg=bar_chart_race
 basedpyright==1.38.2
 bcrypt==3.2.0
-# Editable install with no version control (benchflow==0.1.0)
--e /data/GitHub/benchflow
--e git+https://github.com/yeongseon/benchforge.git@30ec73dcafe10128ab05f1dc3a1310a2e88858c0#egg=benchforge
 billiard==4.2.4
 black==25.12.0
 blinker==1.9.0
@@ -67,7 +52,6 @@ click-didyoumean==0.3.1
 click-plugins==1.1.1.2
 click-repl==0.3.0
 cloud-init==25.2
--e git+https://github.com/yeongseon/cloudblocks.git@c3f7cddc24fd38d728957675817556035c8e35d9#egg=cloudblocks_api&subdirectory=apps/api
 cloudflared==1.0.0.2
 colorama==0.4.6
 command-not-found==0.3
@@ -75,9 +59,6 @@ configobj==5.0.6
 constantly==15.1.0
 contourpy==1.3.2
 coverage==7.13.4
--e git+https://github.com/yeongseon/short-form-studio.git@478b14a2333f0f0c0c3cd99b6c7bbc148c0b2ca7#egg=creator_domain&subdirectory=packages/creator-domain
--e git+https://github.com/yeongseon/short-form-studio.git@478b14a2333f0f0c0c3cd99b6c7bbc148c0b2ca7#egg=creator_provider&subdirectory=packages/creator-provider
--e git+https://github.com/yeongseon/short-form-studio.git@478b14a2333f0f0c0c3cd99b6c7bbc148c0b2ca7#egg=creator_service&subdirectory=packages/creator-service
 cryptography==46.0.5
 csscompressor==0.9.5
 cssselect2==0.9.0
@@ -97,7 +78,6 @@ docutils==0.21.2
 edge-tts==7.2.8
 elevenlabs==2.40.0
 et_xmlfile==2.0.0
--e git+https://github.com/yeongseon/excel-dbapi.git@4ed4018ad81358604a0b6dced6fa706eb994341d#egg=excel_dbapi
 exceptiongroup==1.3.1
 fastapi==0.129.0
 filelock==3.20.3
@@ -120,7 +100,6 @@ greenlet==3.3.2
 griffe==2.0.0
 griffecli==2.0.0
 griffelib==2.0.0
--e git+https://github.com/yeongseon/gwanjeom-blog-bot.git@3b217b23d9af542314f1d829e159f281adf75674#egg=gwanjeom_blog_bot
 gyp==0.1
 h11==0.16.0
 hatch==1.16.3
@@ -160,7 +139,6 @@ kiwipiepy==0.23.0
 kiwipiepy_model==0.23.0
 kiwisolver==1.5.0
 kombu==5.6.2
--e git+https://github.com/yeongseon/kopen-data-builder.git@2ce2851d48d015ddf74c0cf90aa30aac194a3c94#egg=kopen_data_builder
 langchain-core==1.2.24
 langgraph==1.1.4
 langgraph-checkpoint==4.0.1
@@ -181,12 +159,9 @@ matplotlib==3.10.8
 mdit-py-plugins==0.5.0
 mdurl==0.1.2
 mergedeep==1.3.4
-# Editable install with no version control (metrics-core==0.1.0)
--e /data/GitHub/shorts-automation/packages/metrics-core
 mkdocs==1.6.1
 mkdocs-autorefs==1.4.4
 mkdocs-charts-plugin==0.0.13
--e git+https://github.com/Mkdocs-Books/mkdocs-ebook.git@0147df054886a954ee5992f0643d778692447468#egg=mkdocs_ebook
 mkdocs-get-deps==0.2.0
 mkdocs-material==9.7.1
 mkdocs-material-extensions==1.3.1
@@ -215,17 +190,12 @@ opentelemetry-semantic-conventions==0.61b0
 orderedmultidict==1.0.2
 orjson==3.11.8
 ormsgpack==1.12.2
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=pack_paystreet&subdirectory=packs/paystreet
-# Editable install with no version control (pack-sdk==0.1.0)
--e /data/GitHub/shorts-automation/packages/pack-sdk
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=pack_stock_race&subdirectory=packs/stock-race
 packaging==26.0
 paginate==0.5.7
 pandas==2.3.3
 pandoc==2.4
 pathspec==1.0.4
 pexpect==4.8.0
--e git+https://github.com/yeongseon/photojeni-v2.git@c37e1f9bc1f32fee59b79ad36a3de5796404e0cd#egg=photojeni_server&subdirectory=app/server
 pillow==11.3.0
 platformdirs==4.5.1
 playwright==1.58.0
@@ -238,32 +208,15 @@ prompt_toolkit==3.0.52
 propcache==0.4.1
 proto-plus==1.27.2
 protobuf==6.33.6
-# Editable install with no version control (provider-llm-ollama==0.1.0)
--e /data/GitHub/shorts-automation/packages/provider-llm-ollama
-# Editable install with no version control (provider-llm-openai==0.1.0)
--e /data/GitHub/shorts-automation/packages/provider-llm-openai
-# Editable install with no version control (provider-publish-youtube==0.1.0)
--e /data/GitHub/shorts-automation/packages/provider-publish-youtube
-# Editable install with no version control (provider-storage-local==0.1.0)
--e /data/GitHub/shorts-automation/packages/provider-storage-local
-# Editable install with no version control (provider-stt-whisper==0.1.0)
--e /data/GitHub/shorts-automation/packages/provider-stt-whisper
-# Editable install with no version control (provider-tts-elevenlabs==0.1.0)
--e /data/GitHub/shorts-automation/packages/provider-tts-elevenlabs
-# Editable install with no version control (provider-tts-qwen3==0.1.0)
--e /data/GitHub/shorts-automation/packages/provider-tts-qwen3
 psycopg==3.3.3
 psycopg-binary==3.3.3
 psycopg2-binary==2.9.11
 ptyprocess==0.7.0
-# Editable install with no version control (publisher-core==0.1.0)
--e /data/GitHub/shorts-automation/packages/publisher-core
 py-cpuinfo==9.0.0
 pyarrow==23.0.0
 pyasn1==0.4.8
 pyasn1-modules==0.2.1
 pycparser==3.0
--e git+https://github.com/cubrid-labs/pycubrid.git@3d4109f9447beb98586435c231ec5279116a8275#egg=pycubrid
 pydantic==2.12.5
 pydantic-settings==2.13.1
 pydantic_core==2.41.5
@@ -308,8 +261,6 @@ pyyaml_env_tag==1.1
 readme_renderer==44.0
 redis==6.4.0
 regex==2026.2.28
-# Editable install with no version control (render-core==0.1.0)
--e /data/GitHub/shorts-automation/packages/render-core
 requests==2.32.5
 requests-oauthlib==2.0.0
 requests-toolbelt==1.0.0
@@ -324,30 +275,6 @@ SecretStorage==3.3.1
 service-identity==18.1.0
 setuptools-scm==9.2.2
 shellingham==1.5.4
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=shorts_api&subdirectory=apps/api
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=shorts_cli&subdirectory=apps/cli
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=shorts_contracts&subdirectory=packages/contracts
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=shorts_metrics&subdirectory=packages/shorts-metrics
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=shorts_pack_money_tips&subdirectory=packs/money-tips
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=shorts_pack_paystreet&subdirectory=packs/paystreet
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=shorts_pack_sdk&subdirectory=packages/shorts-pack-sdk
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=shorts_pack_stock_race&subdirectory=packs/stock-race
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=shorts_provider_image_sdxl&subdirectory=packages/shorts-provider-image-sdxl
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=shorts_provider_llm_ollama&subdirectory=packages/shorts-provider-llm-ollama
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=shorts_provider_llm_openai&subdirectory=packages/shorts-provider-llm-openai
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=shorts_provider_publish_youtube&subdirectory=packages/shorts-provider-publish-youtube
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=shorts_provider_storage_local&subdirectory=packages/shorts-provider-storage-local
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=shorts_provider_stt_whisper&subdirectory=packages/shorts-provider-stt-whisper
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=shorts_provider_tts_edge&subdirectory=packages/shorts-provider-tts-edge
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=shorts_provider_tts_elevenlabs&subdirectory=packages/shorts-provider-tts-elevenlabs
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=shorts_provider_tts_qwen3&subdirectory=packages/shorts-provider-tts-qwen3
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=shorts_publisher&subdirectory=packages/shorts-publisher
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=shorts_render&subdirectory=packages/shorts-render
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=shorts_storage&subdirectory=packages/shorts-storage
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=shorts_worker_orchestrator&subdirectory=apps/worker-orchestrator
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=shorts_worker_publish&subdirectory=apps/worker-publish
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=shorts_worker_render&subdirectory=apps/worker-render
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=shorts_workflow&subdirectory=packages/shorts-workflow
 six==1.16.0
 sniffio==1.3.1
 snowballstemmer==3.0.1
@@ -363,14 +290,10 @@ sphinxcontrib-jsmath==1.0.1
 sphinxcontrib-qthelp==2.0.0
 sphinxcontrib-serializinghtml==2.0.0
 SQLAlchemy==2.0.48
--e git+https://github.com/cubrid-labs/sqlalchemy-cubrid.git@98ef97cc8b4592a7b5a756c84f6c2889368038bc#egg=sqlalchemy_cubrid
--e git+https://github.com/yeongseon/sqlalchemy-excel.git@eeec3b95d6bcb736e2c6862479fb7d6fe2d115f6#egg=sqlalchemy_excel
 sqlparse==0.5.5
 ssh-import-id==5.11
 starlette==0.52.1
 stevedore==5.6.0
-# Editable install with no version control (storage-core==0.1.0)
--e /data/GitHub/shorts-automation/packages/storage-core
 systemd-python==234
 tabulate==0.10.0
 tenacity==9.1.4
@@ -415,11 +338,6 @@ wcwidth==0.6.0
 webencodings==0.5.1
 websockets==16.0
 Werkzeug==3.1.6
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=worker_orchestrator&subdirectory=apps/worker-orchestrator
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=worker_publish&subdirectory=apps/worker-publish
--e git+https://github.com/yeongseon/shorts-automation.git@217c32a21dff7cea4bdfc44abb287e271344f260#egg=worker_render&subdirectory=apps/worker-render
-# Editable install with no version control (workflow-core==0.1.0)
--e /data/GitHub/shorts-automation/packages/workflow-core
 xkit==0.0.0
 xxhash==3.6.0
 yarl==1.22.0
