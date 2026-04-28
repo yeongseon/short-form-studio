@@ -9,6 +9,7 @@ from creator_domain.sanitize import UnsafePathComponent, sanitize_path_component
 from creator_service.db import close_pool
 from creator_service.logging_config import setup_json_logging
 from creator_service.model_health_service import ModelHealthService, ModelStatus
+from creator_service.production_checks import validate_production_config
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -39,7 +40,7 @@ runs_router.include_router(runs_lifecycle_router)
 setup_json_logging(service_name="api", level="INFO")
 logger = logging.getLogger(__name__)
 
-
+validate_production_config()
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -47,7 +48,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await close_pool()
 
 
-app = FastAPI(title="short-form-studio API", lifespan=lifespan)
+_is_production = os.getenv("ENVIRONMENT", "development").lower() == "production"
+
+app = FastAPI(
+    title="short-form-studio API",
+    lifespan=lifespan,
+    docs_url=None if _is_production else "/docs",
+    redoc_url=None if _is_production else "/redoc",
+    openapi_url=None if _is_production else "/openapi.json",
+)
 
 cors_origins_env = os.getenv("CORS_ORIGINS")
 cors_origins = [
