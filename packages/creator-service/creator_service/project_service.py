@@ -10,9 +10,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Literal, Protocol
 
-import creator_service.run_service as _run_svc_mod
-
 from creator_domain.models.project import Project
+
+import creator_service.run_service as _run_svc_mod
 
 LatestRunSummary = dict[str, int | str | None]
 
@@ -20,22 +20,21 @@ LatestRunSummary = dict[str, int | str | None]
 class ProjectStorageBackend(Protocol):
     """Abstract async storage interface used by ProjectService."""
 
-    async def insert_project(self, payload: dict[str, Any]) -> dict[str, Any]:
-        ...
+    async def insert_project(self, payload: dict[str, Any]) -> dict[str, Any]: ...
 
-    async def fetch_project(self, project_id: int) -> dict[str, Any] | None:
-        ...
+    async def fetch_project(self, project_id: int) -> dict[str, Any] | None: ...
 
-    async def list_projects(self, limit: int, offset: int) -> list[dict[str, Any]]:
-        ...
+    async def list_projects(
+        self, limit: int, offset: int, workspace_id: int | None = None
+    ) -> list[dict[str, Any]]: ...
 
-    async def fetch_latest_run_summary(self, project_id: int) -> LatestRunSummary | None:
-        ...
+    async def fetch_latest_run_summary(self, project_id: int) -> LatestRunSummary | None: ...
 
-    async def count_projects(self) -> int:
-        ...
+    async def count_projects(self) -> int: ...
 
-    async def update_project(self, project_id: int, updates: dict[str, Any]) -> dict[str, Any] | None:
+    async def update_project(
+        self, project_id: int, updates: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """Update project fields. Returns updated row or None if not found."""
         ...
 
@@ -67,6 +66,7 @@ class InMemoryProjectStorage:
             "url_source": payload.get("url_source"),
             "json_script": payload.get("json_script"),
             "status": payload.get("status", "draft"),
+            "workspace_id": payload.get("workspace_id"),
             "created_at": now,
             "updated_at": now,
         }
@@ -79,18 +79,24 @@ class InMemoryProjectStorage:
             return None
         return dict(row)
 
-    async def list_projects(self, limit: int, offset: int) -> list[dict[str, Any]]:
+    async def list_projects(
+        self, limit: int, offset: int, workspace_id: int | None = None
+    ) -> list[dict[str, Any]]:
         ordered = sorted(
             self._projects.values(),
             key=lambda row: (row["created_at"], row["id"]),
             reverse=True,
         )
+        if workspace_id is not None:
+            ordered = [row for row in ordered if row.get("workspace_id") == workspace_id]
         return [dict(row) for row in ordered[offset : offset + limit]]
 
     async def count_projects(self) -> int:
         return len(self._projects)
 
-    async def update_project(self, project_id: int, updates: dict[str, Any]) -> dict[str, Any] | None:
+    async def update_project(
+        self, project_id: int, updates: dict[str, Any]
+    ) -> dict[str, Any] | None:
         row = self._projects.get(project_id)
         if row is None:
             return None
@@ -106,6 +112,7 @@ class InMemoryProjectStorage:
             self._runs_by_project.pop(project_id, None)
             return True
         return False
+
     async def fetch_latest_run_summary(self, project_id: int) -> LatestRunSummary | None:
         runs = self._runs_by_project.get(project_id, [])
         if runs:
@@ -169,6 +176,7 @@ class ProjectService:
         markdown_source: str | None = None,
         url_source: str | None = None,
         json_script: str | None = None,
+        workspace_id: int | None = None,
     ) -> Project:
         if source_type not in self._ALLOWED_SOURCE_TYPES:
             raise ValueError(f"Unsupported source_type '{source_type}'")
@@ -191,8 +199,12 @@ class ProjectService:
 
         if source_type == "pasted_json" and json_script is None:
             raise ValueError("source_type='pasted_json' requires json_script to be provided")
-        if source_type == "pasted_json" and (idea_brief is not None or markdown_source is not None or url_source is not None):
-            raise ValueError("source_type='pasted_json' cannot have idea_brief, markdown_source, or url_source set")
+        if source_type == "pasted_json" and (
+            idea_brief is not None or markdown_source is not None or url_source is not None
+        ):
+            raise ValueError(
+                "source_type='pasted_json' cannot have idea_brief, markdown_source, or url_source set"
+            )
         if source_type != "pasted_json" and json_script is not None:
             raise ValueError(f"source_type='{source_type}' cannot have json_script set")
 
@@ -205,6 +217,7 @@ class ProjectService:
                 "url_source": url_source,
                 "json_script": json_script,
                 "status": "draft",
+                "workspace_id": workspace_id,
             }
         )
         return Project.model_validate(row)
@@ -217,13 +230,15 @@ class ProjectService:
         latest_run = await self.db.fetch_latest_run_summary(project_id)
         return ProjectWithLatestRun.model_validate({**row, "latest_run": latest_run})
 
-    async def list_projects(self, limit: int = 20, offset: int = 0) -> list[Project]:
+    async def list_projects(
+        self, limit: int = 20, offset: int = 0, workspace_id: int | None = None
+    ) -> list[Project]:
         if limit < 0:
             raise ValueError("limit must be >= 0")
         if offset < 0:
             raise ValueError("offset must be >= 0")
 
-        rows = await self.db.list_projects(limit=limit, offset=offset)
+        rows = await self.db.list_projects(limit=limit, offset=offset, workspace_id=workspace_id)
         projects: list[Project] = []
         for row in rows:
             latest_run = await self.db.fetch_latest_run_summary(row["id"])
@@ -244,6 +259,7 @@ class ProjectService:
     async def delete_project(self, project_id: int) -> bool:
         """Delete a project. FK cascade handles associated runs."""
         return await self.db.delete_project(project_id)
+
 
 def _create_storage() -> ProjectStorageBackend:
     import os

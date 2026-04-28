@@ -44,6 +44,10 @@ class RunStorageBackend(Protocol):
         """Return all run rows for a given project, newest first."""
         ...
 
+    async def list_runs_by_workspace(self, workspace_id: int) -> list[dict[str, Any]]:
+        """Return all run rows for a workspace, newest first."""
+        ...
+
     async def delete_run(self, run_id: int) -> bool:
         """Delete a run by id. Returns True if deleted."""
         ...
@@ -51,6 +55,7 @@ class RunStorageBackend(Protocol):
     async def delete_runs_by_project(self, project_id: int) -> int:
         """Delete all runs for a project. Returns count of deleted rows."""
         ...
+
     async def merge_model_defaults(self, run_id: int, updates_json: str) -> dict[str, Any]:
         """Atomically merge JSON updates into model_defaults_json."""
         ...
@@ -62,6 +67,7 @@ class RunStorageBackend(Protocol):
     async def remove_active_task_id(self, run_id: int, task_id: str) -> dict[str, Any]:
         """Atomically remove a task id from active_task_id."""
         ...
+
 
 class InMemoryRunStorage:
     def __init__(self) -> None:
@@ -111,10 +117,12 @@ class InMemoryRunStorage:
         return True, dict(row)
 
     async def list_runs_by_project(self, project_id: int) -> list[dict[str, Any]]:
-        rows = [
-            dict(r) for r in self._rows.values()
-            if r.get("project_id") == project_id
-        ]
+        rows = [dict(r) for r in self._rows.values() if r.get("project_id") == project_id]
+        rows.sort(key=lambda r: r.get("id", 0), reverse=True)
+        return rows
+
+    async def list_runs_by_workspace(self, workspace_id: int) -> list[dict[str, Any]]:
+        rows = [dict(r) for r in self._rows.values() if r.get("workspace_id") == workspace_id]
         rows.sort(key=lambda r: r.get("id", 0), reverse=True)
         return rows
 
@@ -179,6 +187,7 @@ class InMemoryRunStorage:
             return [parsed] if parsed else []
         return []
 
+
 class RunService:
     def __init__(self, storage: RunStorageBackend):
         self.storage = storage
@@ -212,6 +221,7 @@ class RunService:
         row = await self.storage.create_run(
             {
                 "project_id": project_id,
+                "workspace_id": None,
                 "current_stage": normalized_stage,
                 "status": status,
                 "review_stage": None,
@@ -247,10 +257,14 @@ class RunService:
         try:
             current_stage = RunStage(run.current_stage)
         except ValueError as exc:
-            raise ValueError(f"Invalid current stage '{run.current_stage}' for run {run_id}") from exc
+            raise ValueError(
+                f"Invalid current stage '{run.current_stage}' for run {run_id}"
+            ) from exc
 
         if not can_transition(current_stage, target_stage):
-            raise ValueError(f"Cannot transition from {current_stage.value} to {target_stage.value}")
+            raise ValueError(
+                f"Cannot transition from {current_stage.value} to {target_stage.value}"
+            )
 
         row = await self.storage.update_run(
             run_id,
@@ -281,7 +295,9 @@ class RunService:
         try:
             current = RunStage(run.current_stage)
         except ValueError as exc:
-            raise ValueError(f"Invalid current stage '{run.current_stage}' for run {run_id}") from exc
+            raise ValueError(
+                f"Invalid current stage '{run.current_stage}' for run {run_id}"
+            ) from exc
 
         if not can_transition(current, target):
             raise ValueError(f"Cannot transition from {current.value} to {target.value}")
@@ -295,6 +311,10 @@ class RunService:
     async def list_runs_by_project(self, project_id: int) -> list[PipelineRun]:
         """Return all runs for a project, newest first."""
         rows = await self.storage.list_runs_by_project(project_id)
+        return [PipelineRun.from_row(r) for r in rows]
+
+    async def list_runs_by_workspace(self, workspace_id: int) -> list[PipelineRun]:
+        rows = await self.storage.list_runs_by_workspace(workspace_id)
         return [PipelineRun.from_row(r) for r in rows]
 
     async def stop_run(self, run_id: int) -> PipelineRun:
@@ -344,8 +364,7 @@ class RunService:
 
         if run.status not in ("cancelled", "failed"):
             raise ValueError(
-                f"Run {run_id} has status '{run.status}', "
-                f"can only resume cancelled or failed runs"
+                f"Run {run_id} has status '{run.status}', can only resume cancelled or failed runs"
             )
 
         row = await self.storage.update_run(

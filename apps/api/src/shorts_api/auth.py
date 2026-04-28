@@ -9,6 +9,8 @@ middleware is a transparent pass-through so local development stays frictionless
 import hmac
 import os
 
+from creator_domain.models import User
+from creator_service.user_service import user_service
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -25,9 +27,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._api_key = api_key or os.getenv("API_KEY")
 
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         # Skip auth when no key is configured (local dev)
         if not self._api_key:
             return await call_next(request)
@@ -57,3 +57,42 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             )
 
         return await call_next(request)
+
+
+async def _resolve_user_from_jwt_or_oauth(request: Request) -> User | None:
+    authorization = request.headers.get("Authorization", "")
+    if not authorization.startswith("Bearer "):
+        return None
+    token = authorization[7:].strip()
+    if not token or token == os.getenv("API_KEY", ""):
+        return None
+
+    jwt_email = request.headers.get("X-Auth-Email")
+    if not jwt_email:
+        return None
+    return await user_service.create_or_get_user(
+        email=jwt_email,
+        auth_provider="jwt",
+        auth_subject=token,
+    )
+
+
+async def get_current_user(request: Request) -> User:
+    jwt_user = await _resolve_user_from_jwt_or_oauth(request)
+    if jwt_user is not None:
+        return jwt_user
+
+    user_email = request.headers.get("X-User-Email")
+    if user_email:
+        return await user_service.create_or_get_user(
+            email=user_email,
+            auth_provider="api_key",
+            auth_subject=user_email,
+        )
+
+    return await user_service.create_or_get_user(
+        email="system@short-form-studio.local",
+        name="System",
+        auth_provider="api_key",
+        auth_subject="system",
+    )
