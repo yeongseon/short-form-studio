@@ -7,6 +7,9 @@ stages — the caller (storyboard API) manages aggregate state.
 Subtitles are saved to: data/artifacts/{run_id}/subtitles/{section_id}.srt
 """
 
+# pyright: reportMissingImports=false
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import asyncio
@@ -21,8 +24,10 @@ try:
 except ImportError:
     redis = None
 
+from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.sanitize import sanitize_path_component
+from creator_provider.exceptions import ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.run_service import run_service as _run_service
@@ -46,6 +51,7 @@ def _get_redis_client() -> Any | None:
         return None
     return redis.Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"))
 
+
 async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
     remover: Any = getattr(_run_service.storage, "remove_active_task_id", None)
     if not callable(remover):
@@ -58,7 +64,16 @@ async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
         logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
 
 
-@celery_app.task(bind=True, name="generate_paragraph_subtitles")
+@celery_app.task(
+    bind=True,
+    autoretry_for=(ProviderTimeoutError, RateLimitError),
+    retry_backoff=True,
+    retry_jitter=True,
+    max_retries=3,
+    soft_time_limit=300,
+    time_limit=360,
+    name="generate_paragraph_subtitles",
+)
 def generate_paragraph_subtitles(
     self,
     run_id: int,
@@ -84,7 +99,9 @@ def generate_paragraph_subtitles(
     """
     start_time = datetime.now(timezone.utc)
     start_iso = start_time.isoformat()
-    task_id = str(getattr(getattr(self, "request", None), "id", None) or f"sub-{run_id}-{section_id}")
+    task_id = str(
+        getattr(getattr(self, "request", None), "id", None) or f"sub-{run_id}-{section_id}"
+    )
 
     provider_type: str | None = None
     endpoint: str | None = None
@@ -102,7 +119,9 @@ def generate_paragraph_subtitles(
             raise _StageGuardError(f"Run {run_id} is cancelled")
 
         if subtitle_format not in ("srt", "vtt"):
-            raise ValueError(f"Invalid subtitle_format: {subtitle_format!r}. Must be 'srt' or 'vtt'.")
+            raise ValueError(
+                f"Invalid subtitle_format: {subtitle_format!r}. Must be 'srt' or 'vtt'."
+            )
 
         if not os.path.exists(audio_path):
             raise RuntimeError(f"Audio file not found: {audio_path}")
@@ -179,6 +198,9 @@ def generate_paragraph_subtitles(
         return asyncio.run(_run_task())
     except _StageGuardError:
         raise
+    except SoftTimeLimitExceeded:
+        logger.error("Task generate_paragraph_subtitles timed out for run %s", run_id)
+        raise
     except Exception:
         logger.exception(
             "Failed to generate paragraph subtitles for run %d section %s",
@@ -192,5 +214,7 @@ def generate_paragraph_subtitles(
         except Exception:
             logger.warning(
                 "Could not remove active task id %s for run %d",
-                task_id, run_id, exc_info=True,
+                task_id,
+                run_id,
+                exc_info=True,
             )

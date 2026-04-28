@@ -9,6 +9,9 @@ Key design decisions:
 - Audio is saved to local filesystem: data/artifacts/{run_id}/audio/audio.wav
 """
 
+# pyright: reportMissingImports=false
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import asyncio
@@ -23,8 +26,10 @@ try:
 except ImportError:
     redis = None
 
+from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
+from creator_provider.exceptions import ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.audio_service import audio_service as _audio_service
@@ -39,10 +44,12 @@ _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
 # Stages where writing SUBTITLE_GENERATING or FAILED is safe — the run
 # hasn't advanced past audio generation. The task may start directly from
 # VISUAL_ASSET_REVIEW or from AUDIO_GENERATING after API-side CAS.
-_SAFE_STAGES = frozenset({
-    RunStage.VISUAL_ASSET_REVIEW.value,
-    RunStage.AUDIO_GENERATING.value,
-})
+_SAFE_STAGES = frozenset(
+    {
+        RunStage.VISUAL_ASSET_REVIEW.value,
+        RunStage.AUDIO_GENERATING.value,
+    }
+)
 
 
 class _StageGuardError(ValueError):
@@ -75,7 +82,16 @@ async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
         logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
 
 
-@celery_app.task(bind=True, name="generate_audio")
+@celery_app.task(
+    bind=True,
+    autoretry_for=(ProviderTimeoutError, RateLimitError),
+    retry_backoff=True,
+    retry_jitter=True,
+    max_retries=3,
+    soft_time_limit=300,
+    time_limit=360,
+    name="generate_audio",
+)
 def generate_audio(
     self,
     run_id: int,
@@ -215,6 +231,9 @@ def generate_audio(
         return asyncio.run(_run_task())
     except _StageGuardError:
         # Validation rejection — do NOT mutate run state to FAILED.
+        raise
+    except SoftTimeLimitExceeded:
+        logger.error("Task generate_audio timed out for run %s", run_id)
         raise
     except Exception:
         # Unexpected error — atomic conditional fail.

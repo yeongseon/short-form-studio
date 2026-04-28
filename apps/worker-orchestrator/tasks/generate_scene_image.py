@@ -12,6 +12,9 @@ Key design decisions:
 - Images are saved to local filesystem: data/artifacts/{run_id}/scenes/
 """
 
+# pyright: reportMissingImports=false
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import asyncio
@@ -28,9 +31,11 @@ try:
 except ImportError:
     redis = None
 
+from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
 from creator_domain.sanitize import sanitize_path_component
+from creator_provider.exceptions import ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.run_service import run_service as _run_service
@@ -39,29 +44,35 @@ from creator_service.visual_plan_service import visual_plan_service as _visual_p
 
 logger = logging.getLogger(__name__)
 
-_ALLOWED_STAGES = frozenset({
-    RunStage.VISUAL_PLAN_REVIEW,
-    RunStage.VISUAL_ASSET_GENERATING,
-    RunStage.VISUAL_ASSET_REVIEW,
-})
+_ALLOWED_STAGES = frozenset(
+    {
+        RunStage.VISUAL_PLAN_REVIEW,
+        RunStage.VISUAL_ASSET_GENERATING,
+        RunStage.VISUAL_ASSET_REVIEW,
+    }
+)
 
 # Stages where successful image generation can still safely land.
 # Batch generation starts from VISUAL_ASSET_GENERATING, while single-scene
 # generation/regeneration may be triggered from review stages without an
 # intermediate stage transition.
-_SAFE_SUCCESS_STAGES = frozenset({
-    RunStage.VISUAL_PLAN_REVIEW.value,
-    RunStage.VISUAL_ASSET_GENERATING.value,
-    RunStage.VISUAL_ASSET_REVIEW.value,
-})
+_SAFE_SUCCESS_STAGES = frozenset(
+    {
+        RunStage.VISUAL_PLAN_REVIEW.value,
+        RunStage.VISUAL_ASSET_GENERATING.value,
+        RunStage.VISUAL_ASSET_REVIEW.value,
+    }
+)
 
 # FAILED should only be written while the run is still pre-review or actively
 # generating. Once a run has advanced to asset review, a stale failing task
 # must not downgrade it.
-_SAFE_FAILURE_STAGES = frozenset({
-    RunStage.VISUAL_PLAN_REVIEW.value,
-    RunStage.VISUAL_ASSET_GENERATING.value,
-})
+_SAFE_FAILURE_STAGES = frozenset(
+    {
+        RunStage.VISUAL_PLAN_REVIEW.value,
+        RunStage.VISUAL_ASSET_GENERATING.value,
+    }
+)
 
 # Base directory for artifact storage (relative to project root).
 _ARTIFACTS_BASE = os.getenv("ARTIFACT_ROOT", "data/artifacts")
@@ -102,7 +113,16 @@ async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
         logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
 
 
-@celery_app.task(bind=True, name="generate_scene_image")
+@celery_app.task(
+    bind=True,
+    autoretry_for=(ProviderTimeoutError, RateLimitError),
+    retry_backoff=True,
+    retry_jitter=True,
+    max_retries=3,
+    soft_time_limit=600,
+    time_limit=660,
+    name="generate_scene_image",
+)
 def generate_scene_image(
     self,
     run_id: int,
@@ -209,7 +229,9 @@ def generate_scene_image(
                     if entry.requires_gpu:
                         redis_client = _get_redis_client()
                         if redis_client is None:
-                            raise RuntimeError("Redis client is unavailable; cannot acquire GPU lock")
+                            raise RuntimeError(
+                                "Redis client is unavailable; cannot acquire GPU lock"
+                            )
                         scene_task_id = f"{task_id}:{target_scene.scene_id}"
                         acquire_gpu_lock(redis_client, scene_task_id)
                         lock_acquired = True
@@ -219,7 +241,9 @@ def generate_scene_image(
                         params = dict(entry.default_params or {})
                         if image_params:
                             params.update(image_params)
-                        safe_scene_id = sanitize_path_component(target_scene.scene_id, label="scene_id")
+                        safe_scene_id = sanitize_path_component(
+                            target_scene.scene_id, label="scene_id"
+                        )
                         target_path = str(asset_dir / f"{safe_scene_id}-{uuid4().hex}.png")
                         params["output_path"] = target_path
                         await provider.generate(effective_prompt, params)
@@ -234,14 +258,16 @@ def generate_scene_image(
                             is_active=is_active,
                         )
 
-                        scene_result.update({
-                            "status": "success",
-                            "asset_id": asset.id,
-                            "asset_path": asset.asset_path,
-                            "version": asset.version,
-                            "gpu_lock_acquired_at": gpu_lock_acquired_at,
-                            "gpu_lock_released_at": None,
-                        })
+                        scene_result.update(
+                            {
+                                "status": "success",
+                                "asset_id": asset.id,
+                                "asset_path": asset.asset_path,
+                                "version": asset.version,
+                                "gpu_lock_acquired_at": gpu_lock_acquired_at,
+                                "gpu_lock_released_at": None,
+                            }
+                        )
                     finally:
                         if lock_acquired:
                             try:
@@ -258,10 +284,12 @@ def generate_scene_image(
                     results.append(scene_result)
 
                 except Exception as exc:
-                    scene_result.update({
-                        "status": "failed",
-                        "error": str(exc),
-                    })
+                    scene_result.update(
+                        {
+                            "status": "failed",
+                            "error": str(exc),
+                        }
+                    )
                     failed_scenes.append(scene_result)
                     logger.error(
                         "Failed to generate image for scene %s in run %d: %s",
@@ -335,6 +363,9 @@ def generate_scene_image(
         return asyncio.run(_run_task())
     except _StageGuardError:
         # Validation rejection — do NOT mutate run state to FAILED.
+        raise
+    except SoftTimeLimitExceeded:
+        logger.error("Task generate_scene_image timed out for run %s", run_id)
         raise
     except Exception:
         # Unexpected error (not scene-level) — atomic conditional fail.

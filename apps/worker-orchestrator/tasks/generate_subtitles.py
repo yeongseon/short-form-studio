@@ -9,6 +9,9 @@ Key design decisions:
 - Subtitles are saved to local filesystem: data/artifacts/{run_id}/subtitles/subtitles.srt
 """
 
+# pyright: reportMissingImports=false
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import asyncio
@@ -23,8 +26,10 @@ try:
 except ImportError:
     redis = None
 
+from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
+from creator_provider.exceptions import ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.audio_service import audio_service as _audio_service
@@ -40,10 +45,12 @@ _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
 # Stages where writing RENDER_GENERATING or FAILED is safe — the run
 # hasn't advanced past subtitle generation. The task may start directly
 # from AUDIO_GENERATING or from SUBTITLE_GENERATING after API-side CAS.
-_SAFE_STAGES = frozenset({
-    "AUDIO_GENERATING",
-    "SUBTITLE_GENERATING",
-})
+_SAFE_STAGES = frozenset(
+    {
+        "AUDIO_GENERATING",
+        "SUBTITLE_GENERATING",
+    }
+)
 
 
 class _StageGuardError(ValueError):
@@ -76,7 +83,16 @@ async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
         logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
 
 
-@celery_app.task(bind=True, name="generate_subtitles")
+@celery_app.task(
+    bind=True,
+    autoretry_for=(ProviderTimeoutError, RateLimitError),
+    retry_backoff=True,
+    retry_jitter=True,
+    max_retries=3,
+    soft_time_limit=300,
+    time_limit=360,
+    name="generate_subtitles",
+)
 def generate_subtitles(
     self,
     run_id: int,
@@ -99,7 +115,9 @@ def generate_subtitles(
         nonlocal redis_client, lock_acquired
         try:
             if subtitle_format not in ("srt", "vtt"):
-                raise ValueError(f"Invalid subtitle_format: {subtitle_format!r}. Must be 'srt' or 'vtt'.")
+                raise ValueError(
+                    f"Invalid subtitle_format: {subtitle_format!r}. Must be 'srt' or 'vtt'."
+                )
 
             # 1. Stage guard — reject before any side effects.
             run = await _run_service.storage.get_run(run_id)
@@ -166,7 +184,9 @@ def generate_subtitles(
                 params["format"] = subtitle_format
                 params["output_path"] = subtitle_path
                 if not audio_path:
-                    raise RuntimeError(f"No audio artifact found for run {run_id}; cannot transcribe")
+                    raise RuntimeError(
+                        f"No audio artifact found for run {run_id}; cannot transcribe"
+                    )
                 await provider.transcribe(audio_path, params=params)
 
                 # 7. Save subtitle artifact via service.
@@ -227,6 +247,9 @@ def generate_subtitles(
         return asyncio.run(_run_task())
     except _StageGuardError:
         # Validation rejection — do NOT mutate run state to FAILED.
+        raise
+    except SoftTimeLimitExceeded:
+        logger.error("Task generate_subtitles timed out for run %s", run_id)
         raise
     except Exception:
         # Unexpected error — atomic conditional fail.

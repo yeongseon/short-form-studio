@@ -1,5 +1,8 @@
 """Celery task for script generation via model providers."""
 
+# pyright: reportMissingImports=false
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import asyncio
@@ -14,8 +17,10 @@ try:
 except ImportError:
     redis = None
 
+from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
+from creator_provider.exceptions import ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.run_service import run_service as _run_service
@@ -28,10 +33,12 @@ _ALLOWED_STAGES = frozenset({RunStage.IDEA_READY, RunStage.SCRIPT_GENERATING})
 # Stages where writing SCRIPT_REVIEW or FAILED is safe — the run hasn't
 # advanced past generation. The task may start directly from IDEA_READY
 # or from SCRIPT_GENERATING after the API-side CAS.
-_SAFE_STAGES = frozenset({
-    RunStage.IDEA_READY.value,
-    RunStage.SCRIPT_GENERATING.value,
-})
+_SAFE_STAGES = frozenset(
+    {
+        RunStage.IDEA_READY.value,
+        RunStage.SCRIPT_GENERATING.value,
+    }
+)
 
 
 class _StageGuardError(ValueError):
@@ -76,7 +83,16 @@ async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
         logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
 
 
-@celery_app.task(bind=True, name="generate_script")
+@celery_app.task(
+    bind=True,
+    autoretry_for=(ProviderTimeoutError, RateLimitError),
+    retry_backoff=True,
+    retry_jitter=True,
+    max_retries=3,
+    soft_time_limit=300,
+    time_limit=360,
+    name="generate_script",
+)
 def generate_script(
     self,
     run_id: int,
@@ -194,6 +210,9 @@ def generate_script(
     except _StageGuardError:
         # Validation rejection — do NOT mutate run state to FAILED.
         # A stale/duplicate task should not downgrade a run already past generation.
+        raise
+    except SoftTimeLimitExceeded:
+        logger.error("Task generate_script timed out for run %s", run_id)
         raise
     except Exception:
         # Atomic conditional fail: only mark FAILED if run is still in a

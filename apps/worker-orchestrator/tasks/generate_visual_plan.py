@@ -5,6 +5,9 @@ per script section with image-generation prompts, style tags, and mood.
 Follows the same pattern as generate_script.
 """
 
+# pyright: reportMissingImports=false
+# ruff: noqa: E402
+
 from __future__ import annotations
 
 import asyncio
@@ -20,9 +23,11 @@ try:
 except ImportError:
     redis = None
 
+from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
 from creator_domain.models.visual_plan import VisualScene
+from creator_provider.exceptions import ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.run_service import run_service as _run_service
@@ -125,7 +130,8 @@ def _parse_llm_response(
             scene_index=idx,
             section_type=section_type,
             original_text=text,
-            prompt=section.get("image_prompt") or llm_data.get("prompt", f"Visual representation of: {text[:200]}"),
+            prompt=section.get("image_prompt")
+            or llm_data.get("prompt", f"Visual representation of: {text[:200]}"),
             prompt_edited=bool(section.get("image_prompt")),
             prompt_source="user_edited" if section.get("image_prompt") else "auto_generated",
             style_tags=section.get("style_tags") or llm_data.get("style_tags", []),
@@ -157,7 +163,16 @@ async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
         logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
 
 
-@celery_app.task(bind=True, name="generate_visual_plan")
+@celery_app.task(
+    bind=True,
+    autoretry_for=(ProviderTimeoutError, RateLimitError),
+    retry_backoff=True,
+    retry_jitter=True,
+    max_retries=3,
+    soft_time_limit=300,
+    time_limit=360,
+    name="generate_visual_plan",
+)
 def generate_visual_plan(
     self,
     run_id: int,
@@ -294,6 +309,9 @@ def generate_visual_plan(
         return asyncio.run(_run_task())
     except _StageGuardError:
         # Validation rejection — do NOT mutate run state to FAILED.
+        raise
+    except SoftTimeLimitExceeded:
+        logger.error("Task generate_visual_plan timed out for run %s", run_id)
         raise
     except Exception:
         # Atomic conditional fail: only mark FAILED if run is still in a
