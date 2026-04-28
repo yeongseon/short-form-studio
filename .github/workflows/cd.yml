@@ -1,0 +1,95 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-push:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: api
+            dockerfile: apps/api/Dockerfile
+          - service: studio-web
+            dockerfile: apps/studio-web/Dockerfile
+          - service: worker
+            dockerfile: apps/worker-orchestrator/Dockerfile
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: vars
+        run: |
+          echo "date_tag=$(date +%Y.%m.%d).${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "sha_short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          target: runtime
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/${{ matrix.service }}:${{ steps.vars.outputs.date_tag }}
+            ghcr.io/${{ github.repository }}/${{ matrix.service }}:main-${{ steps.vars.outputs.sha_short }}
+            ghcr.io/${{ github.repository }}/${{ matrix.service }}:latest
+
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: build-push
+    environment: staging
+    steps:
+      - name: Run staging migrations
+        run: 'echo "TODO: Run alembic upgrade head against staging DB"'
+
+      - name: Deploy staging API
+        run: 'echo "TODO: Deploy API service to staging using new ghcr.io image"'
+
+      - name: Deploy staging worker
+        run: 'echo "TODO: Deploy worker service to staging using new ghcr.io image"'
+
+      - name: Deploy staging web
+        run: 'echo "TODO: Deploy studio-web service to staging using new ghcr.io image"'
+
+      - name: Staging smoke test
+        run: 'echo "TODO: Run staging smoke tests against API and web health endpoints"'
+
+  deploy-production:
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    environment: production
+    steps:
+      - name: Run production migrations
+        run: 'echo "TODO: Run alembic upgrade head against production DB"'
+
+      - name: Deploy production API
+        run: 'echo "TODO: Deploy API service to production using approved ghcr.io image"'
+
+      - name: Deploy production worker
+        run: 'echo "TODO: Deploy worker service to production using approved ghcr.io image"'
+
+      - name: Deploy production web
+        run: 'echo "TODO: Deploy studio-web service to production using approved ghcr.io image"'
+
+      - name: Production smoke test
+        run: 'echo "TODO: Run production smoke tests against API and web health endpoints"'
