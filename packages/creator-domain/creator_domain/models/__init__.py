@@ -17,6 +17,7 @@ from .stage import (
 )
 from .storyboard import ParagraphStatus, StaleFlags, StoryboardParagraph, StoryboardResponse
 from .subtitle_artifact import SubtitleArtifact
+from .usage import UsageEvent, UsageSummary, WorkspaceQuota
 from .video_artifact import VideoArtifact
 from .visual_asset import VisualAsset
 from .visual_plan import VisualPlan, VisualScene
@@ -43,6 +44,9 @@ __all__ = [
     "VisualAsset",
     "AudioArtifact",
     "SubtitleArtifact",
+    "UsageEvent",
+    "WorkspaceQuota",
+    "UsageSummary",
     "VideoArtifact",
     "ParagraphStatus",
     "StaleFlags",

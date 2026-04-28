@@ -1,4 +1,7 @@
 """FastAPI entrypoint for shorts_api."""
+
+# pyright: reportMissingImports=false
+
 import logging
 import os
 import time
@@ -25,6 +28,7 @@ from shorts_api.routes.creator_runs_visuals import router as runs_visuals_router
 from shorts_api.routes.creator_script import router as script_router
 from shorts_api.routes.creator_script import run_script_router
 from shorts_api.routes.creator_settings import router as settings_router
+from shorts_api.routes.creator_usage import router as usage_router
 from shorts_api.routes.creator_visual_plan import router as visual_plan_router
 
 # Combined runs router for backward compatibility (used by tests)
@@ -40,7 +44,6 @@ setup_json_logging(service_name="api", level="INFO")
 logger = logging.getLogger(__name__)
 
 
-
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     yield
@@ -50,9 +53,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="short-form-studio API", lifespan=lifespan)
 
 cors_origins_env = os.getenv("CORS_ORIGINS")
-cors_origins = [
-    origin.strip() for origin in cors_origins_env.split(",") if origin.strip()
-] if cors_origins_env else ["http://localhost:5174"]
+cors_origins = (
+    [origin.strip() for origin in cors_origins_env.split(",") if origin.strip()]
+    if cors_origins_env
+    else ["http://localhost:5174"]
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -62,6 +67,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(ApiKeyMiddleware)
+
 
 @app.middleware("http")
 async def request_logging_middleware(request: Request, call_next):
@@ -84,6 +90,7 @@ async def request_logging_middleware(request: Request, call_next):
 
 model_health = ModelHealthService()
 
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, _exc: Exception) -> JSONResponse:
     logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
@@ -91,6 +98,7 @@ async def global_exception_handler(request: Request, _exc: Exception) -> JSONRes
         status_code=500,
         content={"detail": "Internal server error"},
     )
+
 
 app.include_router(models_router, prefix="/api/creator")
 app.include_router(projects_router, prefix="/api/creator")
@@ -103,6 +111,7 @@ app.include_router(script_router, prefix="/api/creator")
 app.include_router(run_script_router, prefix="/api/creator")
 app.include_router(visual_plan_router, prefix="/api/creator")
 app.include_router(settings_router, prefix="/api/creator")
+app.include_router(usage_router, prefix="/api/creator")
 
 
 @app.get("/healthz")
