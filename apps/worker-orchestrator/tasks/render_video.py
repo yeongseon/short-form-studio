@@ -7,6 +7,8 @@ Phase 9: Supports per-paragraph audio/subtitle concatenation when available.
 Falls back to run-level audio/subtitles if per-paragraph artifacts don't exist.
 """
 
+# pyright: reportMissingImports=false
+
 from __future__ import annotations
 
 import asyncio
@@ -26,6 +28,7 @@ from creator_service.render_service import render_service as _render_service
 from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
+from creator_service.task_tracking_service import task_tracking_service as _task_tracking_service
 from creator_service.visual_asset_service import visual_asset_service as _visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
 
@@ -38,6 +41,7 @@ _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
 
 class _StageGuardError(ValueError):
     pass
+
 
 # Map profile name → RenderProfile constructor
 _PROFILE_REGISTRY: dict[str, Callable[[], RenderProfile]] = {
@@ -66,6 +70,7 @@ async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
     except Exception:
         logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
 
+
 @celery_app.task(bind=True, name="render_video")
 def render_video(
     self,
@@ -78,6 +83,11 @@ def render_video(
 
     async def _run_task() -> dict[str, object]:
         try:
+            try:
+                await _task_tracking_service.record_task_start(run_id, "render_video", task_id)
+                await _task_tracking_service.mark_running(task_id)
+            except Exception:
+                logger.warning("Failed to record task start", exc_info=True)
             run = await _run_service.storage.get_run(run_id)
             if run is None:
                 raise _StageGuardError(f"Run {run_id} not found")
@@ -171,10 +181,9 @@ def render_video(
                     ffmpeg.concatenate_audio(ordered_audio_paths, concat_path)
                     audio_path = Path(concat_path)
 
-                    scene_durations = [
-                        duration_by_section[sid]
-                        for sid in ordered_sections
-                    ][:scene_count]
+                    scene_durations = [duration_by_section[sid] for sid in ordered_sections][
+                        :scene_count
+                    ]
                     if len(scene_durations) < scene_count:
                         total_known = sum(scene_durations)
                         remaining = max(0.0, profile_data["max_duration_seconds"] - total_known)
@@ -193,9 +202,15 @@ def render_video(
                             sid in sub_by_section for sid in ordered_sections
                         )
                         if all_subtitles_covered:
-                            ordered_sub_paths = [sub_by_section[sid].path for sid in ordered_sections]
-                            ordered_sub_durations = [duration_by_section[sid] for sid in ordered_sections]
-                            merged_sub_path = f"{_ARTIFACT_ROOT}/{run_id}/render/subtitles_merged.srt"
+                            ordered_sub_paths = [
+                                sub_by_section[sid].path for sid in ordered_sections
+                            ]
+                            ordered_sub_durations = [
+                                duration_by_section[sid] for sid in ordered_sections
+                            ]
+                            merged_sub_path = (
+                                f"{_ARTIFACT_ROOT}/{run_id}/render/subtitles_merged.srt"
+                            )
                             ffmpeg.merge_subtitles(
                                 ordered_sub_paths, ordered_sub_durations, merged_sub_path
                             )
@@ -257,6 +272,10 @@ def render_video(
 
             end_time = datetime.now(timezone.utc)
             duration_seconds = (end_time - start_time).total_seconds()
+            try:
+                await _task_tracking_service.mark_success(task_id)
+            except Exception:
+                logger.warning("Failed to record task success", exc_info=True)
 
             return {
                 "task_id": task_id,
@@ -279,7 +298,13 @@ def render_video(
         return asyncio.run(_run_task())
     except _StageGuardError:
         raise
-    except Exception:
+    except Exception as exc:
+        try:
+            asyncio.run(
+                _task_tracking_service.mark_failed(task_id, type(exc).__name__, str(exc)[:500])
+            )
+        except Exception:
+            logger.warning("Failed to record task failure", exc_info=True)
         try:
             applied, _ = asyncio.run(
                 _run_service.storage.conditional_update_run(

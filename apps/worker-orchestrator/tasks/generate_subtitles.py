@@ -9,6 +9,9 @@ Key design decisions:
 - Subtitles are saved to local filesystem: data/artifacts/{run_id}/subtitles/subtitles.srt
 """
 
+# ruff: noqa: E402
+# pyright: reportMissingImports=false
+
 from __future__ import annotations
 
 import asyncio
@@ -31,6 +34,7 @@ from creator_service.audio_service import audio_service as _audio_service
 from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
+from creator_service.task_tracking_service import task_tracking_service as _task_tracking_service
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +44,12 @@ _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
 # Stages where writing RENDER_GENERATING or FAILED is safe — the run
 # hasn't advanced past subtitle generation. The task may start directly
 # from AUDIO_GENERATING or from SUBTITLE_GENERATING after API-side CAS.
-_SAFE_STAGES = frozenset({
-    "AUDIO_GENERATING",
-    "SUBTITLE_GENERATING",
-})
+_SAFE_STAGES = frozenset(
+    {
+        "AUDIO_GENERATING",
+        "SUBTITLE_GENERATING",
+    }
+)
 
 
 class _StageGuardError(ValueError):
@@ -98,8 +104,17 @@ def generate_subtitles(
         nonlocal provider_type, endpoint, gpu_lock_acquired_at, gpu_lock_released_at
         nonlocal redis_client, lock_acquired
         try:
+            try:
+                await _task_tracking_service.record_task_start(
+                    run_id, "generate_subtitles", task_id
+                )
+                await _task_tracking_service.mark_running(task_id)
+            except Exception:
+                logger.warning("Failed to record task start", exc_info=True)
             if subtitle_format not in ("srt", "vtt"):
-                raise ValueError(f"Invalid subtitle_format: {subtitle_format!r}. Must be 'srt' or 'vtt'.")
+                raise ValueError(
+                    f"Invalid subtitle_format: {subtitle_format!r}. Must be 'srt' or 'vtt'."
+                )
 
             # 1. Stage guard — reject before any side effects.
             run = await _run_service.storage.get_run(run_id)
@@ -166,7 +181,9 @@ def generate_subtitles(
                 params["format"] = subtitle_format
                 params["output_path"] = subtitle_path
                 if not audio_path:
-                    raise RuntimeError(f"No audio artifact found for run {run_id}; cannot transcribe")
+                    raise RuntimeError(
+                        f"No audio artifact found for run {run_id}; cannot transcribe"
+                    )
                 await provider.transcribe(audio_path, params=params)
 
                 # 7. Save subtitle artifact via service.
@@ -202,6 +219,10 @@ def generate_subtitles(
 
             end_time = datetime.now(timezone.utc)
             duration_seconds = (end_time - start_time).total_seconds()
+            try:
+                await _task_tracking_service.mark_success(task_id)
+            except Exception:
+                logger.warning("Failed to record task success", exc_info=True)
 
             return {
                 "task_id": task_id,
@@ -228,7 +249,13 @@ def generate_subtitles(
     except _StageGuardError:
         # Validation rejection — do NOT mutate run state to FAILED.
         raise
-    except Exception:
+    except Exception as exc:
+        try:
+            asyncio.run(
+                _task_tracking_service.mark_failed(task_id, type(exc).__name__, str(exc)[:500])
+            )
+        except Exception:
+            logger.warning("Failed to record task failure", exc_info=True)
         # Unexpected error — atomic conditional fail.
         try:
             applied, _ = asyncio.run(

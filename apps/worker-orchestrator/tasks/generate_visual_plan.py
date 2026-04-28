@@ -5,6 +5,9 @@ per script section with image-generation prompts, style tags, and mood.
 Follows the same pattern as generate_script.
 """
 
+# ruff: noqa: E402
+# pyright: reportMissingImports=false
+
 from __future__ import annotations
 
 import asyncio
@@ -27,6 +30,7 @@ from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
+from creator_service.task_tracking_service import task_tracking_service as _task_tracking_service
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
 
 logger = logging.getLogger(__name__)
@@ -125,7 +129,8 @@ def _parse_llm_response(
             scene_index=idx,
             section_type=section_type,
             original_text=text,
-            prompt=section.get("image_prompt") or llm_data.get("prompt", f"Visual representation of: {text[:200]}"),
+            prompt=section.get("image_prompt")
+            or llm_data.get("prompt", f"Visual representation of: {text[:200]}"),
             prompt_edited=bool(section.get("image_prompt")),
             prompt_source="user_edited" if section.get("image_prompt") else "auto_generated",
             style_tags=section.get("style_tags") or llm_data.get("style_tags", []),
@@ -179,6 +184,13 @@ def generate_visual_plan(
         nonlocal provider_type, endpoint, gpu_lock_acquired_at, gpu_lock_released_at
         nonlocal redis_client, lock_acquired
         try:
+            try:
+                await _task_tracking_service.record_task_start(
+                    run_id, "generate_visual_plan", task_id
+                )
+                await _task_tracking_service.mark_running(task_id)
+            except Exception:
+                logger.warning("Failed to record task start", exc_info=True)
             # 1. Stage guard — reject before any side effects.
             run = await _run_service.storage.get_run(run_id)
             if run is None:
@@ -272,6 +284,10 @@ def generate_visual_plan(
 
             end_time = datetime.now(timezone.utc)
             duration_seconds = (end_time - start_time).total_seconds()
+            try:
+                await _task_tracking_service.mark_success(task_id)
+            except Exception:
+                logger.warning("Failed to record task success", exc_info=True)
             return {
                 "task_id": task_id,
                 "run_id": run_id,
@@ -295,7 +311,13 @@ def generate_visual_plan(
     except _StageGuardError:
         # Validation rejection — do NOT mutate run state to FAILED.
         raise
-    except Exception:
+    except Exception as exc:
+        try:
+            asyncio.run(
+                _task_tracking_service.mark_failed(task_id, type(exc).__name__, str(exc)[:500])
+            )
+        except Exception:
+            logger.warning("Failed to record task failure", exc_info=True)
         # Atomic conditional fail: only mark FAILED if run is still in a
         # generating-compatible stage.
         try:

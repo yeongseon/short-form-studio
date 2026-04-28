@@ -2,6 +2,7 @@ from .audio_artifact import AudioArtifact
 from .model_selection import ModelSelection
 from .pipeline_run import PipelineRun
 from .project import Project
+from .run_task import RunTask
 from .script_draft import ScriptDraft, ScriptSection, VisualOverride
 from .stage import (
     GENERATING_STAGES,
@@ -24,6 +25,7 @@ from .visual_plan import VisualPlan, VisualScene
 __all__ = [
     "Project",
     "PipelineRun",
+    "RunTask",
     "ModelSelection",
     "ScriptDraft",
     "ScriptSection",

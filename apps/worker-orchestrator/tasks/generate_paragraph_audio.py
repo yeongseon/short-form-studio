@@ -7,6 +7,9 @@ caller (storyboard API) manages aggregate state.
 Audio is saved to: data/artifacts/{run_id}/audio/{section_id}.wav
 """
 
+# ruff: noqa: E402
+# pyright: reportMissingImports=false
+
 from __future__ import annotations
 
 import asyncio
@@ -27,6 +30,7 @@ from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.audio_service import audio_service as _audio_service
 from creator_service.run_service import run_service as _run_service
+from creator_service.task_tracking_service import task_tracking_service as _task_tracking_service
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +49,7 @@ def _get_redis_client() -> Any | None:
     if redis is None:
         return None
     return redis.Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"))
+
 
 async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
     remover: Any = getattr(_run_service.storage, "remove_active_task_id", None)
@@ -84,7 +89,9 @@ def generate_paragraph_audio(
     """
     start_time = datetime.now(timezone.utc)
     start_iso = start_time.isoformat()
-    task_id = str(getattr(getattr(self, "request", None), "id", None) or f"para-{run_id}-{section_id}")
+    task_id = str(
+        getattr(getattr(self, "request", None), "id", None) or f"para-{run_id}-{section_id}"
+    )
 
     provider_type: str | None = None
     endpoint: str | None = None
@@ -96,6 +103,14 @@ def generate_paragraph_audio(
     async def _run_task() -> dict[str, object]:
         nonlocal provider_type, endpoint, gpu_lock_acquired_at, gpu_lock_released_at
         nonlocal redis_client, lock_acquired
+
+        try:
+            await _task_tracking_service.record_task_start(
+                run_id, "generate_paragraph_audio", task_id
+            )
+            await _task_tracking_service.mark_running(task_id)
+        except Exception:
+            logger.warning("Failed to record task start", exc_info=True)
 
         run = await _run_service.storage.get_run(run_id)
         if run is not None and run.get("status") == "cancelled":
@@ -148,6 +163,10 @@ def generate_paragraph_audio(
 
         end_time = datetime.now(timezone.utc)
         duration_seconds = (end_time - start_time).total_seconds()
+        try:
+            await _task_tracking_service.mark_success(task_id)
+        except Exception:
+            logger.warning("Failed to record task success", exc_info=True)
 
         return {
             "task_id": task_id,
@@ -171,7 +190,13 @@ def generate_paragraph_audio(
         return asyncio.run(_run_task())
     except _StageGuardError:
         raise
-    except Exception:
+    except Exception as exc:
+        try:
+            asyncio.run(
+                _task_tracking_service.mark_failed(task_id, type(exc).__name__, str(exc)[:500])
+            )
+        except Exception:
+            logger.warning("Failed to record task failure", exc_info=True)
         logger.exception(
             "Failed to generate paragraph audio for run %d section %s",
             run_id,
@@ -184,5 +209,7 @@ def generate_paragraph_audio(
         except Exception:
             logger.warning(
                 "Could not remove active task id %s for run %d",
-                task_id, run_id, exc_info=True,
+                task_id,
+                run_id,
+                exc_info=True,
             )
