@@ -94,3 +94,37 @@ def test_factory_returns_local_backend_by_default(monkeypatch):
     backend = module.create_storage_backend()
 
     assert isinstance(backend, module.LocalStorageBackend)
+
+
+def test_path_traversal_upload_rejected(tmp_path):
+    backend = _object_storage_module().LocalStorageBackend(root=str(tmp_path))
+    import pytest
+
+    with pytest.raises(ValueError, match="path traversal"):
+        backend.upload("../../etc/passwd", b"evil")
+
+
+def test_path_traversal_download_rejected(tmp_path):
+    backend = _object_storage_module().LocalStorageBackend(root=str(tmp_path))
+    import pytest
+
+    with pytest.raises(ValueError, match="path traversal"):
+        backend.download_bytes("../../../etc/shadow")
+
+
+def test_path_traversal_delete_rejected(tmp_path):
+    backend = _object_storage_module().LocalStorageBackend(root=str(tmp_path))
+    import pytest
+
+    with pytest.raises(ValueError, match="path traversal"):
+        backend.delete("../../etc/passwd")
+
+
+def test_lazy_singleton_does_not_crash_at_import(monkeypatch):
+    monkeypatch.delenv("STORAGE_BACKEND", raising=False)
+    module = _object_storage_module()
+    # Module-level _storage_backend should be None (lazy)
+    assert module._storage_backend is None
+    # get_storage_backend() should create on first call
+    backend = module.get_storage_backend()
+    assert isinstance(backend, module.LocalStorageBackend)

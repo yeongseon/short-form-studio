@@ -65,13 +65,21 @@ class LocalStorageBackend:
     def __init__(self, root: str | None = None) -> None:
         self._root = Path(root or os.getenv("ARTIFACT_ROOT", "data/artifacts"))
 
+    def _safe_key(self, key: str) -> str:
+        """Validate key to prevent path traversal attacks."""
+        resolved = (self._root / key).resolve()
+        if not str(resolved).startswith(str(self._root.resolve())):
+            raise ValueError(f"Invalid key (path traversal): {key}")
+        return key
+
     def upload(
         self,
         key: str,
         data: bytes | BinaryIO,
         content_type: str = "application/octet-stream",
     ) -> StorageResult:
-        path = self._root / key
+        safe_key = self._safe_key(key)
+        path = self._root / safe_key
         path.parent.mkdir(parents=True, exist_ok=True)
 
         md5 = hashlib.md5()
@@ -95,21 +103,23 @@ class LocalStorageBackend:
         )
 
     def download_url(self, key: str, expires_in: int = 3600) -> str:
+        """Return a file path for local storage (not a real URL)."""
         _ = expires_in
-        return str(self._root / key)
+        safe_key = self._safe_key(key)
+        return str(self._root / safe_key)
 
     def download_bytes(self, key: str) -> bytes:
-        return (self._root / key).read_bytes()
+        return (self._root / self._safe_key(key)).read_bytes()
 
     def delete(self, key: str) -> bool:
-        path = self._root / key
+        path = self._root / self._safe_key(key)
         if path.is_file():
             path.unlink()
             return True
         return False
 
     def exists(self, key: str) -> bool:
-        return (self._root / key).is_file()
+        return (self._root / self._safe_key(key)).is_file()
 
 
 class S3StorageBackend:
@@ -281,5 +291,17 @@ def create_storage_backend() -> ArtifactStorageBackend:
         return AzureBlobStorageBackend()
     raise ValueError(f"Unknown STORAGE_BACKEND: {backend}")
 
+def _get_storage_backend() -> ArtifactStorageBackend:
+    """Lazy singleton — created on first access, not at import time."""
+    global _storage_backend  # noqa: PLW0603
+    if _storage_backend is None:
+        _storage_backend = create_storage_backend()
+    return _storage_backend
 
-storage_backend: ArtifactStorageBackend = create_storage_backend()
+
+_storage_backend: ArtifactStorageBackend | None = None
+
+
+def get_storage_backend() -> ArtifactStorageBackend:
+    """Public accessor for the storage backend singleton."""
+    return _get_storage_backend()
