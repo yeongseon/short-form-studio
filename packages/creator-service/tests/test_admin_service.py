@@ -25,14 +25,31 @@ class _FakePool:
 
 
 class _FakeRedis:
-    def __init__(self, lengths=None):
+    def __init__(self, lengths=None, keys=None):
         self._lengths = lengths or {}
+        self._keys = list(keys or [])
+        self.deleted: list[str] = []
 
     async def ping(self):
         return True
 
     async def llen(self, key):
         return self._lengths.get(key, 0)
+
+    async def scan_iter(self, match="*"):
+        if match.endswith("*"):
+            prefix = match[:-1]
+            for key in self._keys:
+                if key.startswith(prefix):
+                    yield key
+            return
+        for key in self._keys:
+            if key == match:
+                yield key
+
+    async def delete(self, key):
+        self.deleted.append(key)
+        return 1
 
     async def aclose(self):
         return None
@@ -98,9 +115,13 @@ def test_get_stuck_runs_queries_pool(monkeypatch) -> None:
 
 def test_unstick_run_updates_generating_stage(monkeypatch) -> None:
     class _Conn:
-        async def fetchrow(self, query, *args):
+        async def fetchrow(self, query, *_args):
             if query.startswith("SELECT"):
-                return {"id": 42, "current_stage": "SCRIPT_GENERATING"}
+                return {
+                    "id": 42,
+                    "current_stage": "SCRIPT_GENERATING",
+                    "updated_at": datetime(2025, 1, 1, tzinfo=timezone.utc),
+                }
             return {
                 "id": 42,
                 "current_stage": "SCRIPT_REVIEW",
@@ -122,8 +143,12 @@ def test_unstick_run_updates_generating_stage(monkeypatch) -> None:
 
 def test_unstick_run_rejects_non_generating_stage(monkeypatch) -> None:
     class _Conn:
-        async def fetchrow(self, query, *args):
-            return {"id": 42, "current_stage": "SCRIPT_REVIEW"}
+        async def fetchrow(self, _query, *_args):
+            return {
+                "id": 42,
+                "current_stage": "SCRIPT_REVIEW",
+                "updated_at": datetime(2025, 1, 1, tzinfo=timezone.utc),
+            }
 
     async def _fake_get_pool():
         return _FakePool(_Conn())
@@ -135,6 +160,54 @@ def test_unstick_run_rejects_non_generating_stage(monkeypatch) -> None:
 
     assert result["ok"] is False
     assert result["error"] == "Run is not in a generating stage"
+
+
+def test_unstick_run_rejects_if_not_stuck_long_enough(monkeypatch) -> None:
+    class _Conn:
+        async def fetchrow(self, _query, *_args):
+            return {
+                "id": 42,
+                "current_stage": "SCRIPT_GENERATING",
+                "updated_at": datetime.now(tz=timezone.utc),
+            }
+
+    async def _fake_get_pool():
+        return _FakePool(_Conn())
+
+    monkeypatch.setattr("creator_service.admin_service.get_pool", _fake_get_pool)
+    service = AdminService()
+
+    result = asyncio.run(service.unstick_run("42"))
+
+    assert result["ok"] is False
+    assert result["error"] == "Run has not been stuck long enough"
+
+
+def test_clear_cache_only_deletes_matching_prefix(monkeypatch) -> None:
+    service = AdminService()
+    fake_redis = _FakeRedis(keys=["cache:a", "cache:b", "session:1", "gpu_queue"])
+    monkeypatch.setattr(service, "_redis_client", lambda: fake_redis)
+
+    result = asyncio.run(service.clear_cache(key_pattern="cache:*", dry_run=False))
+
+    assert result["ok"] is True
+    assert result["deleted_keys"] == 2
+    assert sorted(result["matched_keys"]) == ["cache:a", "cache:b"]
+    assert sorted(fake_redis.deleted) == ["cache:a", "cache:b"]
+
+
+def test_clear_cache_dry_run_reports_without_deleting(monkeypatch) -> None:
+    service = AdminService()
+    fake_redis = _FakeRedis(keys=["cache:a", "cache:b", "session:1"])
+    monkeypatch.setattr(service, "_redis_client", lambda: fake_redis)
+
+    result = asyncio.run(service.clear_cache(key_pattern="cache:*", dry_run=True))
+
+    assert result["ok"] is True
+    assert result["deleted_keys"] == 0
+    assert result["dry_run"] is True
+    assert sorted(result["matched_keys"]) == ["cache:a", "cache:b"]
+    assert fake_redis.deleted == []
 
 
 def test_get_system_health_with_mocked_connections(monkeypatch) -> None:

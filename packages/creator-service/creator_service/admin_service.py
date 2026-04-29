@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 import os
 import time
 from datetime import datetime, timedelta, timezone
@@ -15,10 +16,13 @@ _GENERATING_TO_REVIEW_STAGE = {
     "SCRIPT_GENERATING": "SCRIPT_REVIEW",
     "VISUAL_PLAN_GENERATING": "VISUAL_PLAN_REVIEW",
     "VISUAL_ASSET_GENERATING": "VISUAL_ASSET_REVIEW",
-    "AUDIO_GENERATING": "AUDIO_REVIEW",
-    "SUBTITLE_GENERATING": "SUBTITLE_REVIEW",
+    "AUDIO_GENERATING": "SUBTITLE_GENERATING",
+    "SUBTITLE_GENERATING": "RENDER_GENERATING",
     "RENDER_GENERATING": "FINAL_REVIEW",
 }
+
+_UNSTICK_MIN_AGE_SECONDS = 30 * 60
+logger = logging.getLogger(__name__)
 
 
 class AdminService:
@@ -155,7 +159,7 @@ class AdminService:
             pool = await get_pool()
             async with pool.acquire() as connection:
                 row = await connection.fetchrow(
-                    "SELECT id, current_stage FROM creator_runs WHERE id = $1",
+                    "SELECT id, current_stage, updated_at FROM creator_runs WHERE id = $1",
                     run_id_int,
                 )
                 if row is None:
@@ -171,6 +175,26 @@ class AdminService:
                         "error": "Run is not in a generating stage",
                     }
 
+                updated_at = row["updated_at"]
+                if not isinstance(updated_at, datetime):
+                    return {
+                        "ok": False,
+                        "run_id": run_id,
+                        "current_stage": current_stage,
+                        "error": "Run missing stage timestamp",
+                    }
+                if updated_at.tzinfo is None:
+                    updated_at = updated_at.replace(tzinfo=timezone.utc)
+
+                stage_age_seconds = (datetime.now(tz=timezone.utc) - updated_at).total_seconds()
+                if stage_age_seconds <= _UNSTICK_MIN_AGE_SECONDS:
+                    return {
+                        "ok": False,
+                        "run_id": run_id,
+                        "current_stage": current_stage,
+                        "error": "Run has not been stuck long enough",
+                    }
+
                 updated = await connection.fetchrow(
                     """
                     UPDATE creator_runs
@@ -184,6 +208,14 @@ class AdminService:
                 if updated is None:
                     return {"ok": False, "run_id": run_id, "error": "Failed to update run"}
 
+                logger.warning(
+                    "Admin mutation executed: unstick run_id=%s from=%s to=%s age_seconds=%.1f",
+                    run_id_int,
+                    current_stage,
+                    target_stage,
+                    stage_age_seconds,
+                )
+
                 return {
                     "ok": True,
                     "run_id": str(updated["id"]),
@@ -193,24 +225,51 @@ class AdminService:
         except Exception as exc:
             return {"ok": False, "run_id": run_id, "error": str(exc)}
 
-    async def clear_cache(self) -> dict[str, Any]:
+    async def clear_cache(
+        self, key_pattern: str | None = None, dry_run: bool = False
+    ) -> dict[str, Any]:
         protected_keys = {"celery", "gpu_queue"}
         deleted = 0
+        resolved_pattern = key_pattern or os.getenv("ADMIN_CACHE_CLEAR_PREFIX", "cache:*")
+        matched_keys: list[str] = []
         client: redis.Redis | None = None
         try:
             client = self._redis_client()
-            keys = [key async for key in client.scan_iter(match="*")]
+            keys = [key async for key in client.scan_iter(match=resolved_pattern)]
             for key in keys:
                 if key in protected_keys:
+                    continue
+                matched_keys.append(key)
+                if dry_run:
                     continue
                 deleted_result = client.delete(key)
                 if inspect.isawaitable(deleted_result):
                     deleted += int(await deleted_result)
                 else:
                     deleted += int(deleted_result)
-            return {"ok": True, "deleted_keys": deleted}
+            logger.warning(
+                "Admin mutation executed: clear cache key_pattern=%s dry_run=%s matched=%d deleted=%d",
+                resolved_pattern,
+                dry_run,
+                len(matched_keys),
+                deleted,
+            )
+            return {
+                "ok": True,
+                "deleted_keys": deleted,
+                "key_pattern": resolved_pattern,
+                "dry_run": dry_run,
+                "matched_keys": matched_keys,
+            }
         except Exception as exc:
-            return {"ok": False, "deleted_keys": deleted, "error": str(exc)}
+            return {
+                "ok": False,
+                "deleted_keys": deleted,
+                "key_pattern": resolved_pattern,
+                "dry_run": dry_run,
+                "matched_keys": matched_keys,
+                "error": str(exc),
+            }
         finally:
             if client is not None:
                 await client.aclose()

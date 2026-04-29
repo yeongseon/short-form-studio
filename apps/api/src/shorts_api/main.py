@@ -30,6 +30,7 @@ from starlette.responses import FileResponse, Response
 
 from shorts_api.auth import ApiKeyMiddleware
 from shorts_api.routes.creator_artifact_download import router as artifact_download_router
+from shorts_api.routes.admin import router as admin_router
 from shorts_api.routes.creator_models import router as models_router
 from shorts_api.routes.creator_projects import router as projects_router
 from shorts_api.routes.creator_run_tasks import router as run_tasks_router
@@ -277,6 +278,7 @@ app.include_router(settings_router, prefix="/api/creator")
 app.include_router(usage_router, prefix="/api/creator")
 app.include_router(workspaces_router, prefix="/api/creator")
 app.include_router(users_router, prefix="/api/creator")
+app.include_router(admin_router, prefix="/api/admin")
 
 
 @app.get("/healthz")
