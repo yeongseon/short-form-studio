@@ -2,9 +2,11 @@
 
 from creator_domain.models import TRIGGER_POLICY
 from creator_service.audio_service import audio_service
+from creator_service.project_service import project_service
 from creator_service.render_service import render_service
 from creator_service.run_service import run_service
 from creator_service.subtitle_service import subtitle_service
+from creator_service.task_tracking_service import task_tracking_service
 from creator_service.visual_asset_service import visual_asset_service
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -30,6 +32,25 @@ from shorts_api.routes.creator_runs_visuals import ImageTuningParams
 router = APIRouter(tags=["runs"])
 
 
+async def _enforce_run_quota(run_id: int, operation_type: str) -> int:
+    from creator_service.usage_service import check_workspace_quota
+
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    project = await project_service.get_project(run.project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    workspace_id = getattr(project, "workspace_id", None)
+    if workspace_id is None:
+        raise HTTPException(status_code=400, detail="Project workspace is not configured")
+
+    allowed, reason = await check_workspace_quota(int(workspace_id), operation_type=operation_type)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=reason)
+    return int(workspace_id)
+
+
 class RegenerateSceneImageRequest(BaseModel):
     model_key: str = "sd15"
     prompt_override: str | None = None
@@ -53,7 +74,9 @@ async def generate_scene_image_endpoint(
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    allowed_stages = frozenset({"VISUAL_PLAN_REVIEW", "VISUAL_ASSET_GENERATING", "VISUAL_ASSET_REVIEW"})
+    allowed_stages = frozenset(
+        {"VISUAL_PLAN_REVIEW", "VISUAL_ASSET_GENERATING", "VISUAL_ASSET_REVIEW"}
+    )
     if run.current_stage not in allowed_stages:
         raise HTTPException(
             status_code=409,
@@ -62,6 +85,7 @@ async def generate_scene_image_endpoint(
         )
 
     validate_model_key(effective_request.model_key)
+    workspace_id = await _enforce_run_quota(run_id, "image_gen")
     try:
         task_id = dispatch_generate_scene_image(
             run_id=run_id,
@@ -69,15 +93,21 @@ async def generate_scene_image_endpoint(
             scene_id=scene_id,
             prompt_override=None,
             is_active=True,
-            image_params=effective_request.image_params.model_dump() if effective_request.image_params else None,
+            image_params=effective_request.image_params.model_dump()
+            if effective_request.image_params
+            else None,
         )
     except Exception:
+        from creator_service.usage_service import cancel_workspace_quota_reservation
+
+        await cancel_workspace_quota_reservation(workspace_id, "image_gen")
         raise HTTPException(
             status_code=503,
             detail="Failed to enqueue image generation task",
         ) from None
 
     await _append_task_id(run_id, task_id, run_service=run_service)
+    await task_tracking_service.record_task_queued(run_id, "generate_scene_image", task_id)
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -106,6 +136,7 @@ async def regenerate_scene_image_endpoint(
         )
 
     validate_model_key(request.model_key)
+    workspace_id = await _enforce_run_quota(run_id, "image_gen")
     try:
         task_id = dispatch_generate_scene_image(
             run_id=run_id,
@@ -116,12 +147,16 @@ async def regenerate_scene_image_endpoint(
             image_params=request.image_params.model_dump() if request.image_params else None,
         )
     except Exception:
+        from creator_service.usage_service import cancel_workspace_quota_reservation
+
+        await cancel_workspace_quota_reservation(workspace_id, "image_gen")
         raise HTTPException(
             status_code=503,
             detail="Failed to enqueue image generation task",
         ) from None
 
     await _append_task_id(run_id, task_id, run_service=run_service)
+    await task_tracking_service.record_task_queued(run_id, "generate_scene_image", task_id)
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -219,11 +254,14 @@ async def generate_audio_trigger(run_id: int, request: GenerateAudioRequest) -> 
         rollback_stage=run.current_stage,
         rollback_restart_from=run.restart_from,
         enqueue_error_detail="Failed to enqueue audio generation task",
+        quota_operation_type="tts",
     )
 
 
 @router.post("/runs/{run_id}/generate-subtitles", status_code=202)
-async def generate_subtitles_trigger(run_id: int, request: GenerateSubtitlesRequest) -> dict[str, object]:
+async def generate_subtitles_trigger(
+    run_id: int, request: GenerateSubtitlesRequest
+) -> dict[str, object]:
     run = await run_service.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -253,6 +291,7 @@ async def generate_subtitles_trigger(run_id: int, request: GenerateSubtitlesRequ
         rollback_stage=run.current_stage,
         rollback_restart_from=run.restart_from,
         enqueue_error_detail="Failed to enqueue subtitle generation task",
+        quota_operation_type="stt",
     )
 
 
@@ -286,6 +325,7 @@ async def render_trigger(run_id: int, request: RenderRequest) -> dict[str, objec
         rollback_stage=run.current_stage,
         rollback_restart_from=run.restart_from,
         enqueue_error_detail="Failed to enqueue render task",
+        quota_operation_type="render",
     )
 
 
@@ -307,17 +347,23 @@ async def get_preview(run_id: int) -> dict[str, object]:
             "path": video.path,
             "render_profile": video.render_profile,
             "created_at": str(video.created_at),
-        } if video else None,
+        }
+        if video
+        else None,
         "audio": {
             "id": audio.id,
             "path": audio.path,
             "model_used": audio.model_used,
             "created_at": str(audio.created_at),
-        } if audio else None,
+        }
+        if audio
+        else None,
         "subtitle": {
             "id": subtitle.id,
             "path": subtitle.path,
             "format": subtitle.format,
             "created_at": str(subtitle.created_at),
-        } if subtitle else None,
+        }
+        if subtitle
+        else None,
     }

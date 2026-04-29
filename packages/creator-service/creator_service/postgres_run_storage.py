@@ -6,6 +6,7 @@ from .db import fetch_all, fetch_one
 
 _UPDATABLE_COLUMNS = {
     "project_id",
+    "workspace_id",
     "current_stage",
     "status",
     "review_stage",
@@ -25,6 +26,7 @@ class PostgresRunStorage:
             """
             INSERT INTO creator_runs (
                 project_id,
+                workspace_id,
                 current_stage,
                 status,
                 review_stage,
@@ -35,10 +37,11 @@ class PostgresRunStorage:
                 started_at,
                 finished_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             RETURNING *
             """,
             row.get("project_id"),
+            row.get("workspace_id"),
             row.get("current_stage"),
             row.get("status", "pending"),
             row.get("review_stage"),
@@ -172,6 +175,12 @@ class PostgresRunStorage:
         return await fetch_all(
             "SELECT * FROM creator_runs WHERE project_id = $1 ORDER BY id DESC",
             project_id,
+        )
+
+    async def list_runs_by_workspace(self, workspace_id: int) -> list[dict[str, Any]]:
+        return await fetch_all(
+            "SELECT * FROM creator_runs WHERE workspace_id = $1 ORDER BY id DESC",
+            workspace_id,
         )
 
     async def delete_run(self, run_id: int) -> bool:

@@ -148,11 +148,13 @@ class StubRunStorage:
         updates: dict[str, object],
         expected_stages: frozenset[str],
     ) -> tuple[bool, dict[str, object] | None]:
-        self.conditional_update_calls.append({
-            "run_id": run_id,
-            "updates": dict(updates),
-            "expected_stages": expected_stages,
-        })
+        self.conditional_update_calls.append(
+            {
+                "run_id": run_id,
+                "updates": dict(updates),
+                "expected_stages": expected_stages,
+            }
+        )
 
         run = self._run_svc.runs.get(run_id)
         if run is None:
@@ -199,6 +201,8 @@ class StubRunStorage:
         updated = run.model_copy(update={"active_task_id": json.dumps(current)})
         self._run_svc.runs[run_id] = updated
         return updated.model_dump(mode="json")
+
+
 class StubStageReviewService:
     def __init__(self, run_svc: StubRunService) -> None:
         self.approve_calls: list[dict[str, object]] = []
@@ -214,21 +218,22 @@ class StubStageReviewService:
         reviewer: str = "agent",
         notes: str | None = None,
     ) -> StubPipelineRun:
-        self.approve_calls.append({
-            "run_id": run_id,
-            "stage_name": stage_name,
-            "target_stage": target_stage,
-            "reviewer": reviewer,
-            "notes": notes,
-        })
+        self.approve_calls.append(
+            {
+                "run_id": run_id,
+                "stage_name": stage_name,
+                "target_stage": target_stage,
+                "reviewer": reviewer,
+                "notes": notes,
+            }
+        )
 
         run = self._run_svc.runs.get(run_id)
         if run is None:
             raise ValueError(f"Run {run_id} not found")
         if run.current_stage != stage_name:
             raise ValueError(
-                f"Stage conflict: run is now in '{run.current_stage}', "
-                f"expected '{stage_name}'"
+                f"Stage conflict: run is now in '{run.current_stage}', expected '{stage_name}'"
             )
 
         updated = run.model_copy(update={"current_stage": target_stage})
@@ -247,13 +252,24 @@ class StubProjectLookupService:
             return {"id": project_id}
         return None
 
+
 @pytest.fixture
 def stub_run_service(monkeypatch: pytest.MonkeyPatch) -> StubRunService:
     service = StubRunService()
     project_lookup = StubProjectLookupService()
 
     for route in _iter_api_routes(runs_router.routes):
-        if route.name in {"create_run", "get_run_detail", "restart_run", "approve_script", "generate_script_trigger", "generate_visual_plan_trigger", "generate_audio_trigger", "generate_subtitles_trigger", "list_runs_for_project"}:
+        if route.name in {
+            "create_run",
+            "get_run_detail",
+            "restart_run",
+            "approve_script",
+            "generate_script_trigger",
+            "generate_visual_plan_trigger",
+            "generate_audio_trigger",
+            "generate_subtitles_trigger",
+            "list_runs_for_project",
+        }:
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", service)
         if route.name == "create_run":
             monkeypatch.setitem(route.endpoint.__globals__, "project_service", project_lookup)
@@ -320,7 +336,9 @@ async def test_create_run_project_not_found(client, stub_run_service: StubRunSer
 
 
 @pytest.mark.asyncio
-async def test_create_run_rejects_unknown_model_default_key(client, stub_run_service: StubRunService):
+async def test_create_run_rejects_unknown_model_default_key(
+    client, stub_run_service: StubRunService
+):
     _ = stub_run_service
     response = await client.post(
         "/api/creator/projects/7/runs",
@@ -365,7 +383,9 @@ def stub_model_defaults_services(monkeypatch: pytest.MonkeyPatch) -> StubRunServ
 
 
 @pytest.mark.asyncio
-async def test_update_model_defaults_rejects_invalid_render_profile(client, stub_model_defaults_services):
+async def test_update_model_defaults_rejects_invalid_render_profile(
+    client, stub_model_defaults_services
+):
     run_svc = stub_model_defaults_services
     run_svc.runs[501] = _make_run(501, stage="SCRIPT_REVIEW")
 
@@ -481,14 +501,18 @@ async def test_restart_run_invalid_stage(client, stub_run_service: StubRunServic
 @pytest.mark.asyncio
 async def test_restart_run_not_found(client, stub_run_service: StubRunService):
     _ = stub_run_service
-    response = await client.post("/api/creator/runs/4242/restart", json={"stage": "SCRIPT_GENERATING"})
+    response = await client.post(
+        "/api/creator/runs/4242/restart", json={"stage": "SCRIPT_GENERATING"}
+    )
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Run 4242 not found"}
 
 
 @pytest.fixture
-def stub_approve_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubStageReviewService]:
+def stub_approve_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[StubRunService, StubStageReviewService]:
     run_svc = StubRunService()
     review_svc = StubStageReviewService(run_svc)
 
@@ -498,6 +522,7 @@ def stub_approve_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunServi
             monkeypatch.setitem(route.endpoint.__globals__, "stage_review_service", review_svc)
 
     return run_svc, review_svc
+
 
 def _make_run(run_id: int, stage: str = "SCRIPT_REVIEW") -> StubPipelineRun:
     now = datetime.now(timezone.utc)
@@ -542,6 +567,7 @@ async def test_approve_script_success(client, stub_approve_services):
         }
     ]
 
+
 @pytest.mark.asyncio
 async def test_approve_script_default_reviewer(client, stub_approve_services):
     run_svc, review_svc = stub_approve_services
@@ -556,6 +582,7 @@ async def test_approve_script_default_reviewer(client, stub_approve_services):
     assert review_svc.approve_calls[0]["reviewer"] == "agent"
     assert review_svc.approve_calls[0]["notes"] is None
 
+
 @pytest.mark.asyncio
 async def test_approve_script_run_not_found(client, stub_approve_services):
     _, _ = stub_approve_services
@@ -566,6 +593,7 @@ async def test_approve_script_run_not_found(client, stub_approve_services):
 
     assert response.status_code == 404
     assert "not found" in response.json()["detail"].lower()
+
 
 @pytest.mark.asyncio
 async def test_approve_script_wrong_stage(client, stub_approve_services):
@@ -579,6 +607,7 @@ async def test_approve_script_wrong_stage(client, stub_approve_services):
 
     assert response.status_code == 409
     assert "conflict" in response.json()["detail"].lower()
+
 
 @pytest.mark.asyncio
 async def test_approve_script_wrong_stage_generating(client, stub_approve_services):
@@ -600,7 +629,9 @@ async def test_approve_script_wrong_stage_generating(client, stub_approve_servic
 
 
 @pytest.fixture
-def stub_approve_vp_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubStageReviewService]:
+def stub_approve_vp_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[StubRunService, StubStageReviewService]:
     run_svc = StubRunService()
     review_svc = StubStageReviewService(run_svc)
 
@@ -710,6 +741,7 @@ async def test_approve_visual_plan_wrong_stage_generating(client, stub_approve_v
     assert response.status_code == 409
     assert "conflict" in response.json()["detail"].lower()
 
+
 class StubProject(BaseModel):
     id: int
     title: str | None = None
@@ -718,6 +750,7 @@ class StubProject(BaseModel):
     markdown_source: str | None = None
     url_source: str | None = None
     status: str = "draft"
+    workspace_id: int | None = 1
     created_at: datetime
     updated_at: datetime
 
@@ -738,20 +771,28 @@ class StubDispatcher:
     def __call__(
         self, run_id: int, idea_brief: str, model_key: str, instructions: str | None
     ) -> str:
-        self.calls.append({
-            "run_id": run_id,
-            "idea_brief": idea_brief,
-            "model_key": model_key,
-            "instructions": instructions,
-        })
+        self.calls.append(
+            {
+                "run_id": run_id,
+                "idea_brief": idea_brief,
+                "model_key": model_key,
+                "instructions": instructions,
+            }
+        )
         return self.task_id
 
 
 @pytest.fixture
-def stub_generate_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubProjectService, StubDispatcher]:
+def stub_generate_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[StubRunService, StubProjectService, StubDispatcher]:
     run_svc = StubRunService()
     project_svc = StubProjectService()
     dispatcher = StubDispatcher()
+    project_service_module = __import__(
+        "creator_service.project_service", fromlist=["project_service"]
+    )
+    monkeypatch.setattr(project_service_module, "project_service", project_svc)
 
     for route in _iter_api_routes(runs_router.routes):
         if route.name == "generate_script_trigger":
@@ -797,12 +838,14 @@ async def test_generate_script_from_idea_ready(client, stub_generate_services):
     assert cas_calls[0]["run_id"] == 10
     assert cas_calls[0]["updates"] == {"current_stage": "SCRIPT_GENERATING"}
     assert "IDEA_READY" in cas_calls[0]["expected_stages"]
-    assert dispatcher.calls == [{
-        "run_id": 10,
-        "idea_brief": "Create a cooking tutorial",
-        "model_key": "qwen3-4b",
-        "instructions": "Focus on pasta",
-    }]
+    assert dispatcher.calls == [
+        {
+            "run_id": 10,
+            "idea_brief": "Create a cooking tutorial",
+            "model_key": "qwen3-4b",
+            "instructions": "Focus on pasta",
+        }
+    ]
     assert run_svc.storage.append_task_calls == [{"run_id": 10, "task_id": "test-task-id-123"}]
 
 
@@ -872,6 +915,7 @@ async def test_generate_script_wrong_stage_generating(client, stub_generate_serv
 
     assert response.status_code == 202
 
+
 @pytest.mark.asyncio
 async def test_generate_script_wrong_stage_visual(client, stub_generate_services):
     run_svc, _, _ = stub_generate_services
@@ -892,8 +936,11 @@ async def test_generate_script_idea_brief_fallback_to_title(client, stub_generat
     run_svc.runs[16] = _make_run(16, "IDEA_READY")
     now = datetime.now(timezone.utc)
     project_svc.projects[1] = StubProject(
-        id=1, title="Fallback Title", idea_brief=None,
-        created_at=now, updated_at=now,
+        id=1,
+        title="Fallback Title",
+        idea_brief=None,
+        created_at=now,
+        updated_at=now,
     )
 
     response = await client.post(
@@ -947,6 +994,7 @@ async def test_generate_script_dispatch_failure_rollback(client, stub_generate_s
 
     # Patch the dispatcher for this test
     from shorts_api.main import runs_router as _r
+
     for route in _iter_api_routes(_r.routes):
         if route.name == "generate_script_trigger":
             route.endpoint.__globals__["dispatch_generate_script"] = failing_dispatcher
@@ -994,9 +1042,15 @@ async def test_generate_script_project_not_found(client, stub_generate_services)
 @pytest.mark.asyncio
 async def test_list_runs_for_project(client, stub_run_service: StubRunService):
     # Create 2 runs for project 7 and 1 for project 8
-    await stub_run_service.create_run(project_id=7, model_defaults=None, style_preset="default", metadata=None)
-    await stub_run_service.create_run(project_id=7, model_defaults=None, style_preset="default", metadata=None)
-    await stub_run_service.create_run(project_id=8, model_defaults=None, style_preset="default", metadata=None)
+    await stub_run_service.create_run(
+        project_id=7, model_defaults=None, style_preset="default", metadata=None
+    )
+    await stub_run_service.create_run(
+        project_id=7, model_defaults=None, style_preset="default", metadata=None
+    )
+    await stub_run_service.create_run(
+        project_id=8, model_defaults=None, style_preset="default", metadata=None
+    )
 
     response = await client.get("/api/creator/projects/7/runs")
 
@@ -1025,32 +1079,38 @@ class StubVisualPlanDispatcher:
         self.calls: list[dict[str, object]] = []
         self.task_id = "test-vp-task-id-456"
 
-    def __call__(
-        self, run_id: int, model_key: str, style_preset: str | None
-    ) -> str:
-        self.calls.append({
-            "run_id": run_id,
-            "model_key": model_key,
-            "style_preset": style_preset,
-        })
+    def __call__(self, run_id: int, model_key: str, style_preset: str | None) -> str:
+        self.calls.append(
+            {
+                "run_id": run_id,
+                "model_key": model_key,
+                "style_preset": style_preset,
+            }
+        )
         return self.task_id
 
 
 @pytest.fixture
-def stub_generate_visual_plan_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubVisualPlanDispatcher]:
+def stub_generate_visual_plan_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[StubRunService, StubVisualPlanDispatcher]:
     run_svc = StubRunService()
     dispatcher = StubVisualPlanDispatcher()
 
     for route in _iter_api_routes(runs_router.routes):
         if route.name == "generate_visual_plan_trigger":
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
-            monkeypatch.setitem(route.endpoint.__globals__, "dispatch_generate_visual_plan", dispatcher)
+            monkeypatch.setitem(
+                route.endpoint.__globals__, "dispatch_generate_visual_plan", dispatcher
+            )
 
     return run_svc, dispatcher
 
 
 @pytest.mark.asyncio
-async def test_generate_visual_plan_from_visual_plan_setup(client, stub_generate_visual_plan_services):
+async def test_generate_visual_plan_from_visual_plan_setup(
+    client, stub_generate_visual_plan_services
+):
     run_svc, dispatcher = stub_generate_visual_plan_services
     run_svc.runs[30] = _make_run(30, "VISUAL_PLAN_SETUP")
 
@@ -1070,16 +1130,20 @@ async def test_generate_visual_plan_from_visual_plan_setup(client, stub_generate
     assert cas_calls[0]["run_id"] == 30
     assert cas_calls[0]["updates"] == {"current_stage": "VISUAL_PLAN_GENERATING"}
     assert "VISUAL_PLAN_SETUP" in cas_calls[0]["expected_stages"]
-    assert dispatcher.calls == [{
-        "run_id": 30,
-        "model_key": "qwen3-4b",
-        "style_preset": "cinematic",
-    }]
+    assert dispatcher.calls == [
+        {
+            "run_id": 30,
+            "model_key": "qwen3-4b",
+            "style_preset": "cinematic",
+        }
+    ]
     assert run_svc.storage.append_task_calls == [{"run_id": 30, "task_id": "test-vp-task-id-456"}]
 
 
 @pytest.mark.asyncio
-async def test_generate_visual_plan_retry_from_generating(client, stub_generate_visual_plan_services):
+async def test_generate_visual_plan_retry_from_generating(
+    client, stub_generate_visual_plan_services
+):
     run_svc, dispatcher = stub_generate_visual_plan_services
     run_svc.runs[31] = _make_run(31, "VISUAL_PLAN_GENERATING")
 
@@ -1143,7 +1207,9 @@ async def test_generate_visual_plan_wrong_stage(client, stub_generate_visual_pla
 
 
 @pytest.mark.asyncio
-async def test_generate_visual_plan_wrong_stage_visual_review(client, stub_generate_visual_plan_services):
+async def test_generate_visual_plan_wrong_stage_visual_review(
+    client, stub_generate_visual_plan_services
+):
     run_svc, _ = stub_generate_visual_plan_services
     run_svc.runs[34] = _make_run(34, "VISUAL_PLAN_REVIEW")
 
@@ -1178,7 +1244,9 @@ async def test_generate_visual_plan_cas_conflict(client, stub_generate_visual_pl
 
 
 @pytest.mark.asyncio
-async def test_generate_visual_plan_dispatch_failure_rollback(client, stub_generate_visual_plan_services):
+async def test_generate_visual_plan_dispatch_failure_rollback(
+    client, stub_generate_visual_plan_services
+):
     """Celery dispatch failure triggers rollback to original stage."""
     run_svc, _ = stub_generate_visual_plan_services
     run_svc.runs[36] = _make_run(36, "VISUAL_PLAN_SETUP")
@@ -1187,6 +1255,7 @@ async def test_generate_visual_plan_dispatch_failure_rollback(client, stub_gener
         raise RuntimeError("Celery broker down")
 
     from shorts_api.main import runs_router as _r
+
     for route in _iter_api_routes(_r.routes):
         if route.name == "generate_visual_plan_trigger":
             route.endpoint.__globals__["dispatch_generate_visual_plan"] = failing_dispatcher
@@ -1211,11 +1280,7 @@ async def test_generate_visual_plan_dispatch_failure_rollback(client, stub_gener
     assert run_svc.runs[36].current_stage == "VISUAL_PLAN_SETUP"
 
 
-
-
 # -- generate-visual-assets tests -----------------------------------------------
-
-
 
 
 class StubImageDispatcher:
@@ -1224,36 +1289,48 @@ class StubImageDispatcher:
         self.task_id = "test-img-task-id-789"
 
     def __call__(
-        self, run_id: int, model_key: str, scene_id: str | None,
-        prompt_override: str | None, is_active: bool,
+        self,
+        run_id: int,
+        model_key: str,
+        scene_id: str | None,
+        prompt_override: str | None,
+        is_active: bool,
         image_params: dict[str, object] | None = None,
     ) -> str:
-        self.calls.append({
-            "run_id": run_id,
-            "model_key": model_key,
-            "scene_id": scene_id,
-            "prompt_override": prompt_override,
-            "is_active": is_active,
-            "image_params": image_params,
-        })
+        self.calls.append(
+            {
+                "run_id": run_id,
+                "model_key": model_key,
+                "scene_id": scene_id,
+                "prompt_override": prompt_override,
+                "is_active": is_active,
+                "image_params": image_params,
+            }
+        )
         return self.task_id
 
 
 @pytest.fixture
-def stub_generate_visual_assets_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubImageDispatcher]:
+def stub_generate_visual_assets_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[StubRunService, StubImageDispatcher]:
     run_svc = StubRunService()
     dispatcher = StubImageDispatcher()
 
     for route in _iter_api_routes(runs_router.routes):
         if route.name == "generate_visual_assets_trigger":
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
-            monkeypatch.setitem(route.endpoint.__globals__, "dispatch_generate_scene_image", dispatcher)
+            monkeypatch.setitem(
+                route.endpoint.__globals__, "dispatch_generate_scene_image", dispatcher
+            )
 
     return run_svc, dispatcher
 
 
 @pytest.mark.asyncio
-async def test_generate_visual_assets_from_visual_plan_review(client, stub_generate_visual_assets_services):
+async def test_generate_visual_assets_from_visual_plan_review(
+    client, stub_generate_visual_assets_services
+):
     run_svc, dispatcher = stub_generate_visual_assets_services
     run_svc.runs[60] = _make_run(60, "VISUAL_PLAN_REVIEW")
 
@@ -1273,19 +1350,23 @@ async def test_generate_visual_assets_from_visual_plan_review(client, stub_gener
     assert cas_calls[0]["run_id"] == 60
     assert cas_calls[0]["updates"] == {"current_stage": "VISUAL_ASSET_GENERATING"}
     assert "VISUAL_PLAN_REVIEW" in cas_calls[0]["expected_stages"]
-    assert dispatcher.calls == [{
-        "run_id": 60,
-        "model_key": "sd15",
-        "scene_id": None,
-        "prompt_override": None,
-        "is_active": True,
-        "image_params": None,
-    }]
+    assert dispatcher.calls == [
+        {
+            "run_id": 60,
+            "model_key": "sd15",
+            "scene_id": None,
+            "prompt_override": None,
+            "is_active": True,
+            "image_params": None,
+        }
+    ]
     assert run_svc.storage.append_task_calls == [{"run_id": 60, "task_id": "test-img-task-id-789"}]
 
 
 @pytest.mark.asyncio
-async def test_generate_visual_assets_retry_from_generating(client, stub_generate_visual_assets_services):
+async def test_generate_visual_assets_retry_from_generating(
+    client, stub_generate_visual_assets_services
+):
     run_svc, dispatcher = stub_generate_visual_assets_services
     run_svc.runs[61] = _make_run(61, "VISUAL_ASSET_GENERATING")
 
@@ -1348,7 +1429,9 @@ async def test_generate_visual_assets_wrong_stage(client, stub_generate_visual_a
 
 
 @pytest.mark.asyncio
-async def test_generate_visual_assets_wrong_stage_script_review(client, stub_generate_visual_assets_services):
+async def test_generate_visual_assets_wrong_stage_script_review(
+    client, stub_generate_visual_assets_services
+):
     run_svc, _ = stub_generate_visual_assets_services
     run_svc.runs[64] = _make_run(64, "SCRIPT_REVIEW")
 
@@ -1383,15 +1466,20 @@ async def test_generate_visual_assets_cas_conflict(client, stub_generate_visual_
 
 
 @pytest.mark.asyncio
-async def test_generate_visual_assets_dispatch_failure_rollback(client, stub_generate_visual_assets_services):
+async def test_generate_visual_assets_dispatch_failure_rollback(
+    client, stub_generate_visual_assets_services
+):
     """Celery dispatch failure triggers rollback to original stage."""
     run_svc, _ = stub_generate_visual_assets_services
     run_svc.runs[66] = _make_run(66, "VISUAL_PLAN_REVIEW")
 
-    def failing_dispatcher(run_id, model_key, scene_id, prompt_override, is_active, image_params=None):
+    def failing_dispatcher(
+        run_id, model_key, scene_id, prompt_override, is_active, image_params=None
+    ):
         raise RuntimeError("Celery broker down")
 
     from shorts_api.main import runs_router as _r
+
     for route in _iter_api_routes(_r.routes):
         if route.name == "generate_visual_assets_trigger":
             route.endpoint.__globals__["dispatch_generate_scene_image"] = failing_dispatcher
@@ -1422,14 +1510,18 @@ async def test_generate_visual_assets_dispatch_failure_rollback(client, stub_gen
 
 
 @pytest.fixture
-def stub_single_scene_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubImageDispatcher]:
+def stub_single_scene_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[StubRunService, StubImageDispatcher]:
     run_svc = StubRunService()
     dispatcher = StubImageDispatcher()
 
     for route in _iter_api_routes(runs_router.routes):
         if route.name in ("generate_scene_image_endpoint", "regenerate_scene_image_endpoint"):
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
-            monkeypatch.setitem(route.endpoint.__globals__, "dispatch_generate_scene_image", dispatcher)
+            monkeypatch.setitem(
+                route.endpoint.__globals__, "dispatch_generate_scene_image", dispatcher
+            )
 
     return run_svc, dispatcher
 
@@ -1449,14 +1541,16 @@ async def test_generate_scene_image_from_visual_plan_review(client, stub_single_
     assert body["run_id"] == 70
     assert body["scene_id"] == "scene-sec-0"
     assert body["current_stage"] == "VISUAL_PLAN_REVIEW"
-    assert dispatcher.calls == [{
-        "run_id": 70,
-        "model_key": "sd15",
-        "scene_id": "scene-sec-0",
-        "prompt_override": None,
-        "is_active": True,
-        "image_params": None,
-    }]
+    assert dispatcher.calls == [
+        {
+            "run_id": 70,
+            "model_key": "sd15",
+            "scene_id": "scene-sec-0",
+            "prompt_override": None,
+            "is_active": True,
+            "image_params": None,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -1501,7 +1595,9 @@ async def test_generate_scene_image_dispatch_failure(client, stub_single_scene_s
     run_svc, _ = stub_single_scene_services
     run_svc.runs[73] = _make_run(73, "VISUAL_PLAN_REVIEW")
 
-    def failing_dispatcher(run_id, model_key, scene_id, prompt_override, is_active, image_params=None):
+    def failing_dispatcher(
+        run_id, model_key, scene_id, prompt_override, is_active, image_params=None
+    ):
         raise RuntimeError("Celery broker down")
 
     for route in _iter_api_routes(runs_router.routes):
@@ -1537,14 +1633,16 @@ async def test_regenerate_scene_image_success(client, stub_single_scene_services
     assert body["run_id"] == 80
     assert body["scene_id"] == "scene-sec-0"
     assert body["current_stage"] == "VISUAL_ASSET_REVIEW"
-    assert dispatcher.calls == [{
-        "run_id": 80,
-        "model_key": "sd15",
-        "scene_id": "scene-sec-0",
-        "prompt_override": "A dark moody scene",
-        "is_active": False,  # regenerated assets are inactive
-        "image_params": None,
-    }]
+    assert dispatcher.calls == [
+        {
+            "run_id": 80,
+            "model_key": "sd15",
+            "scene_id": "scene-sec-0",
+            "prompt_override": "A dark moody scene",
+            "is_active": False,  # regenerated assets are inactive
+            "image_params": None,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -1606,7 +1704,9 @@ async def test_regenerate_scene_image_dispatch_failure(client, stub_single_scene
     run_svc, _ = stub_single_scene_services
     run_svc.runs[84] = _make_run(84, "VISUAL_ASSET_REVIEW")
 
-    def failing_dispatcher(run_id, model_key, scene_id, prompt_override, is_active, image_params=None):
+    def failing_dispatcher(
+        run_id, model_key, scene_id, prompt_override, is_active, image_params=None
+    ):
         raise RuntimeError("Celery broker down")
 
     for route in _iter_api_routes(runs_router.routes):
@@ -1658,9 +1758,7 @@ class StubVisualAssetService:
             grouped.setdefault(a.scene_id, []).append(a)
         return grouped
 
-    async def list_by_scene(
-        self, run_id: int, scene_id: str
-    ) -> list[StubVisualAsset]:
+    async def list_by_scene(self, run_id: int, scene_id: str) -> list[StubVisualAsset]:
         self.list_by_scene_calls.append({"run_id": run_id, "scene_id": scene_id})
         assets = self._assets.get(run_id, [])
         return sorted(
@@ -1669,21 +1767,20 @@ class StubVisualAssetService:
             reverse=True,
         )
 
-    async def select_active(
-        self, run_id: int, scene_id: str, asset_id: int
-    ) -> StubVisualAsset:
-        self.select_active_calls.append({
-            "run_id": run_id,
-            "scene_id": scene_id,
-            "asset_id": asset_id,
-        })
+    async def select_active(self, run_id: int, scene_id: str, asset_id: int) -> StubVisualAsset:
+        self.select_active_calls.append(
+            {
+                "run_id": run_id,
+                "scene_id": scene_id,
+                "asset_id": asset_id,
+            }
+        )
         assets = self._assets.get(run_id, [])
         for a in assets:
             if a.id == asset_id:
                 if a.scene_id != scene_id:
                     raise ValueError(
-                        f"Asset {asset_id} does not belong to run {run_id} "
-                        f"scene '{scene_id}'"
+                        f"Asset {asset_id} does not belong to run {run_id} scene '{scene_id}'"
                     )
                 return a.model_copy(update={"is_active": True})
         raise ValueError(f"Asset {asset_id} not found")
@@ -1715,7 +1812,9 @@ def _make_asset(
 
 
 @pytest.fixture
-def stub_listing_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubVisualAssetService]:
+def stub_listing_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[StubRunService, StubVisualAssetService]:
     run_svc = StubRunService()
     asset_svc = StubVisualAssetService()
 
@@ -1779,12 +1878,17 @@ async def test_list_visual_assets_by_run_includes_fields(client, stub_listing_se
     run_svc, asset_svc = stub_listing_services
     run_svc.runs[92] = _make_run(92, "VISUAL_ASSET_REVIEW")
 
-    asset_svc.add_asset(_make_asset(
-        10, 92, "scene-0", 1,
-        prompt_snapshot="A serene landscape",
-        model_used="sd15",
-        provider_type="local-gpu",
-    ))
+    asset_svc.add_asset(
+        _make_asset(
+            10,
+            92,
+            "scene-0",
+            1,
+            prompt_snapshot="A serene landscape",
+            model_used="sd15",
+            provider_type="local-gpu",
+        )
+    )
 
     response = await client.get("/api/creator/runs/92/visual-assets")
 
@@ -1848,13 +1952,18 @@ async def test_list_visual_assets_by_scene_includes_fields(client, stub_listing_
     run_svc, asset_svc = stub_listing_services
     run_svc.runs[95] = _make_run(95, "VISUAL_ASSET_REVIEW")
 
-    asset_svc.add_asset(_make_asset(
-        30, 95, "scene-sec-0", 1,
-        prompt_snapshot="A dark forest",
-        model_used="sd15",
-        provider_type="local-gpu",
-        is_active=True,
-    ))
+    asset_svc.add_asset(
+        _make_asset(
+            30,
+            95,
+            "scene-sec-0",
+            1,
+            prompt_snapshot="A dark forest",
+            model_used="sd15",
+            provider_type="local-gpu",
+            is_active=True,
+        )
+    )
 
     response = await client.get("/api/creator/runs/95/visual-assets/scene-sec-0")
 
@@ -1878,7 +1987,9 @@ async def test_list_visual_assets_by_scene_includes_fields(client, stub_listing_
 
 
 @pytest.fixture
-def stub_select_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubVisualAssetService]:
+def stub_select_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[StubRunService, StubVisualAssetService]:
     run_svc = StubRunService()
     asset_svc = StubVisualAssetService()
 
@@ -1898,9 +2009,7 @@ async def test_select_active_asset_success(client, stub_select_services):
     asset_svc.add_asset(_make_asset(40, 100, "scene-0", 1, is_active=False))
     asset_svc.add_asset(_make_asset(41, 100, "scene-0", 2, is_active=True))
 
-    response = await client.post(
-        "/api/creator/runs/100/visual-assets/scene-0/select/40"
-    )
+    response = await client.post("/api/creator/runs/100/visual-assets/scene-0/select/40")
 
     assert response.status_code == 200
     body = response.json()
@@ -1912,9 +2021,7 @@ async def test_select_active_asset_success(client, stub_select_services):
 
 @pytest.mark.asyncio
 async def test_select_active_asset_run_not_found(client, stub_select_services):
-    response = await client.post(
-        "/api/creator/runs/999/visual-assets/scene-0/select/1"
-    )
+    response = await client.post("/api/creator/runs/999/visual-assets/scene-0/select/1")
     assert response.status_code == 404
     assert "not found" in response.json()["detail"].lower()
 
@@ -1924,9 +2031,7 @@ async def test_select_active_asset_wrong_stage(client, stub_select_services):
     run_svc, _ = stub_select_services
     run_svc.runs[101] = _make_run(101, "SCRIPT_REVIEW")
 
-    response = await client.post(
-        "/api/creator/runs/101/visual-assets/scene-0/select/1"
-    )
+    response = await client.post("/api/creator/runs/101/visual-assets/scene-0/select/1")
     assert response.status_code == 409
     assert "SCRIPT_REVIEW" in response.json()["detail"]
 
@@ -1937,9 +2042,7 @@ async def test_select_active_asset_not_found(client, stub_select_services):
     run_svc.runs[102] = _make_run(102, "VISUAL_ASSET_REVIEW")
     # No assets added — asset 999 doesn't exist
 
-    response = await client.post(
-        "/api/creator/runs/102/visual-assets/scene-0/select/999"
-    )
+    response = await client.post("/api/creator/runs/102/visual-assets/scene-0/select/999")
     assert response.status_code == 404
     assert "not found" in response.json()["detail"].lower()
 
@@ -1951,9 +2054,7 @@ async def test_select_active_asset_wrong_scene(client, stub_select_services):
     # Asset belongs to scene-1, not scene-0
     asset_svc.add_asset(_make_asset(50, 103, "scene-1", 1))
 
-    response = await client.post(
-        "/api/creator/runs/103/visual-assets/scene-0/select/50"
-    )
+    response = await client.post("/api/creator/runs/103/visual-assets/scene-0/select/50")
     # Service raises ValueError for wrong scene — mapped to 400
     assert response.status_code == 400
     assert "does not belong" in response.json()["detail"].lower()
@@ -1966,9 +2067,7 @@ async def test_select_active_asset_during_generating(client, stub_select_service
     run_svc.runs[104] = _make_run(104, "VISUAL_ASSET_GENERATING")
     asset_svc.add_asset(_make_asset(60, 104, "scene-0", 1))
 
-    response = await client.post(
-        "/api/creator/runs/104/visual-assets/scene-0/select/60"
-    )
+    response = await client.post("/api/creator/runs/104/visual-assets/scene-0/select/60")
     assert response.status_code == 200
     assert response.json()["id"] == 60
 
@@ -1979,16 +2078,20 @@ class StubAudioDispatcher:
         self.task_id = "test-audio-task-id-abc"
 
     def __call__(self, run_id: int, tts_model: str, voice: str) -> str:
-        self.calls.append({
-            "run_id": run_id,
-            "tts_model": tts_model,
-            "voice": voice,
-        })
+        self.calls.append(
+            {
+                "run_id": run_id,
+                "tts_model": tts_model,
+                "voice": voice,
+            }
+        )
         return self.task_id
 
 
 @pytest.fixture
-def stub_generate_audio_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubAudioDispatcher]:
+def stub_generate_audio_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[StubRunService, StubAudioDispatcher]:
     run_svc = StubRunService()
     dispatcher = StubAudioDispatcher()
 
@@ -2041,11 +2144,13 @@ async def test_generate_audio_from_visual_asset_review(client, stub_generate_aud
     assert cas_calls[0]["run_id"] == 110
     assert cas_calls[0]["updates"] == {"current_stage": "AUDIO_GENERATING"}
     assert "VISUAL_ASSET_REVIEW" in cas_calls[0]["expected_stages"]
-    assert dispatcher.calls == [{
-        "run_id": 110,
-        "tts_model": "qwen3-tts",
-        "voice": "en_US-lessac-medium",
-    }]
+    assert dispatcher.calls == [
+        {
+            "run_id": 110,
+            "tts_model": "qwen3-tts",
+            "voice": "en_US-lessac-medium",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -2157,6 +2262,7 @@ async def test_generate_audio_dispatch_failure_rollback(client, stub_generate_au
         raise RuntimeError("Celery broker down")
 
     from shorts_api.main import runs_router as _r
+
     for route in _iter_api_routes(_r.routes):
         if route.name == "generate_audio_trigger":
             route.endpoint.__globals__["dispatch_generate_audio"] = failing_dispatcher
@@ -2181,7 +2287,6 @@ async def test_generate_audio_dispatch_failure_rollback(client, stub_generate_au
     assert run_svc.runs[116].current_stage == "VISUAL_ASSET_REVIEW"
 
 
-
 # ──────────────────────────────────────────────────────────────────────
 # POST /runs/{run_id}/generate-subtitles
 # ──────────────────────────────────────────────────────────────────────
@@ -2193,23 +2298,29 @@ class StubSubtitleDispatcher:
         self.task_id = "test-subtitle-task-id-xyz"
 
     def __call__(self, run_id: int, subtitle_model: str, subtitle_format: str) -> str:
-        self.calls.append({
-            "run_id": run_id,
-            "subtitle_model": subtitle_model,
-            "subtitle_format": subtitle_format,
-        })
+        self.calls.append(
+            {
+                "run_id": run_id,
+                "subtitle_model": subtitle_model,
+                "subtitle_format": subtitle_format,
+            }
+        )
         return self.task_id
 
 
 @pytest.fixture
-def stub_generate_subtitles_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubSubtitleDispatcher]:
+def stub_generate_subtitles_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[StubRunService, StubSubtitleDispatcher]:
     run_svc = StubRunService()
     dispatcher = StubSubtitleDispatcher()
 
     for route in _iter_api_routes(runs_router.routes):
         if route.name == "generate_subtitles_trigger":
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
-            monkeypatch.setitem(route.endpoint.__globals__, "dispatch_generate_subtitles", dispatcher)
+            monkeypatch.setitem(
+                route.endpoint.__globals__, "dispatch_generate_subtitles", dispatcher
+            )
 
     return run_svc, dispatcher
 
@@ -2255,11 +2366,13 @@ async def test_generate_subtitles_from_audio_generating(client, stub_generate_su
     assert cas_calls[0]["run_id"] == 120
     assert cas_calls[0]["updates"] == {"current_stage": "SUBTITLE_GENERATING"}
     assert "AUDIO_GENERATING" in cas_calls[0]["expected_stages"]
-    assert dispatcher.calls == [{
-        "run_id": 120,
-        "subtitle_model": "whisper-small",
-        "subtitle_format": "srt",
-    }]
+    assert dispatcher.calls == [
+        {
+            "run_id": 120,
+            "subtitle_model": "whisper-small",
+            "subtitle_format": "srt",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -2362,7 +2475,9 @@ async def test_generate_subtitles_cas_conflict(client, stub_generate_subtitles_s
 
 
 @pytest.mark.asyncio
-async def test_generate_subtitles_dispatch_failure_rollback(client, stub_generate_subtitles_services):
+async def test_generate_subtitles_dispatch_failure_rollback(
+    client, stub_generate_subtitles_services
+):
     """Celery dispatch failure triggers rollback to original stage."""
     run_svc, _ = stub_generate_subtitles_services
     run_svc.runs[126] = _make_subtitle_run(126, "AUDIO_GENERATING")
@@ -2371,6 +2486,7 @@ async def test_generate_subtitles_dispatch_failure_rollback(client, stub_generat
         raise RuntimeError("Celery broker down")
 
     from shorts_api.main import runs_router as _r
+
     for route in _iter_api_routes(_r.routes):
         if route.name == "generate_subtitles_trigger":
             route.endpoint.__globals__["dispatch_generate_subtitles"] = failing_dispatcher
@@ -2404,15 +2520,19 @@ class StubRenderDispatcher:
         self.task_id = "test-render-task-id-xyz"
 
     def __call__(self, run_id: int, render_profile: str) -> str:
-        self.calls.append({
-            "run_id": run_id,
-            "render_profile": render_profile,
-        })
+        self.calls.append(
+            {
+                "run_id": run_id,
+                "render_profile": render_profile,
+            }
+        )
         return self.task_id
 
 
 @pytest.fixture
-def stub_generate_render_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubRenderDispatcher]:
+def stub_generate_render_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[StubRunService, StubRenderDispatcher]:
     run_svc = StubRunService()
     dispatcher = StubRenderDispatcher()
 
@@ -2464,10 +2584,12 @@ async def test_render_from_subtitle_generating(client, stub_generate_render_serv
     assert cas_calls[0]["run_id"] == 130
     assert cas_calls[0]["updates"] == {"current_stage": "RENDER_GENERATING"}
     assert "SUBTITLE_GENERATING" in cas_calls[0]["expected_stages"]
-    assert dispatcher.calls == [{
-        "run_id": 130,
-        "render_profile": "high_quality",
-    }]
+    assert dispatcher.calls == [
+        {
+            "run_id": 130,
+            "render_profile": "high_quality",
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -2560,6 +2682,7 @@ async def test_render_dispatch_failure_rollback(client, stub_generate_render_ser
         raise RuntimeError("Celery broker down")
 
     from shorts_api.main import runs_router as _r
+
     for route in _iter_api_routes(_r.routes):
         if route.name == "render_trigger":
             route.endpoint.__globals__["dispatch_render_video"] = failing_dispatcher
@@ -2585,7 +2708,9 @@ async def test_render_dispatch_failure_rollback(client, stub_generate_render_ser
 
 
 class StubVideoArtifact:
-    def __init__(self, id: int, path: str, render_profile: str | None, created_at: datetime) -> None:
+    def __init__(
+        self, id: int, path: str, render_profile: str | None, created_at: datetime
+    ) -> None:
         self.id = id
         self.path = path
         self.render_profile = render_profile

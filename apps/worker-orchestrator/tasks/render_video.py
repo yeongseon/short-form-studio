@@ -5,7 +5,37 @@ renders a single MP4 output for the run, and stores it as a video artifact.
 
 Phase 9: Supports per-paragraph audio/subtitle concatenation when available.
 Falls back to run-level audio/subtitles if per-paragraph artifacts don't exist.
+
+Idempotency:
+    IDEMPOTENT - Safe to retry:
+    - Stage guard rejects if run has progressed past RENDER_GENERATING.
+    - Multiple invocations attempt render; only first successful render and stage
+      transition complete (conditional_update_run uses compare-and-set).
+    - Subsequent invocations overwrite output video but stage transition no-ops
+      if run has already advanced to FINAL_REVIEW.
+    - FFmpeg handles multiple invocations gracefully (file overwrites).
+    - Idempotency guaranteed by acks_late + task_reject_on_worker_lost.
+
+Side effects:
+    - Filesystem: Saves video to data/artifacts/{run_id}/render/output.mp4 (overwrites on retry).
+    - Filesystem: Creates intermediate audio/subtitle concatenated files in render/ dir
+      (audio_concat.wav, subtitles_merged.srt).
+    - Database: Creates video artifact record (run_id, path, render_profile).
+    - Database: Atomically transitions run stage to FINAL_REVIEW (via conditional_update_run).
+    - No GPU resource: FFmpeg runs CPU-only (no lock management).
+
+Retry safety:
+    SAFE FOR RETRY - Configured with:
+    - max_retries=3
+    - autoretry_for=(ProviderTimeoutError, RateLimitError)
+    - retry_backoff=True, retry_jitter=True
+    - soft_time_limit=600s, hard time_limit=660s (longest of all tasks)
+    On timeout: Task transitions run to FAILED atomically before raising.
+    On partial failure (missing audio/subtitles): Task falls back gracefully to run-level
+    artifacts; logs warnings but completes (no exception).
 """
+
+# pyright: reportMissingImports=false
 
 from __future__ import annotations
 
@@ -17,9 +47,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
+from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
 from creator_service.audio_service import audio_service as _audio_service
+from creator_service.cost_config import COST_RENDER_VIDEO
 from creator_service.ffmpeg_service import FFmpegService, RenderInput
 from creator_service.render_profile import RenderProfile
 from creator_service.render_service import render_service as _render_service
@@ -27,6 +60,8 @@ from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
 from creator_service.telemetry import trace_task
+from creator_service.task_tracking_service import task_tracking_service as _task_tracking_service
+from creator_service.usage_service import record_provider_call, resolve_workspace_id_from_run
 from creator_service.visual_asset_service import visual_asset_service as _visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
 
@@ -69,7 +104,16 @@ async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
         logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
 
 
-@celery_app.task(bind=True, name="render_video")
+@celery_app.task(
+    bind=True,
+    autoretry_for=(ProviderTimeoutError, RateLimitError),
+    retry_backoff=True,
+    retry_jitter=True,
+    max_retries=3,
+    soft_time_limit=600,
+    time_limit=660,
+    name="render_video",
+)
 @trace_task("render_video")
 def render_video(
     self,
@@ -79,9 +123,17 @@ def render_video(
     start_time = datetime.now(timezone.utc)
     start_iso = start_time.isoformat()
     task_id = str(getattr(getattr(self, "request", None), "id", None) or f"run-{run_id}")
+    # Idempotency: acks_late + task_reject_on_worker_lost ensures redelivery on crash.
+    # If the run has already advanced past this stage, the worker's stage check will
+    # naturally skip processing (handled by run_service stage validation).
 
     async def _run_task() -> dict[str, object]:
         try:
+            try:
+                await _task_tracking_service.record_task_start(run_id, "render_video", task_id)
+                await _task_tracking_service.mark_running(task_id)
+            except Exception:
+                logger.warning("Failed to record task start", exc_info=True)
             run = await _run_service.storage.get_run(run_id)
             if run is None:
                 raise _StageGuardError(f"Run {run_id} not found")
@@ -99,6 +151,8 @@ def render_video(
                 )
             if run.get("status") == "cancelled":
                 raise _StageGuardError(f"Run {run_id} is cancelled")
+            workspace_id = await resolve_workspace_id_from_run(run_id)
+            project_id = run.get("project_id")
 
             manifest = await _render_service.build_render_manifest(
                 run_id,
@@ -242,12 +296,55 @@ def render_video(
 
             output_path = f"{_ARTIFACT_ROOT}/{run_id}/render/output.mp4"
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-            ffmpeg.render(render_input, Path(output_path))
+            try:
+                ffmpeg.render(render_input, Path(output_path))
+            except (TimeoutError, ConnectionError) as exc:
+                raise ProviderTimeoutError(
+                    f"Provider timed out during video render for run {run_id}"
+                ) from exc
+            except SoftTimeLimitExceeded:
+                raise
+            except Exception as exc:
+                message = str(exc).lower()
+                if "429" in message or "rate" in message:
+                    raise RateLimitError(
+                        f"Provider rate limited video render for run {run_id}"
+                    ) from exc
+                raise ProviderError(f"Provider failed video render for run {run_id}") from exc
+            try:
+                await record_provider_call(
+                    run_id,
+                    "ffmpeg",
+                    render_profile,
+                    "render",
+                    cost_usd=COST_RENDER_VIDEO,
+                    workspace_id=workspace_id,
+                    project_id=project_id,
+                )
+            except Exception:
+                logger.warning("Failed to record provider usage", exc_info=True)
+
+            from creator_service.artifact_storage_integration import store_artifact_file
+
+            try:
+                uploaded = store_artifact_file(run_id, output_path, "video/mp4")
+            except Exception as exc:
+                logger.error(
+                    "Failed to upload artifact %s to remote storage: %s",
+                    output_path,
+                    exc,
+                )
+                raise
+
+            storage_provider = uploaded.storage_provider
+            storage_key = uploaded.key
 
             artifact = await _render_service.create_artifact(
                 run_id=run_id,
                 path=output_path,
                 render_profile=render_profile,
+                storage_provider=storage_provider,
+                storage_key=storage_key,
             )
 
             applied, _ = await _run_service.storage.conditional_update_run(
@@ -266,6 +363,10 @@ def render_video(
 
             end_time = datetime.now(timezone.utc)
             duration_seconds = (end_time - start_time).total_seconds()
+            try:
+                await _task_tracking_service.mark_success(task_id)
+            except Exception:
+                logger.warning("Failed to record task success", exc_info=True)
 
             return {
                 "task_id": task_id,
@@ -287,8 +388,41 @@ def render_video(
     try:
         return asyncio.run(_run_task())
     except _StageGuardError:
+        # Validation rejection — do NOT mutate run state to FAILED.
+        try:
+            asyncio.run(_task_tracking_service.mark_rejected(task_id, "stage_guard"))
+        except Exception:
+            logger.warning("Failed to record task rejection", exc_info=True)
         raise
-    except Exception:
+    except SoftTimeLimitExceeded:
+        logger.error("Task timed out for run %s", run_id)
+        # Transition run to FAILED so it doesn't stay stuck in generating stage
+        try:
+            asyncio.run(
+                _run_service.storage.conditional_update_run(
+                    run_id,
+                    {
+                        "current_stage": RunStage.FAILED.value,
+                        "status": "failed",
+                    },
+                    expected_stages=_SAFE_STAGES,
+                )
+            )
+        except Exception:
+            logger.exception("Failed to mark run %d as FAILED after timeout", run_id)
+        raise
+    except Exception as exc:
+        if (
+            isinstance(exc, (ProviderTimeoutError, RateLimitError))
+            and self.request.retries < self.max_retries
+        ):
+            raise
+        try:
+            asyncio.run(
+                _task_tracking_service.mark_failed(task_id, type(exc).__name__, str(exc)[:500])
+            )
+        except Exception:
+            logger.warning("Failed to record task failure", exc_info=True)
         try:
             applied, _ = asyncio.run(
                 _run_service.storage.conditional_update_run(

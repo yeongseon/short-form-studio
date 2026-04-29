@@ -2,11 +2,14 @@
 
 """Tests for API key authentication middleware."""
 
+import hashlib
+
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from httpx import ASGITransport, AsyncClient
-from shorts_api.auth import ApiKeyMiddleware
+from shorts_api.auth import ApiKeyMiddleware, get_current_user, require_workspace_access
+from starlette.requests import Request
 
 
 def _make_app(api_key: str | None = None) -> FastAPI:
@@ -50,66 +53,52 @@ def api_key():
 
 
 @pytest.fixture
-async def authed_client(api_key):
+async def authed_client(api_key, monkeypatch: pytest.MonkeyPatch):
     """Client for an app with API_KEY configured."""
+    expected_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+
+    async def _fetch_one_stub(query: str, *args: object) -> dict[str, object] | None:
+        if "FROM api_keys" in query:
+            key_hash = args[0] if args else None
+            if key_hash == expected_hash:
+                return {"user_id": 1}
+            return None
+        if "FROM workspace_members" in query:
+            user_id = args[0] if args else None
+            if user_id == 1:
+                return {"workspace_id": 1, "workspace_name": "workspace-1"}
+            return None
+        return None
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost:5432/test")
+    monkeypatch.setattr("shorts_api.auth.fetch_one", _fetch_one_stub)
+
     app = _make_app(api_key=api_key)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
 
 
-@pytest.fixture
-async def open_client():
-    """Client for an app with no API_KEY (open access)."""
-    app = _make_app(api_key=None)
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac
-
-
-# --- Tests with no API key (open access mode) ---
-
-
-@pytest.mark.asyncio
-async def test_no_api_key_allows_health(open_client):
-    """When API_KEY is not set, health should be accessible."""
-    response = await open_client.get("/health")
-    assert response.status_code == 200
-
-
-@pytest.mark.asyncio
-async def test_no_api_key_allows_api_routes(open_client):
-    """API routes should work without auth when API_KEY is unset."""
-    response = await open_client.get("/api/data")
-    assert response.status_code == 200
-
-
-# --- Tests with API key configured ---
-
-
 @pytest.mark.asyncio
 async def test_health_requires_auth_when_api_key_set(authed_client):
-    """Detailed /health endpoint requires auth when API_KEY is set."""
     response = await authed_client.get("/health")
     assert response.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_healthz_always_public(authed_client):
-    """Liveness probe /healthz should be accessible without auth even when API_KEY is set."""
     response = await authed_client.get("/healthz")
     assert response.status_code == 200
 
+
 @pytest.mark.asyncio
 async def test_docs_require_auth_when_api_key_set(authed_client):
-    """Docs endpoints should require auth when API_KEY is configured."""
     response = await authed_client.get("/docs")
     assert response.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_openapi_requires_auth_when_api_key_set(authed_client):
-    """OpenAPI JSON should require auth when API_KEY is configured."""
     response = await authed_client.get("/openapi.json")
     assert response.status_code == 401
 
@@ -166,13 +155,12 @@ async def test_query_param_api_key_rejected(authed_client, api_key):
 
 
 @pytest.mark.asyncio
-async def test_empty_string_api_key_is_open_access():
-    """An empty string API_KEY should be treated as no auth (open access)."""
+async def test_empty_string_api_key_requires_auth():
     app = _make_app(api_key="")
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         response = await ac.get("/api/data")
-        assert response.status_code == 200
+        assert response.status_code == 401
 
 
 @pytest.mark.asyncio
@@ -235,3 +223,82 @@ async def test_options_without_origin_requires_auth(authed_client):
     """OPTIONS without Origin header is not CORS preflight — should require auth."""
     response = await authed_client.options("/api/data")
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_without_api_key_returns_401():
+    request = Request({"type": "http", "headers": []})
+    with pytest.raises(HTTPException) as exc_info:
+        await get_current_user(request)
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "API key required"
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_with_invalid_api_key_returns_401(monkeypatch):
+    async def _fetch_one(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr("shorts_api.auth.fetch_one", _fetch_one)
+    request = Request({"type": "http", "headers": [(b"x-api-key", b"invalid-key")]})
+    with pytest.raises(HTTPException) as exc_info:
+        await get_current_user(request)
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Invalid API key"
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_resolves_from_api_keys_and_membership(monkeypatch):
+    calls: list[tuple[str, tuple[object, ...]]] = []
+
+    async def _fetch_one(query: str, *args):
+        calls.append((query, args))
+        if "FROM api_keys" in query:
+            return {"user_id": 123}
+        if "FROM workspace_members" in query:
+            return {"workspace_id": 10}
+        return None
+
+    monkeypatch.setattr("shorts_api.auth.fetch_one", _fetch_one)
+    request = Request({"type": "http", "headers": [(b"x-api-key", b"valid-key")]})
+    result = await get_current_user(request)
+
+    assert result["user_id"] == 123
+    assert result["workspace_id"] == 10
+    assert result["auth_provider"] == "api_key"
+    assert len(calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_require_workspace_access_denies_without_membership(monkeypatch):
+    async def _no_access(_workspace_id: int, _user_id: int) -> bool:
+        return False
+
+    monkeypatch.setattr("shorts_api.auth.workspace_service.check_access", _no_access)
+    user = {
+        "user_id": 1,
+        "auth_provider": "api_key",
+        "auth_subject": "subject",
+        "workspace_id": None,
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        await require_workspace_access(99, user)
+    assert exc_info.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_require_workspace_access_allows_with_membership(monkeypatch):
+    async def _has_access(_workspace_id: int, _user_id: int) -> bool:
+        return True
+
+    monkeypatch.setattr("shorts_api.auth.workspace_service.check_access", _has_access)
+    user = {
+        "user_id": 2,
+        "auth_provider": "api_key",
+        "auth_subject": "subject",
+        "workspace_id": 10,
+    }
+
+    result = await require_workspace_access(100, user)
+    assert result["user_id"] == 2

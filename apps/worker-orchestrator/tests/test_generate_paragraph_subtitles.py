@@ -143,7 +143,9 @@ def test_generate_paragraph_subtitles_success(monkeypatch: pytest.MonkeyPatch) -
 
 def test_generate_paragraph_subtitles_audio_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = FakeProvider()
-    _patch_registry(monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider))
+    _patch_registry(
+        monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider)
+    )
 
     subtitle_service = FakeSubtitleService()
     monkeypatch.setattr(module, "_subtitle_service", subtitle_service)
@@ -167,7 +169,9 @@ def test_generate_paragraph_subtitles_with_gpu_lock(monkeypatch: pytest.MonkeyPa
     lock_calls: list[str] = []
     release_calls: list[str] = []
     monkeypatch.setattr(module, "acquire_gpu_lock", lambda _, task_id: lock_calls.append(task_id))
-    monkeypatch.setattr(module, "release_gpu_lock", lambda _, task_id: release_calls.append(task_id))
+    monkeypatch.setattr(
+        module, "release_gpu_lock", lambda _, task_id: release_calls.append(task_id)
+    )
 
     subtitle_service = FakeSubtitleService(artifact_id=61)
     monkeypatch.setattr(module, "_subtitle_service", subtitle_service)
@@ -191,7 +195,10 @@ def test_generate_paragraph_subtitles_provider_failure(monkeypatch: pytest.Monke
     monkeypatch.setattr(module, "_subtitle_service", subtitle_service)
     monkeypatch.setattr(module.os.path, "exists", lambda _: True)
 
-    with pytest.raises(RuntimeError, match="subtitle provider failed"):
+    with pytest.raises(
+        module.ProviderError,
+        match="Provider failed paragraph subtitle generation",
+    ):
         _invoke_task(run_id=104, section_id="hook-4", audio_path="audio.wav")
 
     assert subtitle_service.calls == []

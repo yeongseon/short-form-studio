@@ -66,6 +66,7 @@ class FakeStorage:
         self._runs[run_id] = row
         return True, dict(row)
 
+
 def _make_storage(run_id: int = 101, stage: str = "IDEA_READY", **extra: Any) -> FakeStorage:
     """Create a FakeStorage pre-populated with a single run in the given stage."""
     run_row: dict[str, object] = {"id": run_id, "current_stage": stage, **extra}
@@ -77,7 +78,9 @@ class FakeScriptService:
         self.error = error
         self.calls: list[tuple[int, str, str | None]] = []
 
-    async def save_draft(self, run_id: int, source_type: str, markdown_content: str | None) -> dict[str, object]:
+    async def save_draft(
+        self, run_id: int, source_type: str, markdown_content: str | None
+    ) -> dict[str, object]:
         self.calls.append((run_id, source_type, markdown_content))
         if self.error is not None:
             raise self.error
@@ -85,7 +88,9 @@ class FakeScriptService:
 
 
 class FakeRegistry:
-    def __init__(self, entry: FakeEntry, provider: FakeProvider, resolve_error: Exception | None = None) -> None:
+    def __init__(
+        self, entry: FakeEntry, provider: FakeProvider, resolve_error: Exception | None = None
+    ) -> None:
         self.entry = entry
         self.provider = provider
         self.resolve_error = resolve_error
@@ -132,7 +137,10 @@ def _invoke_task(**kwargs: Any) -> dict[str, object]:
 # Happy-path tests
 # ──────────────────────────────────────────────────────────────────────
 
-def test_generate_script_happy_path_local_model_with_gpu_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+
+def test_generate_script_happy_path_local_model_with_gpu_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     provider = FakeProvider(result="# Draft")
     entry = FakeEntry(requires_gpu=True, default_params={"temperature": 0.2})
     registry = FakeRegistry(entry=entry, provider=provider)
@@ -144,8 +152,16 @@ def test_generate_script_happy_path_local_model_with_gpu_lock(monkeypatch: pytes
     lock_calls: list[str] = []
     release_calls: list[str] = []
 
-    monkeypatch.setattr(generate_script_module, "acquire_gpu_lock", lambda client, task_id: lock_calls.append(task_id))
-    monkeypatch.setattr(generate_script_module, "release_gpu_lock", lambda client, task_id: release_calls.append(task_id))
+    monkeypatch.setattr(
+        generate_script_module,
+        "acquire_gpu_lock",
+        lambda client, task_id: lock_calls.append(task_id),
+    )
+    monkeypatch.setattr(
+        generate_script_module,
+        "release_gpu_lock",
+        lambda client, task_id: release_calls.append(task_id),
+    )
 
     script_service = FakeScriptService()
     storage = _make_storage(run_id=101, stage="IDEA_READY")
@@ -166,14 +182,24 @@ def test_generate_script_happy_path_local_model_with_gpu_lock(monkeypatch: pytes
     assert provider.calls[0][1] == {"temperature": 0.2}
 
 
-def test_generate_script_happy_path_external_model_without_gpu_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_generate_script_happy_path_external_model_without_gpu_lock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     provider = FakeProvider(result="Script from external")
     entry = FakeEntry(provider_type="openai", endpoint="https://api.openai.com", requires_gpu=False)
     registry = FakeRegistry(entry=entry, provider=provider)
     _patch_registry(monkeypatch, registry)
 
-    monkeypatch.setattr(generate_script_module, "acquire_gpu_lock", lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")))
-    monkeypatch.setattr(generate_script_module, "release_gpu_lock", lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")))
+    monkeypatch.setattr(
+        generate_script_module,
+        "acquire_gpu_lock",
+        lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")),
+    )
+    monkeypatch.setattr(
+        generate_script_module,
+        "release_gpu_lock",
+        lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")),
+    )
 
     script_service = FakeScriptService()
     storage = _make_storage(run_id=102, stage="IDEA_READY")
@@ -188,7 +214,9 @@ def test_generate_script_happy_path_external_model_without_gpu_lock(monkeypatch:
     assert storage.calls == [(102, {"current_stage": "SCRIPT_REVIEW", "status": "running"})]
 
 
-def test_generate_script_appends_custom_instructions_to_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_generate_script_appends_custom_instructions_to_prompt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     provider = FakeProvider(result="Draft")
     entry = FakeEntry(requires_gpu=False)
     registry = FakeRegistry(entry=entry, provider=provider)
@@ -215,6 +243,7 @@ def test_generate_script_appends_custom_instructions_to_prompt(monkeypatch: pyte
 # Failure tests — task now re-raises, so pytest.raises is required
 # ──────────────────────────────────────────────────────────────────────
 
+
 def test_generate_script_provider_resolution_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     registry = FakeRegistry(
         entry=FakeEntry(),
@@ -234,7 +263,9 @@ def test_generate_script_provider_resolution_failure(monkeypatch: pytest.MonkeyP
     assert storage.calls == [(103, {"current_stage": "FAILED", "status": "failed"})]
 
 
-def test_generate_script_llm_generation_failure_sets_failed_stage(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_generate_script_llm_generation_failure_sets_failed_stage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     provider = FakeProvider(error=RuntimeError("generation failed"))
     entry = FakeEntry(requires_gpu=False)
     registry = FakeRegistry(entry=entry, provider=provider)
@@ -244,7 +275,9 @@ def test_generate_script_llm_generation_failure_sets_failed_stage(monkeypatch: p
     storage = _make_storage(run_id=104, stage="IDEA_READY")
     _patch_services(monkeypatch, script_service, storage)
 
-    with pytest.raises(RuntimeError, match="generation failed"):
+    with pytest.raises(
+        generate_script_module.ProviderError, match="Provider failed script generation"
+    ):
         _invoke_task(run_id=104, idea_brief="Failing generation")
 
     assert script_service.calls == []
@@ -289,13 +322,17 @@ def test_generate_script_releases_gpu_lock_when_llm_fails(monkeypatch: pytest.Mo
 
     released: list[str] = []
     monkeypatch.setattr(generate_script_module, "acquire_gpu_lock", lambda *_: True)
-    monkeypatch.setattr(generate_script_module, "release_gpu_lock", lambda _, task_id: released.append(task_id))
+    monkeypatch.setattr(
+        generate_script_module, "release_gpu_lock", lambda _, task_id: released.append(task_id)
+    )
 
     script_service = FakeScriptService()
     storage = _make_storage(run_id=106, stage="IDEA_READY")
     _patch_services(monkeypatch, script_service, storage)
 
-    with pytest.raises(RuntimeError, match="provider exploded"):
+    with pytest.raises(
+        generate_script_module.ProviderError, match="Provider failed script generation"
+    ):
         _invoke_task(run_id=106, idea_brief="Failure with GPU")
 
     assert released == ["run-106"]
@@ -321,6 +358,7 @@ def test_generate_script_script_save_failure(monkeypatch: pytest.MonkeyPatch) ->
 # ──────────────────────────────────────────────────────────────────────
 # Oracle-requested: stage guard
 # ──────────────────────────────────────────────────────────────────────
+
 
 def test_stage_guard_rejects_wrong_stage(monkeypatch: pytest.MonkeyPatch) -> None:
     """Task must refuse to run when the run is NOT in IDEA_READY or SCRIPT_GENERATING."""
@@ -378,9 +416,11 @@ def test_stage_guard_run_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     # Run state must NOT be mutated for a non-existent run
     assert storage.calls == []
 
+
 # ──────────────────────────────────────────────────────────────────────
 # Oracle-requested: re-raise propagation
 # ──────────────────────────────────────────────────────────────────────
+
 
 def test_failure_propagates_to_celery(monkeypatch: pytest.MonkeyPatch) -> None:
     """Task must re-raise exceptions so Celery marks the task as FAILURE."""
@@ -393,7 +433,9 @@ def test_failure_propagates_to_celery(monkeypatch: pytest.MonkeyPatch) -> None:
     storage = _make_storage(run_id=300, stage="IDEA_READY")
     _patch_services(monkeypatch, script_service, storage)
 
-    with pytest.raises(RuntimeError, match="LLM exploded"):
+    with pytest.raises(
+        generate_script_module.ProviderError, match="Provider failed script generation"
+    ):
         _invoke_task(run_id=300, idea_brief="Propagation test")
 
     # The FAILED stage update must still have happened before re-raise
@@ -404,7 +446,10 @@ def test_failure_propagates_to_celery(monkeypatch: pytest.MonkeyPatch) -> None:
 # Oracle-requested: release_gpu_lock failure resilience
 # ──────────────────────────────────────────────────────────────────────
 
-def test_release_gpu_lock_failure_still_propagates_original_error(monkeypatch: pytest.MonkeyPatch) -> None:
+
+def test_release_gpu_lock_failure_still_propagates_original_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """If release_gpu_lock raises, the original generation error still propagates."""
     provider = FakeProvider(error=RuntimeError("generation boom"))
     entry = FakeEntry(requires_gpu=True)
@@ -426,11 +471,15 @@ def test_release_gpu_lock_failure_still_propagates_original_error(monkeypatch: p
     _patch_services(monkeypatch, script_service, storage)
 
     # The original error should propagate (not the release_gpu_lock ConnectionError)
-    with pytest.raises(RuntimeError, match="generation boom"):
+    with pytest.raises(
+        generate_script_module.ProviderError, match="Provider failed script generation"
+    ):
         _invoke_task(run_id=400, idea_brief="Lock release failure")
 
 
-def test_update_run_failure_in_error_path_still_re_raises_original(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_update_run_failure_in_error_path_still_re_raises_original(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """If update_run fails in the error handler, the original exception still propagates."""
     provider = FakeProvider(error=RuntimeError("original error"))
     entry = FakeEntry(requires_gpu=False)
@@ -443,7 +492,9 @@ def test_update_run_failure_in_error_path_still_re_raises_original(monkeypatch: 
     _patch_services(monkeypatch, script_service, storage)
 
     # Original error must still propagate even if FAILED-stage update fails
-    with pytest.raises(RuntimeError, match="original error"):
+    with pytest.raises(
+        generate_script_module.ProviderError, match="Provider failed script generation"
+    ):
         _invoke_task(run_id=500, idea_brief="Double failure")
 
 
@@ -525,7 +576,9 @@ class RaceConditionStorage(FakeStorage):
     - Failure path race: advance_after=1 (guard sees IDEA_READY, CAS sees advanced)
     """
 
-    def __init__(self, run_id: int, initial_stage: str, advanced_stage: str, advance_after: int = 1) -> None:
+    def __init__(
+        self, run_id: int, initial_stage: str, advanced_stage: str, advance_after: int = 1
+    ) -> None:
         super().__init__(runs={run_id: {"id": run_id, "current_stage": initial_stage}})
         self._target_id = run_id
         self._advanced_stage = advanced_stage
@@ -561,6 +614,7 @@ class RaceConditionStorage(FakeStorage):
         self._runs[run_id] = row
         return True, dict(row)
 
+
 def test_conditional_fail_skips_when_run_already_advanced(monkeypatch: pytest.MonkeyPatch) -> None:
     """If a competing task advances the run to SCRIPT_REVIEW before the error handler
     runs, the error handler must NOT overwrite it to FAILED.
@@ -582,7 +636,9 @@ def test_conditional_fail_skips_when_run_already_advanced(monkeypatch: pytest.Mo
     )
     _patch_services(monkeypatch, script_service, storage)
 
-    with pytest.raises(RuntimeError, match="task B generation failed"):
+    with pytest.raises(
+        generate_script_module.ProviderError, match="Provider failed script generation"
+    ):
         _invoke_task(run_id=900, idea_brief="Duplicate task scenario")
 
     # Error handler must NOT have written FAILED -- run was already advanced
@@ -590,7 +646,9 @@ def test_conditional_fail_skips_when_run_already_advanced(monkeypatch: pytest.Mo
     assert storage._runs[900]["current_stage"] == "SCRIPT_REVIEW"
 
 
-def test_conditional_fail_marks_failed_when_still_in_generating_stage(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_conditional_fail_marks_failed_when_still_in_generating_stage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """When the run is still in IDEA_READY at error time, the error handler should
     mark it as FAILED (normal failure path)."""
     provider = FakeProvider(error=RuntimeError("generation error"))
@@ -602,14 +660,18 @@ def test_conditional_fail_marks_failed_when_still_in_generating_stage(monkeypatc
     storage = _make_storage(run_id=901, stage="IDEA_READY")
     _patch_services(monkeypatch, script_service, storage)
 
-    with pytest.raises(RuntimeError, match="generation error"):
+    with pytest.raises(
+        generate_script_module.ProviderError, match="Provider failed script generation"
+    ):
         _invoke_task(run_id=901, idea_brief="Normal failure")
 
     # Run was still in IDEA_READY -> FAILED write should happen
     assert storage.calls == [(901, {"current_stage": "FAILED", "status": "failed"})]
 
 
-def test_success_transition_skips_when_run_already_advanced(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_success_transition_skips_when_run_already_advanced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """If a competing task advances the run past generation before this task's
     success transition, the SCRIPT_REVIEW write must be skipped.
 
