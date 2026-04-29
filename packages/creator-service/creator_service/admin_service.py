@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import inspect
+import json
 import logging
 import os
 import time
-from importlib import import_module
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import redis.asyncio as redis
+from celery import current_app as celery_app
 
 from creator_service.db import get_pool
 
@@ -38,6 +39,23 @@ class AdminService:
         if inspect.isawaitable(value):
             return await value
         return value
+
+    async def revoke_task(self, task_id: str) -> None:
+        """Revoke a Celery task."""
+        cast(Any, celery_app).control.revoke(task_id, terminate=True)
+
+    def _parse_active_task_ids(self, active_task_id: str | None) -> list[str]:
+        if not active_task_id:
+            return []
+        try:
+            parsed = json.loads(active_task_id)
+            if isinstance(parsed, str):
+                return [parsed] if parsed else []
+            if isinstance(parsed, list):
+                return [str(task_id) for task_id in parsed if str(task_id)]
+        except (ValueError, TypeError):
+            pass
+        return [active_task_id]
 
     async def get_system_health(self) -> dict[str, Any]:
         uptime_seconds = int(time.time() - self._started_at)
@@ -91,7 +109,7 @@ class AdminService:
         except Exception:
             return []
 
-    async def get_failed_tasks(self, hours: int = 24) -> list[dict[str, Any]]:
+    async def get_failed_runs(self, hours: int = 24) -> list[dict[str, Any]]:
         hours = max(1, hours)
         cutoff = datetime.now(tz=timezone.utc) - timedelta(hours=hours)
         try:
@@ -208,8 +226,8 @@ class AdminService:
 
                 active_task_id = row["active_task_id"]
                 if active_task_id:
-                    creator_runs_utils = import_module("shorts_api.routes.creator_runs_utils")
-                    creator_runs_utils._revoke_active_tasks(active_task_id)
+                    for task_id in self._parse_active_task_ids(active_task_id):
+                        await self.revoke_task(task_id)
 
                 updated = await connection.fetchrow(
                     """

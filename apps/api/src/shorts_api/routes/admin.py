@@ -1,3 +1,5 @@
+"""Admin API endpoints for operational management of creator runs and system health."""
+
 from __future__ import annotations
 
 import hmac
@@ -150,7 +152,7 @@ async def require_confirmation_and_rate_limit(
 
 router = APIRouter(
     prefix="",
-    tags=["admin"],
+    tags=["admin-api"],
     dependencies=[Depends(require_admin)],
 )
 
@@ -213,9 +215,9 @@ async def admin_stuck_runs(
     return await admin_service.get_stuck_runs(threshold_minutes=threshold_minutes)
 
 
-@router.get("/tasks/failed", response_model=list[RunInfo])
-async def admin_failed_tasks(hours: int = Query(default=24, ge=1)) -> list[dict[str, Any]]:
-    return await admin_service.get_failed_tasks(hours=hours)
+@router.get("/runs/failed", response_model=list[RunInfo])
+async def admin_failed_runs(hours: int = Query(default=24, ge=1)) -> list[dict[str, Any]]:
+    return await admin_service.get_failed_runs(hours=hours)
 
 
 @router.get("/queue/depth", response_model=QueueDepthResponse)
