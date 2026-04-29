@@ -49,31 +49,12 @@ def upgrade() -> None:
     op.execute(
         """
         DO $$
-        DECLARE
-            default_workspace_id integer;
         BEGIN
-            IF EXISTS (
-                SELECT 1
-                FROM information_schema.tables
-                WHERE table_schema = 'public' AND table_name = 'workspaces'
-            ) THEN
-                EXECUTE 'SELECT MIN(id) FROM workspaces' INTO default_workspace_id;
-            END IF;
-
-            default_workspace_id := COALESCE(
-                default_workspace_id,
-                (SELECT MIN(workspace_id) FROM creator_projects WHERE workspace_id IS NOT NULL),
-                1
-            );
-
-            UPDATE creator_projects
-            SET workspace_id = default_workspace_id
-            WHERE workspace_id IS NULL;
-
             UPDATE creator_runs r
-            SET workspace_id = COALESCE(p.workspace_id, default_workspace_id)
+            SET workspace_id = p.workspace_id
             FROM creator_projects p
             WHERE r.project_id = p.id
+              AND p.workspace_id IS NOT NULL
               AND r.workspace_id IS NULL;
         END $$;
         """

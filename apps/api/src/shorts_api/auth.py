@@ -7,6 +7,7 @@ middleware is a transparent pass-through so local development stays frictionless
 """
 
 import contextvars
+import hashlib
 import hmac
 import json
 import logging
@@ -29,6 +30,7 @@ _current_user_ctx: contextvars.ContextVar["CurrentUser | None"] = contextvars.Co
 
 @dataclass
 class CurrentUser:
+    user_id: int | None = None
     workspace_id: int | None = None
     workspace_name: str | None = None
 
@@ -76,28 +78,88 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
                 logger.warning("Ignoring API_KEY_WORKSPACE_MAP entry with non-integer workspace_id")
         return mapping
 
-    async def _resolve_workspace_from_membership(self, api_key_value: str) -> int | None:
+    async def _get_pool(self):
         try:
             db_module = __import__("creator_service.db", fromlist=["get_pool"])
-            pool = await db_module.get_pool()
+            return await db_module.get_pool()
         except Exception:
             return None
 
-        candidate_queries = (
-            "SELECT workspace_id FROM workspace_members WHERE user_id::text = $1 ORDER BY workspace_id LIMIT 1",
+    async def _resolve_user_id_from_api_key(self, api_key_value: str) -> int | None:
+        pool = await self._get_pool()
+        if pool is None:
+            return None
+
+        api_key_hash = hashlib.sha256(api_key_value.encode("utf-8")).hexdigest()
+        candidate_queries: tuple[tuple[str, str], ...] = (
+            (
+                "SELECT user_id FROM api_keys WHERE api_key = $1 ORDER BY user_id LIMIT 1",
+                api_key_value,
+            ),
+            ("SELECT user_id FROM api_keys WHERE key = $1 ORDER BY user_id LIMIT 1", api_key_value),
+            (
+                "SELECT user_id FROM user_api_keys WHERE api_key = $1 ORDER BY user_id LIMIT 1",
+                api_key_value,
+            ),
+            (
+                "SELECT user_id FROM user_api_keys WHERE key = $1 ORDER BY user_id LIMIT 1",
+                api_key_value,
+            ),
+            (
+                "SELECT user_id FROM api_keys WHERE api_key_hash = $1 ORDER BY user_id LIMIT 1",
+                api_key_hash,
+            ),
+            (
+                "SELECT user_id FROM api_keys WHERE key_hash = $1 ORDER BY user_id LIMIT 1",
+                api_key_hash,
+            ),
+            (
+                "SELECT user_id FROM user_api_keys WHERE api_key_hash = $1 ORDER BY user_id LIMIT 1",
+                api_key_hash,
+            ),
+            (
+                "SELECT user_id FROM user_api_keys WHERE key_hash = $1 ORDER BY user_id LIMIT 1",
+                api_key_hash,
+            ),
         )
+
         async with pool.acquire() as connection:
-            for query in candidate_queries:
+            for query, query_arg in candidate_queries:
                 try:
-                    row = await connection.fetchrow(query, api_key_value)
+                    row = await connection.fetchrow(query, query_arg)
                 except Exception:
                     continue
-                if row is not None and row.get("workspace_id") is not None:
+                if row is not None and row.get("user_id") is not None:
                     try:
-                        return int(row["workspace_id"])
+                        return int(row["user_id"])
                     except (TypeError, ValueError):
                         continue
         return None
+
+    async def _resolve_member_workspaces(self, user_id: int) -> list[int]:
+        pool = await self._get_pool()
+        if pool is None:
+            return []
+
+        query = (
+            "SELECT workspace_id FROM workspace_members WHERE user_id = $1 ORDER BY workspace_id"
+        )
+        async with pool.acquire() as connection:
+            try:
+                rows = await connection.fetch(query, user_id)
+            except Exception:
+                return []
+
+        workspace_ids: list[int] = []
+        for row in rows:
+            workspace_id = row.get("workspace_id")
+            if workspace_id is None:
+                continue
+            try:
+                workspace_ids.append(int(workspace_id))
+            except (TypeError, ValueError):
+                continue
+        return workspace_ids
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         request.state.user = CurrentUser()
@@ -136,24 +198,39 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
                 content={"detail": "Invalid or missing API key"},
             )
 
-        workspace_id = workspace_map.get(provided)
-        if workspace_id is None:
-            workspace_id = await self._resolve_workspace_from_membership(provided)
+        user_id = await self._resolve_user_id_from_api_key(provided)
+        if user_id is None:
+            if self._api_key and hmac.compare_digest(provided, self._api_key):
+                user = CurrentUser()
+                request.state.user = user
+                _current_user_ctx.set(user)
+                return await call_next(request)
+            return JSONResponse(status_code=403, content={"detail": "Forbidden"})
 
-        if workspace_id is None:
-            workspace_header = request.headers.get("X-Workspace-Id")
-            if workspace_header is not None:
-                try:
-                    workspace_id = int(workspace_header)
-                except ValueError:
-                    return JSONResponse(
-                        status_code=400, content={"detail": "Invalid X-Workspace-Id header"}
-                    )
-                logger.warning(
-                    "Falling back to X-Workspace-Id because workspace mapping lookup is unavailable; this behavior is deprecated"
+        member_workspace_ids = await self._resolve_member_workspaces(user_id)
+        if not member_workspace_ids:
+            return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+
+        workspace_id: int | None = None
+        workspace_header = request.headers.get("X-Workspace-Id")
+        if workspace_header is not None:
+            try:
+                workspace_id = int(workspace_header)
+            except ValueError:
+                return JSONResponse(
+                    status_code=400, content={"detail": "Invalid X-Workspace-Id header"}
                 )
 
-        user = CurrentUser(workspace_id=workspace_id)
+            if workspace_id not in member_workspace_ids:
+                return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+        else:
+            workspace_id = member_workspace_ids[0]
+
+        mapped_workspace_id = workspace_map.get(provided)
+        if mapped_workspace_id is not None and mapped_workspace_id in member_workspace_ids:
+            workspace_id = mapped_workspace_id
+
+        user = CurrentUser(user_id=user_id, workspace_id=workspace_id)
         request.state.user = user
         _current_user_ctx.set(user)
 
