@@ -7,6 +7,7 @@ middleware is a transparent pass-through so local development stays frictionless
 """
 
 import hmac
+import logging
 import os
 from dataclasses import dataclass
 
@@ -17,6 +18,7 @@ from starlette.responses import Response
 
 # Paths that never require authentication
 _PUBLIC_PATHS = frozenset({"/healthz"})
+_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -63,6 +65,23 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._api_key = api_key or os.getenv("API_KEY")
 
+    async def _resolve_workspace(self, api_key: str, request: Request) -> CurrentUser:
+        # TODO(#395): Replace header-only derivation with workspace_members DB validation.
+        if not api_key:
+            return CurrentUser(workspace_id=None, workspace_name=None)
+        requested_ws = request.headers.get("X-Workspace-Id")
+        if requested_ws is None:
+            return CurrentUser(workspace_id=None, workspace_name=None)
+
+        try:
+            ws_id = int(requested_ws)
+        except ValueError:
+            _logger.warning("Invalid X-Workspace-Id header", extra={"header": requested_ws})
+            return CurrentUser(workspace_id=None, workspace_name=None)
+
+        _logger.info("Workspace derived from X-Workspace-Id header (not DB-verified yet)")
+        return CurrentUser(workspace_id=ws_id, workspace_name=f"workspace-{ws_id}")
+
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         # Skip auth when no key is configured (local dev)
         if not self._api_key:
@@ -95,5 +114,5 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
                 content={"detail": "Invalid or missing API key"},
             )
 
-        request.state.user = CurrentUser(workspace_id=1, workspace_name="default")
+        request.state.user = await self._resolve_workspace(provided, request)
         return await call_next(request)
