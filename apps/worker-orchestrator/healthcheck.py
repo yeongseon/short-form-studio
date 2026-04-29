@@ -1,48 +1,47 @@
-from __future__ import annotations
-
-import argparse
-import os
+import socket
 import sys
-from typing import Any
 
 from celery import Celery
+from celery_app import celery_app as app
+
+
+def check_health() -> None:
+    hostname = f"celery@{socket.gethostname()}"
+    response = app.control.ping(destination=[hostname], timeout=5.0)
+
+    if not response:
+        print(f"UNHEALTHY: No response from {hostname}")
+        sys.exit(1)
+
+    for entry in response:
+        if hostname in entry and entry[hostname].get("ok") == "pong":
+            print(f"HEALTHY: {hostname} responded")
+            sys.exit(0)
+
+    print(f"UNHEALTHY: {hostname} did not respond correctly")
+    sys.exit(1)
 
 
 def check_worker_health(redis_url: str, timeout_seconds: float = 3.0) -> bool:
-    app = Celery("worker-healthcheck", broker=redis_url, backend=redis_url)
-    inspect = app.control.inspect(timeout=timeout_seconds)
-    response: Any = inspect.ping()
-    if not isinstance(response, dict) or not response:
+    hostname = f"celery@{socket.gethostname()}"
+    healthcheck_app = Celery("worker-healthcheck", broker=redis_url, backend=redis_url)
+    if hasattr(healthcheck_app.control, "ping"):
+        response = healthcheck_app.control.ping(destination=[hostname], timeout=timeout_seconds)
+    else:
+        inspect = healthcheck_app.control.inspect(timeout=timeout_seconds)
+        response = inspect.ping()
+
+    if isinstance(response, dict):
+        return any(worker_result.get("ok") == "pong" for worker_result in response.values())
+
+    if not response:
         return False
-    return any(worker_result.get("ok") == "pong" for worker_result in response.values())
 
-
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Check Celery worker health with inspect ping")
-    parser.add_argument(
-        "--redis-url",
-        default=os.getenv("REDIS_URL", "redis://redis:6379/0"),
-        help="Celery broker/backend Redis URL (default: REDIS_URL env)",
-    )
-    parser.add_argument(
-        "--timeout-seconds",
-        type=float,
-        default=3.0,
-        help="Inspect ping timeout in seconds",
-    )
-    return parser.parse_args()
-
-
-def main() -> int:
-    args = parse_args()
-    is_healthy = check_worker_health(args.redis_url, args.timeout_seconds)
-    if is_healthy:
-        print("Worker health check passed")
-        return 0
-
-    print("Worker health check failed: no Celery worker responded to ping")
-    return 1
+    for entry in response:
+        if hostname in entry and entry[hostname].get("ok") == "pong":
+            return True
+    return False
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    check_health()

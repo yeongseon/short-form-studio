@@ -20,6 +20,8 @@ COPY --chown=appuser:appuser apps/worker-orchestrator/tasks ./tasks
 COPY --chown=appuser:appuser apps/worker-orchestrator/celery_app.py ./celery_app.py
 COPY --chown=appuser:appuser apps/worker-orchestrator/healthcheck.py ./healthcheck.py
 USER appuser
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD ["python", "healthcheck.py"]
 CMD ["celery", "-A", "celery_app.celery_app", "worker", "--loglevel=info"]
 
 # --- dev stage ---
