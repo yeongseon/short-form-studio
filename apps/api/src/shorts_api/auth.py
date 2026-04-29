@@ -82,16 +82,7 @@ async def require_workspace_access(
     workspace_id: int,
     user: User = Depends(get_current_user),
 ) -> User:
-    """Verify the user has access to the given workspace.
-
-    In production (shared API-key auth, system user), workspace access is
-    implicitly granted since there is only one system identity.
-    When per-user identity is enabled (JWT/OAuth, future PR), this will
-    check workspace membership.
-    """
-    if os.getenv("API_KEY") and user.auth_subject == "system":
-        return user
-
+    """Verify the user has access to the given workspace."""
     has_access = await workspace_service.check_access(workspace_id, user.id)
     if not has_access:
         raise HTTPException(status_code=403, detail="Workspace access denied")

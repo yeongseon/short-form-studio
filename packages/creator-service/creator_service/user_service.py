@@ -99,14 +99,13 @@ class UserService:
 
         user_workspaces = await workspace_service.list_user_workspaces(user.id)
         if user_workspaces:
-            user.workspace_id = user_workspaces[0].id
             return user
 
         slug_base = self._workspace_slug_base(user.email)
         for attempt in range(4):
             slug_candidate = slug_base if attempt == 0 else f"{slug_base}-{secrets.token_hex(2)}"
             try:
-                workspace = await workspace_service.create_workspace(
+                await workspace_service.create_workspace(
                     name=f"{user.email}'s Workspace",
                     slug=slug_candidate,
                     owner_id=user.id,
@@ -114,7 +113,6 @@ class UserService:
             except UniqueViolationError:
                 continue
 
-            user.workspace_id = workspace.id
             return user
 
         raise RuntimeError("Unable to create unique workspace slug after retries")

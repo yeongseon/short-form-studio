@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from httpx import ASGITransport, AsyncClient
-from shorts_api.auth import ApiKeyMiddleware, get_current_user
+from shorts_api.auth import ApiKeyMiddleware, get_current_user, require_workspace_access
 from starlette.requests import Request
 
 
@@ -298,3 +298,48 @@ async def test_get_current_user_with_valid_api_key_resolves_user(monkeypatch):
     assert result.id == 123
     assert result.auth_provider == "api_key"
     assert result.auth_subject == expected_subject
+
+
+@pytest.mark.asyncio
+async def test_require_workspace_access_denies_system_user_without_membership(monkeypatch):
+    async def _no_access(_workspace_id: int, _user_id: int) -> bool:
+        return False
+
+    monkeypatch.setattr("shorts_api.auth.workspace_service.check_access", _no_access)
+    user = User(
+        id=1,
+        email="system@example.com",
+        name="System",
+        workspace_id=None,
+        auth_provider="api_key",
+        auth_subject="system",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await require_workspace_access(99, user)
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "Workspace access denied"
+
+
+@pytest.mark.asyncio
+async def test_require_workspace_access_allows_system_user_with_membership(monkeypatch):
+    async def _has_access(_workspace_id: int, _user_id: int) -> bool:
+        return True
+
+    monkeypatch.setattr("shorts_api.auth.workspace_service.check_access", _has_access)
+    user = User(
+        id=2,
+        email="system@example.com",
+        name="System",
+        workspace_id=None,
+        auth_provider="api_key",
+        auth_subject="system",
+        created_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+
+    result = await require_workspace_access(100, user)
+    assert result.id == 2
