@@ -205,6 +205,16 @@ class InMemoryUsageStorage:
 
 
 class UsageService:
+    """Tracks usage and enforces workspace quotas.
+
+    Quota unit semantics:
+    - `monthly_llm_calls` and `monthly_image_generations` are request/image-count based.
+    - `monthly_tts_seconds` is a legacy field name but is enforced as generic
+      audio/render request units for `tts`/`stt`/`render` operations.
+    - Reservation and release for `tts`/`stt`/`render` therefore use `units=1`
+      per request to match enforcement.
+    """
+
     def __init__(self, storage: UsageStorageBackend):
         self.storage = storage
 
@@ -303,8 +313,12 @@ class UsageService:
             and summary.total_image_generations >= quota.monthly_image_generations
         ):
             return "Monthly image generation quota exceeded"
-        if operation_type == "tts" and summary.total_tts_seconds >= quota.monthly_tts_seconds:
-            return "Monthly TTS seconds quota exceeded"
+        if operation_type in {"tts", "stt", "render"}:
+            audio_operation_count = sum(
+                summary.by_operation.get(op, 0) for op in ("tts", "stt", "render")
+            )
+            if audio_operation_count >= quota.monthly_tts_seconds:
+                return "Monthly audio/render request quota exceeded"
         return None
 
     async def check_quota(self, workspace_id: int, operation: str) -> tuple[bool, str]:

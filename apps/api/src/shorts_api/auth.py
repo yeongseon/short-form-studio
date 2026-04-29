@@ -8,6 +8,7 @@ middleware is a transparent pass-through so local development stays frictionless
 
 import hmac
 import os
+from hashlib import sha256
 from dataclasses import dataclass
 
 from fastapi import HTTPException, Request, status
@@ -45,6 +46,33 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._api_key = api_key or os.getenv("API_KEY")
 
+    async def _resolve_user_from_api_key(self, api_key: str) -> AuthenticatedUser:
+        fetch_one = __import__("creator_service.db", fromlist=["fetch_one"]).fetch_one
+
+        api_key_hash = sha256(api_key.encode("utf-8")).hexdigest()
+        auth_subject = f"api_key:{api_key_hash}"
+        user = await fetch_one(
+            "SELECT id FROM users WHERE auth_subject = $1 OR auth_subject = $2",
+            auth_subject,
+            api_key_hash,
+        )
+        if user is None:
+            return AuthenticatedUser(user_id=None, workspace_id=None)
+
+        user_id = int(user["id"])
+        membership = await fetch_one(
+            """
+            SELECT workspace_id
+            FROM workspace_members
+            WHERE user_id = $1
+            ORDER BY workspace_id ASC
+            LIMIT 1
+            """,
+            user_id,
+        )
+        workspace_id = int(membership["workspace_id"]) if membership is not None else None
+        return AuthenticatedUser(user_id=user_id, workspace_id=workspace_id)
+
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         # Skip auth when no key is configured (local dev)
         if not self._api_key:
@@ -76,7 +104,10 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
                 content={"detail": "Invalid or missing API key"},
             )
 
-        request.state.user = _resolve_authenticated_user(request)
+        try:
+            request.state.user = await self._resolve_user_from_api_key(provided)
+        except Exception:
+            request.state.user = AuthenticatedUser(user_id=None, workspace_id=None)
         return await call_next(request)
 
 
