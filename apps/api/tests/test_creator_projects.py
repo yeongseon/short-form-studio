@@ -21,6 +21,7 @@ class StubProject(BaseModel):
     created_at: datetime
     updated_at: datetime
     latest_run: dict[str, int | str | None] | None = None
+    workspace_id: int | None = None
 
 
 class StubProjectService:
@@ -40,6 +41,7 @@ class StubProjectService:
                 created_at=now,
                 updated_at=now,
                 latest_run={"run_id": 11, "current_stage": "script", "status": "completed"},
+                workspace_id=1,
             ),
             2: StubProject(
                 id=2,
@@ -50,6 +52,7 @@ class StubProjectService:
                 created_at=now,
                 updated_at=now,
                 latest_run=None,
+                workspace_id=1,
             ),
         }
         self._next_id = 3
@@ -62,6 +65,7 @@ class StubProjectService:
         markdown_source: str | None = None,
         url_source: str | None = None,
         json_script: str | None = None,
+        workspace_id: int | None = None,
     ) -> StubProject:
         self.create_project_calls.append(
             {
@@ -71,6 +75,7 @@ class StubProjectService:
                 "markdown_source": markdown_source,
                 "url_source": url_source,
                 "json_script": json_script,
+                "workspace_id": workspace_id,
             }
         )
 
@@ -99,6 +104,7 @@ class StubProjectService:
             created_at=now,
             updated_at=now,
             latest_run=None,
+            workspace_id=workspace_id,
         )
         self._projects[self._next_id] = project
         self._next_id += 1
@@ -108,14 +114,19 @@ class StubProjectService:
         self.get_project_calls.append(project_id)
         return self._projects.get(project_id)
 
-    async def list_projects(self, limit: int = 20, offset: int = 0) -> list[StubProject]:
+    async def list_projects(
+        self,
+        limit: int = 20,
+        offset: int = 0,
+        workspace_id: int | None = None,
+    ) -> list[StubProject]:
         self.list_projects_calls.append((limit, offset))
         ordered = sorted(self._projects.values(), key=lambda project: project.id)
         return ordered[offset : offset + limit]
 
-
-    async def count_projects(self) -> int:
+    async def count_projects(self, workspace_id: int | None = None) -> int:
         return len(self._projects)
+
 
 def _iter_api_routes(routes: Sequence[object]) -> list[APIRoute]:
     return [route for route in routes if isinstance(route, APIRoute)]
@@ -181,7 +192,9 @@ async def test_create_project_url_source_type(client, stub_project_service: Stub
 
 
 @pytest.mark.asyncio
-async def test_create_project_missing_required_field(client, stub_project_service: StubProjectService):
+async def test_create_project_missing_required_field(
+    client, stub_project_service: StubProjectService
+):
     response = await client.post(
         "/api/creator/projects",
         json={"title": "Missing", "source_type": "idea"},
@@ -249,7 +262,9 @@ async def test_create_project_pasted_json(client, stub_project_service: StubProj
 
 
 @pytest.mark.asyncio
-async def test_create_project_pasted_json_missing_script(client, stub_project_service: StubProjectService):
+async def test_create_project_pasted_json_missing_script(
+    client, stub_project_service: StubProjectService
+):
     response = await client.post(
         "/api/creator/projects",
         json={"title": "Missing JSON", "source_type": "pasted_json"},

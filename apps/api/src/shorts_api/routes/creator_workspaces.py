@@ -13,7 +13,7 @@ router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 async def list_workspaces(
     user: Any = Depends(require_current_user),
 ) -> dict[str, list[dict[str, int | str]]]:
-    user_id = getattr(user, "user_id", None)
+    user_id = user.get("user_id") if isinstance(user, dict) else getattr(user, "user_id", None)
     if not isinstance(user_id, int):
         raise HTTPException(status_code=401, detail="Authentication required")
 

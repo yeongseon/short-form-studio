@@ -3,6 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
+from creator_service.artifact_storage_integration import get_artifact_download_path
+from creator_service.object_storage import get_storage_backend
+
 from .db import fetch_one
 
 
@@ -58,3 +61,14 @@ def _create_storage() -> ArtifactDownloadStorageBackend:
 
 
 artifact_download_service = ArtifactDownloadService(_create_storage())
+
+
+def resolve_artifact_download(key: str) -> str:
+    return get_artifact_download_path(key)
+
+
+def read_artifact_bytes(key: str) -> bytes:
+    backend = get_storage_backend()
+    if not backend.exists(key):
+        raise FileNotFoundError(key)
+    return backend.download_bytes(key)

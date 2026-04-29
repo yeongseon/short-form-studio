@@ -1,23 +1,18 @@
-"""API-key identity middleware.
-
-When a request provides an API key (``X-API-Key`` or ``Authorization: Bearer``),
-the middleware resolves user identity from ``api_keys`` and workspace membership
-from ``workspace_members``.
-"""
+"""API-key identity middleware and auth helpers."""
 
 import contextvars
 import hashlib
 import logging
 from dataclasses import dataclass
 
-from fastapi import Request
-from fastapi import HTTPException
+from creator_service.db import fetch_one
+from creator_service.workspace_service import workspace_service
+from fastapi import Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 
-# Paths that never require authentication
 _PUBLIC_PATHS = frozenset({"/healthz"})
 logger = logging.getLogger(__name__)
 _current_user_ctx: contextvars.ContextVar["CurrentUser | None"] = contextvars.ContextVar(
@@ -53,7 +48,6 @@ class _AsyncpgSessionAdapter:
 
 
 async def _resolve_user_id_from_api_key(api_key: str, db_session) -> str | None:
-    """Resolve user_id from API key via api_keys table."""
     key_hash = hashlib.sha256(api_key.encode()).hexdigest()
     result = await db_session.execute(
         text("SELECT user_id FROM api_keys WHERE key_hash = :h AND revoked_at IS NULL"),
@@ -61,23 +55,6 @@ async def _resolve_user_id_from_api_key(api_key: str, db_session) -> str | None:
     )
     row = result.fetchone()
     return row[0] if row else None
-
-
-async def get_current_user(request: Request) -> CurrentUser:
-    user = getattr(request.state, "user", None)
-    if isinstance(user, CurrentUser) and user.user_id is not None:
-        return user
-
-    context_user = _current_user_ctx.get()
-    if isinstance(context_user, CurrentUser) and context_user.user_id is not None:
-        return context_user
-
-    raise HTTPException(status_code=401, detail="Invalid or missing API key")
-
-
-async def require_current_user(request: Request) -> CurrentUser:
-    return await get_current_user(request)
-
 
 
 class ApiKeyMiddleware(BaseHTTPMiddleware):
@@ -121,14 +98,10 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         request.state.user = CurrentUser()
 
-        # Always allow CORS preflight requests (OPTIONS with Origin header)
         if request.method == "OPTIONS" and "origin" in request.headers:
             return await call_next(request)
-
-        # Always allow public paths
         if request.url.path in _PUBLIC_PATHS:
             return await call_next(request)
-
         if request.url.path == "/docs" and request.app.docs_url is None:
             return await call_next(request)
         if request.url.path == "/redoc" and request.app.redoc_url is None:
@@ -136,23 +109,18 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         if request.url.path == "/openapi.json" and request.app.openapi_url is None:
             return await call_next(request)
 
-        # Check header only (never accept keys via query params to avoid log leakage)
         provided = request.headers.get("X-API-Key")
         if not provided:
-            # Fall back to Authorization: Bearer <key>
             auth_header = request.headers.get("Authorization", "")
             if auth_header.startswith("Bearer "):
-                provided = auth_header[7:]  # len("Bearer ") == 7
+                provided = auth_header[7:]
 
         if not provided:
             return await call_next(request)
 
         pool = await self._get_pool()
         if pool is None:
-            return JSONResponse(
-                status_code=503,
-                content={"detail": "Service unavailable"},
-            )
+            return JSONResponse(status_code=503, content={"detail": "Service unavailable"})
 
         async with pool.acquire() as connection:
             user_id = await _resolve_user_id_from_api_key(
@@ -176,10 +144,87 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         if not member_workspace_ids:
             return JSONResponse(status_code=403, content={"detail": "Forbidden"})
 
-        workspace_id = member_workspace_ids[0]
-
-        user = CurrentUser(user_id=user_id_int, workspace_id=workspace_id)
+        user = CurrentUser(user_id=user_id_int, workspace_id=member_workspace_ids[0])
         request.state.user = user
         _current_user_ctx.set(user)
-
         return await call_next(request)
+
+
+async def get_current_user(request: Request) -> dict[str, str | int | None]:
+    user = getattr(request.state, "user", None)
+    if isinstance(user, CurrentUser) and user.user_id is not None:
+        return {
+            "user_id": user.user_id,
+            "auth_provider": "api_key",
+            "auth_subject": "middleware",
+            "workspace_id": user.workspace_id,
+        }
+
+    context_user = _current_user_ctx.get()
+    if isinstance(context_user, CurrentUser) and context_user.user_id is not None:
+        return {
+            "user_id": context_user.user_id,
+            "auth_provider": "api_key",
+            "auth_subject": "middleware",
+            "workspace_id": context_user.workspace_id,
+        }
+
+    api_key = (
+        request.headers.get("X-API-Key")
+        or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    )
+    if not api_key:
+        raise HTTPException(status_code=401, detail="API key required")
+
+    key_hash = hashlib.sha256(api_key.encode()).hexdigest()
+    key_row = await fetch_one(
+        """
+        SELECT user_id
+        FROM api_keys
+        WHERE key_hash = $1 AND revoked_at IS NULL
+        LIMIT 1
+        """,
+        key_hash,
+    )
+    if key_row is None:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    user_id = key_row["user_id"]
+    membership_row = await fetch_one(
+        """
+        SELECT workspace_id
+        FROM workspace_members
+        WHERE user_id = $1
+        ORDER BY workspace_id ASC
+        LIMIT 1
+        """,
+        user_id,
+    )
+    if membership_row is None:
+        raise HTTPException(status_code=403, detail="No workspace membership")
+
+    return {
+        "user_id": user_id,
+        "auth_provider": "api_key",
+        "auth_subject": key_hash,
+        "workspace_id": membership_row["workspace_id"],
+    }
+
+
+async def require_current_user(request: Request) -> dict[str, str | int | None]:
+    return await get_current_user(request)
+
+
+async def require_workspace_access(
+    workspace_id: int,
+    user: dict[str, str | int | None] = Depends(get_current_user),
+) -> dict[str, str | int | None]:
+    user_id = user.get("user_id")
+    if not isinstance(user_id, int):
+        raise HTTPException(status_code=401, detail="Invalid user context")
+
+    has_access = await workspace_service.check_access(workspace_id, user_id)
+    if not has_access:
+        raise HTTPException(status_code=403, detail="Workspace access denied")
+
+    return user

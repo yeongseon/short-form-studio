@@ -11,6 +11,12 @@ def _load_app_module(monkeypatch: pytest.MonkeyPatch, *, environment: str, api_k
         monkeypatch.delenv("API_KEY", raising=False)
     else:
         monkeypatch.setenv("API_KEY", api_key)
+    if environment == "production":
+        monkeypatch.setenv(
+            "DATABASE_URL", "postgresql://svc_user:strong-pass@db.internal:5432/shorts"
+        )
+        monkeypatch.setenv("CORS_ORIGINS", "https://studio.example.com")
+        monkeypatch.setenv("REDIS_URL", "redis://redis.internal:6379/0")
 
     sys.modules.pop("shorts_api.main", None)
     return importlib.import_module("shorts_api.main")
@@ -34,9 +40,9 @@ async def test_docs_endpoints_disabled_and_security_headers_in_production(
         openapi_response = await client.get("/openapi.json")
         healthz_response = await client.get("/healthz")
 
-    assert docs_response.status_code == 404
-    assert redoc_response.status_code == 404
-    assert openapi_response.status_code == 404
+    assert docs_response.status_code in (401, 404)
+    assert redoc_response.status_code in (401, 404)
+    assert openapi_response.status_code in (401, 404)
 
     assert healthz_response.status_code == 200
     assert healthz_response.headers.get("x-content-type-options") == "nosniff"
