@@ -236,7 +236,11 @@ def generate_scene_image(
                         await provider.generate(effective_prompt, params)
                         try:
                             await record_provider_call(
-                                run_id, entry.provider_type, model_key, "image_gen"
+                                run_id,
+                                entry.provider_type,
+                                model_key,
+                                "image_gen",
+                                project_id=run.get("project_id"),
                             )
                         except Exception:
                             logger.warning("Failed to record provider usage", exc_info=True)

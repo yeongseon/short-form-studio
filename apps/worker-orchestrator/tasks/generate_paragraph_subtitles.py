@@ -143,7 +143,13 @@ def generate_paragraph_subtitles(
             params["output_path"] = subtitle_path
             await provider.transcribe(audio_path, params=params)
             try:
-                await record_provider_call(run_id, entry.provider_type, subtitle_model, "stt")
+                await record_provider_call(
+                    run_id,
+                    entry.provider_type,
+                    subtitle_model,
+                    "stt",
+                    project_id=run.get("project_id") if run else None,
+                )
             except Exception:
                 logger.warning("Failed to record provider usage", exc_info=True)
 

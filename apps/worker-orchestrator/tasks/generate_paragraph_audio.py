@@ -133,7 +133,13 @@ def generate_paragraph_audio(
             params["output_path"] = audio_path
             await provider.generate(section_text, voice=voice, params=params)
             try:
-                await record_provider_call(run_id, entry.provider_type, tts_model, "tts")
+                await record_provider_call(
+                    run_id,
+                    entry.provider_type,
+                    tts_model,
+                    "tts",
+                    project_id=run.get("project_id") if run else None,
+                )
             except Exception:
                 logger.warning("Failed to record provider usage", exc_info=True)
 

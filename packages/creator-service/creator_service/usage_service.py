@@ -227,6 +227,7 @@ async def record_provider_call(
     audio_seconds: float | None = None,
     cost_usd: float | None = None,
     workspace_id: int | None = None,
+    project_id: int | None = None,
 ) -> UsageEvent:
     """Record a provider call from a worker task.
 
@@ -263,13 +264,11 @@ async def record_provider_call(
         image_count=image_count,
         audio_seconds=audio_seconds,
         estimated_cost_usd=cost_usd,
-        project_id=None,
+        project_id=project_id,
     )
 
 
-async def check_workspace_quota(
-    workspace_id: int, operation_type: str = "llm"
-) -> tuple[bool, str]:
+async def check_workspace_quota(workspace_id: int, operation_type: str = "llm") -> tuple[bool, str]:
     """Check if a workspace can perform the given operation type.
 
     Call at task start to verify the workspace hasn't exceeded quota::

@@ -42,7 +42,7 @@ def upgrade() -> None:
     op.create_check_constraint(
         "ck_usage_events_operation_type",
         "usage_events",
-        "operation_type IN ('llm', 'image_gen', 'tts', 'stt')",
+        "operation_type IN ('llm', 'image_gen', 'tts', 'stt', 'render')",
     )
     op.create_index("ix_usage_workspace", "usage_events", ["workspace_id", "created_at"])
     op.create_index("ix_usage_run", "usage_events", ["run_id"])

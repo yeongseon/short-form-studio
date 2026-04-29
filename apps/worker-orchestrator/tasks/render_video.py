@@ -243,7 +243,13 @@ def render_video(
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
             ffmpeg.render(render_input, Path(output_path))
             try:
-                await record_provider_call(run_id, "ffmpeg", render_profile, "render")
+                await record_provider_call(
+                    run_id,
+                    "ffmpeg",
+                    render_profile,
+                    "render",
+                    project_id=run.get("project_id"),
+                )
             except Exception:
                 logger.warning("Failed to record provider usage", exc_info=True)
 

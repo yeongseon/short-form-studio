@@ -144,7 +144,13 @@ def generate_script(
                 params = dict(entry.default_params or {})
                 generated = await provider.generate(prompt, params)
                 try:
-                    await record_provider_call(run_id, entry.provider_type, model_key, "llm")
+                    await record_provider_call(
+                        run_id,
+                        entry.provider_type,
+                        model_key,
+                        "llm",
+                        project_id=run.get("project_id"),
+                    )
                 except Exception:
                     logger.warning("Failed to record provider usage", exc_info=True)
                 await _script_service.save_draft(
