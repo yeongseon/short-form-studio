@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import resource
 import signal
 import sys
 import time
@@ -80,6 +81,45 @@ MAX_CPU_PERCENT = _parse_int_env("MAX_CPU_PERCENT", 80)
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
 
+def _apply_resource_limits() -> None:
+    memory_limit_bytes = MAX_MEMORY_MB * 1024 * 1024
+    with contextlib.suppress(OSError, ValueError):
+        resource.setrlimit(resource.RLIMIT_AS, (memory_limit_bytes, memory_limit_bytes))
+
+
+def _cpu_usage_percent(
+    previous_cpu_seconds: float, previous_wall_seconds: float
+) -> tuple[float, float, float]:
+    current_cpu_seconds = (
+        resource.getrusage(resource.RUSAGE_SELF).ru_utime
+        + resource.getrusage(resource.RUSAGE_SELF).ru_stime
+    )
+    current_wall_seconds = time.monotonic()
+    cpu_delta = max(0.0, current_cpu_seconds - previous_cpu_seconds)
+    wall_delta = max(1e-6, current_wall_seconds - previous_wall_seconds)
+    cpu_percent = (cpu_delta / wall_delta) * 100.0
+    return cpu_percent, current_cpu_seconds, current_wall_seconds
+
+
+async def _monitor_cpu_limit() -> None:
+    cpu_seconds = (
+        resource.getrusage(resource.RUSAGE_SELF).ru_utime
+        + resource.getrusage(resource.RUSAGE_SELF).ru_stime
+    )
+    wall_seconds = time.monotonic()
+    while True:
+        await asyncio.sleep(2.0)
+        cpu_percent, cpu_seconds, wall_seconds = _cpu_usage_percent(cpu_seconds, wall_seconds)
+        if cpu_percent > float(MAX_CPU_PERCENT):
+            logger.error(
+                "CPU usage %.1f%% exceeded MAX_CPU_PERCENT=%d; enabling shutdown guard",
+                cpu_percent,
+                MAX_CPU_PERCENT,
+            )
+            _mark_shutdown()
+            return
+
+
 def _mark_shutdown() -> None:
     if shutdown_state.is_shutting_down:
         return
@@ -89,11 +129,13 @@ def _mark_shutdown() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    _apply_resource_limits()
     logger.info(
         "Resource limits configured: MAX_MEMORY_MB=%d, MAX_CPU_PERCENT=%d",
         MAX_MEMORY_MB,
         MAX_CPU_PERCENT,
     )
+    cpu_monitor_task = asyncio.create_task(_monitor_cpu_limit())
 
     signal_handlers_registered = False
     loop: asyncio.AbstractEventLoop | None = None
@@ -108,6 +150,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     yield
     _mark_shutdown()
+    cpu_monitor_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await cpu_monitor_task
     if signal_handlers_registered and loop is not None:
         with contextlib.suppress(NotImplementedError, RuntimeError):
             loop.remove_signal_handler(signal.SIGTERM)

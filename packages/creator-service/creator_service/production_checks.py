@@ -50,9 +50,8 @@ def _check_database_url(database_url: str, errors: list[str]) -> None:
         errors.append("DATABASE_URL could not be parsed. Check the format.")
 
 
-def validate_production_config() -> None:
-    """Run safety checks when ``ENVIRONMENT`` is ``production`` or ``staging``.
-    """
+def validate_production_config(*, service_kind: str = "api") -> None:
+    """Run safety checks when ``ENVIRONMENT`` is ``production`` or ``staging``."""
     environment = os.getenv("ENVIRONMENT", "development").lower()
     if environment not in _CHECKED_ENVIRONMENTS:
         if environment != "development":
@@ -62,29 +61,31 @@ def validate_production_config() -> None:
     logger.info("ENVIRONMENT=%s — running startup safety checks", environment)
     errors: list[str] = []
 
-    # 1. API_KEY must be set
-    api_key = os.getenv("API_KEY", "")
-    if not api_key.strip():
-        errors.append(
-            "API_KEY is required in production. Set a strong, random key to protect the API."
-        )
+    requires_http_config = service_kind.lower() == "api"
+
+    if requires_http_config:
+        api_key = os.getenv("API_KEY", "")
+        if not api_key.strip():
+            errors.append(
+                "API_KEY is required in production. Set a strong, random key to protect the API."
+            )
 
     # 2. DATABASE_URL must be set with safe credentials
     database_url = os.getenv("DATABASE_URL", "")
     _check_database_url(database_url, errors)
 
-    # 3. CORS_ORIGINS must be set and not contain wildcards
-    cors_origins = os.getenv("CORS_ORIGINS", "")
-    if not cors_origins.strip():
-        errors.append(
-            "CORS_ORIGINS is required in production. "
-            "Set to the actual frontend origin(s), e.g. 'https://studio.example.com'."
-        )
-    elif "*" in cors_origins:
-        errors.append(
-            "CORS_ORIGINS must not contain wildcards ('*') in production. "
-            "List specific allowed origins."
-        )
+    if requires_http_config:
+        cors_origins = os.getenv("CORS_ORIGINS", "")
+        if not cors_origins.strip():
+            errors.append(
+                "CORS_ORIGINS is required in production. "
+                "Set to the actual frontend origin(s), e.g. 'https://studio.example.com'."
+            )
+        elif "*" in cors_origins:
+            errors.append(
+                "CORS_ORIGINS must not contain wildcards ('*') in production. "
+                "List specific allowed origins."
+            )
 
     # 4. REDIS_URL must be set
     redis_url = os.getenv("REDIS_URL", "")
