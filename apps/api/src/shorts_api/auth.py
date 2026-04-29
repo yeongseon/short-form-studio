@@ -7,7 +7,10 @@ middleware is a transparent pass-through so local development stays frictionless
 """
 
 import hmac
+import hashlib
+import logging
 import os
+from datetime import datetime, timezone
 
 from creator_domain.models import User
 from creator_service.workspace_service import workspace_service
@@ -19,6 +22,9 @@ from starlette.responses import Response
 
 # Paths that never require authentication
 _PUBLIC_PATHS = frozenset({"/healthz"})
+_DEFAULT_USER_EMAIL = "default@short-form-studio.local"
+_DEFAULT_USER_NAME = "Default User"
+_logger = logging.getLogger(__name__)
 
 
 class ApiKeyMiddleware(BaseHTTPMiddleware):
@@ -61,39 +67,50 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
 
 
 async def get_current_user(request: Request) -> User:
-    """Resolve user identity after API key middleware has authenticated the request.
+    """Resolve user identity from request credentials with safe fallbacks."""
+    provided_key = request.headers.get("X-API-Key")
+    if not provided_key:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            provided_key = auth_header[7:]
 
-    In production (API_KEY is set), all requests are attributed to the system user.
-    The X-User-Email header is ONLY honoured when API_KEY is unset (local dev)
-    because any caller who can set HTTP headers could impersonate another user.
-    JWT/OAuth support will replace this in a future PR.
-    """
-    api_key_configured = bool(os.getenv("API_KEY"))
-
-    # In production, always use the system user — X-User-Email is untrusted
-    # when the only auth is a shared API key.
-    if api_key_configured:
+    if provided_key:
+        key_fingerprint = hashlib.sha256(provided_key.encode("utf-8")).hexdigest()[:12]
         return await user_service.create_or_get_user(
-            email="system@short-form-studio.local",
-            name="System",
+            email=f"api-key-{key_fingerprint}@short-form-studio.local",
             auth_provider="api_key",
-            auth_subject="system",
+            auth_subject=key_fingerprint,
         )
 
-    # Dev mode: allow X-User-Email for convenience
     user_email = request.headers.get("X-User-Email")
     if user_email:
         return await user_service.create_or_get_user(
             email=user_email,
-            auth_provider="api_key",
+            auth_provider="header",
             auth_subject=user_email,
         )
 
-    return await user_service.create_or_get_user(
-        email="system@short-form-studio.local",
-        name="System",
-        auth_provider="api_key",
-        auth_subject="system",
+    session_data = request.scope.get("session")
+    if isinstance(session_data, dict):
+        session_email = session_data.get("user_email")
+        if isinstance(session_email, str) and session_email:
+            return await user_service.create_or_get_user(
+                email=session_email,
+                auth_provider="session",
+                auth_subject=session_email,
+            )
+
+    _logger.warning("No auth header or session identity provided; using default user")
+    now = datetime.now(timezone.utc)
+    return User(
+        id=0,
+        email=_DEFAULT_USER_EMAIL,
+        name=_DEFAULT_USER_NAME,
+        workspace_id=None,
+        auth_provider="default",
+        auth_subject="default",
+        created_at=now,
+        updated_at=now,
     )
 
 

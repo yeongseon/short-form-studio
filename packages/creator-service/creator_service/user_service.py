@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import re
+import secrets
 from typing import Any, Protocol
 
 from creator_domain.models import User
@@ -102,17 +103,26 @@ class UserService:
 
         workspace = await workspace_service.create_workspace(
             name=f"{user.email}'s Workspace",
-            slug=self._default_workspace_slug(user.email),
+            slug=await self._default_workspace_slug(user.email),
             owner_id=user.id,
         )
         user.workspace_id = workspace.id
         return user
 
-    def _default_workspace_slug(self, email: str) -> str:
+    async def _default_workspace_slug(self, email: str) -> str:
+        from .workspace_service import workspace_service
+
         slug_base = re.sub(r"[^a-z0-9]+", "-", email.strip().lower()).strip("-")
         if not slug_base:
             slug_base = "workspace"
-        return slug_base
+
+        for attempt in range(4):
+            slug_candidate = slug_base if attempt == 0 else f"{slug_base}-{secrets.token_hex(2)}"
+            existing = await workspace_service.storage.get_workspace_by_slug(slug_candidate)
+            if existing is None:
+                return slug_candidate
+
+        raise RuntimeError("Unable to generate unique workspace slug after retries")
 
     async def get_user(self, user_id: int) -> User | None:
         row = await self.storage.get_user(user_id)
