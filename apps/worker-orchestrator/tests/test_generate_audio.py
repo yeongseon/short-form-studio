@@ -205,7 +205,9 @@ def test_generate_audio_success(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_generate_audio_run_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = FakeProvider()
-    _patch_registry(monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider))
+    _patch_registry(
+        monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider)
+    )
 
     script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Any"))
     audio_service = FakeAudioService()
@@ -222,7 +224,9 @@ def test_generate_audio_run_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_generate_audio_wrong_stage(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = FakeProvider()
-    _patch_registry(monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider))
+    _patch_registry(
+        monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider)
+    )
 
     script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Any"))
     audio_service = FakeAudioService()
@@ -239,7 +243,9 @@ def test_generate_audio_wrong_stage(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_generate_audio_no_script(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = FakeProvider()
-    _patch_registry(monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider))
+    _patch_registry(
+        monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider)
+    )
 
     script_service = FakeScriptService(draft=None)
     audio_service = FakeAudioService()
@@ -256,14 +262,18 @@ def test_generate_audio_no_script(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_generate_audio_provider_failure_marks_failed(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = FakeProvider(error=RuntimeError("audio provider failed"))
-    _patch_registry(monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider))
+    _patch_registry(
+        monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider)
+    )
 
     script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Some script"))
     audio_service = FakeAudioService()
     storage = _make_storage(run_id=104, stage="VISUAL_ASSET_REVIEW")
     _patch_services(monkeypatch, script_service, audio_service, storage)
 
-    with pytest.raises(RuntimeError, match="audio provider failed"):
+    with pytest.raises(
+        generate_audio_module.ProviderError, match="Provider failed audio generation"
+    ):
         _invoke_task(run_id=104)
 
     assert audio_service.calls == []
@@ -281,8 +291,12 @@ def test_generate_audio_with_gpu_lock(monkeypatch: pytest.MonkeyPatch) -> None:
 
     lock_calls: list[str] = []
     release_calls: list[str] = []
-    monkeypatch.setattr(generate_audio_module, "acquire_gpu_lock", lambda _, task_id: lock_calls.append(task_id))
-    monkeypatch.setattr(generate_audio_module, "release_gpu_lock", lambda _, task_id: release_calls.append(task_id))
+    monkeypatch.setattr(
+        generate_audio_module, "acquire_gpu_lock", lambda _, task_id: lock_calls.append(task_id)
+    )
+    monkeypatch.setattr(
+        generate_audio_module, "release_gpu_lock", lambda _, task_id: release_calls.append(task_id)
+    )
 
     script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Lock script"))
     audio_service = FakeAudioService(artifact_id=61)
@@ -303,8 +317,16 @@ def test_generate_audio_without_gpu_lock(monkeypatch: pytest.MonkeyPatch) -> Non
     entry = FakeEntry(requires_gpu=False)
     _patch_registry(monkeypatch, FakeRegistry(entry=entry, provider=provider))
 
-    monkeypatch.setattr(generate_audio_module, "acquire_gpu_lock", lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")))
-    monkeypatch.setattr(generate_audio_module, "release_gpu_lock", lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")))
+    monkeypatch.setattr(
+        generate_audio_module,
+        "acquire_gpu_lock",
+        lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")),
+    )
+    monkeypatch.setattr(
+        generate_audio_module,
+        "release_gpu_lock",
+        lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")),
+    )
 
     script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="No lock script"))
     audio_service = FakeAudioService(artifact_id=71)
@@ -333,7 +355,9 @@ class _CASSkipStorage(FakeStorage):
 
 def test_generate_audio_cas_skip_on_stage_change(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = FakeProvider()
-    _patch_registry(monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider))
+    _patch_registry(
+        monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider)
+    )
 
     script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Narration text"))
     audio_service = FakeAudioService(artifact_id=50)

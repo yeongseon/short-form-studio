@@ -35,7 +35,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
 from creator_domain.sanitize import sanitize_path_component
-from creator_provider.exceptions import ProviderTimeoutError, RateLimitError
+from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.run_service import run_service as _run_service
@@ -149,6 +149,9 @@ def generate_scene_image(
     start_time = datetime.now(timezone.utc)
     start_iso = start_time.isoformat()
     task_id = str(getattr(getattr(self, "request", None), "id", None) or f"run-{run_id}")
+    # Idempotency: acks_late + task_reject_on_worker_lost ensures redelivery on crash.
+    # If the run has already advanced past this stage, the worker's stage check will
+    # naturally skip processing (handled by run_service stage validation).
 
     provider_type: str | None = None
     endpoint: str | None = None
@@ -246,7 +249,24 @@ def generate_scene_image(
                         )
                         target_path = str(asset_dir / f"{safe_scene_id}-{uuid4().hex}.png")
                         params["output_path"] = target_path
-                        await provider.generate(effective_prompt, params)
+                        try:
+                            await provider.generate(effective_prompt, params)
+                        except (TimeoutError, ConnectionError) as exc:
+                            raise ProviderTimeoutError(
+                                "Provider timed out during scene image generation "
+                                f"for run {run_id} scene {target_scene.scene_id}"
+                            ) from exc
+                        except Exception as exc:
+                            message = str(exc).lower()
+                            if "429" in message or "rate" in message:
+                                raise RateLimitError(
+                                    "Provider rate limited scene image generation "
+                                    f"for run {run_id} scene {target_scene.scene_id}"
+                                ) from exc
+                            raise ProviderError(
+                                "Provider failed scene image generation "
+                                f"for run {run_id} scene {target_scene.scene_id}"
+                            ) from exc
 
                         asset = await _visual_asset_service.create_asset(
                             run_id=run_id,
@@ -365,7 +385,7 @@ def generate_scene_image(
         # Validation rejection — do NOT mutate run state to FAILED.
         raise
     except SoftTimeLimitExceeded:
-        logger.error("Task generate_scene_image timed out for run %s", run_id)
+        logger.error("Task timed out for run %s", run_id)
         raise
     except Exception:
         # Unexpected error (not scene-level) — atomic conditional fail.

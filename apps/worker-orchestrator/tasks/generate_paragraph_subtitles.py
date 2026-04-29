@@ -16,7 +16,8 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Literal
+from pathlib import Path
+from typing import Any
 
 redis: Any  # optional dependency; may be None at runtime
 try:
@@ -27,7 +28,7 @@ except ImportError:
 from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.sanitize import sanitize_path_component
-from creator_provider.exceptions import ProviderTimeoutError, RateLimitError
+from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.run_service import run_service as _run_service
@@ -80,7 +81,7 @@ def generate_paragraph_subtitles(
     section_id: str,
     audio_path: str,
     subtitle_model: str = "whisper-small",
-    subtitle_format: Literal["srt", "vtt"] = "srt",
+    subtitle_format: str = "srt",
 ) -> dict[str, object]:
     """Generate subtitles for a single paragraph's audio.
 
@@ -102,6 +103,9 @@ def generate_paragraph_subtitles(
     task_id = str(
         getattr(getattr(self, "request", None), "id", None) or f"sub-{run_id}-{section_id}"
     )
+    # Idempotency: acks_late + task_reject_on_worker_lost ensures redelivery on crash.
+    # If the run has already advanced past this stage, the worker's stage check will
+    # naturally skip processing (handled by run_service stage validation).
 
     provider_type: str | None = None
     endpoint: str | None = None
@@ -147,13 +151,30 @@ def generate_paragraph_subtitles(
         subtitle_path = f"{_ARTIFACT_ROOT}/{run_id}/subtitles/{safe_section_id}.{subtitle_format}"
 
         try:
-            os.makedirs(os.path.dirname(subtitle_path), exist_ok=True)
+            Path(subtitle_path).parent.mkdir(parents=True, exist_ok=True)
 
             # 3. Transcribe via provider
             params = dict(entry.default_params or {})
             params["format"] = subtitle_format
             params["output_path"] = subtitle_path
-            await provider.transcribe(audio_path, params=params)
+            try:
+                await provider.transcribe(audio_path, params=params)
+            except (TimeoutError, ConnectionError) as exc:
+                raise ProviderTimeoutError(
+                    "Provider timed out during paragraph subtitle generation "
+                    f"for run {run_id} section {section_id}"
+                ) from exc
+            except Exception as exc:
+                message = str(exc).lower()
+                if "429" in message or "rate" in message:
+                    raise RateLimitError(
+                        "Provider rate limited paragraph subtitle generation "
+                        f"for run {run_id} section {section_id}"
+                    ) from exc
+                raise ProviderError(
+                    "Provider failed paragraph subtitle generation "
+                    f"for run {run_id} section {section_id}"
+                ) from exc
 
             # 4. Save per-paragraph subtitle artifact
             artifact = await _subtitle_service.create_paragraph_artifact(
@@ -199,7 +220,7 @@ def generate_paragraph_subtitles(
     except _StageGuardError:
         raise
     except SoftTimeLimitExceeded:
-        logger.error("Task generate_paragraph_subtitles timed out for run %s", run_id)
+        logger.error("Task timed out for run %s", run_id)
         raise
     except Exception:
         logger.exception(

@@ -22,7 +22,7 @@ from typing import Any
 from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
-from creator_provider.exceptions import ProviderTimeoutError, RateLimitError
+from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
 from creator_service.audio_service import audio_service as _audio_service
 from creator_service.ffmpeg_service import FFmpegService, RenderInput
 from creator_service.render_profile import RenderProfile
@@ -90,6 +90,9 @@ def render_video(
     start_time = datetime.now(timezone.utc)
     start_iso = start_time.isoformat()
     task_id = str(getattr(getattr(self, "request", None), "id", None) or f"run-{run_id}")
+    # Idempotency: acks_late + task_reject_on_worker_lost ensures redelivery on crash.
+    # If the run has already advanced past this stage, the worker's stage check will
+    # naturally skip processing (handled by run_service stage validation).
 
     async def _run_task() -> dict[str, object]:
         try:
@@ -253,7 +256,19 @@ def render_video(
 
             output_path = f"{_ARTIFACT_ROOT}/{run_id}/render/output.mp4"
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-            ffmpeg.render(render_input, Path(output_path))
+            try:
+                ffmpeg.render(render_input, Path(output_path))
+            except (TimeoutError, ConnectionError) as exc:
+                raise ProviderTimeoutError(
+                    f"Provider timed out during video render for run {run_id}"
+                ) from exc
+            except Exception as exc:
+                message = str(exc).lower()
+                if "429" in message or "rate" in message:
+                    raise RateLimitError(
+                        f"Provider rate limited video render for run {run_id}"
+                    ) from exc
+                raise ProviderError(f"Provider failed video render for run {run_id}") from exc
 
             artifact = await _render_service.create_artifact(
                 run_id=run_id,
@@ -300,7 +315,7 @@ def render_video(
     except _StageGuardError:
         raise
     except SoftTimeLimitExceeded:
-        logger.error("Task render_video timed out for run %s", run_id)
+        logger.error("Task timed out for run %s", run_id)
         raise
     except Exception:
         try:

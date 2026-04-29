@@ -27,7 +27,7 @@ from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
 from creator_domain.models.visual_plan import VisualScene
-from creator_provider.exceptions import ProviderTimeoutError, RateLimitError
+from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.run_service import run_service as _run_service
@@ -182,6 +182,9 @@ def generate_visual_plan(
     start_time = datetime.now(timezone.utc)
     start_iso = start_time.isoformat()
     task_id = str(getattr(getattr(self, "request", None), "id", None) or f"run-{run_id}")
+    # Idempotency: acks_late + task_reject_on_worker_lost ensures redelivery on crash.
+    # If the run has already advanced past this stage, the worker's stage check will
+    # naturally skip processing (handled by run_service stage validation).
 
     provider_type: str | None = None
     endpoint: str | None = None
@@ -251,7 +254,21 @@ def generate_visual_plan(
                 full_prompt = f"{system_prompt}\n\n---\nScript sections:\n{sections_prompt}"
 
                 params = dict(entry.default_params or {})
-                raw_response = await provider.generate(full_prompt, params)
+                try:
+                    raw_response = await provider.generate(full_prompt, params)
+                except (TimeoutError, ConnectionError) as exc:
+                    raise ProviderTimeoutError(
+                        f"Provider timed out during visual plan generation for run {run_id}"
+                    ) from exc
+                except Exception as exc:
+                    message = str(exc).lower()
+                    if "429" in message or "rate" in message:
+                        raise RateLimitError(
+                            f"Provider rate limited visual plan generation for run {run_id}"
+                        ) from exc
+                    raise ProviderError(
+                        f"Provider failed visual plan generation for run {run_id}"
+                    ) from exc
 
                 # 6. Parse LLM response into VisualScene objects.
                 visual_scenes = _parse_llm_response(raw_response, sections)
@@ -311,7 +328,7 @@ def generate_visual_plan(
         # Validation rejection — do NOT mutate run state to FAILED.
         raise
     except SoftTimeLimitExceeded:
-        logger.error("Task generate_visual_plan timed out for run %s", run_id)
+        logger.error("Task timed out for run %s", run_id)
         raise
     except Exception:
         # Atomic conditional fail: only mark FAILED if run is still in a

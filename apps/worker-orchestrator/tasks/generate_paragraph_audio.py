@@ -27,7 +27,7 @@ except ImportError:
 from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.sanitize import sanitize_path_component
-from creator_provider.exceptions import ProviderTimeoutError, RateLimitError
+from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.audio_service import audio_service as _audio_service
@@ -102,6 +102,9 @@ def generate_paragraph_audio(
     task_id = str(
         getattr(getattr(self, "request", None), "id", None) or f"para-{run_id}-{section_id}"
     )
+    # Idempotency: acks_late + task_reject_on_worker_lost ensures redelivery on crash.
+    # If the run has already advanced past this stage, the worker's stage check will
+    # naturally skip processing (handled by run_service stage validation).
 
     provider_type: str | None = None
     endpoint: str | None = None
@@ -144,7 +147,24 @@ def generate_paragraph_audio(
             # 3. Generate audio via provider
             params = dict(entry.default_params or {})
             params["output_path"] = audio_path
-            await provider.generate(section_text, voice=voice, params=params)
+            try:
+                await provider.generate(section_text, voice=voice, params=params)
+            except (TimeoutError, ConnectionError) as exc:
+                raise ProviderTimeoutError(
+                    "Provider timed out during paragraph audio generation "
+                    f"for run {run_id} section {section_id}"
+                ) from exc
+            except Exception as exc:
+                message = str(exc).lower()
+                if "429" in message or "rate" in message:
+                    raise RateLimitError(
+                        "Provider rate limited paragraph audio generation "
+                        f"for run {run_id} section {section_id}"
+                    ) from exc
+                raise ProviderError(
+                    "Provider failed paragraph audio generation "
+                    f"for run {run_id} section {section_id}"
+                ) from exc
 
             # 4. Save per-paragraph artifact
             artifact = await _audio_service.create_paragraph_artifact(
@@ -189,7 +209,7 @@ def generate_paragraph_audio(
     except _StageGuardError:
         raise
     except SoftTimeLimitExceeded:
-        logger.error("Task generate_paragraph_audio timed out for run %s", run_id)
+        logger.error("Task timed out for run %s", run_id)
         raise
     except Exception:
         logger.exception(

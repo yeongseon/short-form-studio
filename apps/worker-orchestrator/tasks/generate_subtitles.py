@@ -18,7 +18,7 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any
 
 redis: Any  # optional dependency; may be None at runtime
 try:
@@ -29,7 +29,7 @@ except ImportError:
 from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
-from creator_provider.exceptions import ProviderTimeoutError, RateLimitError
+from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.audio_service import audio_service as _audio_service
@@ -97,11 +97,14 @@ def generate_subtitles(
     self,
     run_id: int,
     subtitle_model: str = "whisper-small",
-    subtitle_format: Literal["srt", "vtt"] = "srt",
+    subtitle_format: str = "srt",
 ) -> dict[str, object]:
     start_time = datetime.now(timezone.utc)
     start_iso = start_time.isoformat()
     task_id = str(getattr(getattr(self, "request", None), "id", None) or f"run-{run_id}")
+    # Idempotency: acks_late + task_reject_on_worker_lost ensures redelivery on crash.
+    # If the run has already advanced past this stage, the worker's stage check will
+    # naturally skip processing (handled by run_service stage validation).
 
     provider_type: str | None = None
     endpoint: str | None = None
@@ -187,7 +190,21 @@ def generate_subtitles(
                     raise RuntimeError(
                         f"No audio artifact found for run {run_id}; cannot transcribe"
                     )
-                await provider.transcribe(audio_path, params=params)
+                try:
+                    await provider.transcribe(audio_path, params=params)
+                except (TimeoutError, ConnectionError) as exc:
+                    raise ProviderTimeoutError(
+                        f"Provider timed out during subtitle generation for run {run_id}"
+                    ) from exc
+                except Exception as exc:
+                    message = str(exc).lower()
+                    if "429" in message or "rate" in message:
+                        raise RateLimitError(
+                            f"Provider rate limited subtitle generation for run {run_id}"
+                        ) from exc
+                    raise ProviderError(
+                        f"Provider failed subtitle generation for run {run_id}"
+                    ) from exc
 
                 # 7. Save subtitle artifact via service.
                 artifact = await _subtitle_service.create_artifact(
@@ -249,7 +266,7 @@ def generate_subtitles(
         # Validation rejection — do NOT mutate run state to FAILED.
         raise
     except SoftTimeLimitExceeded:
-        logger.error("Task generate_subtitles timed out for run %s", run_id)
+        logger.error("Task timed out for run %s", run_id)
         raise
     except Exception:
         # Unexpected error — atomic conditional fail.
