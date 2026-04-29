@@ -7,6 +7,8 @@ Follows the same pattern as generate_script.
 
 from __future__ import annotations
 
+# pyright: reportMissingImports=false
+
 import asyncio
 import json
 import logging
@@ -27,6 +29,7 @@ from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
+from telemetry import trace_task
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
 
 logger = logging.getLogger(__name__)
@@ -125,7 +128,8 @@ def _parse_llm_response(
             scene_index=idx,
             section_type=section_type,
             original_text=text,
-            prompt=section.get("image_prompt") or llm_data.get("prompt", f"Visual representation of: {text[:200]}"),
+            prompt=section.get("image_prompt")
+            or llm_data.get("prompt", f"Visual representation of: {text[:200]}"),
             prompt_edited=bool(section.get("image_prompt")),
             prompt_source="user_edited" if section.get("image_prompt") else "auto_generated",
             style_tags=section.get("style_tags") or llm_data.get("style_tags", []),
@@ -158,6 +162,7 @@ async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
 
 
 @celery_app.task(bind=True, name="generate_visual_plan")
+@trace_task("generate_visual_plan")
 def generate_visual_plan(
     self,
     run_id: int,

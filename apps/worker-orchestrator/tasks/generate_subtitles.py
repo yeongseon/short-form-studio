@@ -11,6 +11,8 @@ Key design decisions:
 
 from __future__ import annotations
 
+# pyright: reportMissingImports=false
+
 import asyncio
 import logging
 import os
@@ -31,6 +33,7 @@ from creator_service.audio_service import audio_service as _audio_service
 from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
+from telemetry import trace_task
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +43,12 @@ _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
 # Stages where writing RENDER_GENERATING or FAILED is safe — the run
 # hasn't advanced past subtitle generation. The task may start directly
 # from AUDIO_GENERATING or from SUBTITLE_GENERATING after API-side CAS.
-_SAFE_STAGES = frozenset({
-    "AUDIO_GENERATING",
-    "SUBTITLE_GENERATING",
-})
+_SAFE_STAGES = frozenset(
+    {
+        "AUDIO_GENERATING",
+        "SUBTITLE_GENERATING",
+    }
+)
 
 
 class _StageGuardError(ValueError):
@@ -77,6 +82,7 @@ async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
 
 
 @celery_app.task(bind=True, name="generate_subtitles")
+@trace_task("generate_subtitles")
 def generate_subtitles(
     self,
     run_id: int,
@@ -99,7 +105,9 @@ def generate_subtitles(
         nonlocal redis_client, lock_acquired
         try:
             if subtitle_format not in ("srt", "vtt"):
-                raise ValueError(f"Invalid subtitle_format: {subtitle_format!r}. Must be 'srt' or 'vtt'.")
+                raise ValueError(
+                    f"Invalid subtitle_format: {subtitle_format!r}. Must be 'srt' or 'vtt'."
+                )
 
             # 1. Stage guard — reject before any side effects.
             run = await _run_service.storage.get_run(run_id)
@@ -166,7 +174,9 @@ def generate_subtitles(
                 params["format"] = subtitle_format
                 params["output_path"] = subtitle_path
                 if not audio_path:
-                    raise RuntimeError(f"No audio artifact found for run {run_id}; cannot transcribe")
+                    raise RuntimeError(
+                        f"No audio artifact found for run {run_id}; cannot transcribe"
+                    )
                 await provider.transcribe(audio_path, params=params)
 
                 # 7. Save subtitle artifact via service.
