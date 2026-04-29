@@ -58,6 +58,7 @@ from creator_service.render_service import render_service as _render_service
 from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
+from creator_service.task_tracking_service import task_tracking_service as _task_tracking_service
 from creator_service.visual_asset_service import visual_asset_service as _visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
 
@@ -124,6 +125,11 @@ def render_video(
 
     async def _run_task() -> dict[str, object]:
         try:
+            try:
+                await _task_tracking_service.record_task_start(run_id, "render_video", task_id)
+                await _task_tracking_service.mark_running(task_id)
+            except Exception:
+                logger.warning("Failed to record task start", exc_info=True)
             run = await _run_service.storage.get_run(run_id)
             if run is None:
                 raise _StageGuardError(f"Run {run_id} not found")
@@ -339,6 +345,10 @@ def render_video(
 
             end_time = datetime.now(timezone.utc)
             duration_seconds = (end_time - start_time).total_seconds()
+            try:
+                await _task_tracking_service.mark_success(task_id)
+            except Exception:
+                logger.warning("Failed to record task success", exc_info=True)
 
             return {
                 "task_id": task_id,
@@ -360,6 +370,11 @@ def render_video(
     try:
         return asyncio.run(_run_task())
     except _StageGuardError:
+        # Validation rejection — do NOT mutate run state to FAILED.
+        try:
+            asyncio.run(_task_tracking_service.mark_rejected(task_id, "stage_guard"))
+        except Exception:
+            logger.warning("Failed to record task rejection", exc_info=True)
         raise
     except SoftTimeLimitExceeded:
         logger.error("Task timed out for run %s", run_id)
@@ -384,6 +399,12 @@ def render_video(
             and self.request.retries < self.max_retries
         ):
             raise
+        try:
+            asyncio.run(
+                _task_tracking_service.mark_failed(task_id, type(exc).__name__, str(exc)[:500])
+            )
+        except Exception:
+            logger.warning("Failed to record task failure", exc_info=True)
         try:
             applied, _ = asyncio.run(
                 _run_service.storage.conditional_update_run(

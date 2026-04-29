@@ -2,15 +2,40 @@
 
 """Tests for the settings endpoints."""
 
+import hashlib
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from shorts_api.main import app
 
 
 @pytest.fixture
-async def client():
+async def client(monkeypatch: pytest.MonkeyPatch):
+    api_key = "test-api-key"
+    expected_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+
+    async def _fetch_one_stub(query: str, *args: object) -> dict[str, object] | None:
+        if "FROM api_keys" in query:
+            key_hash = args[0] if args else None
+            if key_hash == expected_hash:
+                return {"user_id": 1}
+            return None
+        if "FROM workspace_members" in query:
+            user_id = args[0] if args else None
+            if user_id == 1:
+                return {"workspace_id": 1, "workspace_name": "workspace-1"}
+            return None
+        return None
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost:5432/test")
+    monkeypatch.setattr("shorts_api.auth.fetch_one", _fetch_one_stub)
+
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-API-Key": api_key},
+    ) as ac:
         yield ac
 
 
@@ -94,14 +119,10 @@ async def test_api_keys_response_structure(client):
 @pytest.mark.asyncio
 async def test_settings_is_read_only(client):
     """POST/PUT/DELETE to settings should return 405 Method Not Allowed."""
-    response = await client.post(
-        "/api/creator/settings/api-keys", json={"key": "value"}
-    )
+    response = await client.post("/api/creator/settings/api-keys", json={"key": "value"})
     assert response.status_code == 405
 
-    response = await client.put(
-        "/api/creator/settings/api-keys", json={"key": "value"}
-    )
+    response = await client.put("/api/creator/settings/api-keys", json={"key": "value"})
     assert response.status_code == 405
 
     response = await client.delete("/api/creator/settings/api-keys")

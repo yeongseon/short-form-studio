@@ -215,6 +215,12 @@ async def require_current_user(request: Request) -> dict[str, str | int | None]:
     return await get_current_user(request)
 
 
+async def validate_workspace_header(request: Request) -> int | None:
+    user = await get_current_user(request)
+    workspace_id = user.get("workspace_id")
+    return workspace_id if isinstance(workspace_id, int) else None
+
+
 async def require_workspace_access(
     workspace_id: int,
     user: dict[str, str | int | None] = Depends(get_current_user),

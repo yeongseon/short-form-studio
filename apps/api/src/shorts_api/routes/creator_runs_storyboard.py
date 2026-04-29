@@ -7,6 +7,7 @@ from creator_service.audio_service import audio_service
 from creator_service.run_service import run_service
 from creator_service.script_service import script_service
 from creator_service.subtitle_service import subtitle_service
+from creator_service.task_tracking_service import task_tracking_service
 from creator_service.visual_asset_service import visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service
 from fastapi import APIRouter, HTTPException
@@ -22,13 +23,15 @@ from shorts_api.routes.creator_runs_utils import (
 
 logger = logging.getLogger(__name__)
 
-STORYBOARD_ALLOWED_STAGES = frozenset({
-    "VISUAL_ASSET_REVIEW",
-    "AUDIO_GENERATING",
-    "SUBTITLE_GENERATING",
-    "RENDER_GENERATING",
-    "FINAL_REVIEW",
-})
+STORYBOARD_ALLOWED_STAGES = frozenset(
+    {
+        "VISUAL_ASSET_REVIEW",
+        "AUDIO_GENERATING",
+        "SUBTITLE_GENERATING",
+        "RENDER_GENERATING",
+        "FINAL_REVIEW",
+    }
+)
 
 router = APIRouter(tags=["runs"])
 
@@ -133,38 +136,50 @@ async def get_storyboard(run_id: int) -> dict[str, object]:
             ready_count += 1
         elif run.current_stage == "VISUAL_ASSET_GENERATING" and not has_image:
             status = "generating_image"
-        elif (run.current_stage == "AUDIO_GENERATING" or (has_active and in_storyboard_stage)) and has_image and not has_audio:
+        elif (
+            (run.current_stage == "AUDIO_GENERATING" or (has_active and in_storyboard_stage))
+            and has_image
+            and not has_audio
+        ):
             status = "generating_audio"
-        elif (run.current_stage == "SUBTITLE_GENERATING" or (has_active and in_storyboard_stage)) and has_audio and not has_subtitles:
+        elif (
+            (run.current_stage == "SUBTITLE_GENERATING" or (has_active and in_storyboard_stage))
+            and has_audio
+            and not has_subtitles
+        ):
             status = "generating_subtitles"
         elif not has_image and not has_audio and not has_subtitles:
             status = "idle"
         else:
             status = "idle"
 
-        paragraphs.append({
-            "section_id": section.section_id,
-            "order": idx,
-            "text": section.text,
-            "display_text": section.display_text,
-            "image_prompt": scene.prompt if scene else getattr(section, "image_prompt", None),
-            "image_url": image_url,
-            "audio_url": audio_url,
-            "audio_duration": audio_duration,
-            "subtitles_url": subtitles_url,
-            "subtitle_entries": None,
-            "status": status,
-            "stale_flags": None,
-            "scene_id": scene_id,
-            "image_asset_id": image_asset_id,
-            "audio_artifact_id": audio_artifact_id,
-            "subtitle_artifact_id": subtitle_artifact_id,
-            "section_type": section.type,
-            "speaker": section.speaker,
-            "duration": section.duration,
-            "turn_kind": section.turn_kind,
-            "visual_override": section.visual_override.model_dump(mode="json") if section.visual_override else None,
-        })
+        paragraphs.append(
+            {
+                "section_id": section.section_id,
+                "order": idx,
+                "text": section.text,
+                "display_text": section.display_text,
+                "image_prompt": scene.prompt if scene else getattr(section, "image_prompt", None),
+                "image_url": image_url,
+                "audio_url": audio_url,
+                "audio_duration": audio_duration,
+                "subtitles_url": subtitles_url,
+                "subtitle_entries": None,
+                "status": status,
+                "stale_flags": None,
+                "scene_id": scene_id,
+                "image_asset_id": image_asset_id,
+                "audio_artifact_id": audio_artifact_id,
+                "subtitle_artifact_id": subtitle_artifact_id,
+                "section_type": section.type,
+                "speaker": section.speaker,
+                "duration": section.duration,
+                "turn_kind": section.turn_kind,
+                "visual_override": section.visual_override.model_dump(mode="json")
+                if section.visual_override
+                else None,
+            }
+        )
 
     total = len(paragraphs)
     render_ready = total > 0 and ready_count == total
@@ -222,6 +237,7 @@ async def generate_paragraph_audio_endpoint(
             voice=effective.voice,
         )
         await _append_task_id(run_id, task_id, run_service=run_service)
+        await task_tracking_service.record_task_queued(run_id, "generate_paragraph_audio", task_id)
     except Exception:
         raise HTTPException(
             status_code=503,
@@ -272,6 +288,9 @@ async def generate_paragraph_subtitles_endpoint(
             subtitle_format=effective.subtitle_format,
         )
         await _append_task_id(run_id, task_id, run_service=run_service)
+        await task_tracking_service.record_task_queued(
+            run_id, "generate_paragraph_subtitles", task_id
+        )
     except Exception:
         raise HTTPException(
             status_code=503,
@@ -327,10 +346,15 @@ async def generate_all_paragraph_audio(
                 voice=effective.voice,
             )
             await _append_task_id(run_id, tid, run_service=run_service)
+            await task_tracking_service.record_task_queued(run_id, "generate_paragraph_audio", tid)
             task_ids.append({"section_id": section.section_id, "task_id": tid})
         except Exception:
-            logger.exception("Failed to dispatch audio task for section %s of run %s", section.section_id, run_id)
-            task_ids.append({"section_id": section.section_id, "task_id": "", "error": "dispatch_failed"})
+            logger.exception(
+                "Failed to dispatch audio task for section %s of run %s", section.section_id, run_id
+            )
+            task_ids.append(
+                {"section_id": section.section_id, "task_id": "", "error": "dispatch_failed"}
+            )
     failed_count = sum(1 for t in task_ids if "error" in t)
     return {
         "run_id": run_id,
@@ -359,7 +383,9 @@ async def generate_all_paragraph_subtitles(
 
     audio_artifacts = await audio_service.list_paragraph_audio(run_id)
     if not audio_artifacts:
-        raise HTTPException(status_code=400, detail="No paragraph audio found. Generate audio first.")
+        raise HTTPException(
+            status_code=400, detail="No paragraph audio found. Generate audio first."
+        )
 
     validate_model_key(effective.subtitle_model)
 
@@ -389,10 +415,19 @@ async def generate_all_paragraph_subtitles(
                 subtitle_format=effective.subtitle_format,
             )
             await _append_task_id(run_id, tid, run_service=run_service)
+            await task_tracking_service.record_task_queued(
+                run_id, "generate_paragraph_subtitles", tid
+            )
             task_ids.append({"section_id": audio.section_id, "task_id": tid})
         except Exception:
-            logger.exception("Failed to dispatch subtitle task for section %s of run %s", audio.section_id, run_id)
-            task_ids.append({"section_id": audio.section_id, "task_id": "", "error": "dispatch_failed"})
+            logger.exception(
+                "Failed to dispatch subtitle task for section %s of run %s",
+                audio.section_id,
+                run_id,
+            )
+            task_ids.append(
+                {"section_id": audio.section_id, "task_id": "", "error": "dispatch_failed"}
+            )
     failed_count = sum(1 for t in task_ids if "error" in t)
     return {
         "run_id": run_id,

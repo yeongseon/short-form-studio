@@ -68,6 +68,7 @@ from creator_provider.exceptions import ProviderError, ProviderTimeoutError, Rat
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.run_service import run_service as _run_service
+from creator_service.task_tracking_service import task_tracking_service as _task_tracking_service
 from creator_service.visual_asset_service import visual_asset_service as _visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
 
@@ -188,6 +189,13 @@ def generate_scene_image(
     async def _run_task() -> dict[str, object]:
         nonlocal provider_type, endpoint
         try:
+            try:
+                await _task_tracking_service.record_task_start(
+                    run_id, "generate_scene_image", task_id
+                )
+                await _task_tracking_service.mark_running(task_id)
+            except Exception:
+                logger.warning("Failed to record task start", exc_info=True)
             # 1. Stage guard — reject before any side effects.
             run = await _run_service.storage.get_run(run_id)
             if run is None:
@@ -408,6 +416,10 @@ def generate_scene_image(
 
             end_time = datetime.now(timezone.utc)
             duration_seconds = (end_time - start_time).total_seconds()
+            try:
+                await _task_tracking_service.mark_success(task_id)
+            except Exception:
+                logger.warning("Failed to record task success", exc_info=True)
 
             return {
                 "task_id": task_id,
@@ -432,6 +444,11 @@ def generate_scene_image(
         return asyncio.run(_run_task())
     except _StageGuardError:
         # Validation rejection — do NOT mutate run state to FAILED.
+        # A stale/duplicate task should not downgrade a run already past generation.
+        try:
+            asyncio.run(_task_tracking_service.mark_rejected(task_id, "stage_guard"))
+        except Exception:
+            logger.warning("Failed to record task rejection", exc_info=True)
         raise
     except SoftTimeLimitExceeded:
         logger.error("Task timed out for run %s", run_id)
@@ -456,6 +473,12 @@ def generate_scene_image(
             and self.request.retries < self.max_retries
         ):
             raise
+        try:
+            asyncio.run(
+                _task_tracking_service.mark_failed(task_id, type(exc).__name__, str(exc)[:500])
+            )
+        except Exception:
+            logger.warning("Failed to record task failure", exc_info=True)
         # Unexpected error (not scene-level) — atomic conditional fail.
         try:
             applied, _ = asyncio.run(

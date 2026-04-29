@@ -58,6 +58,7 @@ from creator_provider.registry import ProviderRegistry
 from creator_service.audio_service import audio_service as _audio_service
 from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
+from creator_service.task_tracking_service import task_tracking_service as _task_tracking_service
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +140,11 @@ def generate_audio(
         nonlocal provider_type, endpoint, gpu_lock_acquired_at, gpu_lock_released_at
         nonlocal redis_client, lock_acquired
         try:
+            try:
+                await _task_tracking_service.record_task_start(run_id, "generate_audio", task_id)
+                await _task_tracking_service.mark_running(task_id)
+            except Exception:
+                logger.warning("Failed to record task start", exc_info=True)
             # 1. Stage guard — reject before any side effects.
             run = await _run_service.storage.get_run(run_id)
             if run is None:
@@ -266,6 +272,10 @@ def generate_audio(
 
             end_time = datetime.now(timezone.utc)
             duration_seconds = (end_time - start_time).total_seconds()
+            try:
+                await _task_tracking_service.mark_success(task_id)
+            except Exception:
+                logger.warning("Failed to record task success", exc_info=True)
 
             return {
                 "task_id": task_id,
@@ -290,6 +300,11 @@ def generate_audio(
         return asyncio.run(_run_task())
     except _StageGuardError:
         # Validation rejection — do NOT mutate run state to FAILED.
+        # A stale/duplicate task should not downgrade a run already past generation.
+        try:
+            asyncio.run(_task_tracking_service.mark_rejected(task_id, "stage_guard"))
+        except Exception:
+            logger.warning("Failed to record task rejection", exc_info=True)
         raise
     except SoftTimeLimitExceeded:
         logger.error("Task timed out for run %s", run_id)
@@ -314,6 +329,12 @@ def generate_audio(
             and self.request.retries < self.max_retries
         ):
             raise
+        try:
+            asyncio.run(
+                _task_tracking_service.mark_failed(task_id, type(exc).__name__, str(exc)[:500])
+            )
+        except Exception:
+            logger.warning("Failed to record task failure", exc_info=True)
         # Unexpected error — atomic conditional fail.
         try:
             applied, _ = asyncio.run(

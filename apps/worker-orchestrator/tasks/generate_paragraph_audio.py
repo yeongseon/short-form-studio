@@ -62,6 +62,7 @@ from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.audio_service import audio_service as _audio_service
 from creator_service.run_service import run_service as _run_service
+from creator_service.task_tracking_service import task_tracking_service as _task_tracking_service
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +157,14 @@ def generate_paragraph_audio(
         nonlocal provider_type, endpoint, gpu_lock_acquired_at, gpu_lock_released_at
         nonlocal redis_client, lock_acquired
 
+        try:
+            await _task_tracking_service.record_task_start(
+                run_id, "generate_paragraph_audio", task_id
+            )
+            await _task_tracking_service.mark_running(task_id)
+        except Exception:
+            logger.warning("Failed to record task start", exc_info=True)
+
         run = await _run_service.storage.get_run(run_id)
         if run is not None and run.get("status") == "cancelled":
             raise _StageGuardError(f"Run {run_id} is cancelled")
@@ -243,6 +252,10 @@ def generate_paragraph_audio(
 
         end_time = datetime.now(timezone.utc)
         duration_seconds = (end_time - start_time).total_seconds()
+        try:
+            await _task_tracking_service.mark_success(task_id)
+        except Exception:
+            logger.warning("Failed to record task success", exc_info=True)
 
         return {
             "task_id": task_id,
@@ -265,6 +278,11 @@ def generate_paragraph_audio(
     try:
         return asyncio.run(_run_task())
     except _StageGuardError:
+        # Validation rejection — do NOT mutate run state to FAILED.
+        try:
+            asyncio.run(_task_tracking_service.mark_rejected(task_id, "stage_guard"))
+        except Exception:
+            logger.warning("Failed to record task rejection", exc_info=True)
         raise
     except SoftTimeLimitExceeded:
         logger.error("Task timed out for run %s", run_id)
@@ -283,7 +301,13 @@ def generate_paragraph_audio(
         except Exception:
             logger.exception("Failed to mark run %d as FAILED after timeout", run_id)
         raise
-    except Exception:
+    except Exception as exc:
+        try:
+            asyncio.run(
+                _task_tracking_service.mark_failed(task_id, type(exc).__name__, str(exc)[:500])
+            )
+        except Exception:
+            logger.warning("Failed to record task failure", exc_info=True)
         logger.exception(
             "Failed to generate paragraph audio for run %d section %s",
             run_id,

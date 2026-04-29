@@ -32,6 +32,7 @@ from shorts_api.auth import ApiKeyMiddleware
 from shorts_api.routes.creator_artifact_download import router as artifact_download_router
 from shorts_api.routes.creator_models import router as models_router
 from shorts_api.routes.creator_projects import router as projects_router
+from shorts_api.routes.creator_run_tasks import router as run_tasks_router
 from shorts_api.routes.creator_runs_core import router as runs_core_router
 from shorts_api.routes.creator_runs_lifecycle import router as runs_lifecycle_router
 from shorts_api.routes.creator_runs_scene_assets import router as runs_scene_assets_router
@@ -265,6 +266,8 @@ app.include_router(runs_visuals_router, prefix="/api/creator")
 app.include_router(runs_scene_assets_router, prefix="/api/creator")
 app.include_router(runs_storyboard_router, prefix="/api/creator")
 app.include_router(runs_lifecycle_router, prefix="/api/creator")
+app.include_router(run_tasks_router, prefix="/api/creator")
+app.include_router(artifact_download_router, prefix="/api/creator")
 app.include_router(artifact_download_router, prefix="/api/creator")
 app.include_router(script_router, prefix="/api/creator")
 app.include_router(run_script_router, prefix="/api/creator")
