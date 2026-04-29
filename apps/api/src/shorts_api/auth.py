@@ -2,7 +2,7 @@
 
 When a request provides an API key (``X-API-Key`` or ``Authorization: Bearer``),
 the middleware resolves user identity from ``api_keys`` and workspace membership
-from ``workspace_members``. Requests without an API key continue as anonymous.
+from ``workspace_members``.
 """
 
 import contextvars
@@ -72,14 +72,11 @@ async def get_current_user(request: Request) -> CurrentUser:
     if isinstance(context_user, CurrentUser):
         return context_user
 
-    return CurrentUser()
+    raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
 async def require_current_user(request: Request) -> CurrentUser:
-    user = await get_current_user(request)
-    if user.user_id is None or user.workspace_id is None:
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
-    return user
+    return await get_current_user(request)
 
 
 class ApiKeyMiddleware(BaseHTTPMiddleware):
