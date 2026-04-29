@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Any, Protocol
@@ -34,13 +35,24 @@ class UsageStorageBackend(Protocol):
         self, workspace_id: int, quota: dict[str, Any]
     ) -> dict[str, Any]: ...
 
+    async def try_reserve_quota(self, workspace_id: int, operation_type: str) -> bool: ...
+
 
 class InMemoryUsageStorage:
     def __init__(self) -> None:
         self._events: dict[int, dict[str, Any]] = {}
         self._quotas: dict[int, dict[str, Any]] = {}
+        self._reservations: dict[tuple[int, datetime], dict[str, int]] = {}
+        self._locks: dict[int, asyncio.Lock] = {}
         self._next_event_id = 1
         self._next_quota_id = 1
+
+    def _lock_for_workspace(self, workspace_id: int) -> asyncio.Lock:
+        lock = self._locks.get(workspace_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._locks[workspace_id] = lock
+        return lock
 
     async def record_event(self, row: dict[str, Any]) -> dict[str, Any]:
         saved = {
@@ -94,6 +106,56 @@ class InMemoryUsageStorage:
             self._next_quota_id += 1
         self._quotas[workspace_id] = saved
         return dict(saved)
+
+    async def try_reserve_quota(self, workspace_id: int, operation_type: str) -> bool:
+        now = datetime.now(timezone.utc)
+        period_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+        key = (workspace_id, period_start)
+        async with self._lock_for_workspace(workspace_id):
+            quota = await self.get_workspace_quota(workspace_id)
+            if quota is None:
+                quota = await self.set_workspace_quota(
+                    workspace_id,
+                    {
+                        "monthly_llm_calls": int(QUOTAS["monthly_llm_calls"]),
+                        "monthly_image_generations": int(QUOTAS["monthly_image_generations"]),
+                        "monthly_tts_seconds": int(QUOTAS["monthly_tts_seconds"]),
+                        "monthly_cost_usd": float(QUOTAS["monthly_cost_usd"]),
+                    },
+                )
+
+            usage = {"llm": 0, "image_gen": 0, "tts": 0}
+            for row in self._events.values():
+                if row.get("workspace_id") != workspace_id or row["created_at"] < period_start:
+                    continue
+                row_operation = str(row.get("operation_type") or "")
+                if row_operation == "llm":
+                    usage["llm"] += 1
+                elif row_operation == "image_gen":
+                    image_count = int(row.get("image_count") or 0)
+                    usage["image_gen"] += image_count if image_count > 0 else 1
+                elif row_operation == "tts":
+                    usage["tts"] += 1
+
+            reserved = self._reservations.setdefault(key, {"llm": 0, "image_gen": 0, "tts": 0})
+            if operation_type == "llm":
+                if usage["llm"] + reserved["llm"] >= int(quota["monthly_llm_calls"]):
+                    return False
+                reserved["llm"] += 1
+                return True
+            if operation_type == "image_gen":
+                if usage["image_gen"] + reserved["image_gen"] >= int(
+                    quota["monthly_image_generations"]
+                ):
+                    return False
+                reserved["image_gen"] += 1
+                return True
+            if operation_type in {"tts", "stt", "render"}:
+                if usage["tts"] + reserved["tts"] >= int(quota["monthly_tts_seconds"]):
+                    return False
+                reserved["tts"] += 1
+                return True
+            return True
 
 
 class UsageService:
@@ -197,10 +259,17 @@ class UsageService:
             return "Monthly TTS seconds quota exceeded"
         return None
 
-    async def check_quota(self, workspace_id: int, operation: str) -> bool:
+    async def check_quota(self, workspace_id: int, operation: str) -> tuple[bool, str]:
         summary = await self.get_monthly_summary(workspace_id)
         quota = await self.get_quota(workspace_id)
-        return self._quota_exceeded_reason(summary, quota, operation) is None
+        reason = self._quota_exceeded_reason(summary, quota, operation)
+        if reason is not None:
+            return False, reason
+        reserved = await self.storage.try_reserve_quota(workspace_id, operation)
+        if not reserved:
+            reason = self._quota_exceeded_reason(summary, quota, operation)
+            return False, reason or "Quota exceeded"
+        return True, "ok"
 
     async def check_quota_reason(self, workspace_id: int, operation: str) -> str | None:
         summary = await self.get_monthly_summary(workspace_id)
@@ -351,7 +420,4 @@ async def check_workspace_quota(workspace_id: int, operation_type: str = "llm") 
     Supported operation_type values: 'llm', 'image_gen', 'tts'.
     """
     # Task dispatch routes should call this before enqueueing async jobs.
-    reason = await usage_service.check_quota_reason(workspace_id, operation=operation_type)
-    if reason is not None:
-        return False, reason
-    return True, "ok"
+    return await usage_service.check_quota(workspace_id, operation=operation_type)
