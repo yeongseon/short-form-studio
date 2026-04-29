@@ -135,3 +135,29 @@ async def test_http_target_excludes_query_params(monkeypatch) -> None:
     await middleware.dispatch(_request(), _call_next)
 
     assert captured_attrs["http.target"] == "/items"
+
+
+@pytest.mark.asyncio
+async def test_http_route_normalizes_numeric_ids(monkeypatch) -> None:
+    middleware_telemetry.TelemetryMiddleware._initialized = False
+    captured_attrs: dict[str, str] = {}
+    fake = _FakeTelemetry(captured_attrs)
+    monkeypatch.setattr(middleware_telemetry, "import_module", lambda _name: fake)
+    middleware = middleware_telemetry.TelemetryMiddleware(app=lambda *_args, **_kwargs: None)
+
+    req = Request(
+        {
+            "type": "http", "http_version": "1.1", "method": "GET",
+            "scheme": "http", "path": "/api/creator/runs/123/artifacts/456/download",
+            "query_string": b"", "headers": [],
+            "client": ("127.0.0.1", 8080), "server": ("test", 80),
+        }
+    )
+
+    async def _call_next(_request: Request) -> Response:
+        return Response(status_code=200)
+
+    await middleware.dispatch(req, _call_next)
+
+    assert captured_attrs["http.route"] == "/api/creator/runs/{id}/artifacts/{id}/download"
+    assert captured_attrs["http.target"] == "/api/creator/runs/123/artifacts/456/download"

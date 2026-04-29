@@ -8,6 +8,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+import re
+
+_ID_SEGMENT = re.compile(r"/\d+")
 
 class TelemetryMiddleware(BaseHTTPMiddleware):
     _lock = Lock()
@@ -47,7 +50,9 @@ class TelemetryMiddleware(BaseHTTPMiddleware):
 
         start = time.perf_counter()
         status_code = 500
-        route_path = request.url.path
+        # Normalize IDs to prevent high-cardinality metrics
+        # e.g. /api/creator/runs/123/artifacts/456 -> /api/creator/runs/{id}/artifacts/{id}
+        route_path = _ID_SEGMENT.sub("/{id}", request.url.path)
 
         with tracer.start_as_current_span(
             f"{request.method} {route_path}",
