@@ -79,16 +79,6 @@ async def require_current_user(request: Request) -> CurrentUser:
     return await get_current_user(request)
 
 
-async def optional_current_user(request: Request) -> CurrentUser | None:
-    """Return authenticated user or None. For routes with optional auth."""
-    user = getattr(request.state, "user", None)
-    if isinstance(user, CurrentUser) and user.user_id is not None:
-        return user
-    context_user = _current_user_ctx.get()
-    if isinstance(context_user, CurrentUser) and context_user.user_id is not None:
-        return context_user
-    return None
-
 
 class ApiKeyMiddleware(BaseHTTPMiddleware):
     """Starlette middleware that resolves user context from API keys."""
