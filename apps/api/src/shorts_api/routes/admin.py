@@ -1,4 +1,9 @@
-"""Admin API endpoints for operational management of creator runs and system health."""
+"""Admin API endpoints for operational control and observability.
+
+This module exposes backend-only admin endpoints under ``/api/admin``.
+It does not implement any admin dashboard UI; frontend dashboard work is
+handled separately from this API surface.
+"""
 
 from __future__ import annotations
 
@@ -124,10 +129,13 @@ class RedisRateLimiter:
 _rate_limiter = RedisRateLimiter(max_ops=10, window_seconds=60)
 
 
-async def require_admin(x_admin_key: str = Header(...)) -> str:
+async def require_admin(x_admin_key: str | None = Header(default=None)) -> str:
+    if not x_admin_key:
+        raise HTTPException(status_code=401, detail="Admin access denied")
+
     expected = os.environ.get("ADMIN_API_KEY", "")
     if not expected or not hmac.compare_digest(x_admin_key, expected):
-        raise HTTPException(403, "Admin access denied")
+        raise HTTPException(status_code=403, detail="Admin access denied")
     return x_admin_key
 
 
