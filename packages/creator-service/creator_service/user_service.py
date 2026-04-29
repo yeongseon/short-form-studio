@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import re
 from typing import Any, Protocol
 
 from creator_domain.models import User
@@ -31,6 +32,7 @@ class InMemoryUserStorage:
             "id": self._next_id,
             "email": payload["email"],
             "name": payload.get("name"),
+            "workspace_id": payload.get("workspace_id"),
             "auth_provider": payload.get("auth_provider", "api_key"),
             "auth_subject": payload.get("auth_subject", ""),
             "created_at": now,
@@ -62,6 +64,7 @@ class InMemoryUserStorage:
                 return dict(row)
         return None
 
+
 class UserService:
     def __init__(self, storage: UserStorageBackend | None = None) -> None:
         self.storage = storage if storage is not None else InMemoryUserStorage()
@@ -75,7 +78,8 @@ class UserService:
     ) -> User:
         existing = await self.storage.get_user_by_email(email)
         if existing is not None:
-            return User.model_validate(existing)
+            user = User.model_validate(existing)
+            return await self._attach_workspace(user)
 
         row = await self.storage.create_user(
             {
@@ -85,7 +89,30 @@ class UserService:
                 "auth_subject": auth_subject,
             }
         )
-        return User.model_validate(row)
+        user = User.model_validate(row)
+        return await self._attach_workspace(user)
+
+    async def _attach_workspace(self, user: User) -> User:
+        from .workspace_service import workspace_service
+
+        user_workspaces = await workspace_service.list_user_workspaces(user.id)
+        if user_workspaces:
+            user.workspace_id = user_workspaces[0].id
+            return user
+
+        workspace = await workspace_service.create_workspace(
+            name=f"{user.email}'s Workspace",
+            slug=self._default_workspace_slug(user.email),
+            owner_id=user.id,
+        )
+        user.workspace_id = workspace.id
+        return user
+
+    def _default_workspace_slug(self, email: str) -> str:
+        slug_base = re.sub(r"[^a-z0-9]+", "-", email.strip().lower()).strip("-")
+        if not slug_base:
+            slug_base = "workspace"
+        return slug_base
 
     async def get_user(self, user_id: int) -> User | None:
         row = await self.storage.get_user(user_id)
@@ -93,9 +120,7 @@ class UserService:
             return None
         return User.model_validate(row)
 
-    async def get_user_by_auth(
-        self, auth_provider: str, auth_subject: str
-    ) -> User | None:
+    async def get_user_by_auth(self, auth_provider: str, auth_subject: str) -> User | None:
         row = await self.storage.get_user_by_auth(auth_provider, auth_subject)
         if row is None:
             return None

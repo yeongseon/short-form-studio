@@ -10,8 +10,9 @@ import hmac
 import os
 
 from creator_domain.models import User
+from creator_service.workspace_service import workspace_service
 from creator_service.user_service import user_service
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
@@ -107,9 +108,11 @@ async def require_workspace_access(
     When per-user identity is enabled (JWT/OAuth, future PR), this will
     check workspace membership.
     """
-    # With shared-key auth all requests map to the system user,
-    # so membership checks are deferred until JWT/OAuth lands.
-    # This dependency exists as a structural placeholder: routes
-    # that require workspace access MUST declare it so the
-    # enforcement point is already in place.
+    if os.getenv("API_KEY") and user.auth_subject == "system":
+        return user
+
+    has_access = await workspace_service.check_access(workspace_id, user.id)
+    if not has_access:
+        raise HTTPException(status_code=403, detail="Workspace access denied")
+
     return user

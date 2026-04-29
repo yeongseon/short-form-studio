@@ -8,6 +8,7 @@ class User(BaseModel):
     id: int
     email: str
     name: str | None = None
+    workspace_id: int | None = None
     auth_provider: str = "api_key"
     auth_subject: str = ""
     created_at: datetime
