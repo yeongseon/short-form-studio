@@ -3,7 +3,6 @@
 from datetime import datetime, timezone
 
 import pytest
-from creator_domain.models.project import Project
 from fastapi.routing import APIRoute
 from shorts_api.main import app
 
@@ -18,6 +17,13 @@ def _find_route(name: str) -> APIRoute:
 @pytest.fixture
 def stub_artifact_download_services(monkeypatch: pytest.MonkeyPatch, tmp_path):
     now = datetime.now(timezone.utc)
+
+    class StubProject:
+        def __init__(self, workspace_id: int | None):
+            self.id = 7
+            self.workspace_id = workspace_id
+            self.created_at = now
+            self.updated_at = now
 
     class StubRunStorage:
         async def get_run(self, run_id: int):
@@ -36,15 +42,7 @@ def stub_artifact_download_services(monkeypatch: pytest.MonkeyPatch, tmp_path):
         async def get_project(self, project_id: int):
             if project_id != 7:
                 return None
-            return Project(
-                id=7,
-                workspace_id=self.workspace_id,
-                title="t",
-                source_type="idea",
-                status="draft",
-                created_at=now,
-                updated_at=now,
-            )
+            return StubProject(workspace_id=self.workspace_id)
 
     class StubArtifactDownloadService:
         async def get_artifact_by_id(self, artifact_id: int):

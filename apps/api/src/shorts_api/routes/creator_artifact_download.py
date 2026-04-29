@@ -39,10 +39,11 @@ async def download_artifact(
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid X-Workspace-Id header") from exc
 
+    project_workspace_id = getattr(project, "workspace_id", None)
     if (
         request_workspace_id is not None
-        and project.workspace_id is not None
-        and request_workspace_id != project.workspace_id
+        and project_workspace_id is not None
+        and request_workspace_id != project_workspace_id
     ):
         raise HTTPException(status_code=403, detail="Forbidden")
 
