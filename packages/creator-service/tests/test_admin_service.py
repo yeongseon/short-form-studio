@@ -76,12 +76,12 @@ def test_get_queue_depth_with_mocked_redis(monkeypatch) -> None:
     monkeypatch.setattr(
         service,
         "_redis_client",
-        lambda: _FakeRedis(lengths={"celery": 4, "gpu_queue": 2}),
+        lambda: _FakeRedis(lengths={"creator": 4}),
     )
 
     result = asyncio.run(service.get_queue_depth())
 
-    assert result == {"celery": 4, "gpu_queue": 2}
+    assert result == {"creator": 4}
 
 
 def test_get_stuck_runs_queries_pool(monkeypatch) -> None:
@@ -121,11 +121,13 @@ def test_unstick_run_updates_generating_stage(monkeypatch) -> None:
                     "id": 42,
                     "current_stage": "SCRIPT_GENERATING",
                     "status": "running",
+                    "active_task_id": None,
                     "updated_at": datetime(2025, 1, 1, tzinfo=timezone.utc),
                 }
             return {
                 "id": 42,
                 "current_stage": "SCRIPT_REVIEW",
+                "status": "pending",
                 "updated_at": datetime.now(tz=timezone.utc),
             }
 

@@ -1,4 +1,5 @@
 """API-key identity middleware and auth helpers."""
+
 from __future__ import annotations
 
 import contextvars
@@ -63,11 +64,15 @@ async def _resolve_user_id_from_api_key(api_key: str, db_session) -> str | None:
     return row[0] if row else None
 
 
+_ADMIN_PATH_PREFIX = "/api/admin"
+
+
 class ApiKeyMiddleware(BaseHTTPMiddleware):
     """Starlette middleware that resolves user context from API keys."""
 
     def __init__(self, app, *, api_key: str | None = None) -> None:
         super().__init__(app)
+        self._api_key = (api_key or "").strip()
 
     async def _get_pool(self):
         try:
@@ -104,6 +109,10 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         request.state.user = CurrentUser()
 
+        # Skip auth when no key is configured (local dev)
+        if not self._api_key:
+            return await call_next(request)
+
         if request.method == "OPTIONS" and "origin" in request.headers:
             return await call_next(request)
         if request.url.path in _PUBLIC_PATHS:
@@ -115,6 +124,13 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         if request.url.path == "/openapi.json" and request.app.openapi_url is None:
             return await call_next(request)
 
+        if request.url.path.startswith(_ADMIN_PATH_PREFIX):
+            return await call_next(request)
+
+        # Docs paths go through normal auth when API_KEY is set
+        # (they were removed from _PUBLIC_PATHS so they're not auto-allowed)
+
+        # Check header only (never accept keys via query params to avoid log leakage)
         provided = request.headers.get("X-API-Key")
         if not provided:
             auth_header = request.headers.get("Authorization", "")
@@ -244,7 +260,6 @@ async def get_api_key(request: Request) -> str:
     return api_key
 
 
-
 async def require_run_access(
     run_id: int,
     user: CurrentUser = Depends(require_current_user),
@@ -297,4 +312,3 @@ async def require_project_access(
         raise HTTPException(status_code=404, detail="Project not found")
 
     return user, project
-
