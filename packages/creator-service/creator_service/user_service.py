@@ -79,8 +79,6 @@ class UserService:
         auth_subject: str = "",
     ) -> User:
         existing = await self.storage.get_user_by_auth(auth_provider, auth_subject)
-        if existing is None:
-            existing = await self.storage.get_user_by_email(email)
         if existing is not None:
             user = User.model_validate(existing)
             return await self._attach_workspace(user)
