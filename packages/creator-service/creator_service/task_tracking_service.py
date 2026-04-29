@@ -25,9 +25,23 @@ class TaskTrackingStorageBackend(Protocol):
 class InMemoryTaskTrackingStorage:
     def __init__(self) -> None:
         self._rows: dict[int, dict[str, Any]] = {}
+        self._rows_by_celery_task_id: dict[str, int] = {}
         self._next_id = 1
 
     async def create_task(self, row: dict[str, Any]) -> dict[str, Any]:
+        celery_task_id = row.get("celery_task_id")
+        if isinstance(celery_task_id, str):
+            existing_id = self._rows_by_celery_task_id.get(celery_task_id)
+            if existing_id is not None:
+                existing = self._rows[existing_id]
+                existing["status"] = "running"
+                existing["attempt"] = int(existing.get("attempt", 0)) + 1
+                existing["started_at"] = datetime.now(timezone.utc)
+                existing["error_code"] = None
+                existing["error_message"] = None
+                self._rows[existing_id] = existing
+                return dict(existing)
+
         now = datetime.now(timezone.utc)
         saved = {
             "id": self._next_id,
@@ -41,6 +55,8 @@ class InMemoryTaskTrackingStorage:
             **row,
         }
         self._rows[self._next_id] = saved
+        if isinstance(celery_task_id, str):
+            self._rows_by_celery_task_id[celery_task_id] = self._next_id
         self._next_id += 1
         return dict(saved)
 
@@ -146,6 +162,7 @@ class TaskTrackingService:
         return RunTask.from_row(row) if row is not None else None
 
     async def mark_revoked(self, celery_task_id: str) -> RunTask | None:
+        """Called externally by admin API or monitoring tools when a task is manually revoked."""
         task = await self.storage.get_by_celery_id(celery_task_id)
         if task is None:
             return None

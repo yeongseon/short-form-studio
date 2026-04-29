@@ -66,3 +66,14 @@ def test_find_stuck_tasks_returns_only_stuck_tasks() -> None:
 
     stuck = asyncio.run(service.find_stuck_tasks(threshold_seconds=60))
     assert [task.celery_task_id for task in stuck] == ["celery-old"]
+
+
+def test_record_task_start_reuses_celery_task_id_and_increments_attempt() -> None:
+    service = TaskTrackingService(InMemoryTaskTrackingStorage())
+    first = asyncio.run(service.record_task_start(7, "generate_script", "celery-retry-1"))
+    retried = asyncio.run(service.record_task_start(7, "generate_script", "celery-retry-1"))
+
+    assert retried.id == first.id
+    assert retried.attempt == 2
+    assert retried.status == "running"
+    assert retried.started_at is not None

@@ -21,6 +21,13 @@ class PostgresTaskTrackingStorage:
                 error_message
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            ON CONFLICT (celery_task_id) DO UPDATE
+            SET status = 'running',
+                attempt = creator_run_tasks.attempt + 1,
+                started_at = NOW(),
+                finished_at = NULL,
+                error_code = NULL,
+                error_message = NULL
             RETURNING *
             """,
             row.get("run_id"),
