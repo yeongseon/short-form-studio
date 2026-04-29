@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 from creator_domain.sanitize import UnsafePathComponent, sanitize_path_component
+from creator_service.artifact_download_service import read_artifact_bytes
 from creator_service.db import close_pool, get_pool
 from creator_service.logging_config import setup_json_logging
 from creator_service.model_health_service import ModelHealthService, ModelStatus
@@ -23,7 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 from starlette import status
-from starlette.responses import FileResponse
+from starlette.responses import FileResponse, Response
 
 from shorts_api.auth import ApiKeyMiddleware
 from shorts_api.routes.creator_models import router as models_router
@@ -371,7 +372,7 @@ async def serve_artifact(artifact_path: str) -> FileResponse:
 
 
 @app.get("/api/artifacts/files/{path:path}")
-async def serve_local_artifact_file(path: str) -> FileResponse:
+async def serve_local_artifact_file(path: str) -> Response:
     storage_root = os.path.realpath(
         os.getenv("LOCAL_STORAGE_PATH", os.getenv("ARTIFACT_ROOT", "data/artifacts"))
     )
@@ -379,11 +380,19 @@ async def serve_local_artifact_file(path: str) -> FileResponse:
     if not path or path.startswith("/") or any(component == ".." for component in path.split("/")):
         raise HTTPException(status_code=400, detail="Invalid artifact path")
 
-    resolved_path = os.path.realpath(os.path.join(storage_root, path))
+    storage_key = path
+    resolved_path = os.path.realpath(os.path.join(storage_root, storage_key))
     if os.path.commonpath([storage_root, resolved_path]) != storage_root:
         raise HTTPException(status_code=400, detail="Path traversal detected")
-    if not os.path.isfile(resolved_path):
-        raise HTTPException(status_code=404, detail="Artifact not found")
 
-    media_type, _ = mimetypes.guess_type(resolved_path)
-    return FileResponse(resolved_path, media_type=media_type or "application/octet-stream")
+    try:
+        content = read_artifact_bytes(storage_key)
+        media_type, _ = mimetypes.guess_type(storage_key)
+        return Response(content=content, media_type=media_type or "application/octet-stream")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Artifact not found") from exc
+    except Exception:
+        if not os.path.isfile(resolved_path):
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        media_type, _ = mimetypes.guess_type(resolved_path)
+        return FileResponse(resolved_path, media_type=media_type or "application/octet-stream")

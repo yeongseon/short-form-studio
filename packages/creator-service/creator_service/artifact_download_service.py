@@ -1,19 +1,15 @@
 from __future__ import annotations
 
-import os
-
-from creator_service.artifact_storage_integration import (
-    get_artifact_bytes,
-    get_artifact_download_path,
-)
+from creator_service.artifact_storage_integration import get_artifact_download_path
+from creator_service.object_storage import get_storage_backend
 
 
 def resolve_artifact_download(key: str) -> str:
-    backend = os.getenv("STORAGE_BACKEND", "local")
-    if backend == "local":
-        return key
     return get_artifact_download_path(key)
 
 
 def read_artifact_bytes(key: str) -> bytes:
-    return get_artifact_bytes(key)
+    backend = get_storage_backend()
+    if not backend.exists(key):
+        raise FileNotFoundError(key)
+    return backend.download_bytes(key)
