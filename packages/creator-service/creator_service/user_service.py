@@ -13,6 +13,10 @@ class UserStorageBackend(Protocol):
 
     async def get_user_by_email(self, email: str) -> dict[str, Any] | None: ...
 
+    async def get_user_by_auth(
+        self, auth_provider: str, auth_subject: str
+    ) -> dict[str, Any] | None: ...
+
     async def list_users(self, limit: int, offset: int) -> list[dict[str, Any]]: ...
 
 

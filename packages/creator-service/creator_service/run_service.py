@@ -200,6 +200,7 @@ class RunService:
         metadata: dict[str, Any] | None = None,
         current_stage: str = RunStage.IDEA_READY.value,
         status: str = "pending",
+        workspace_id: int | None = None,
     ) -> PipelineRun:
         try:
             normalized_stage = RunStage(current_stage).value
@@ -221,7 +222,7 @@ class RunService:
         row = await self.storage.create_run(
             {
                 "project_id": project_id,
-                "workspace_id": None,
+                "workspace_id": workspace_id,
                 "current_stage": normalized_stage,
                 "status": status,
                 "review_stage": None,
