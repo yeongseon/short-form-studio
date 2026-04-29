@@ -1,3 +1,5 @@
+"""Admin API endpoints service operations for run management and safeguards."""
+
 from __future__ import annotations
 
 import inspect
@@ -24,6 +26,21 @@ _GENERATING_TO_REVIEW_STAGE = {
 }
 
 _UNSTICK_MIN_AGE_SECONDS = 30 * 60
+_STAGE_REQUIRED_ARTIFACTS: dict[str, list[str]] = {
+    "SCRIPT_GENERATING": [],
+    "SCRIPT_REVIEW": ["script"],
+    "VOICE_GENERATING": ["script"],
+    "VOICE_REVIEW": ["script", "voice"],
+    "VIDEO_GENERATING": ["script", "voice"],
+    "VIDEO_REVIEW": ["script", "voice", "video"],
+    "COMPLETED": ["script", "voice", "video"],
+    "VISUAL_PLAN_REVIEW": ["script"],
+    "VISUAL_ASSET_REVIEW": ["script", "visual_plan"],
+    "SUBTITLE_GENERATING": ["script", "audio"],
+    "RENDER_GENERATING": ["script", "audio", "subtitle"],
+    "FINAL_REVIEW": ["script", "audio", "subtitle", "render"],
+    "PUBLISHED": ["script", "audio", "subtitle", "render"],
+}
 logger = logging.getLogger(__name__)
 
 
@@ -49,6 +66,13 @@ class AdminService:
         if inspect.isawaitable(value):
             return await value
         return value
+
+    async def _get_run_artifact_types(self, run_id: int, connection: Any) -> set[str]:
+        rows = await connection.fetch(
+            "SELECT DISTINCT artifact_type FROM artifacts WHERE run_id = $1",
+            run_id,
+        )
+        return {str(row["artifact_type"]) for row in rows if row.get("artifact_type")}
 
     def _parse_active_task_ids(self, active_task_id: str | None) -> list[str]:
         if not active_task_id:
@@ -229,6 +253,25 @@ class AdminService:
                         "current_stage": current_stage,
                         "error": "Run has not been stuck long enough",
                     }
+
+                required_artifacts = _STAGE_REQUIRED_ARTIFACTS.get(target_stage, [])
+                if required_artifacts:
+                    existing_artifacts = await self._get_run_artifact_types(run_id_int, connection)
+                    missing_artifacts = [
+                        artifact_type
+                        for artifact_type in required_artifacts
+                        if artifact_type not in existing_artifacts
+                    ]
+                    if missing_artifacts:
+                        return {
+                            "ok": False,
+                            "run_id": run_id,
+                            "current_stage": current_stage,
+                            "error": (
+                                f"Cannot advance to {target_stage}: missing required artifacts: "
+                                f"{missing_artifacts}"
+                            ),
+                        }
 
                 active_task_id = row["active_task_id"]
                 updated = await connection.fetchrow(

@@ -115,6 +115,10 @@ def test_get_stuck_runs_queries_pool(monkeypatch) -> None:
 
 def test_unstick_run_updates_generating_stage(monkeypatch) -> None:
     class _Conn:
+        async def fetch(self, query, *_args):
+            assert "SELECT DISTINCT artifact_type FROM artifacts" in query
+            return [{"artifact_type": "script"}]
+
         async def fetchrow(self, query, *_args):
             if query.startswith("SELECT"):
                 return {
@@ -185,6 +189,55 @@ def test_unstick_run_rejects_if_not_stuck_long_enough(monkeypatch) -> None:
 
     assert result["ok"] is False
     assert result["error"] == "Run has not been stuck long enough"
+
+
+def test_unstick_run_requires_artifacts_before_advancing(monkeypatch) -> None:
+    class _Conn:
+        def __init__(self, artifact_types=None):
+            self._artifact_types = artifact_types or []
+
+        async def fetchrow(self, query, *_args):
+            if query.startswith("SELECT"):
+                return {
+                    "id": 42,
+                    "current_stage": "SCRIPT_GENERATING",
+                    "status": "running",
+                    "active_task_id": None,
+                    "updated_at": datetime(2025, 1, 1, tzinfo=timezone.utc),
+                }
+            return {
+                "id": 42,
+                "current_stage": "SCRIPT_REVIEW",
+                "status": "pending",
+                "updated_at": datetime.now(tz=timezone.utc),
+            }
+
+        async def fetch(self, query, *_args):
+            assert "SELECT DISTINCT artifact_type FROM artifacts" in query
+            return [{"artifact_type": artifact_type} for artifact_type in self._artifact_types]
+
+    async def _fake_get_pool_missing():
+        return _FakePool(_Conn(artifact_types=[]))
+
+    async def _fake_get_pool_with_script():
+        return _FakePool(_Conn(artifact_types=["script"]))
+
+    monkeypatch.setattr("creator_service.admin_service.get_pool", _fake_get_pool_missing)
+    service = AdminService()
+
+    missing_result = asyncio.run(service.unstick_run("42"))
+
+    assert missing_result["ok"] is False
+    assert missing_result["error"] == (
+        "Cannot advance to SCRIPT_REVIEW: missing required artifacts: ['script']"
+    )
+
+    monkeypatch.setattr("creator_service.admin_service.get_pool", _fake_get_pool_with_script)
+
+    success_result = asyncio.run(service.unstick_run("42"))
+
+    assert success_result["ok"] is True
+    assert success_result["current_stage"] == "SCRIPT_REVIEW"
 
 
 def test_clear_cache_only_deletes_matching_prefix(monkeypatch) -> None:
