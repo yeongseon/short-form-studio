@@ -26,6 +26,7 @@ from creator_service.render_service import render_service as _render_service
 from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
+from creator_service.telemetry import trace_task
 from creator_service.visual_asset_service import visual_asset_service as _visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
 
@@ -38,6 +39,7 @@ _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
 
 class _StageGuardError(ValueError):
     pass
+
 
 # Map profile name → RenderProfile constructor
 _PROFILE_REGISTRY: dict[str, Callable[[], RenderProfile]] = {
@@ -66,7 +68,9 @@ async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
     except Exception:
         logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
 
+
 @celery_app.task(bind=True, name="render_video")
+@trace_task("render_video")
 def render_video(
     self,
     run_id: int,
@@ -171,10 +175,9 @@ def render_video(
                     ffmpeg.concatenate_audio(ordered_audio_paths, concat_path)
                     audio_path = Path(concat_path)
 
-                    scene_durations = [
-                        duration_by_section[sid]
-                        for sid in ordered_sections
-                    ][:scene_count]
+                    scene_durations = [duration_by_section[sid] for sid in ordered_sections][
+                        :scene_count
+                    ]
                     if len(scene_durations) < scene_count:
                         total_known = sum(scene_durations)
                         remaining = max(0.0, profile_data["max_duration_seconds"] - total_known)
@@ -193,9 +196,15 @@ def render_video(
                             sid in sub_by_section for sid in ordered_sections
                         )
                         if all_subtitles_covered:
-                            ordered_sub_paths = [sub_by_section[sid].path for sid in ordered_sections]
-                            ordered_sub_durations = [duration_by_section[sid] for sid in ordered_sections]
-                            merged_sub_path = f"{_ARTIFACT_ROOT}/{run_id}/render/subtitles_merged.srt"
+                            ordered_sub_paths = [
+                                sub_by_section[sid].path for sid in ordered_sections
+                            ]
+                            ordered_sub_durations = [
+                                duration_by_section[sid] for sid in ordered_sections
+                            ]
+                            merged_sub_path = (
+                                f"{_ARTIFACT_ROOT}/{run_id}/render/subtitles_merged.srt"
+                            )
                             ffmpeg.merge_subtitles(
                                 ordered_sub_paths, ordered_sub_durations, merged_sub_path
                             )

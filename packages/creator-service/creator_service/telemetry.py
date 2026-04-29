@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import logging
 import os
 from contextlib import nullcontext
@@ -220,3 +221,21 @@ def add_trace_context_to_log(record: dict[str, Any]) -> dict[str, Any]:
         enriched["trace_id"] = format(span_context.trace_id, "032x")
         enriched["span_id"] = format(span_context.span_id, "016x")
     return enriched
+
+
+def trace_task(task_name: str):
+    """Decorator to add OTEL tracing to Celery tasks."""
+
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            tracer = get_tracer(__name__)
+            with tracer.start_as_current_span(
+                f"celery.task.{task_name}",
+                attributes={"celery.task_name": task_name},
+            ):
+                return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
