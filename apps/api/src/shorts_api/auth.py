@@ -11,6 +11,7 @@ import logging
 import os
 from dataclasses import dataclass
 
+from creator_service.db import fetch_one
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -65,8 +66,22 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._api_key = api_key or os.getenv("API_KEY")
 
+    async def _workspace_exists(self, workspace_id: int) -> bool:
+        if not os.getenv("DATABASE_URL"):
+            return False
+        try:
+            row = await fetch_one(
+                "SELECT 1 AS exists FROM creator_projects WHERE workspace_id = $1 LIMIT 1",
+                workspace_id,
+            )
+            return row is not None
+        except Exception:
+            _logger.warning(
+                "Failed to validate workspace id against DB", extra={"workspace_id": workspace_id}
+            )
+            return False
+
     async def _resolve_workspace(self, api_key: str, request: Request) -> CurrentUser:
-        # TODO(#395): Replace header-only derivation with workspace_members DB validation.
         if not api_key:
             return CurrentUser(workspace_id=None, workspace_name=None)
         requested_ws = request.headers.get("X-Workspace-Id")
@@ -79,7 +94,10 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             _logger.warning("Invalid X-Workspace-Id header", extra={"header": requested_ws})
             return CurrentUser(workspace_id=None, workspace_name=None)
 
-        _logger.info("Workspace derived from X-Workspace-Id header (not DB-verified yet)")
+        if not await self._workspace_exists(ws_id):
+            _logger.warning("Workspace id from header not found", extra={"workspace_id": ws_id})
+            return CurrentUser(workspace_id=None, workspace_name=None)
+
         return CurrentUser(workspace_id=ws_id, workspace_name=f"workspace-{ws_id}")
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
