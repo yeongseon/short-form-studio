@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 from fastapi.routing import APIRoute
+from shorts_api.auth import CurrentUser
 from shorts_api.main import app
 
 
@@ -64,24 +65,27 @@ def stub_artifact_download_services(monkeypatch: pytest.MonkeyPatch, tmp_path):
 
     route = _find_route("download_artifact")
     stub_project_service = StubProjectService()
+    auth_context = {"workspace_id": 1}
+
+    async def stub_get_current_user(_request):
+        return CurrentUser(user_id=123, workspace_id=auth_context["workspace_id"])
+
     monkeypatch.setitem(route.endpoint.__globals__, "run_service", StubRunService())
     monkeypatch.setitem(route.endpoint.__globals__, "project_service", stub_project_service)
     monkeypatch.setitem(
         route.endpoint.__globals__, "artifact_download_service", StubArtifactDownloadService()
     )
+    monkeypatch.setitem(route.endpoint.__globals__, "get_current_user", stub_get_current_user)
 
-    return stub_project_service
+    return {"project_service": stub_project_service, "auth_context": auth_context}
 
 
 @pytest.mark.asyncio
 async def test_download_artifact_forbidden_workspace_mismatch(
     client, stub_artifact_download_services
 ):
-    _ = stub_artifact_download_services
-    response = await client.get(
-        "/api/creator/runs/10/artifacts/99/download",
-        headers={"X-Workspace-Id": "2"},
-    )
+    stub_artifact_download_services["project_service"].workspace_id = 2
+    response = await client.get("/api/creator/runs/10/artifacts/99/download")
 
     assert response.status_code == 403
     assert response.json() == {"detail": "Forbidden"}
@@ -89,11 +93,8 @@ async def test_download_artifact_forbidden_workspace_mismatch(
 
 @pytest.mark.asyncio
 async def test_download_artifact_rejects_none_workspace(client, stub_artifact_download_services):
-    stub_artifact_download_services.workspace_id = None
-    response = await client.get(
-        "/api/creator/runs/10/artifacts/99/download",
-        headers={"X-Workspace-Id": "2"},
-    )
+    stub_artifact_download_services["auth_context"]["workspace_id"] = None
+    response = await client.get("/api/creator/runs/10/artifacts/99/download")
 
     assert response.status_code == 403
     assert response.json() == {"detail": "Forbidden"}
@@ -103,7 +104,7 @@ async def test_download_artifact_rejects_none_workspace(client, stub_artifact_do
 async def test_download_artifact_without_workspace_context_forbidden(
     client, stub_artifact_download_services
 ):
-    _ = stub_artifact_download_services
+    stub_artifact_download_services["auth_context"]["workspace_id"] = None
     response = await client.get("/api/creator/runs/10/artifacts/99/download")
 
     assert response.status_code == 403

@@ -3,6 +3,7 @@
 import logging
 import os
 from datetime import datetime, timezone
+from typing import Any, cast
 from creator_domain.sanitize import UnsafePathComponent, sanitize_path_component
 from creator_service.artifact_download_service import artifact_download_service
 from creator_service.project_service import project_service
@@ -13,6 +14,27 @@ from starlette.responses import FileResponse, RedirectResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["runs"])
+
+
+def _workspace_id_from_user(user: CurrentUser | dict[str, object] | object) -> int | None:
+    if isinstance(user, CurrentUser):
+        return user.workspace_id
+    if isinstance(user, dict):
+        workspace_id = user.get("workspace_id")
+    else:
+        workspace_id = cast(Any, user).workspace_id
+    if workspace_id is None:
+        return None
+    if isinstance(workspace_id, bool):
+        return None
+    if isinstance(workspace_id, int):
+        return workspace_id
+    if isinstance(workspace_id, str):
+        try:
+            return int(workspace_id)
+        except ValueError:
+            return None
+    return None
 
 
 @router.get("/runs/{run_id}/artifacts/{artifact_id}/download")
@@ -34,53 +56,14 @@ async def download_artifact(
         raise HTTPException(status_code=404, detail="Project not found")
 
     user: CurrentUser = await get_current_user(request)
-    user_workspace_id = getattr(user, "workspace_id", None)
-
-    request_workspace_id_raw = request.headers.get("X-Workspace-Id")
-    request_workspace_id: int | None = None
-    if request_workspace_id_raw is not None:
-        try:
-            request_workspace_id = int(request_workspace_id_raw)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid X-Workspace-Id header") from exc
-
+    user_workspace_id = _workspace_id_from_user(user)
     project_workspace_id = getattr(project, "workspace_id", None)
 
-    strict_mode = os.getenv("ARTIFACT_ACCESS_STRICT", "true").lower() in ("1", "true")
-    auth_configured = bool(os.getenv("API_KEY")) or bool(
-        os.getenv("API_KEY_WORKSPACE_MAP", "").strip()
-    )
-    strict_mode = strict_mode and auth_configured
+    if user_workspace_id is None:
+        logger.warning("No authenticated workspace context on artifact access; rejecting request")
+        raise HTTPException(status_code=403, detail="Forbidden")
 
-    if strict_mode:
-        if user_workspace_id is None:
-            logger.warning(
-                "No authenticated workspace context on strict-mode artifact access; rejecting request"
-            )
-            raise HTTPException(status_code=403, detail="Forbidden")
-        if request_workspace_id is not None and request_workspace_id != user_workspace_id:
-            raise HTTPException(status_code=403, detail="Forbidden")
-        access_workspace_id = user_workspace_id
-    else:
-        access_workspace_id = request_workspace_id
-        if (
-            request_workspace_id is not None
-            and user_workspace_id is not None
-            and request_workspace_id != user_workspace_id
-        ):
-            logger.warning(
-                "Workspace header/user mismatch in non-strict mode; honoring header for backward compatibility — "
-                "request_workspace_id=%s, user_workspace_id=%s, run_id=%s",
-                request_workspace_id,
-                user_workspace_id,
-                run_id,
-            )
-
-    if (
-        access_workspace_id is not None
-        and project_workspace_id is not None
-        and access_workspace_id != project_workspace_id
-    ):
+    if project_workspace_id is not None and user_workspace_id != project_workspace_id:
         raise HTTPException(status_code=403, detail="Forbidden")
 
     artifact = await artifact_download_service.get_artifact_by_id(artifact_id)

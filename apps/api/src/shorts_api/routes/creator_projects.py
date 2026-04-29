@@ -1,3 +1,4 @@
+# pyright: reportMissingImports=false, reportGeneralTypeIssues=false
 """Routes for creator project management."""
 
 import os
@@ -10,9 +11,29 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from shorts_api.auth import get_current_user
-from shorts_api.routes import creator_runs_utils
+from shorts_api.routes import creator_runs_utils  # type: ignore[attr-defined]
 
 router = APIRouter(prefix="/projects", tags=["projects"])
+
+
+def _workspace_id_from_auth_user(user: Any) -> int | None:
+    if isinstance(user, dict):
+        value = user.get("workspace_id")
+    else:
+        try:
+            value = user.workspace_id
+        except AttributeError:
+            return None
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
 
 
 class CreateProjectRequest(BaseModel):
@@ -29,7 +50,7 @@ async def create_project(
     request: CreateProjectRequest,
     user: Any = Depends(get_current_user),
 ) -> dict[str, object]:
-    user_workspace_id = getattr(user, "workspace_id", None)
+    user_workspace_id = _workspace_id_from_auth_user(user)
     create_kwargs = {
         "title": request.title,
         "source_type": request.source_type,
@@ -58,7 +79,7 @@ async def update_project(
     request: UpdateProjectRequest,
     user: Any = Depends(get_current_user),
 ) -> dict[str, object]:
-    user_workspace_id = getattr(user, "workspace_id", None)
+    user_workspace_id = _workspace_id_from_auth_user(user)
     current_project = await project_service.get_project(project_id)
     if current_project is None:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -81,7 +102,7 @@ async def get_project_detail(
     project_id: int,
     user: Any = Depends(get_current_user),
 ) -> dict[str, object]:
-    user_workspace_id = getattr(user, "workspace_id", None)
+    user_workspace_id = _workspace_id_from_auth_user(user)
     project = await project_service.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -102,7 +123,7 @@ async def list_projects(
     offset: int = Query(default=0, ge=0),
     user: Any = Depends(get_current_user),
 ) -> dict[str, object]:
-    user_workspace_id = getattr(user, "workspace_id", None)
+    user_workspace_id = _workspace_id_from_auth_user(user)
     if user_workspace_id is None:
         projects = await project_service.list_projects(limit=limit, offset=offset)
         total = await project_service.count_projects()
@@ -142,10 +163,10 @@ async def delete_project(
     project_id: int,
     user: Any = Depends(get_current_user),
 ) -> dict[str, object]:
-    user_workspace_id = getattr(user, "workspace_id", None)
+    user_workspace_id = _workspace_id_from_auth_user(user)
     get_project = getattr(project_service, "get_project", None)
     if callable(get_project):
-        project = await get_project(project_id)
+        project = await get_project(project_id)  # type: ignore[misc]
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
         project_workspace_id = getattr(project, "workspace_id", None)

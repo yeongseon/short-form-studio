@@ -1,4 +1,5 @@
 import pytest
+from types import SimpleNamespace
 
 from shorts_api.routes import creator_artifact_download as route_mod
 
@@ -51,6 +52,11 @@ async def test_download_nonlocal_storage_redirects(client, monkeypatch: pytest.M
 
     monkeypatch.setattr(route_mod, "run_service", _StubRunService())
     monkeypatch.setattr(route_mod, "project_service", _StubProjectService())
+
+    async def _stub_get_current_user(_request):
+        return SimpleNamespace(user_id=101, workspace_id=1)
+
+    monkeypatch.setattr(route_mod, "get_current_user", _stub_get_current_user)
     monkeypatch.setattr(
         route_mod, "artifact_download_service", _StubArtifactDownloadService(artifact)
     )
