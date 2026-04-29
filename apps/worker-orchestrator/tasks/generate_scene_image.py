@@ -234,6 +234,20 @@ def generate_scene_image(
                         params["output_path"] = target_path
                         await provider.generate(effective_prompt, params)
 
+                        from creator_service.artifact_storage_integration import (
+                            store_artifact_file,
+                        )
+
+                        try:
+                            uploaded = store_artifact_file(run_id, target_path, "image/png")
+                        except Exception as exc:
+                            logger.error(
+                                "Failed to upload artifact %s to remote storage: %s",
+                                target_path,
+                                exc,
+                            )
+                            raise
+
                         asset = await _visual_asset_service.create_asset(
                             run_id=run_id,
                             scene_id=target_scene.scene_id,
@@ -241,19 +255,10 @@ def generate_scene_image(
                             prompt_snapshot=effective_prompt,
                             model_used=model_key,
                             provider_type=entry.provider_type,
+                            storage_provider=uploaded.storage_provider,
+                            storage_key=uploaded.key,
                             is_active=is_active,
                         )
-                        try:
-                            from creator_service.artifact_storage_integration import (
-                                store_artifact_file,
-                            )
-
-                            store_artifact_file(run_id, target_path, "image/png")
-                        except Exception:
-                            logger.warning(
-                                "Object storage upload failed for run %d, local file retained",
-                                run_id,
-                            )
 
                         scene_result.update(
                             {

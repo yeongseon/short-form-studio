@@ -242,19 +242,20 @@ def render_video(
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
             ffmpeg.render(render_input, Path(output_path))
 
-            storage_provider: str | None = None
-            storage_key: str | None = None
-            try:
-                from creator_service.artifact_storage_integration import store_artifact_file
+            from creator_service.artifact_storage_integration import store_artifact_file
 
+            try:
                 uploaded = store_artifact_file(run_id, output_path, "video/mp4")
-                if uploaded is not None:
-                    storage_provider = uploaded.storage_provider
-                    storage_key = uploaded.key
-            except Exception:
-                logger.warning(
-                    "Object storage upload failed for run %d, local file retained", run_id
+            except Exception as exc:
+                logger.error(
+                    "Failed to upload artifact %s to remote storage: %s",
+                    output_path,
+                    exc,
                 )
+                raise
+
+            storage_provider = uploaded.storage_provider
+            storage_key = uploaded.key
 
             artifact = await _render_service.create_artifact(
                 run_id=run_id,

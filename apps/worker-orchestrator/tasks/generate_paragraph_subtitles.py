@@ -141,21 +141,22 @@ def generate_paragraph_subtitles(
             params["output_path"] = subtitle_path
             await provider.transcribe(audio_path, params=params)
 
-            storage_provider: str | None = None
-            storage_key: str | None = None
-            try:
-                from creator_service.artifact_storage_integration import store_artifact_file
+            from creator_service.artifact_storage_integration import store_artifact_file
 
+            try:
                 uploaded = store_artifact_file(
                     run_id, subtitle_path, f"application/{subtitle_format}"
                 )
-                if uploaded is not None:
-                    storage_provider = uploaded.storage_provider
-                    storage_key = uploaded.key
-            except Exception:
-                logger.warning(
-                    "Object storage upload failed for run %d, local file retained", run_id
+            except Exception as exc:
+                logger.error(
+                    "Failed to upload artifact %s to remote storage: %s",
+                    subtitle_path,
+                    exc,
                 )
+                raise
+
+            storage_provider = uploaded.storage_provider
+            storage_key = uploaded.key
 
             # 4. Save per-paragraph subtitle artifact
             artifact = await _subtitle_service.create_paragraph_artifact(

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from creator_service.object_storage import StorageResult
 
 
@@ -53,7 +55,7 @@ def test_store_artifact_file_uploads_relative_key(tmp_path, monkeypatch):
     assert backend.calls == [("42/render/output.mp4", b"video-bytes", "video/mp4")]
 
 
-def test_store_artifact_file_returns_none_on_upload_failure(tmp_path, monkeypatch):
+def test_store_artifact_file_raises_on_upload_failure(tmp_path, monkeypatch):
     from creator_service import artifact_storage_integration as mod
 
     run_id = 7
@@ -67,16 +69,16 @@ def test_store_artifact_file_returns_none_on_upload_failure(tmp_path, monkeypatc
             self,
             _key: str,
             _data: bytes,
-            _content_type: str = "application/octet-stream",
+            content_type: str = "application/octet-stream",
         ) -> StorageResult:
+            _ = content_type
             raise RuntimeError("upload failed")
 
     monkeypatch.setattr(mod, "_ARTIFACT_ROOT", artifact_root.resolve())
     monkeypatch.setattr(mod, "get_storage_backend", lambda: _FailingBackend())
 
-    result = mod.store_artifact_file(run_id, local_path, "audio/wav")
-
-    assert result is None
+    with pytest.raises(RuntimeError, match="upload failed"):
+        mod.store_artifact_file(run_id, local_path, "audio/wav")
 
 
 def test_get_artifact_url_delegates_to_backend(monkeypatch):

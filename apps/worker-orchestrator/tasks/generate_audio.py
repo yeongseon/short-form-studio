@@ -160,19 +160,20 @@ def generate_audio(
                 params["output_path"] = audio_path
                 await provider.generate(script_text, voice=voice, params=params)
 
-                storage_provider: str | None = None
-                storage_key: str | None = None
-                try:
-                    from creator_service.artifact_storage_integration import store_artifact_file
+                from creator_service.artifact_storage_integration import store_artifact_file
 
+                try:
                     uploaded = store_artifact_file(run_id, audio_path, "audio/wav")
-                    if uploaded is not None:
-                        storage_provider = uploaded.storage_provider
-                        storage_key = uploaded.key
-                except Exception:
-                    logger.warning(
-                        "Object storage upload failed for run %d, local file retained", run_id
+                except Exception as exc:
+                    logger.error(
+                        "Failed to upload artifact %s to remote storage: %s",
+                        audio_path,
+                        exc,
                     )
+                    raise
+
+                storage_provider = uploaded.storage_provider
+                storage_key = uploaded.key
 
                 # 6. Save audio artifact via service.
                 artifact = await _audio_service.create_artifact(
