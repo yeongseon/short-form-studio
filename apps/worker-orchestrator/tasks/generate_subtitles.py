@@ -7,7 +7,34 @@ Key design decisions:
 - Subtitle generation is all-or-nothing for a run (no partial scene-level success).
 - GPU lock is held for the full generation window when required by provider.
 - Subtitles are saved to local filesystem: data/artifacts/{run_id}/subtitles/subtitles.srt
+
+Idempotency:
+    IDEMPOTENT - Safe to retry:
+    - Stage guard rejects if run has progressed past SUBTITLE_GENERATING.
+    - Multiple invocations attempt generation; only first successful subtitle save and stage
+      transition complete (conditional_update_run uses compare-and-set).
+    - Subsequent invocations overwrite subtitle file but stage transition no-ops if run
+      has already advanced to RENDER_GENERATING.
+    - Idempotency guaranteed by acks_late + task_reject_on_worker_lost.
+
+Side effects:
+    - Filesystem: Saves subtitles to data/artifacts/{run_id}/subtitles/subtitles.{format}
+      (overwrites on retry).
+    - Database: Creates subtitle artifact record (run_id, path, format, model_used, provider_type).
+    - Database: Atomically transitions run stage to RENDER_GENERATING (via conditional_update_run).
+    - GPU Resource: Acquires/releases GPU lock in Redis (if provider requires GPU).
+
+Retry safety:
+    SAFE FOR RETRY - Configured with:
+    - max_retries=3
+    - autoretry_for=(ProviderTimeoutError, RateLimitError)
+    - retry_backoff=True, retry_jitter=True
+    - soft_time_limit=300s, hard time_limit=360s
+    On timeout: Task transitions run to FAILED atomically before raising.
 """
+
+# pyright: reportMissingImports=false
+# ruff: noqa: E402
 
 from __future__ import annotations
 
@@ -15,7 +42,7 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Literal
+from typing import Any
 
 redis: Any  # optional dependency; may be None at runtime
 try:
@@ -23,8 +50,10 @@ try:
 except ImportError:
     redis = None
 
+from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
+from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.audio_service import audio_service as _audio_service
@@ -78,16 +107,28 @@ async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
         logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
 
 
-@celery_app.task(bind=True, name="generate_subtitles")
+@celery_app.task(
+    bind=True,
+    autoretry_for=(ProviderTimeoutError, RateLimitError),
+    retry_backoff=True,
+    retry_jitter=True,
+    max_retries=3,
+    soft_time_limit=300,
+    time_limit=360,
+    name="generate_subtitles",
+)
 def generate_subtitles(
     self,
     run_id: int,
     subtitle_model: str = "whisper-small",
-    subtitle_format: Literal["srt", "vtt"] = "srt",
+    subtitle_format: str = "srt",
 ) -> dict[str, object]:
     start_time = datetime.now(timezone.utc)
     start_iso = start_time.isoformat()
     task_id = str(getattr(getattr(self, "request", None), "id", None) or f"run-{run_id}")
+    # Idempotency: acks_late + task_reject_on_worker_lost ensures redelivery on crash.
+    # If the run has already advanced past this stage, the worker's stage check will
+    # naturally skip processing (handled by run_service stage validation).
 
     provider_type: str | None = None
     endpoint: str | None = None
@@ -173,7 +214,23 @@ def generate_subtitles(
                     raise RuntimeError(
                         f"No audio artifact found for run {run_id}; cannot transcribe"
                     )
-                await provider.transcribe(audio_path, params=params)
+                try:
+                    await provider.transcribe(audio_path, params=params)
+                except (TimeoutError, ConnectionError) as exc:
+                    raise ProviderTimeoutError(
+                        f"Provider timed out during subtitle generation for run {run_id}"
+                    ) from exc
+                except SoftTimeLimitExceeded:
+                    raise
+                except Exception as exc:
+                    message = str(exc).lower()
+                    if "429" in message or "rate" in message:
+                        raise RateLimitError(
+                            f"Provider rate limited subtitle generation for run {run_id}"
+                        ) from exc
+                    raise ProviderError(
+                        f"Provider failed subtitle generation for run {run_id}"
+                    ) from exc
 
                 from creator_service.artifact_storage_integration import store_artifact_file
 
@@ -253,7 +310,29 @@ def generate_subtitles(
     except _StageGuardError:
         # Validation rejection — do NOT mutate run state to FAILED.
         raise
-    except Exception:
+    except SoftTimeLimitExceeded:
+        logger.error("Task timed out for run %s", run_id)
+        # Transition run to FAILED so it doesn't stay stuck in generating stage
+        try:
+            asyncio.run(
+                _run_service.storage.conditional_update_run(
+                    run_id,
+                    {
+                        "current_stage": RunStage.FAILED.value,
+                        "status": "failed",
+                    },
+                    expected_stages=_SAFE_STAGES,
+                )
+            )
+        except Exception:
+            logger.exception("Failed to mark run %d as FAILED after timeout", run_id)
+        raise
+    except Exception as exc:
+        if (
+            isinstance(exc, (ProviderTimeoutError, RateLimitError))
+            and self.request.retries < self.max_retries
+        ):
+            raise
         # Unexpected error — atomic conditional fail.
         try:
             applied, _ = asyncio.run(

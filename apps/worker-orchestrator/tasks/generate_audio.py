@@ -7,7 +7,33 @@ Key design decisions:
 - Audio generation is all-or-nothing for a run (no partial scene-level success).
 - GPU lock is held for the full generation window when required by provider.
 - Audio is saved to local filesystem: data/artifacts/{run_id}/audio/audio.wav
+
+Idempotency:
+    IDEMPOTENT - Safe to retry:
+    - Stage guard rejects if run has progressed past AUDIO_GENERATING.
+    - Multiple invocations attempt generation; only first successful audio save and stage
+      transition complete (conditional_update_run uses compare-and-set).
+    - Subsequent invocations will overwrite the audio file but stage transition will no-op
+      if run has already advanced to SUBTITLE_GENERATING.
+    - Idempotency guaranteed by acks_late + task_reject_on_worker_lost.
+
+Side effects:
+    - Filesystem: Saves audio to data/artifacts/{run_id}/audio/audio.wav (overwrites on retry).
+    - Database: Creates audio artifact record (run_id, path, model_used, provider_type).
+    - Database: Atomically transitions run stage to SUBTITLE_GENERATING (via conditional_update_run).
+    - GPU Resource: Acquires/releases GPU lock in Redis (if provider requires GPU).
+
+Retry safety:
+    SAFE FOR RETRY - Configured with:
+    - max_retries=3
+    - autoretry_for=(ProviderTimeoutError, RateLimitError)
+    - retry_backoff=True, retry_jitter=True
+    - soft_time_limit=300s, hard time_limit=360s
+    On timeout: Task transitions run to FAILED atomically before raising.
 """
+
+# pyright: reportMissingImports=false
+# ruff: noqa: E402
 
 from __future__ import annotations
 
@@ -23,8 +49,10 @@ try:
 except ImportError:
     redis = None
 
+from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
+from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.audio_service import audio_service as _audio_service
@@ -77,7 +105,16 @@ async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
         logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
 
 
-@celery_app.task(bind=True, name="generate_audio")
+@celery_app.task(
+    bind=True,
+    autoretry_for=(ProviderTimeoutError, RateLimitError),
+    retry_backoff=True,
+    retry_jitter=True,
+    max_retries=3,
+    soft_time_limit=300,
+    time_limit=360,
+    name="generate_audio",
+)
 def generate_audio(
     self,
     run_id: int,
@@ -87,6 +124,9 @@ def generate_audio(
     start_time = datetime.now(timezone.utc)
     start_iso = start_time.isoformat()
     task_id = str(getattr(getattr(self, "request", None), "id", None) or f"run-{run_id}")
+    # Idempotency: acks_late + task_reject_on_worker_lost ensures redelivery on crash.
+    # If the run has already advanced past this stage, the worker's stage check will
+    # naturally skip processing (handled by run_service stage validation).
 
     provider_type: str | None = None
     endpoint: str | None = None
@@ -158,7 +198,23 @@ def generate_audio(
                 # 5. Generate audio via provider.
                 params = dict(entry.default_params or {})
                 params["output_path"] = audio_path
-                await provider.generate(script_text, voice=voice, params=params)
+                try:
+                    await provider.generate(script_text, voice=voice, params=params)
+                except (TimeoutError, ConnectionError) as exc:
+                    raise ProviderTimeoutError(
+                        f"Provider timed out during audio generation for run {run_id}"
+                    ) from exc
+                except SoftTimeLimitExceeded:
+                    raise
+                except Exception as exc:
+                    message = str(exc).lower()
+                    if "429" in message or "rate" in message:
+                        raise RateLimitError(
+                            f"Provider rate limited audio generation for run {run_id}"
+                        ) from exc
+                    raise ProviderError(
+                        f"Provider failed audio generation for run {run_id}"
+                    ) from exc
 
                 from creator_service.artifact_storage_integration import store_artifact_file
 
@@ -235,7 +291,29 @@ def generate_audio(
     except _StageGuardError:
         # Validation rejection — do NOT mutate run state to FAILED.
         raise
-    except Exception:
+    except SoftTimeLimitExceeded:
+        logger.error("Task timed out for run %s", run_id)
+        # Transition run to FAILED so it doesn't stay stuck in generating stage
+        try:
+            asyncio.run(
+                _run_service.storage.conditional_update_run(
+                    run_id,
+                    {
+                        "current_stage": RunStage.FAILED.value,
+                        "status": "failed",
+                    },
+                    expected_stages=_SAFE_STAGES,
+                )
+            )
+        except Exception:
+            logger.exception("Failed to mark run %d as FAILED after timeout", run_id)
+        raise
+    except Exception as exc:
+        if (
+            isinstance(exc, (ProviderTimeoutError, RateLimitError))
+            and self.request.retries < self.max_retries
+        ):
+            raise
         # Unexpected error — atomic conditional fail.
         try:
             applied, _ = asyncio.run(

@@ -68,7 +68,9 @@ class FakeStorage:
         return True, dict(row)
 
 
-def _make_storage(run_id: int = 101, stage: str = "VISUAL_PLAN_GENERATING", **extra: Any) -> FakeStorage:
+def _make_storage(
+    run_id: int = 101, stage: str = "VISUAL_PLAN_GENERATING", **extra: Any
+) -> FakeStorage:
     """Create a FakeStorage pre-populated with a single run in the given stage."""
     run_row: dict[str, object] = {"id": run_id, "current_stage": stage, **extra}
     return FakeStorage(runs={run_id: run_row})
@@ -77,6 +79,7 @@ def _make_storage(run_id: int = 101, stage: str = "VISUAL_PLAN_GENERATING", **ex
 @dataclass
 class FakeScriptDraft:
     """Minimal fake for the ScriptDraft domain model returned by script_service."""
+
     markdown_content: str | None = None
     structured_script: list[Any] | None = None
 
@@ -99,6 +102,7 @@ class FakeScriptService:
 @dataclass
 class FakeSection:
     """Minimal structured script section with model_dump support."""
+
     section_id: str = "sec-0"
     type: str = "hook"
     text: str = "Hook text"
@@ -120,7 +124,9 @@ class FakeVisualPlanService:
 
 
 class FakeRegistry:
-    def __init__(self, entry: FakeEntry, provider: FakeProvider, resolve_error: Exception | None = None) -> None:
+    def __init__(
+        self, entry: FakeEntry, provider: FakeProvider, resolve_error: Exception | None = None
+    ) -> None:
         self.entry = entry
         self.provider = provider
         self.resolve_error = resolve_error
@@ -156,7 +162,9 @@ def _patch_services(
 ) -> None:
     monkeypatch.setattr(generate_visual_plan_module, "_script_service", script_service)
     monkeypatch.setattr(generate_visual_plan_module, "_visual_plan_service", visual_plan_service)
-    monkeypatch.setattr(generate_visual_plan_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr(
+        generate_visual_plan_module, "_run_service", SimpleNamespace(storage=storage)
+    )
 
 
 def _invoke_task(**kwargs: Any) -> dict[str, object]:
@@ -169,13 +177,15 @@ def _make_llm_response(sections: list[dict[str, str]]) -> str:
     """Build a valid LLM JSON response matching the expected format."""
     scenes = []
     for sec in sections:
-        scenes.append({
-            "section_id": sec.get("section_id", "sec-0"),
-            "prompt": f"Visual for {sec.get('text', '')}",
-            "style_tags": ["cinematic"],
-            "mood": "dramatic",
-            "composition": "wide shot",
-        })
+        scenes.append(
+            {
+                "section_id": sec.get("section_id", "sec-0"),
+                "prompt": f"Visual for {sec.get('text', '')}",
+                "style_tags": ["cinematic"],
+                "mood": "dramatic",
+                "composition": "wide shot",
+            }
+        )
     return json.dumps(scenes)
 
 
@@ -198,8 +208,16 @@ def test_happy_path_local_model_with_gpu_lock(monkeypatch: pytest.MonkeyPatch) -
     lock_calls: list[str] = []
     release_calls: list[str] = []
 
-    monkeypatch.setattr(generate_visual_plan_module, "acquire_gpu_lock", lambda client, task_id: lock_calls.append(task_id))
-    monkeypatch.setattr(generate_visual_plan_module, "release_gpu_lock", lambda client, task_id: release_calls.append(task_id))
+    monkeypatch.setattr(
+        generate_visual_plan_module,
+        "acquire_gpu_lock",
+        lambda client, task_id: lock_calls.append(task_id),
+    )
+    monkeypatch.setattr(
+        generate_visual_plan_module,
+        "release_gpu_lock",
+        lambda client, task_id: release_calls.append(task_id),
+    )
 
     script_service = FakeScriptService(draft=FakeScriptDraft(structured_script=sections))
     visual_plan_service = FakeVisualPlanService()
@@ -229,8 +247,16 @@ def test_happy_path_external_model_without_gpu_lock(monkeypatch: pytest.MonkeyPa
     registry = FakeRegistry(entry=entry, provider=provider)
     _patch_registry(monkeypatch, registry)
 
-    monkeypatch.setattr(generate_visual_plan_module, "acquire_gpu_lock", lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")))
-    monkeypatch.setattr(generate_visual_plan_module, "release_gpu_lock", lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")))
+    monkeypatch.setattr(
+        generate_visual_plan_module,
+        "acquire_gpu_lock",
+        lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")),
+    )
+    monkeypatch.setattr(
+        generate_visual_plan_module,
+        "release_gpu_lock",
+        lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")),
+    )
 
     script_service = FakeScriptService(draft=FakeScriptDraft(structured_script=sections))
     visual_plan_service = FakeVisualPlanService()
@@ -272,19 +298,25 @@ def test_happy_path_multi_section_script(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_happy_path_markdown_fallback_single_section(monkeypatch: pytest.MonkeyPatch) -> None:
     """When draft has only markdown_content (no structured_script), produces a single scene."""
-    llm_response = json.dumps([{
-        "section_id": "sec-0",
-        "prompt": "Visual for markdown",
-        "style_tags": ["minimalist"],
-        "mood": "calm",
-        "composition": "medium shot",
-    }])
+    llm_response = json.dumps(
+        [
+            {
+                "section_id": "sec-0",
+                "prompt": "Visual for markdown",
+                "style_tags": ["minimalist"],
+                "mood": "calm",
+                "composition": "medium shot",
+            }
+        ]
+    )
     provider = FakeProvider(result=llm_response)
     entry = FakeEntry(requires_gpu=False)
     registry = FakeRegistry(entry=entry, provider=provider)
     _patch_registry(monkeypatch, registry)
 
-    script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="# My Script\nSome content"))
+    script_service = FakeScriptService(
+        draft=FakeScriptDraft(markdown_content="# My Script\nSome content")
+    )
     visual_plan_service = FakeVisualPlanService()
     storage = _make_storage(run_id=104, stage="VISUAL_PLAN_GENERATING")
     _patch_services(monkeypatch, script_service, visual_plan_service, storage)
@@ -354,7 +386,10 @@ def test_llm_generation_failure_sets_failed_stage(monkeypatch: pytest.MonkeyPatc
     storage = _make_storage(run_id=202, stage="VISUAL_PLAN_GENERATING")
     _patch_services(monkeypatch, script_service, visual_plan_service, storage)
 
-    with pytest.raises(RuntimeError, match="generation failed"):
+    with pytest.raises(
+        generate_visual_plan_module.ProviderError,
+        match="Provider failed visual plan generation",
+    ):
         _invoke_task(run_id=202)
 
     assert visual_plan_service.calls == []
@@ -401,7 +436,9 @@ def test_releases_gpu_lock_when_llm_fails(monkeypatch: pytest.MonkeyPatch) -> No
 
     released: list[str] = []
     monkeypatch.setattr(generate_visual_plan_module, "acquire_gpu_lock", lambda *_: True)
-    monkeypatch.setattr(generate_visual_plan_module, "release_gpu_lock", lambda _, task_id: released.append(task_id))
+    monkeypatch.setattr(
+        generate_visual_plan_module, "release_gpu_lock", lambda _, task_id: released.append(task_id)
+    )
 
     sections = [FakeSection()]
     script_service = FakeScriptService(draft=FakeScriptDraft(structured_script=sections))
@@ -409,7 +446,10 @@ def test_releases_gpu_lock_when_llm_fails(monkeypatch: pytest.MonkeyPatch) -> No
     storage = _make_storage(run_id=204, stage="VISUAL_PLAN_GENERATING")
     _patch_services(monkeypatch, script_service, visual_plan_service, storage)
 
-    with pytest.raises(RuntimeError, match="provider exploded"):
+    with pytest.raises(
+        generate_visual_plan_module.ProviderError,
+        match="Provider failed visual plan generation",
+    ):
         _invoke_task(run_id=204)
 
     assert released == ["run-204"]
@@ -597,13 +637,18 @@ def test_failure_propagates_to_celery(monkeypatch: pytest.MonkeyPatch) -> None:
     storage = _make_storage(run_id=401, stage="VISUAL_PLAN_GENERATING")
     _patch_services(monkeypatch, script_service, visual_plan_service, storage)
 
-    with pytest.raises(RuntimeError, match="LLM exploded"):
+    with pytest.raises(
+        generate_visual_plan_module.ProviderError,
+        match="Provider failed visual plan generation",
+    ):
         _invoke_task(run_id=401)
 
     assert storage.calls == [(401, {"current_stage": "FAILED", "status": "failed"})]
 
 
-def test_release_gpu_lock_failure_still_propagates_original_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_release_gpu_lock_failure_still_propagates_original_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """If release_gpu_lock raises, the original generation error still propagates."""
     sections = [FakeSection()]
     provider = FakeProvider(error=RuntimeError("generation boom"))
@@ -626,11 +671,16 @@ def test_release_gpu_lock_failure_still_propagates_original_error(monkeypatch: p
     storage = _make_storage(run_id=402, stage="VISUAL_PLAN_GENERATING")
     _patch_services(monkeypatch, script_service, visual_plan_service, storage)
 
-    with pytest.raises(RuntimeError, match="generation boom"):
+    with pytest.raises(
+        generate_visual_plan_module.ProviderError,
+        match="Provider failed visual plan generation",
+    ):
         _invoke_task(run_id=402)
 
 
-def test_update_run_failure_in_error_path_still_re_raises_original(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_update_run_failure_in_error_path_still_re_raises_original(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """If conditional_update_run fails in error handler, original exception still propagates."""
     sections = [FakeSection()]
     provider = FakeProvider(error=RuntimeError("original error"))
@@ -644,7 +694,10 @@ def test_update_run_failure_in_error_path_still_re_raises_original(monkeypatch: 
     storage.error = ConnectionError("DB down")
     _patch_services(monkeypatch, script_service, visual_plan_service, storage)
 
-    with pytest.raises(RuntimeError, match="original error"):
+    with pytest.raises(
+        generate_visual_plan_module.ProviderError,
+        match="Provider failed visual plan generation",
+    ):
         _invoke_task(run_id=403)
 
 
@@ -656,7 +709,9 @@ def test_update_run_failure_in_error_path_still_re_raises_original(monkeypatch: 
 class RaceConditionStorage(FakeStorage):
     """Storage that simulates a competing task advancing the run between operations."""
 
-    def __init__(self, run_id: int, initial_stage: str, advanced_stage: str, advance_after: int = 1) -> None:
+    def __init__(
+        self, run_id: int, initial_stage: str, advanced_stage: str, advance_after: int = 1
+    ) -> None:
         super().__init__(runs={run_id: {"id": run_id, "current_stage": initial_stage}})
         self._target_id = run_id
         self._advanced_stage = advanced_stage
@@ -707,14 +762,19 @@ def test_conditional_fail_skips_when_run_already_advanced(monkeypatch: pytest.Mo
     )
     _patch_services(monkeypatch, script_service, visual_plan_service, storage)
 
-    with pytest.raises(RuntimeError, match="task B failed"):
+    with pytest.raises(
+        generate_visual_plan_module.ProviderError,
+        match="Provider failed visual plan generation",
+    ):
         _invoke_task(run_id=501)
 
     assert storage.calls == []
     assert storage._runs[501]["current_stage"] == "VISUAL_PLAN_REVIEW"
 
 
-def test_success_transition_skips_when_run_already_advanced(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_success_transition_skips_when_run_already_advanced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """If a competing task advances the run past visual plan generation,
     the VISUAL_PLAN_REVIEW write must be skipped."""
     sections = [FakeSection()]
@@ -776,13 +836,17 @@ def test_parse_llm_response_missing_section_gets_default() -> None:
         {"section_id": "sec-1", "type": "hook", "text": "Hook"},
         {"section_id": "sec-2", "type": "body", "text": "Body"},
     ]
-    llm_json = json.dumps([{
-        "section_id": "sec-1",
-        "prompt": "LLM prompt for hook",
-        "style_tags": ["anime"],
-        "mood": "energetic",
-        "composition": "close-up",
-    }])
+    llm_json = json.dumps(
+        [
+            {
+                "section_id": "sec-1",
+                "prompt": "LLM prompt for hook",
+                "style_tags": ["anime"],
+                "mood": "energetic",
+                "composition": "close-up",
+            }
+        ]
+    )
 
     result = generate_visual_plan_module._parse_llm_response(llm_json, sections)
 

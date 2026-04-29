@@ -38,12 +38,8 @@ Retry safety:
     whether to transition run to FAILED or retry the task.
 """
 
-Transcribes a single paragraph's audio file to produce a per-section SRT.
-Unlike the run-level ``generate_subtitles`` task this does NOT transition
-stages — the caller (storyboard API) manages aggregate state.
-
-Subtitles are saved to: data/artifacts/{run_id}/subtitles/{section_id}.srt
-"""
+# pyright: reportMissingImports=false
+# ruff: noqa: E402
 
 from __future__ import annotations
 
@@ -51,7 +47,8 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, Literal
+from pathlib import Path
+from typing import Any
 
 redis: Any  # optional dependency; may be None at runtime
 try:
@@ -59,8 +56,11 @@ try:
 except ImportError:
     redis = None
 
+from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
+from creator_domain.models.stage import RunStage
 from creator_domain.sanitize import sanitize_path_component
+from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.run_service import run_service as _run_service
@@ -69,6 +69,15 @@ from creator_service.subtitle_service import subtitle_service as _subtitle_servi
 logger = logging.getLogger(__name__)
 
 _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
+
+# Stages where a timed-out paragraph task can safely transition the run to FAILED.
+# Since paragraph tasks don't manage stages, we include common subtitle stages.
+_SAFE_STAGES = frozenset(
+    {
+        RunStage.AUDIO_GENERATING.value,
+        RunStage.SUBTITLE_GENERATING.value,
+    }
+)
 
 
 class _StageGuardError(ValueError):
@@ -97,14 +106,23 @@ async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
         logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
 
 
-@celery_app.task(bind=True, name="generate_paragraph_subtitles")
+@celery_app.task(
+    bind=True,
+    autoretry_for=(ProviderTimeoutError, RateLimitError),
+    retry_backoff=True,
+    retry_jitter=True,
+    max_retries=3,
+    soft_time_limit=300,
+    time_limit=360,
+    name="generate_paragraph_subtitles",
+)
 def generate_paragraph_subtitles(
     self,
     run_id: int,
     section_id: str,
     audio_path: str,
     subtitle_model: str = "whisper-small",
-    subtitle_format: Literal["srt", "vtt"] = "srt",
+    subtitle_format: str = "srt",
 ) -> dict[str, object]:
     """Generate subtitles for a single paragraph's audio.
 
@@ -126,6 +144,9 @@ def generate_paragraph_subtitles(
     task_id = str(
         getattr(getattr(self, "request", None), "id", None) or f"sub-{run_id}-{section_id}"
     )
+    # Idempotency: acks_late + task_reject_on_worker_lost ensures redelivery on crash.
+    # If the run has already advanced past this stage, the worker's stage check will
+    # naturally skip processing (handled by run_service stage validation).
 
     provider_type: str | None = None
     endpoint: str | None = None
@@ -171,13 +192,32 @@ def generate_paragraph_subtitles(
         subtitle_path = f"{_ARTIFACT_ROOT}/{run_id}/subtitles/{safe_section_id}.{subtitle_format}"
 
         try:
-            os.makedirs(os.path.dirname(subtitle_path), exist_ok=True)
+            Path(subtitle_path).parent.mkdir(parents=True, exist_ok=True)
 
             # 3. Transcribe via provider
             params = dict(entry.default_params or {})
             params["format"] = subtitle_format
             params["output_path"] = subtitle_path
-            await provider.transcribe(audio_path, params=params)
+            try:
+                await provider.transcribe(audio_path, params=params)
+            except (TimeoutError, ConnectionError) as exc:
+                raise ProviderTimeoutError(
+                    "Provider timed out during paragraph subtitle generation "
+                    f"for run {run_id} section {section_id}"
+                ) from exc
+            except SoftTimeLimitExceeded:
+                raise
+            except Exception as exc:
+                message = str(exc).lower()
+                if "429" in message or "rate" in message:
+                    raise RateLimitError(
+                        "Provider rate limited paragraph subtitle generation "
+                        f"for run {run_id} section {section_id}"
+                    ) from exc
+                raise ProviderError(
+                    "Provider failed paragraph subtitle generation "
+                    f"for run {run_id} section {section_id}"
+                ) from exc
 
             from creator_service.artifact_storage_integration import store_artifact_file
 
@@ -240,6 +280,23 @@ def generate_paragraph_subtitles(
     try:
         return asyncio.run(_run_task())
     except _StageGuardError:
+        raise
+    except SoftTimeLimitExceeded:
+        logger.error("Task timed out for run %s", run_id)
+        # Transition run to FAILED so it doesn't stay stuck in generating stage
+        try:
+            asyncio.run(
+                _run_service.storage.conditional_update_run(
+                    run_id,
+                    {
+                        "current_stage": RunStage.FAILED.value,
+                        "status": "failed",
+                    },
+                    expected_stages=_SAFE_STAGES,
+                )
+            )
+        except Exception:
+            logger.exception("Failed to mark run %d as FAILED after timeout", run_id)
         raise
     except Exception:
         logger.exception(

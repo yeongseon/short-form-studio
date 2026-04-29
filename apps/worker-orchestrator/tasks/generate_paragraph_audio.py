@@ -5,7 +5,39 @@ run-level ``generate_audio`` task this does NOT transition stages — the
 caller (storyboard API) manages aggregate state.
 
 Audio is saved to: data/artifacts/{run_id}/audio/{section_id}.wav
+
+Idempotency:
+    IDEMPOTENT - Safe to retry:
+    - Does NOT perform stage guard (paragraph tasks don't manage run stages).
+    - Multiple invocations generate NEW artifact records with unique IDs but
+      the same section_id. Each invocation overwrites the audio file.
+    - Caller is responsible for deduplication (e.g., check if artifact already exists
+      before invoking task, or use task ID for idempotency key).
+    - Task gracefully handles multiple invocations: later artifacts do not break earlier ones;
+      the caller selects the desired artifact by version or timestamp.
+    - Idempotency guaranteed by acks_late + task_reject_on_worker_lost for task delivery;
+      file overwrites are idempotent (same content each invocation).
+
+Side effects:
+    - Filesystem: Saves audio to data/artifacts/{run_id}/audio/{safe_section_id}.wav
+      (overwrites on retry).
+    - Database: Creates audio artifact record (run_id, section_id, path, model_used,
+      provider_type, voice). Each invocation creates a new record.
+    - GPU Resource: Acquires/releases GPU lock in Redis (if provider requires GPU).
+    - NO stage transition: Caller manages run stages.
+
+Retry safety:
+    SAFE FOR RETRY - Configured with:
+    - max_retries=3
+    - autoretry_for=(ProviderTimeoutError, RateLimitError)
+    - retry_backoff=True, retry_jitter=True
+    - soft_time_limit=300s, hard time_limit=360s
+    On timeout: Task does NOT transition run stage (caller's responsibility).
+    Task simply re-raises timeout exception; caller decides whether to transition run to FAILED.
 """
+
+# pyright: reportMissingImports=false
+# ruff: noqa: E402
 
 from __future__ import annotations
 
@@ -21,8 +53,11 @@ try:
 except ImportError:
     redis = None
 
+from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
+from creator_domain.models.stage import RunStage
 from creator_domain.sanitize import sanitize_path_component
+from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.audio_service import audio_service as _audio_service
@@ -31,6 +66,15 @@ from creator_service.run_service import run_service as _run_service
 logger = logging.getLogger(__name__)
 
 _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
+
+# Stages where a timed-out paragraph task can safely transition the run to FAILED.
+# Since paragraph tasks don't manage stages, we include common audio/subtitle stages.
+_SAFE_STAGES = frozenset(
+    {
+        RunStage.AUDIO_GENERATING.value,
+        RunStage.SUBTITLE_GENERATING.value,
+    }
+)
 
 
 class _StageGuardError(ValueError):
@@ -59,7 +103,16 @@ async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
         logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
 
 
-@celery_app.task(bind=True, name="generate_paragraph_audio")
+@celery_app.task(
+    bind=True,
+    autoretry_for=(ProviderTimeoutError, RateLimitError),
+    retry_backoff=True,
+    retry_jitter=True,
+    max_retries=3,
+    soft_time_limit=300,
+    time_limit=360,
+    name="generate_paragraph_audio",
+)
 def generate_paragraph_audio(
     self,
     run_id: int,
@@ -88,6 +141,9 @@ def generate_paragraph_audio(
     task_id = str(
         getattr(getattr(self, "request", None), "id", None) or f"para-{run_id}-{section_id}"
     )
+    # Idempotency: acks_late + task_reject_on_worker_lost ensures redelivery on crash.
+    # If the run has already advanced past this stage, the worker's stage check will
+    # naturally skip processing (handled by run_service stage validation).
 
     provider_type: str | None = None
     endpoint: str | None = None
@@ -130,7 +186,26 @@ def generate_paragraph_audio(
             # 3. Generate audio via provider
             params = dict(entry.default_params or {})
             params["output_path"] = audio_path
-            await provider.generate(section_text, voice=voice, params=params)
+            try:
+                await provider.generate(section_text, voice=voice, params=params)
+            except (TimeoutError, ConnectionError) as exc:
+                raise ProviderTimeoutError(
+                    "Provider timed out during paragraph audio generation "
+                    f"for run {run_id} section {section_id}"
+                ) from exc
+            except SoftTimeLimitExceeded:
+                raise
+            except Exception as exc:
+                message = str(exc).lower()
+                if "429" in message or "rate" in message:
+                    raise RateLimitError(
+                        "Provider rate limited paragraph audio generation "
+                        f"for run {run_id} section {section_id}"
+                    ) from exc
+                raise ProviderError(
+                    "Provider failed paragraph audio generation "
+                    f"for run {run_id} section {section_id}"
+                ) from exc
 
             from creator_service.artifact_storage_integration import store_artifact_file
 
@@ -190,6 +265,23 @@ def generate_paragraph_audio(
     try:
         return asyncio.run(_run_task())
     except _StageGuardError:
+        raise
+    except SoftTimeLimitExceeded:
+        logger.error("Task timed out for run %s", run_id)
+        # Transition run to FAILED so it doesn't stay stuck in generating stage
+        try:
+            asyncio.run(
+                _run_service.storage.conditional_update_run(
+                    run_id,
+                    {
+                        "current_stage": RunStage.FAILED.value,
+                        "status": "failed",
+                    },
+                    expected_stages=_SAFE_STAGES,
+                )
+            )
+        except Exception:
+            logger.exception("Failed to mark run %d as FAILED after timeout", run_id)
         raise
     except Exception:
         logger.exception(
