@@ -5,6 +5,42 @@ run-level ``generate_audio`` task this does NOT transition stages — the
 caller (storyboard API) manages aggregate state.
 
 Audio is saved to: data/artifacts/{run_id}/audio/{section_id}.wav
+
+Idempotency:
+    IDEMPOTENT - Safe to retry:
+    - Does NOT perform stage guard (paragraph tasks don't manage run stages).
+    - Multiple invocations generate NEW artifact records with unique IDs but
+      the same section_id. Each invocation overwrites the audio file.
+    - Caller is responsible for deduplication (e.g., check if artifact already exists
+      before invoking task, or use task ID for idempotency key).
+    - Task gracefully handles multiple invocations: later artifacts do not break earlier ones;
+      the caller selects the desired artifact by version or timestamp.
+    - Idempotency guaranteed by acks_late + task_reject_on_worker_lost for task delivery;
+      file overwrites are idempotent (same content each invocation).
+
+Side effects:
+    - Filesystem: Saves audio to data/artifacts/{run_id}/audio/{safe_section_id}.wav
+      (overwrites on retry).
+    - Database: Creates audio artifact record (run_id, section_id, path, model_used,
+      provider_type, voice). Each invocation creates a new record.
+    - GPU Resource: Acquires/releases GPU lock in Redis (if provider requires GPU).
+    - NO stage transition: Caller manages run stages.
+
+Retry safety:
+    SAFE FOR RETRY - Configured with:
+    - max_retries=3
+    - autoretry_for=(ProviderTimeoutError, RateLimitError)
+    - retry_backoff=True, retry_jitter=True
+    - soft_time_limit=300s, hard time_limit=360s
+    On timeout: Task does NOT transition run stage (caller's responsibility).
+    Task simply re-raises timeout exception; caller decides whether to transition run to FAILED.
+"""
+
+Generates audio for a single script section (paragraph).  Unlike the
+run-level ``generate_audio`` task this does NOT transition stages — the
+caller (storyboard API) manages aggregate state.
+
+Audio is saved to: data/artifacts/{run_id}/audio/{section_id}.wav
 """
 
 # pyright: reportMissingImports=false

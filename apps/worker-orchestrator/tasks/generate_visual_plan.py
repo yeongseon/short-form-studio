@@ -3,6 +3,34 @@
 Consumes an approved script draft and generates a visual plan — one scene
 per script section with image-generation prompts, style tags, and mood.
 Follows the same pattern as generate_script.
+
+Idempotency:
+    IDEMPOTENT - Safe to retry. Uses stage guards identical to generate_script:
+    - Checks run is in VISUAL_PLAN_SETUP or VISUAL_PLAN_GENERATING before any side effects.
+    - If run has advanced to VISUAL_PLAN_REVIEW or later, raises _StageGuardError without
+      mutating run state.
+    - Multiple invocations attempt generation; only first successful stage transition sticks
+      (conditional_update_run uses compare-and-set).
+    - Idempotency guaranteed by acks_late + task_reject_on_worker_lost.
+
+Side effects:
+    - Database: Saves visual plan with VisualScene objects (one per script section).
+    - Database: Atomically transitions run stage to VISUAL_PLAN_REVIEW (via conditional_update_run).
+    - GPU Resource: Acquires/releases GPU lock in Redis (if provider requires GPU).
+    - No file creation: Results stored in database.
+
+Retry safety:
+    SAFE FOR RETRY - Same configuration as generate_script:
+    - max_retries=3
+    - autoretry_for=(ProviderTimeoutError, RateLimitError)
+    - retry_backoff=True, retry_jitter=True
+    - soft_time_limit=300s, hard time_limit=360s
+    On timeout: Task transitions run to FAILED atomically before raising.
+"""
+
+Consumes an approved script draft and generates a visual plan — one scene
+per script section with image-generation prompts, style tags, and mood.
+Follows the same pattern as generate_script.
 """
 
 # pyright: reportMissingImports=false

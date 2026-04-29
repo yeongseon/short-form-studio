@@ -10,6 +10,47 @@ Key design decisions:
 - GPU lock is held per-scene, not for the entire batch, so other tasks can
   interleave between scenes.
 - Images are saved to local filesystem: data/artifacts/{run_id}/scenes/
+
+Idempotency:
+    IDEMPOTENT - Safe to retry with caveats:
+    - Stage guard rejects if run has progressed past VISUAL_ASSET_REVIEW.
+    - Multiple invocations of the same task generate NEW assets (different UUIDs).
+      Each asset has a version number; is_active=True marks the latest as active.
+    - If a task completes an image but crashes before returning, worker redelivery
+      will create a duplicate asset. The service handles this gracefully:
+      only the latest version is marked active; old versions remain accessible.
+    - For deterministic idempotency (no duplicate assets), caller should deduplicate
+      task invocations or check active asset before invoking.
+    - Idempotency guaranteed by acks_late + task_reject_on_worker_lost for task delivery.
+
+Side effects:
+    - Filesystem: Saves PNG images to data/artifacts/{run_id}/scenes/{scene_id}-{uuid}.png
+    - Database: Creates VisualAsset records with path, version, model_used, provider.
+    - Database: Atomically transitions run stage to VISUAL_ASSET_REVIEW on success or FAILED
+      on total failure (conditional_update_run).
+    - GPU Resource: Acquires/releases GPU lock in Redis per-scene (if provider requires GPU).
+
+Retry safety:
+    SAFE FOR RETRY - Partial failure handled gracefully:
+    - max_retries=3
+    - autoretry_for=(ProviderTimeoutError, RateLimitError)
+    - retry_backoff=True, retry_jitter=True
+    - soft_time_limit=600s, hard time_limit=660s (double other tasks for batch processing)
+    On timeout: Task transitions run to FAILED atomically before raising.
+    On partial failure: Task returns success + reports failed_scenes in result;
+    caller decides whether to retry failed scenes or accept partial output.
+"""
+
+Consumes an approved visual plan and generates images for one or all scenes.
+Each generated image is stored as a VisualAsset via the visual_asset_service.
+
+Key design decisions:
+- Partial failure: if one scene fails, already-completed scenes are retained.
+- Regenerated assets are created as new versions; is_active defaults to True
+  (auto-replaces the previous active asset for the scene).
+- GPU lock is held per-scene, not for the entire batch, so other tasks can
+  interleave between scenes.
+- Images are saved to local filesystem: data/artifacts/{run_id}/scenes/
 """
 
 # pyright: reportMissingImports=false

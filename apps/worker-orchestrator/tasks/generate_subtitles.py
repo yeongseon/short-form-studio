@@ -7,6 +7,39 @@ Key design decisions:
 - Subtitle generation is all-or-nothing for a run (no partial scene-level success).
 - GPU lock is held for the full generation window when required by provider.
 - Subtitles are saved to local filesystem: data/artifacts/{run_id}/subtitles/subtitles.srt
+
+Idempotency:
+    IDEMPOTENT - Safe to retry:
+    - Stage guard rejects if run has progressed past SUBTITLE_GENERATING.
+    - Multiple invocations attempt generation; only first successful subtitle save and stage
+      transition complete (conditional_update_run uses compare-and-set).
+    - Subsequent invocations overwrite subtitle file but stage transition no-ops if run
+      has already advanced to RENDER_GENERATING.
+    - Idempotency guaranteed by acks_late + task_reject_on_worker_lost.
+
+Side effects:
+    - Filesystem: Saves subtitles to data/artifacts/{run_id}/subtitles/subtitles.{format}
+      (overwrites on retry).
+    - Database: Creates subtitle artifact record (run_id, path, format, model_used, provider_type).
+    - Database: Atomically transitions run stage to RENDER_GENERATING (via conditional_update_run).
+    - GPU Resource: Acquires/releases GPU lock in Redis (if provider requires GPU).
+
+Retry safety:
+    SAFE FOR RETRY - Configured with:
+    - max_retries=3
+    - autoretry_for=(ProviderTimeoutError, RateLimitError)
+    - retry_backoff=True, retry_jitter=True
+    - soft_time_limit=300s, hard time_limit=360s
+    On timeout: Task transitions run to FAILED atomically before raising.
+"""
+
+Consumes an approved script draft AND optionally audio artifact timing data
+and generates a single subtitle artifact for the run (SRT/VTT format).
+
+Key design decisions:
+- Subtitle generation is all-or-nothing for a run (no partial scene-level success).
+- GPU lock is held for the full generation window when required by provider.
+- Subtitles are saved to local filesystem: data/artifacts/{run_id}/subtitles/subtitles.srt
 """
 
 # pyright: reportMissingImports=false

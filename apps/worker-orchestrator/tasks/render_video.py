@@ -5,6 +5,41 @@ renders a single MP4 output for the run, and stores it as a video artifact.
 
 Phase 9: Supports per-paragraph audio/subtitle concatenation when available.
 Falls back to run-level audio/subtitles if per-paragraph artifacts don't exist.
+
+Idempotency:
+    IDEMPOTENT - Safe to retry:
+    - Stage guard rejects if run has progressed past RENDER_GENERATING.
+    - Multiple invocations attempt render; only first successful render and stage
+      transition complete (conditional_update_run uses compare-and-set).
+    - Subsequent invocations overwrite output video but stage transition no-ops
+      if run has already advanced to FINAL_REVIEW.
+    - FFmpeg handles multiple invocations gracefully (file overwrites).
+    - Idempotency guaranteed by acks_late + task_reject_on_worker_lost.
+
+Side effects:
+    - Filesystem: Saves video to data/artifacts/{run_id}/render/output.mp4 (overwrites on retry).
+    - Filesystem: Creates intermediate audio/subtitle concatenated files in render/ dir
+      (audio_concat.wav, subtitles_merged.srt).
+    - Database: Creates video artifact record (run_id, path, render_profile).
+    - Database: Atomically transitions run stage to FINAL_REVIEW (via conditional_update_run).
+    - No GPU resource: FFmpeg runs CPU-only (no lock management).
+
+Retry safety:
+    SAFE FOR RETRY - Configured with:
+    - max_retries=3
+    - autoretry_for=(ProviderTimeoutError, RateLimitError)
+    - retry_backoff=True, retry_jitter=True
+    - soft_time_limit=600s, hard time_limit=660s (longest of all tasks)
+    On timeout: Task transitions run to FAILED atomically before raising.
+    On partial failure (missing audio/subtitles): Task falls back gracefully to run-level
+    artifacts; logs warnings but completes (no exception).
+"""
+
+Consumes active visual assets and optional audio/subtitle artifacts,
+renders a single MP4 output for the run, and stores it as a video artifact.
+
+Phase 9: Supports per-paragraph audio/subtitle concatenation when available.
+Falls back to run-level audio/subtitles if per-paragraph artifacts don't exist.
 """
 
 # pyright: reportMissingImports=false

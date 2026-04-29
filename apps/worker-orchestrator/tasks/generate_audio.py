@@ -7,6 +7,38 @@ Key design decisions:
 - Audio generation is all-or-nothing for a run (no partial scene-level success).
 - GPU lock is held for the full generation window when required by provider.
 - Audio is saved to local filesystem: data/artifacts/{run_id}/audio/audio.wav
+
+Idempotency:
+    IDEMPOTENT - Safe to retry:
+    - Stage guard rejects if run has progressed past AUDIO_GENERATING.
+    - Multiple invocations attempt generation; only first successful audio save and stage
+      transition complete (conditional_update_run uses compare-and-set).
+    - Subsequent invocations will overwrite the audio file but stage transition will no-op
+      if run has already advanced to SUBTITLE_GENERATING.
+    - Idempotency guaranteed by acks_late + task_reject_on_worker_lost.
+
+Side effects:
+    - Filesystem: Saves audio to data/artifacts/{run_id}/audio/audio.wav (overwrites on retry).
+    - Database: Creates audio artifact record (run_id, path, model_used, provider_type).
+    - Database: Atomically transitions run stage to SUBTITLE_GENERATING (via conditional_update_run).
+    - GPU Resource: Acquires/releases GPU lock in Redis (if provider requires GPU).
+
+Retry safety:
+    SAFE FOR RETRY - Configured with:
+    - max_retries=3
+    - autoretry_for=(ProviderTimeoutError, RateLimitError)
+    - retry_backoff=True, retry_jitter=True
+    - soft_time_limit=300s, hard time_limit=360s
+    On timeout: Task transitions run to FAILED atomically before raising.
+"""
+
+Consumes an approved script draft and generates a single audio artifact
+for the run. The artifact is stored via the audio_service.
+
+Key design decisions:
+- Audio generation is all-or-nothing for a run (no partial scene-level success).
+- GPU lock is held for the full generation window when required by provider.
+- Audio is saved to local filesystem: data/artifacts/{run_id}/audio/audio.wav
 """
 
 # pyright: reportMissingImports=false

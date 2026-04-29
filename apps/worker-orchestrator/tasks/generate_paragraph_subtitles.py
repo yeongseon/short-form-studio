@@ -5,6 +5,44 @@ Unlike the run-level ``generate_subtitles`` task this does NOT transition
 stages — the caller (storyboard API) manages aggregate state.
 
 Subtitles are saved to: data/artifacts/{run_id}/subtitles/{section_id}.srt
+
+Idempotency:
+    IDEMPOTENT - Safe to retry:
+    - Does NOT perform stage guard (paragraph tasks don't manage run stages).
+    - Multiple invocations generate NEW artifact records with unique IDs but
+      the same section_id. Each invocation overwrites the subtitle file.
+    - Caller is responsible for deduplication (e.g., check if artifact already exists
+      before invoking task, or use task ID for idempotency key).
+    - Task gracefully handles multiple invocations: later artifacts do not break earlier ones;
+      the caller selects the desired artifact by version or timestamp.
+    - Idempotency guaranteed by acks_late + task_reject_on_worker_lost for task delivery;
+      file overwrites are idempotent (same content each invocation, same audio input).
+
+Side effects:
+    - Filesystem: Saves subtitles to data/artifacts/{run_id}/subtitles/{safe_section_id}.{format}
+      (overwrites on retry).
+    - Database: Creates subtitle artifact record (run_id, section_id, path, format, model_used,
+      provider_type). Each invocation creates a new record.
+    - GPU Resource: Acquires/releases GPU lock in Redis (if provider requires GPU).
+    - NO stage transition: Caller manages run stages.
+
+Retry safety:
+    SAFE FOR RETRY - Configured with:
+    - max_retries=3
+    - autoretry_for=(ProviderTimeoutError, RateLimitError)  [NOT auto-retried for transcription]
+    - retry_backoff=True, retry_jitter=True
+    - soft_time_limit=300s, hard time_limit=360s
+    Note: Unlike other tasks, paragraph subtitles omit autoretry_for since transcription
+    is deterministic (audio is already generated). On timeout: Task does NOT transition
+    run stage (caller's responsibility). Task simply re-raises timeout; caller decides
+    whether to transition run to FAILED or retry the task.
+"""
+
+Transcribes a single paragraph's audio file to produce a per-section SRT.
+Unlike the run-level ``generate_subtitles`` task this does NOT transition
+stages — the caller (storyboard API) manages aggregate state.
+
+Subtitles are saved to: data/artifacts/{run_id}/subtitles/{section_id}.srt
 """
 
 # pyright: reportMissingImports=false
