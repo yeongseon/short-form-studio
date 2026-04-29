@@ -8,6 +8,10 @@ from dataclasses import dataclass
 from importlib import import_module
 from typing import Any
 
+from opentelemetry import context as otel_context
+from opentelemetry.context import get_current
+from opentelemetry.propagate import extract, inject
+
 
 class _NoOpInstrument:
     def add(self, _value: int | float, _attributes: dict[str, str] | None = None) -> None:
@@ -55,7 +59,9 @@ def _is_enabled() -> bool:
 def _load_otel() -> dict[str, Any] | None:
     try:
         from opentelemetry import metrics, trace
+        from opentelemetry._logs import set_logger_provider
         from opentelemetry.sdk._logs import LoggerProvider
+        from opentelemetry.sdk._logs import LoggingHandler
         from opentelemetry.sdk._logs.export import (
             BatchLogRecordProcessor,
             ConsoleLogExporter,
@@ -110,6 +116,8 @@ def _load_otel() -> dict[str, Any] | None:
             "OTLPLogExporter": otlp_log_exporter,
             "OTLPMetricExporter": otlp_metric_exporter,
             "OTLPSpanExporter": otlp_span_exporter,
+            "set_logger_provider": set_logger_provider,
+            "LoggingHandler": LoggingHandler,
         }
     except ImportError:
         return None
@@ -118,16 +126,16 @@ def _load_otel() -> dict[str, Any] | None:
 def init_telemetry(service_name: str) -> None:
     """
     Initialize OpenTelemetry tracing, metrics, and logging (idempotent).
-    
+
     Safe to call multiple times and across forked processes. Second and
     subsequent calls are no-ops. Each forked worker (e.g., Celery worker)
     will call this independently via signal handlers.
-    
+
     Production Configuration:
     - OTEL_ENABLED: Set to 'true' to enable instrumentation (default: 'false')
     - OTEL_EXPORTER_OTLP_ENDPOINT: gRPC endpoint for span/metric/log export
       Example: 'http://localhost:4317' (default gRPC port)
-    
+
     Sampling Configuration (OpenTelemetry SDK):
     - OTEL_TRACES_SAMPLER: Sampler strategy for production
       Recommended: 'parentbased_traceidratio' for distributed tracing
@@ -137,12 +145,12 @@ def init_telemetry(service_name: str) -> None:
       Example: '1.0' for 100% sampling during development/debugging
     - OTEL_EXPORTER_OTLP_PROTOCOL: Protocol for export
       Options: 'grpc' (default), 'http/protobuf'
-    
+
     Environment Configuration:
     - OTEL_ENVIRONMENT: Deployment environment (default: 'development')
     - OTEL_SERVICE_NAME: Service identifier in traces (default: service_name arg)
     - OTEL_SERVICE_VERSION: Service version in resource attributes
-    
+
     Fork Safety:
     Each forked Celery worker calls init_telemetry independently via
     the worker_process_init signal. The idempotency guard prevents
@@ -150,7 +158,7 @@ def init_telemetry(service_name: str) -> None:
     """
     if _STATE.initialized:
         return
-    
+
     _STATE.initialized = True
     root_logger = logging.getLogger()
     if not any(isinstance(existing, TraceContextFilter) for existing in root_logger.filters):
@@ -211,6 +219,15 @@ def init_telemetry(service_name: str) -> None:
             otel["SimpleLogRecordProcessor"](otel["ConsoleLogExporter"]())
         )
 
+    if otel["set_logger_provider"] is not None:
+        otel["set_logger_provider"](logger_provider)
+    if otel["LoggingHandler"] is not None and not any(
+        isinstance(handler, otel["LoggingHandler"]) for handler in root_logger.handlers
+    ):
+        root_logger.addHandler(
+            otel["LoggingHandler"](level=logging.NOTSET, logger_provider=logger_provider)
+        )
+
     _STATE.enabled = True
 
 
@@ -261,13 +278,26 @@ def trace_task(task_name: str):
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
+            request = getattr(args[0], "request", None) if args else None
+            headers = getattr(request, "headers", None) or {}
+            parent_context = extract(headers)
+            token = otel_context.attach(parent_context)
             tracer = get_tracer(__name__)
-            with tracer.start_as_current_span(
-                f"celery.task.{task_name}",
-                attributes={"celery.task_name": task_name},
-            ):
-                return func(*args, **kwargs)
+            try:
+                with tracer.start_as_current_span(
+                    f"celery.task.{task_name}",
+                    attributes={"celery.task_name": task_name},
+                ):
+                    return func(*args, **kwargs)
+            finally:
+                otel_context.detach(token)
 
         return wrapper
 
     return decorator
+
+
+def get_trace_headers() -> dict[str, str]:
+    headers: dict[str, str] = {}
+    inject(headers, context=get_current())
+    return headers

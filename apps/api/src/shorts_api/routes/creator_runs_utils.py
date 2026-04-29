@@ -11,6 +11,11 @@ from fastapi import HTTPException
 logger = logging.getLogger(__name__)
 
 
+def _get_trace_headers() -> dict[str, str]:
+    telemetry = import_module("creator_service.telemetry")
+    return telemetry.get_trace_headers()
+
+
 def validate_model_key(model_key: str) -> None:
     try:
         from creator_provider.registry import ProviderRegistry
@@ -61,10 +66,7 @@ def validate_model_defaults(model_defaults: Mapping[str, str] | None) -> None:
         if validator is None:
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    f"Unknown model default key '{key}'. "
-                    f"Allowed keys: {sorted(validators)}."
-                ),
+                detail=(f"Unknown model default key '{key}'. Allowed keys: {sorted(validators)}."),
             )
         validator(value)
 
@@ -79,13 +81,14 @@ def dispatch_generate_script(
     from importlib import import_module
 
     tasks = import_module("tasks.generate_script")
-    result = tasks.generate_script.delay(run_id, idea_brief, model_key, instructions)
+    result = tasks.generate_script.apply_async(
+        args=[run_id, idea_brief, model_key, instructions],
+        headers=_get_trace_headers(),
+    )
     return str(result.id)
 
 
-def dispatch_generate_visual_plan(
-    run_id: int, model_key: str, style_preset: str | None
-) -> str:
+def dispatch_generate_visual_plan(run_id: int, model_key: str, style_preset: str | None) -> str:
     """Dispatch generate_visual_plan Celery task. Returns task id.
 
     Separated into a function so tests can monkeypatch without importing Celery.
@@ -93,7 +96,10 @@ def dispatch_generate_visual_plan(
     from importlib import import_module
 
     tasks = import_module("tasks.generate_visual_plan")
-    result = tasks.generate_visual_plan.delay(run_id, model_key, style_preset)
+    result = tasks.generate_visual_plan.apply_async(
+        args=[run_id, model_key, style_preset],
+        headers=_get_trace_headers(),
+    )
     return str(result.id)
 
 
@@ -105,7 +111,11 @@ def dispatch_generate_audio(run_id: int, tts_model: str, voice: str) -> str:
     from importlib import import_module
 
     tasks = import_module("tasks.generate_audio")
-    result = tasks.generate_audio.delay(run_id, tts_model=tts_model, voice=voice)
+    result = tasks.generate_audio.apply_async(
+        args=[run_id],
+        kwargs={"tts_model": tts_model, "voice": voice},
+        headers=_get_trace_headers(),
+    )
     return str(result.id)
 
 
@@ -117,7 +127,11 @@ def dispatch_generate_subtitles(run_id: int, subtitle_model: str, subtitle_forma
     from importlib import import_module
 
     tasks = import_module("tasks.generate_subtitles")
-    result = tasks.generate_subtitles.delay(run_id, subtitle_model=subtitle_model, subtitle_format=subtitle_format)
+    result = tasks.generate_subtitles.apply_async(
+        args=[run_id],
+        kwargs={"subtitle_model": subtitle_model, "subtitle_format": subtitle_format},
+        headers=_get_trace_headers(),
+    )
     return str(result.id)
 
 
@@ -129,7 +143,11 @@ def dispatch_render_video(run_id: int, render_profile: str) -> str:
     from importlib import import_module
 
     tasks = import_module("tasks.render_video")
-    result = tasks.render_video.delay(run_id, render_profile=render_profile)
+    result = tasks.render_video.apply_async(
+        args=[run_id],
+        kwargs={"render_profile": render_profile},
+        headers=_get_trace_headers(),
+    )
     return str(result.id)
 
 
@@ -148,13 +166,16 @@ def dispatch_generate_scene_image(
     from importlib import import_module
 
     tasks = import_module("tasks.generate_scene_image")
-    result = tasks.generate_scene_image.delay(
-        run_id,
-        scene_id=scene_id,
-        model_key=model_key,
-        prompt_override=prompt_override,
-        is_active=is_active,
-        image_params=image_params,
+    result = tasks.generate_scene_image.apply_async(
+        args=[run_id],
+        kwargs={
+            "scene_id": scene_id,
+            "model_key": model_key,
+            "prompt_override": prompt_override,
+            "is_active": is_active,
+            "image_params": image_params,
+        },
+        headers=_get_trace_headers(),
     )
     return str(result.id)
 
@@ -166,12 +187,15 @@ def dispatch_paragraph_audio(
     from importlib import import_module
 
     tasks = import_module("tasks.generate_paragraph_audio")
-    result = tasks.generate_paragraph_audio.delay(
-        run_id,
-        section_id=section_id,
-        section_text=section_text,
-        tts_model=tts_model,
-        voice=voice,
+    result = tasks.generate_paragraph_audio.apply_async(
+        args=[run_id],
+        kwargs={
+            "section_id": section_id,
+            "section_text": section_text,
+            "tts_model": tts_model,
+            "voice": voice,
+        },
+        headers=_get_trace_headers(),
     )
     return str(result.id)
 
@@ -187,12 +211,15 @@ def dispatch_paragraph_subtitles(
     from importlib import import_module
 
     tasks = import_module("tasks.generate_paragraph_subtitles")
-    result = tasks.generate_paragraph_subtitles.delay(
-        run_id,
-        section_id=section_id,
-        audio_path=audio_path,
-        subtitle_model=subtitle_model,
-        subtitle_format=subtitle_format,
+    result = tasks.generate_paragraph_subtitles.apply_async(
+        args=[run_id],
+        kwargs={
+            "section_id": section_id,
+            "audio_path": audio_path,
+            "subtitle_model": subtitle_model,
+            "subtitle_format": subtitle_format,
+        },
+        headers=_get_trace_headers(),
     )
     return str(result.id)
 
@@ -290,5 +317,6 @@ async def cas_dispatch_with_rollback(
         "run_id": run_id,
         "current_stage": target_stage,
     }
+
 
 _EXPORTED_RUN_HELPERS = (_revoke_active_tasks, _append_task_id)
