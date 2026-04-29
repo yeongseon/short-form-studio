@@ -20,7 +20,7 @@ def upgrade() -> None:
     op.create_table(
         "users",
         sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
-        sa.Column("email", sa.String(length=255), nullable=False, unique=True),
+        sa.Column("email", sa.String(length=255), nullable=True),
         sa.Column("name", sa.String(length=255), nullable=True),
         sa.Column("auth_provider", sa.String(length=50), nullable=False, server_default="api_key"),
         sa.Column("auth_subject", sa.String(length=255), nullable=False, server_default=""),

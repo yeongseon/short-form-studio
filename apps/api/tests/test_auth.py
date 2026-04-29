@@ -3,10 +3,14 @@
 """Tests for API key authentication middleware."""
 
 import pytest
+from creator_domain.models import User
+from datetime import datetime, timezone
 from fastapi import FastAPI
+from fastapi import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from httpx import ASGITransport, AsyncClient
-from shorts_api.auth import ApiKeyMiddleware
+from shorts_api.auth import ApiKeyMiddleware, get_current_user
+from starlette.requests import Request
 
 
 def _make_app(api_key: str | None = None) -> FastAPI:
@@ -99,6 +103,7 @@ async def test_healthz_always_public(authed_client):
     """Liveness probe /healthz should be accessible without auth even when API_KEY is set."""
     response = await authed_client.get("/healthz")
     assert response.status_code == 200
+
 
 @pytest.mark.asyncio
 async def test_docs_require_auth_when_api_key_set(authed_client):
@@ -235,3 +240,61 @@ async def test_options_without_origin_requires_auth(authed_client):
     """OPTIONS without Origin header is not CORS preflight — should require auth."""
     response = await authed_client.options("/api/data")
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_without_api_key_returns_401():
+    scope = {"type": "http", "headers": []}
+    request = Request(scope)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_current_user(request)
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "API key required"
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_with_invalid_api_key_returns_401(monkeypatch):
+    async def _no_user(_provider: str, _subject: str):
+        return None
+
+    monkeypatch.setattr("shorts_api.auth.user_service.get_user_by_auth", _no_user)
+    scope = {"type": "http", "headers": [(b"x-api-key", b"invalid-key")]}
+    request = Request(scope)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_current_user(request)
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "Invalid API key"
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_with_valid_api_key_resolves_user(monkeypatch):
+    key = "valid-key"
+    expected_subject = "cc358b85b8b7"
+
+    async def _user_for_auth(provider: str, subject: str):
+        assert provider == "api_key"
+        assert subject == expected_subject
+        return User(
+            id=123,
+            email="test@example.com",
+            name="Test User",
+            workspace_id=10,
+            auth_provider="api_key",
+            auth_subject=subject,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+
+    monkeypatch.setattr("shorts_api.auth.user_service.get_user_by_auth", _user_for_auth)
+    scope = {"type": "http", "headers": [(b"x-api-key", key.encode())]}
+    request = Request(scope)
+
+    result = await get_current_user(request)
+
+    assert result.id == 123
+    assert result.auth_provider == "api_key"
+    assert result.auth_subject == expected_subject

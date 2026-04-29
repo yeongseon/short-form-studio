@@ -8,9 +8,7 @@ middleware is a transparent pass-through so local development stays frictionless
 
 import hmac
 import hashlib
-import logging
 import os
-from datetime import datetime, timezone
 
 from creator_domain.models import User
 from creator_service.workspace_service import workspace_service
@@ -22,9 +20,6 @@ from starlette.responses import Response
 
 # Paths that never require authentication
 _PUBLIC_PATHS = frozenset({"/healthz"})
-_DEFAULT_USER_EMAIL = "default@short-form-studio.local"
-_DEFAULT_USER_NAME = "Default User"
-_logger = logging.getLogger(__name__)
 
 
 class ApiKeyMiddleware(BaseHTTPMiddleware):
@@ -67,51 +62,20 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
 
 
 async def get_current_user(request: Request) -> User:
-    """Resolve user identity from request credentials with safe fallbacks."""
-    provided_key = request.headers.get("X-API-Key")
-    if not provided_key:
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            provided_key = auth_header[7:]
-
-    if provided_key:
-        key_fingerprint = hashlib.sha256(provided_key.encode("utf-8")).hexdigest()[:12]
-        return await user_service.create_or_get_user(
-            email=f"api-key-{key_fingerprint}@short-form-studio.local",
-            auth_provider="api_key",
-            auth_subject=key_fingerprint,
-        )
-
-    user_email = request.headers.get("X-User-Email")
-    if user_email:
-        return await user_service.create_or_get_user(
-            email=user_email,
-            auth_provider="header",
-            auth_subject=user_email,
-        )
-
-    session_data = request.scope.get("session")
-    if isinstance(session_data, dict):
-        session_email = session_data.get("user_email")
-        if isinstance(session_email, str) and session_email:
-            return await user_service.create_or_get_user(
-                email=session_email,
-                auth_provider="session",
-                auth_subject=session_email,
-            )
-
-    _logger.warning("No auth header or session identity provided; using default user")
-    now = datetime.now(timezone.utc)
-    return User(
-        id=0,
-        email=_DEFAULT_USER_EMAIL,
-        name=_DEFAULT_USER_NAME,
-        workspace_id=None,
-        auth_provider="default",
-        auth_subject="default",
-        created_at=now,
-        updated_at=now,
+    """Resolve user from API key only. Returns 401 if no valid key."""
+    api_key = (
+        request.headers.get("X-API-Key")
+        or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
     )
+    if not api_key:
+        raise HTTPException(status_code=401, detail="API key required")
+
+    fingerprint = hashlib.sha256(api_key.encode()).hexdigest()[:12]
+    user = await user_service.get_user_by_auth("api_key", fingerprint)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+    return user
 
 
 async def require_workspace_access(
