@@ -116,7 +116,7 @@ def test_get_stuck_runs_queries_pool(monkeypatch) -> None:
 def test_unstick_run_updates_generating_stage(monkeypatch) -> None:
     class _Conn:
         async def fetch(self, query, *_args):
-            assert "SELECT DISTINCT artifact_type FROM artifacts" in query
+            assert "SELECT DISTINCT artifact_type FROM creator_artifacts" in query
             return [{"artifact_type": "script"}]
 
         async def fetchrow(self, query, *_args):
@@ -213,7 +213,7 @@ def test_unstick_run_requires_artifacts_before_advancing(monkeypatch) -> None:
             }
 
         async def fetch(self, query, *_args):
-            assert "SELECT DISTINCT artifact_type FROM artifacts" in query
+            assert "SELECT DISTINCT artifact_type FROM creator_artifacts" in query
             return [{"artifact_type": artifact_type} for artifact_type in self._artifact_types]
 
     async def _fake_get_pool_missing():

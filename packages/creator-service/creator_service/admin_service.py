@@ -69,7 +69,7 @@ class AdminService:
 
     async def _get_run_artifact_types(self, run_id: int, connection: Any) -> set[str]:
         rows = await connection.fetch(
-            "SELECT DISTINCT artifact_type FROM artifacts WHERE run_id = $1",
+            "SELECT DISTINCT artifact_type FROM creator_artifacts WHERE run_id = $1",
             run_id,
         )
         return {str(row["artifact_type"]) for row in rows if row.get("artifact_type")}
