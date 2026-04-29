@@ -84,9 +84,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             return None
 
         candidate_queries = (
-            "SELECT workspace_id FROM workspace_members WHERE api_key = $1 ORDER BY workspace_id LIMIT 1",
-            "SELECT workspace_id FROM workspace_members WHERE token = $1 ORDER BY workspace_id LIMIT 1",
-            "SELECT workspace_id FROM workspace_members WHERE key = $1 ORDER BY workspace_id LIMIT 1",
+            "SELECT workspace_id FROM workspace_members WHERE user_id::text = $1 ORDER BY workspace_id LIMIT 1",
         )
         async with pool.acquire() as connection:
             for query in candidate_queries:

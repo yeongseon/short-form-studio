@@ -47,21 +47,20 @@ async def download_artifact(
     project_workspace_id = getattr(project, "workspace_id", None)
 
     strict_mode = os.getenv("ARTIFACT_ACCESS_STRICT", "true").lower() in ("1", "true")
+    auth_configured = bool(os.getenv("API_KEY")) or bool(
+        os.getenv("API_KEY_WORKSPACE_MAP", "").strip()
+    )
+    strict_mode = strict_mode and auth_configured
 
-    if strict_mode and user_workspace_id is not None:
+    if strict_mode:
+        if user_workspace_id is None:
+            logger.warning(
+                "No authenticated workspace context on strict-mode artifact access; rejecting request"
+            )
+            raise HTTPException(status_code=403, detail="Forbidden")
         if request_workspace_id is not None and request_workspace_id != user_workspace_id:
             raise HTTPException(status_code=403, detail="Forbidden")
         access_workspace_id = user_workspace_id
-    elif strict_mode and request_workspace_id is not None:
-        logger.warning(
-            "Using legacy X-Workspace-Id in strict mode because authenticated workspace context is missing; this fallback is deprecated"
-        )
-        access_workspace_id = request_workspace_id
-    elif strict_mode:
-        logger.warning(
-            "No authenticated workspace context on strict-mode artifact access; allowing legacy request for backward compatibility"
-        )
-        access_workspace_id = None
     else:
         access_workspace_id = request_workspace_id
         if (
