@@ -1,3 +1,20 @@
+"""Unit tests for telemetry middleware.
+
+This module validates the TelemetryMiddleware behavior in isolation using
+fake tracer and meter implementations. It tests:
+- Lazy initialization of telemetry instruments
+- HTTP attribute capture (target, route, status code, latency)
+- Query parameter exclusion and numeric ID normalization
+
+NOTE: These are UNIT tests using mock tracer/meter. They validate middleware
+behavior in isolation only.
+
+Full API-to-worker trace propagation testing (verifying that traces are
+correctly created by the API middleware AND propagated to Celery workers via
+OTEL context) requires a running OTEL collector and instrumented Celery worker
+environment. See test_telemetry_integration.py for the full propagation test plan.
+"""
+
 from __future__ import annotations
 
 from importlib.util import module_from_spec, spec_from_file_location
