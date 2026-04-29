@@ -20,7 +20,8 @@ Each DLQ entry includes:
 See `apps/worker-orchestrator/celery_app.py`:
 
 - Queue config contains only the Redis-backed `creator` queue (no AMQP dead-letter arguments).
-- `handle_task_failure` writes failed task payloads to `dlq:creator` with `RPUSH`.
+- `handle_task_failure` writes failed task payloads to `dlq:creator` with `LPUSH` + `LTRIM`.
+- If Redis write fails at failure time, the same JSON payload is appended to a local fallback file (`DLQ_FALLBACK_PATH`, default `/tmp/dlq_fallback.jsonl`).
 
 ## Monitoring with Redis CLI
 
@@ -68,5 +69,7 @@ for raw in r.lrange("dlq:creator", -10, -1):
 
 ## Important Notes
 
+- DLQ capture is best-effort by design. If Redis is unavailable during task failure, the Redis DLQ entry can be lost; the failure is still recorded in application logs, and the fallback file captures the payload when local disk write succeeds.
+- Monitor fallback-file growth (`DLQ_FALLBACK_PATH`) as a signal of Redis instability during failure handling.
 - `celery:unacked_index` is an in-flight/unacked transport structure, not a DLQ.
 - Do not treat `celery:unacked_index` as failed-task storage for alerting or replay.

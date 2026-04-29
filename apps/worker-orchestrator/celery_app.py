@@ -29,6 +29,7 @@ except ImportError:
 
 redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
 dlq_max_size = max(1, int(os.getenv("DLQ_MAX_SIZE", "10000")))
+dlq_fallback_path = os.getenv("DLQ_FALLBACK_PATH", "/tmp/dlq_fallback.jsonl")
 
 celery_app = Celery(
     "worker-orchestrator",
@@ -82,11 +83,6 @@ def _record_failed_task_to_dlq(
     kwargs: dict[str, Any],
     exception: BaseException,
 ) -> None:
-    if redis is None:
-        logging.getLogger(__name__).warning("Redis client not installed; cannot write DLQ entry")
-        return
-
-    client = redis.Redis.from_url(redis_url)
     payload = {
         "task_id": task_id,
         "task_name": task_name,
@@ -95,8 +91,39 @@ def _record_failed_task_to_dlq(
         "exception": repr(exception),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
-    client.lpush("dlq:creator", json.dumps(payload, default=str))
-    client.ltrim("dlq:creator", 0, dlq_max_size - 1)
+
+    def _write_dlq_fallback(entry: dict[str, Any], error: BaseException | None = None) -> None:
+        logger = logging.getLogger(__name__)
+        try:
+            with open(dlq_fallback_path, "a", encoding="utf-8") as fallback_file:
+                fallback_file.write(json.dumps(entry, default=str))
+                fallback_file.write("\n")
+            logger.warning(
+                "DLQ Redis write failed; wrote entry to fallback file",
+                extra={"dlq_fallback_path": dlq_fallback_path},
+            )
+        except Exception as fallback_error:
+            logger.error(
+                "DLQ Redis write failed and fallback file write also failed",
+                extra={"dlq_fallback_path": dlq_fallback_path},
+                exc_info=(type(fallback_error), fallback_error, fallback_error.__traceback__),
+            )
+        if error is not None:
+            logger.error(
+                "DLQ Redis write failure",
+                exc_info=(type(error), error, error.__traceback__),
+            )
+
+    if redis is None:
+        _write_dlq_fallback(payload)
+        return
+
+    try:
+        client = redis.Redis.from_url(redis_url)
+        client.lpush("dlq:creator", json.dumps(payload, default=str))
+        client.ltrim("dlq:creator", 0, dlq_max_size - 1)
+    except Exception as redis_error:
+        _write_dlq_fallback(payload, redis_error)
 
 
 @task_failure.connect

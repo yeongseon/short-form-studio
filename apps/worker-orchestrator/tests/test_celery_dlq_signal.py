@@ -24,6 +24,8 @@ class _Sender:
 
 
 def test_task_failure_signal_writes_structured_dlq_entry(monkeypatch):
+    # This is a unit test for the task_failure signal handler in isolation.
+    # End-to-end failure behavior requires an integration test with live Redis and a Celery worker.
     fake_client = _FakeRedisClient()
     fake_redis = SimpleNamespace(
         Redis=SimpleNamespace(from_url=lambda _url: fake_client),
