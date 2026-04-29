@@ -33,15 +33,6 @@ Retry safety:
     On timeout: Task transitions run to FAILED atomically before raising.
 """
 
-Consumes an approved script draft AND optionally audio artifact timing data
-and generates a single subtitle artifact for the run (SRT/VTT format).
-
-Key design decisions:
-- Subtitle generation is all-or-nothing for a run (no partial scene-level success).
-- GPU lock is held for the full generation window when required by provider.
-- Subtitles are saved to local filesystem: data/artifacts/{run_id}/subtitles/subtitles.srt
-"""
-
 # pyright: reportMissingImports=false
 # ruff: noqa: E402
 
@@ -317,7 +308,12 @@ def generate_subtitles(
         except Exception:
             logger.exception("Failed to mark run %d as FAILED after timeout", run_id)
         raise
-    except Exception:
+    except Exception as exc:
+        if (
+            isinstance(exc, (ProviderTimeoutError, RateLimitError))
+            and self.request.retries < self.max_retries
+        ):
+            raise
         # Unexpected error — atomic conditional fail.
         try:
             applied, _ = asyncio.run(

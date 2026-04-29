@@ -35,13 +35,6 @@ Retry safety:
     artifacts; logs warnings but completes (no exception).
 """
 
-Consumes active visual assets and optional audio/subtitle artifacts,
-renders a single MP4 output for the run, and stores it as a video artifact.
-
-Phase 9: Supports per-paragraph audio/subtitle concatenation when available.
-Falls back to run-level audio/subtitles if per-paragraph artifacts don't exist.
-"""
-
 # pyright: reportMissingImports=false
 
 from __future__ import annotations
@@ -368,7 +361,12 @@ def render_video(
         except Exception:
             logger.exception("Failed to mark run %d as FAILED after timeout", run_id)
         raise
-    except Exception:
+    except Exception as exc:
+        if (
+            isinstance(exc, (ProviderTimeoutError, RateLimitError))
+            and self.request.retries < self.max_retries
+        ):
+            raise
         try:
             applied, _ = asyncio.run(
                 _run_service.storage.conditional_update_run(

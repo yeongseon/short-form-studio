@@ -278,7 +278,12 @@ def generate_script(
         except Exception:
             logger.exception("Failed to mark run %d as FAILED after timeout", run_id)
         raise
-    except Exception:
+    except Exception as exc:
+        if (
+            isinstance(exc, (ProviderTimeoutError, RateLimitError))
+            and self.request.retries < self.max_retries
+        ):
+            raise
         # Atomic conditional fail: only mark FAILED if run is still in a
         # generating-compatible stage. Uses compare-and-set — no TOCTOU gap.
         try:

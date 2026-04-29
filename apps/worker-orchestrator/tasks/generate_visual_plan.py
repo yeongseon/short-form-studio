@@ -28,11 +28,6 @@ Retry safety:
     On timeout: Task transitions run to FAILED atomically before raising.
 """
 
-Consumes an approved script draft and generates a visual plan — one scene
-per script section with image-generation prompts, style tags, and mood.
-Follows the same pattern as generate_script.
-"""
-
 # pyright: reportMissingImports=false
 # ruff: noqa: E402
 
@@ -124,7 +119,6 @@ def _parse_llm_response(
     # Try to parse JSON — strip markdown fencing if present
     cleaned = raw.strip()
     if cleaned.startswith("```"):
-        # Remove ```json ... ``` fencing
         lines = cleaned.split("\n")
         lines = [line for line in lines if not line.strip().startswith("```")]
         cleaned = "\n".join(lines)
@@ -374,7 +368,12 @@ def generate_visual_plan(
         except Exception:
             logger.exception("Failed to mark run %d as FAILED after timeout", run_id)
         raise
-    except Exception:
+    except Exception as exc:
+        if (
+            isinstance(exc, (ProviderTimeoutError, RateLimitError))
+            and self.request.retries < self.max_retries
+        ):
+            raise
         # Atomic conditional fail: only mark FAILED if run is still in a
         # generating-compatible stage.
         try:

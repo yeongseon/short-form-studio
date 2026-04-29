@@ -16,6 +16,7 @@ import os
 from celery import Celery
 from celery.signals import after_setup_logger
 from creator_service.logging_config import setup_json_logging
+from kombu import Exchange, Queue
 
 redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
@@ -35,6 +36,19 @@ celery_app = Celery(
     ],
 )
 celery_app.conf.task_default_queue = "creator"
+dlq_exchange = Exchange("dlq", type="direct")
+celery_app.conf.task_queues = (
+    Queue(
+        "creator",
+        Exchange("creator", type="direct"),
+        routing_key="creator",
+        queue_arguments={
+            "x-dead-letter-exchange": "dlq",
+            "x-dead-letter-routing-key": "dead_letter",
+        },
+    ),
+    Queue("dead_letter", dlq_exchange, routing_key="dead_letter"),
+)
 # DLQ Configuration: Controls message acknowledgment and failure handling
 # - task_acks_late=True ensures at-least-once delivery by acknowledging AFTER execution
 # - task_reject_on_worker_lost=True prevents message loss if worker dies

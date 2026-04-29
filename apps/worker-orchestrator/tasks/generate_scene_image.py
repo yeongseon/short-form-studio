@@ -41,18 +41,6 @@ Retry safety:
     caller decides whether to retry failed scenes or accept partial output.
 """
 
-Consumes an approved visual plan and generates images for one or all scenes.
-Each generated image is stored as a VisualAsset via the visual_asset_service.
-
-Key design decisions:
-- Partial failure: if one scene fails, already-completed scenes are retained.
-- Regenerated assets are created as new versions; is_active defaults to True
-  (auto-replaces the previous active asset for the scene).
-- GPU lock is held per-scene, not for the entire batch, so other tasks can
-  interleave between scenes.
-- Images are saved to local filesystem: data/artifacts/{run_id}/scenes/
-"""
-
 # pyright: reportMissingImports=false
 # ruff: noqa: E402
 
@@ -446,7 +434,12 @@ def generate_scene_image(
         except Exception:
             logger.exception("Failed to mark run %d as FAILED after timeout", run_id)
         raise
-    except Exception:
+    except Exception as exc:
+        if (
+            isinstance(exc, (ProviderTimeoutError, RateLimitError))
+            and self.request.retries < self.max_retries
+        ):
+            raise
         # Unexpected error (not scene-level) — atomic conditional fail.
         try:
             applied, _ = asyncio.run(

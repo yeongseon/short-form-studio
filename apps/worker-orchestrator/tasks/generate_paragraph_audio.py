@@ -36,13 +36,6 @@ Retry safety:
     Task simply re-raises timeout exception; caller decides whether to transition run to FAILED.
 """
 
-Generates audio for a single script section (paragraph).  Unlike the
-run-level ``generate_audio`` task this does NOT transition stages — the
-caller (storyboard API) manages aggregate state.
-
-Audio is saved to: data/artifacts/{run_id}/audio/{section_id}.wav
-"""
-
 # pyright: reportMissingImports=false
 # ruff: noqa: E402
 
@@ -62,7 +55,6 @@ except ImportError:
 
 from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
-from celery_app import celery_app
 from creator_domain.models.stage import RunStage
 from creator_domain.sanitize import sanitize_path_component
 from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
@@ -77,11 +69,12 @@ _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
 
 # Stages where a timed-out paragraph task can safely transition the run to FAILED.
 # Since paragraph tasks don't manage stages, we include common audio/subtitle stages.
-_SAFE_STAGES = frozenset({
-    RunStage.AUDIO_GENERATING.value,
-    RunStage.SUBTITLE_GENERATING.value,
-})
-
+_SAFE_STAGES = frozenset(
+    {
+        RunStage.AUDIO_GENERATING.value,
+        RunStage.SUBTITLE_GENERATING.value,
+    }
+)
 
 
 class _StageGuardError(ValueError):

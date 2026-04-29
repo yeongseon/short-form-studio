@@ -38,13 +38,6 @@ Retry safety:
     whether to transition run to FAILED or retry the task.
 """
 
-Transcribes a single paragraph's audio file to produce a per-section SRT.
-Unlike the run-level ``generate_subtitles`` task this does NOT transition
-stages — the caller (storyboard API) manages aggregate state.
-
-Subtitles are saved to: data/artifacts/{run_id}/subtitles/{section_id}.srt
-"""
-
 # pyright: reportMissingImports=false
 # ruff: noqa: E402
 
@@ -67,7 +60,6 @@ from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
 from creator_domain.sanitize import sanitize_path_component
-from creator_domain.sanitize import sanitize_path_component
 from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
@@ -80,11 +72,12 @@ _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
 
 # Stages where a timed-out paragraph task can safely transition the run to FAILED.
 # Since paragraph tasks don't manage stages, we include common subtitle stages.
-_SAFE_STAGES = frozenset({
-    RunStage.AUDIO_GENERATING.value,
-    RunStage.SUBTITLE_GENERATING.value,
-})
-
+_SAFE_STAGES = frozenset(
+    {
+        RunStage.AUDIO_GENERATING.value,
+        RunStage.SUBTITLE_GENERATING.value,
+    }
+)
 
 
 class _StageGuardError(ValueError):

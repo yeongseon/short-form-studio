@@ -32,15 +32,6 @@ Retry safety:
     On timeout: Task transitions run to FAILED atomically before raising.
 """
 
-Consumes an approved script draft and generates a single audio artifact
-for the run. The artifact is stored via the audio_service.
-
-Key design decisions:
-- Audio generation is all-or-nothing for a run (no partial scene-level success).
-- GPU lock is held for the full generation window when required by provider.
-- Audio is saved to local filesystem: data/artifacts/{run_id}/audio/audio.wav
-"""
-
 # pyright: reportMissingImports=false
 # ruff: noqa: E402
 
@@ -300,7 +291,12 @@ def generate_audio(
         except Exception:
             logger.exception("Failed to mark run %d as FAILED after timeout", run_id)
         raise
-    except Exception:
+    except Exception as exc:
+        if (
+            isinstance(exc, (ProviderTimeoutError, RateLimitError))
+            and self.request.retries < self.max_retries
+        ):
+            raise
         # Unexpected error — atomic conditional fail.
         try:
             applied, _ = asyncio.run(
