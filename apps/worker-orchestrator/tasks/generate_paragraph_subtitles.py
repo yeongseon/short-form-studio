@@ -27,6 +27,8 @@ except ImportError:
 
 from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
+from creator_domain.models.stage import RunStage
+from creator_domain.sanitize import sanitize_path_component
 from creator_domain.sanitize import sanitize_path_component
 from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
@@ -37,6 +39,14 @@ from creator_service.subtitle_service import subtitle_service as _subtitle_servi
 logger = logging.getLogger(__name__)
 
 _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
+
+# Stages where a timed-out paragraph task can safely transition the run to FAILED.
+# Since paragraph tasks don't manage stages, we include common subtitle stages.
+_SAFE_STAGES = frozenset({
+    RunStage.AUDIO_GENERATING.value,
+    RunStage.SUBTITLE_GENERATING.value,
+})
+
 
 
 class _StageGuardError(ValueError):
@@ -221,6 +231,20 @@ def generate_paragraph_subtitles(
         raise
     except SoftTimeLimitExceeded:
         logger.error("Task timed out for run %s", run_id)
+        # Transition run to FAILED so it doesn't stay stuck in generating stage
+        try:
+            asyncio.run(
+                _run_service.storage.conditional_update_run(
+                    run_id,
+                    {
+                        "current_stage": RunStage.FAILED.value,
+                        "status": "failed",
+                    },
+                    expected_stages=_SAFE_STAGES,
+                )
+            )
+        except Exception:
+            logger.exception("Failed to mark run %d as FAILED after timeout", run_id)
         raise
     except Exception:
         logger.exception(
