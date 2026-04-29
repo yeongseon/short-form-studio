@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hmac
+import hashlib
 import logging
 import os
 import time
@@ -10,6 +11,8 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
+from redis import Redis
+from redis.exceptions import RedisError
 
 admin_service = import_module("creator_service.admin_service").admin_service
 logger = logging.getLogger(__name__)
@@ -24,20 +27,19 @@ class DestructiveOpRateLimiter:
         # Track operations per admin key: key -> list of timestamps
         self.operations: dict[str, list[float]] = defaultdict(list)
 
-    def is_allowed(self, admin_key: str) -> bool:
+    def is_allowed(self, endpoint_or_admin_key: str, admin_key: str | None = None) -> bool:
         """Check if operation is allowed for the given admin key."""
+        key = admin_key if admin_key is not None else endpoint_or_admin_key
         now = time.time()
         one_minute_ago = now - 60
 
         # Clean up old operations
-        if admin_key in self.operations:
-            self.operations[admin_key] = [
-                ts for ts in self.operations[admin_key] if ts > one_minute_ago
-            ]
+        if key in self.operations:
+            self.operations[key] = [ts for ts in self.operations[key] if ts > one_minute_ago]
 
         # Check if we're under the limit
-        if len(self.operations[admin_key]) < self.max_ops_per_minute:
-            self.operations[admin_key].append(now)
+        if len(self.operations[key]) < self.max_ops_per_minute:
+            self.operations[key].append(now)
             return True
         return False
 
@@ -52,8 +54,60 @@ class DestructiveOpRateLimiter:
         return self.max_ops_per_minute
 
 
+class RedisRateLimiter:
+    # Redis-based rate limiting ensures consistency across multiple API replicas
+    def __init__(
+        self,
+        max_ops: int = 10,
+        window_seconds: int = 60,
+        redis_url: str | None = None,
+    ):
+        self.max_ops = max_ops
+        self.window_seconds = window_seconds
+        self._fallback = DestructiveOpRateLimiter(max_ops_per_minute=max_ops)
+        self._redis: Redis | None = None
+        target_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379/0")
+
+        try:
+            client = Redis.from_url(target_url, decode_responses=True)
+            client.ping()
+            self._redis = client
+        except Exception as exc:
+            logger.warning(
+                "Redis unavailable for rate limiting; falling back to in-memory limiter: %s",
+                exc,
+            )
+
+    @staticmethod
+    def _key_hash(admin_key: str) -> str:
+        return hashlib.sha256(admin_key.encode("utf-8")).hexdigest()
+
+    def _redis_key(self, endpoint: str, admin_key: str) -> str:
+        endpoint_key = endpoint.strip("/").replace("/", ":") or "root"
+        return f"ratelimit:{endpoint_key}:{self._key_hash(admin_key)}"
+
+    def is_allowed(self, endpoint: str, admin_key: str) -> bool:
+        if self._redis is None:
+            return self._fallback.is_allowed(admin_key)
+
+        try:
+            key = self._redis_key(endpoint, admin_key)
+            with self._redis.pipeline() as pipe:
+                pipe.incr(key)
+                pipe.expire(key, self.window_seconds)
+                count, _ = pipe.execute()
+            return int(count) <= self.max_ops
+        except RedisError as exc:
+            logger.warning(
+                "Redis rate limit operation failed; falling back to in-memory limiter: %s",
+                exc,
+            )
+            self._redis = None
+            return self._fallback.is_allowed(admin_key)
+
+
 # Global rate limiter instance
-_rate_limiter = DestructiveOpRateLimiter(max_ops_per_minute=10)
+_rate_limiter = RedisRateLimiter(max_ops=10, window_seconds=60)
 
 
 async def require_admin(x_admin_key: str = Header(...)) -> str:
@@ -75,7 +129,7 @@ async def require_confirmation_and_rate_limit(
         )
 
     # Check rate limit
-    if not _rate_limiter.is_allowed(x_admin_key):
+    if not _rate_limiter.is_allowed("admin:destructive", x_admin_key):
         raise HTTPException(
             status_code=429,
             detail="Rate limit exceeded: maximum 10 destructive operations per minute",
