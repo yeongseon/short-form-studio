@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timezone
 
 from creator_domain.sanitize import UnsafePathComponent, sanitize_path_component
 from creator_service.artifact_download_service import artifact_download_service
@@ -20,6 +21,11 @@ async def download_artifact(run_id: int, artifact_id: int) -> FileResponse:
     # TODO: enforce workspace ownership checks after #385 is merged.
     if artifact.get("storage_provider", "local") != "local":
         raise HTTPException(status_code=501, detail="Unsupported storage provider")
+
+    # Check expiration
+    expires_at = artifact.get("expires_at")
+    if expires_at is not None and isinstance(expires_at, datetime) and expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=410, detail="Artifact has expired")
 
     artifact_root = os.path.realpath(os.getenv("ARTIFACT_ROOT", "data/artifacts"))
     artifact_path = artifact.get("file_path")

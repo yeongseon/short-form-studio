@@ -89,13 +89,8 @@ async def test_download_artifact_nonexistent_returns_404(client, monkeypatch: py
 
 
 @pytest.mark.asyncio
-async def test_old_artifact_endpoint_returns_410(client):
+async def test_old_artifact_endpoint_returns_404_for_missing_file(client):
+    """Old endpoint now serves files directly; missing files return 404."""
     response = await client.get("/artifacts/1/100/audio.wav")
 
-    assert response.status_code == 410
-    assert response.json() == {
-        "detail": (
-            "This endpoint is deprecated. Use GET "
-            "/api/creator/runs/{run_id}/artifacts/{artifact_id}/download instead."
-        )
-    }
+    assert response.status_code == 404

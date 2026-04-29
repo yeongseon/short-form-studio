@@ -145,11 +145,11 @@ async def health() -> dict[str, object]:
 
 @app.get("/artifacts/{artifact_path:path}")
 async def serve_artifact(artifact_path: str) -> FileResponse:
-    _ = artifact_path
-    raise HTTPException(
-        status_code=410,
-        detail=(
-            "This endpoint is deprecated. Use GET "
-            "/api/creator/runs/{run_id}/artifacts/{artifact_id}/download instead."
-        ),
-    )
+    """Backward-compatible artifact serving. Redirects to new download route."""
+    artifact_root = os.path.realpath(os.getenv("ARTIFACT_ROOT", "data/artifacts"))
+    resolved = os.path.realpath(os.path.join(artifact_root, artifact_path))
+    if os.path.commonpath([artifact_root, resolved]) != artifact_root:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    if not os.path.isfile(resolved):
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    return FileResponse(resolved)

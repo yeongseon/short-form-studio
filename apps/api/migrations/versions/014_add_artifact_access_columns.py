@@ -22,8 +22,8 @@ def upgrade() -> None:
         sa.Column(
             "workspace_id",
             sa.Integer(),
-            sa.ForeignKey("workspaces.id"),
             nullable=True,
+            comment="FK to workspaces.id — enforced after workspace PR is merged",
         ),
     )
     op.add_column(
