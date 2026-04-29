@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import wave
 from datetime import datetime, timezone
 from typing import Any
 
@@ -65,6 +66,18 @@ def _get_redis_client() -> Any | None:
     if redis is None:
         return None
     return redis.Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"))
+
+
+def _get_wav_duration_seconds(path: str) -> float | None:
+    try:
+        with wave.open(path, "rb") as wav_file:
+            frame_rate = wav_file.getframerate()
+            if frame_rate <= 0:
+                return None
+            return wav_file.getnframes() / float(frame_rate)
+    except Exception:
+        logger.warning("Could not determine audio duration for %s", path, exc_info=True)
+        return None
 
 
 async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
@@ -161,6 +174,7 @@ def generate_audio(
                 params = dict(entry.default_params or {})
                 params["output_path"] = audio_path
                 await provider.generate(script_text, voice=voice, params=params)
+                audio_seconds = _get_wav_duration_seconds(audio_path)
                 workspace_id = await resolve_workspace_id_from_run(run_id)
                 try:
                     await record_provider_call(
@@ -168,6 +182,7 @@ def generate_audio(
                         entry.provider_type,
                         tts_model,
                         "tts",
+                        audio_seconds=audio_seconds,
                         cost_usd=COST_AUDIO_GENERATION,
                         workspace_id=workspace_id,
                         project_id=run.get("project_id"),
