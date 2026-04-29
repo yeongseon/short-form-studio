@@ -31,6 +31,7 @@ from creator_service.audio_service import audio_service as _audio_service
 from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
+from creator_service.usage_service import record_provider_call
 
 logger = logging.getLogger(__name__)
 
@@ -40,10 +41,12 @@ _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
 # Stages where writing RENDER_GENERATING or FAILED is safe — the run
 # hasn't advanced past subtitle generation. The task may start directly
 # from AUDIO_GENERATING or from SUBTITLE_GENERATING after API-side CAS.
-_SAFE_STAGES = frozenset({
-    "AUDIO_GENERATING",
-    "SUBTITLE_GENERATING",
-})
+_SAFE_STAGES = frozenset(
+    {
+        "AUDIO_GENERATING",
+        "SUBTITLE_GENERATING",
+    }
+)
 
 
 class _StageGuardError(ValueError):
@@ -99,7 +102,9 @@ def generate_subtitles(
         nonlocal redis_client, lock_acquired
         try:
             if subtitle_format not in ("srt", "vtt"):
-                raise ValueError(f"Invalid subtitle_format: {subtitle_format!r}. Must be 'srt' or 'vtt'.")
+                raise ValueError(
+                    f"Invalid subtitle_format: {subtitle_format!r}. Must be 'srt' or 'vtt'."
+                )
 
             # 1. Stage guard — reject before any side effects.
             run = await _run_service.storage.get_run(run_id)
@@ -166,8 +171,14 @@ def generate_subtitles(
                 params["format"] = subtitle_format
                 params["output_path"] = subtitle_path
                 if not audio_path:
-                    raise RuntimeError(f"No audio artifact found for run {run_id}; cannot transcribe")
+                    raise RuntimeError(
+                        f"No audio artifact found for run {run_id}; cannot transcribe"
+                    )
                 await provider.transcribe(audio_path, params=params)
+                try:
+                    await record_provider_call(run_id, entry.provider_type, subtitle_model, "stt")
+                except Exception:
+                    logger.warning("Failed to record provider usage", exc_info=True)
 
                 # 7. Save subtitle artifact via service.
                 artifact = await _subtitle_service.create_artifact(

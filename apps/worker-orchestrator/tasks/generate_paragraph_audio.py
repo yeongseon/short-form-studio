@@ -27,6 +27,7 @@ from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.audio_service import audio_service as _audio_service
 from creator_service.run_service import run_service as _run_service
+from creator_service.usage_service import record_provider_call
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,7 @@ def _get_redis_client() -> Any | None:
     if redis is None:
         return None
     return redis.Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"))
+
 
 async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
     remover: Any = getattr(_run_service.storage, "remove_active_task_id", None)
@@ -84,7 +86,9 @@ def generate_paragraph_audio(
     """
     start_time = datetime.now(timezone.utc)
     start_iso = start_time.isoformat()
-    task_id = str(getattr(getattr(self, "request", None), "id", None) or f"para-{run_id}-{section_id}")
+    task_id = str(
+        getattr(getattr(self, "request", None), "id", None) or f"para-{run_id}-{section_id}"
+    )
 
     provider_type: str | None = None
     endpoint: str | None = None
@@ -128,6 +132,10 @@ def generate_paragraph_audio(
             params = dict(entry.default_params or {})
             params["output_path"] = audio_path
             await provider.generate(section_text, voice=voice, params=params)
+            try:
+                await record_provider_call(run_id, entry.provider_type, tts_model, "tts")
+            except Exception:
+                logger.warning("Failed to record provider usage", exc_info=True)
 
             # 4. Save per-paragraph artifact
             artifact = await _audio_service.create_paragraph_artifact(
@@ -184,5 +192,7 @@ def generate_paragraph_audio(
         except Exception:
             logger.warning(
                 "Could not remove active task id %s for run %d",
-                task_id, run_id, exc_info=True,
+                task_id,
+                run_id,
+                exc_info=True,
             )

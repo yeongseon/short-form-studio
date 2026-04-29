@@ -9,7 +9,7 @@ middleware is a transparent pass-through so local development stays frictionless
 import hmac
 import os
 
-from fastapi import Request
+from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
@@ -25,9 +25,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._api_key = api_key or os.getenv("API_KEY")
 
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         # Skip auth when no key is configured (local dev)
         if not self._api_key:
             return await call_next(request)
@@ -57,3 +55,23 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             )
 
         return await call_next(request)
+
+
+async def get_api_key(request: Request) -> str:
+    api_key = os.getenv("API_KEY")
+    if not api_key:
+        return ""
+
+    provided = request.headers.get("X-API-Key")
+    if not provided:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            provided = auth_header[7:]
+
+    if not provided or not hmac.compare_digest(provided, api_key):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing API key",
+        )
+
+    return provided

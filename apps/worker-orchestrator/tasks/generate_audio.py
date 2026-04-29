@@ -30,6 +30,7 @@ from creator_provider.registry import ProviderRegistry
 from creator_service.audio_service import audio_service as _audio_service
 from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
+from creator_service.usage_service import record_provider_call
 
 logger = logging.getLogger(__name__)
 
@@ -39,10 +40,12 @@ _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
 # Stages where writing SUBTITLE_GENERATING or FAILED is safe — the run
 # hasn't advanced past audio generation. The task may start directly from
 # VISUAL_ASSET_REVIEW or from AUDIO_GENERATING after API-side CAS.
-_SAFE_STAGES = frozenset({
-    RunStage.VISUAL_ASSET_REVIEW.value,
-    RunStage.AUDIO_GENERATING.value,
-})
+_SAFE_STAGES = frozenset(
+    {
+        RunStage.VISUAL_ASSET_REVIEW.value,
+        RunStage.AUDIO_GENERATING.value,
+    }
+)
 
 
 class _StageGuardError(ValueError):
@@ -157,6 +160,10 @@ def generate_audio(
                 params = dict(entry.default_params or {})
                 params["output_path"] = audio_path
                 await provider.generate(script_text, voice=voice, params=params)
+                try:
+                    await record_provider_call(run_id, entry.provider_type, tts_model, "tts")
+                except Exception:
+                    logger.warning("Failed to record provider usage", exc_info=True)
 
                 # 6. Save audio artifact via service.
                 artifact = await _audio_service.create_artifact(

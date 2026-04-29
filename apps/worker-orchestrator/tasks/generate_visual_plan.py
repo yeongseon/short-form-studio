@@ -27,6 +27,7 @@ from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
+from creator_service.usage_service import record_provider_call
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
 
 logger = logging.getLogger(__name__)
@@ -125,7 +126,8 @@ def _parse_llm_response(
             scene_index=idx,
             section_type=section_type,
             original_text=text,
-            prompt=section.get("image_prompt") or llm_data.get("prompt", f"Visual representation of: {text[:200]}"),
+            prompt=section.get("image_prompt")
+            or llm_data.get("prompt", f"Visual representation of: {text[:200]}"),
             prompt_edited=bool(section.get("image_prompt")),
             prompt_source="user_edited" if section.get("image_prompt") else "auto_generated",
             style_tags=section.get("style_tags") or llm_data.get("style_tags", []),
@@ -237,6 +239,10 @@ def generate_visual_plan(
 
                 params = dict(entry.default_params or {})
                 raw_response = await provider.generate(full_prompt, params)
+                try:
+                    await record_provider_call(run_id, entry.provider_type, model_key, "llm")
+                except Exception:
+                    logger.warning("Failed to record provider usage", exc_info=True)
 
                 # 6. Parse LLM response into VisualScene objects.
                 visual_scenes = _parse_llm_response(raw_response, sections)

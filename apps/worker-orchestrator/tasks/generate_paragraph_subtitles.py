@@ -13,6 +13,7 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Literal
 
 redis: Any  # optional dependency; may be None at runtime
@@ -27,6 +28,7 @@ from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.run_service import run_service as _run_service
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
+from creator_service.usage_service import record_provider_call
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,7 @@ def _get_redis_client() -> Any | None:
     if redis is None:
         return None
     return redis.Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"))
+
 
 async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
     remover: Any = getattr(_run_service.storage, "remove_active_task_id", None)
@@ -84,7 +87,9 @@ def generate_paragraph_subtitles(
     """
     start_time = datetime.now(timezone.utc)
     start_iso = start_time.isoformat()
-    task_id = str(getattr(getattr(self, "request", None), "id", None) or f"sub-{run_id}-{section_id}")
+    task_id = str(
+        getattr(getattr(self, "request", None), "id", None) or f"sub-{run_id}-{section_id}"
+    )
 
     provider_type: str | None = None
     endpoint: str | None = None
@@ -102,7 +107,9 @@ def generate_paragraph_subtitles(
             raise _StageGuardError(f"Run {run_id} is cancelled")
 
         if subtitle_format not in ("srt", "vtt"):
-            raise ValueError(f"Invalid subtitle_format: {subtitle_format!r}. Must be 'srt' or 'vtt'.")
+            raise ValueError(
+                f"Invalid subtitle_format: {subtitle_format!r}. Must be 'srt' or 'vtt'."
+            )
 
         if not os.path.exists(audio_path):
             raise RuntimeError(f"Audio file not found: {audio_path}")
@@ -128,13 +135,17 @@ def generate_paragraph_subtitles(
         subtitle_path = f"{_ARTIFACT_ROOT}/{run_id}/subtitles/{safe_section_id}.{subtitle_format}"
 
         try:
-            os.makedirs(os.path.dirname(subtitle_path), exist_ok=True)
+            Path(subtitle_path).parent.mkdir(parents=True, exist_ok=True)
 
             # 3. Transcribe via provider
             params = dict(entry.default_params or {})
             params["format"] = subtitle_format
             params["output_path"] = subtitle_path
             await provider.transcribe(audio_path, params=params)
+            try:
+                await record_provider_call(run_id, entry.provider_type, subtitle_model, "stt")
+            except Exception:
+                logger.warning("Failed to record provider usage", exc_info=True)
 
             # 4. Save per-paragraph subtitle artifact
             artifact = await _subtitle_service.create_paragraph_artifact(
@@ -192,5 +203,7 @@ def generate_paragraph_subtitles(
         except Exception:
             logger.warning(
                 "Could not remove active task id %s for run %d",
-                task_id, run_id, exc_info=True,
+                task_id,
+                run_id,
+                exc_info=True,
             )

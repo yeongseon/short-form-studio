@@ -20,6 +20,7 @@ from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
+from creator_service.usage_service import record_provider_call
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +29,12 @@ _ALLOWED_STAGES = frozenset({RunStage.IDEA_READY, RunStage.SCRIPT_GENERATING})
 # Stages where writing SCRIPT_REVIEW or FAILED is safe — the run hasn't
 # advanced past generation. The task may start directly from IDEA_READY
 # or from SCRIPT_GENERATING after the API-side CAS.
-_SAFE_STAGES = frozenset({
-    RunStage.IDEA_READY.value,
-    RunStage.SCRIPT_GENERATING.value,
-})
+_SAFE_STAGES = frozenset(
+    {
+        RunStage.IDEA_READY.value,
+        RunStage.SCRIPT_GENERATING.value,
+    }
+)
 
 
 class _StageGuardError(ValueError):
@@ -140,6 +143,10 @@ def generate_script(
                 # 4. Generation, save, advance stage.
                 params = dict(entry.default_params or {})
                 generated = await provider.generate(prompt, params)
+                try:
+                    await record_provider_call(run_id, entry.provider_type, model_key, "llm")
+                except Exception:
+                    logger.warning("Failed to record provider usage", exc_info=True)
                 await _script_service.save_draft(
                     run_id=run_id,
                     source_type="generated_by_model",
