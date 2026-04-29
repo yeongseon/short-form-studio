@@ -11,7 +11,9 @@ class RunTask(BaseModel):
     run_id: int
     task_type: str
     celery_task_id: str
-    status: Literal["pending", "running", "success", "failed", "revoked", "rejected"] = "pending"
+    status: Literal["queued", "pending", "running", "success", "failed", "revoked", "rejected"] = (
+        "queued"
+    )
     attempt: int = 1
     started_at: datetime | None = None
     finished_at: datetime | None = None
@@ -20,5 +22,5 @@ class RunTask(BaseModel):
     created_at: datetime
 
     @classmethod
-    def from_row(cls, row: dict) -> RunTask:
+    def from_row(cls, row: dict[str, object]) -> RunTask:
         return cls.model_validate(row)

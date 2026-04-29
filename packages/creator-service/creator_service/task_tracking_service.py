@@ -34,9 +34,10 @@ class InMemoryTaskTrackingStorage:
             existing_id = self._rows_by_celery_task_id.get(celery_task_id)
             if existing_id is not None:
                 existing = self._rows[existing_id]
-                existing["status"] = "running"
+                existing["status"] = "queued"
                 existing["attempt"] = int(existing.get("attempt", 0)) + 1
-                existing["started_at"] = datetime.now(timezone.utc)
+                existing["started_at"] = None
+                existing["finished_at"] = None
                 existing["error_code"] = None
                 existing["error_message"] = None
                 self._rows[existing_id] = existing
@@ -46,7 +47,7 @@ class InMemoryTaskTrackingStorage:
         saved = {
             "id": self._next_id,
             "created_at": now,
-            "status": "pending",
+            "status": "queued",
             "attempt": 1,
             "started_at": None,
             "finished_at": None,
@@ -108,17 +109,20 @@ class TaskTrackingService:
     def __init__(self, storage: TaskTrackingStorageBackend):
         self.storage = storage
 
-    async def record_task_start(self, run_id: int, task_type: str, celery_task_id: str) -> RunTask:
+    async def record_task_queued(self, run_id: int, task_type: str, celery_task_id: str) -> RunTask:
         row = await self.storage.create_task(
             {
                 "run_id": run_id,
                 "task_type": task_type,
                 "celery_task_id": celery_task_id,
-                "status": "pending",
+                "status": "queued",
                 "attempt": 1,
             }
         )
         return RunTask.from_row(row)
+
+    async def record_task_start(self, run_id: int, task_type: str, celery_task_id: str) -> RunTask:
+        return await self.record_task_queued(run_id, task_type, celery_task_id)
 
     async def mark_running(self, celery_task_id: str) -> RunTask | None:
         task = await self.storage.get_by_celery_id(celery_task_id)

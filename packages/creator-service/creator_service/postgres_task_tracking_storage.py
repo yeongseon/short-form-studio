@@ -22,9 +22,9 @@ class PostgresTaskTrackingStorage:
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT (celery_task_id) DO UPDATE
-            SET status = 'running',
+            SET status = 'queued',
                 attempt = creator_run_tasks.attempt + 1,
-                started_at = NOW(),
+                started_at = NULL,
                 finished_at = NULL,
                 error_code = NULL,
                 error_message = NULL
@@ -33,7 +33,7 @@ class PostgresTaskTrackingStorage:
             row.get("run_id"),
             row.get("task_type"),
             row.get("celery_task_id"),
-            row.get("status", "pending"),
+            row.get("status", "queued"),
             row.get("attempt", 1),
             row.get("started_at"),
             row.get("finished_at"),
