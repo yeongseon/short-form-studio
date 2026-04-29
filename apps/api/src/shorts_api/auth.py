@@ -8,14 +8,48 @@ middleware is a transparent pass-through so local development stays frictionless
 
 import hmac
 import os
+from dataclasses import dataclass
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 
 # Paths that never require authentication
 _PUBLIC_PATHS = frozenset({"/healthz"})
+
+
+@dataclass
+class CurrentUser:
+    workspace_id: int | None = None
+    workspace_name: str | None = None
+
+
+async def get_current_user() -> CurrentUser:
+    return CurrentUser()
+
+
+async def validate_workspace_header(request: Request) -> int | None:
+    request_workspace_id_raw = request.headers.get("X-Workspace-Id")
+    request_workspace_id: int | None = None
+    if request_workspace_id_raw is not None:
+        try:
+            request_workspace_id = int(request_workspace_id_raw)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid X-Workspace-Id header") from exc
+
+    user = await get_current_user()
+    user_workspace_id = getattr(user, "workspace_id", None)
+
+    # Once merged with feat/user-workspace-model (#395), workspace_id is always populated on the user
+    if request_workspace_id is not None and user_workspace_id is not None and request_workspace_id != user_workspace_id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if request_workspace_id is not None:
+        return request_workspace_id
+    if user_workspace_id is not None:
+        return user_workspace_id
+    return None
 
 
 class ApiKeyMiddleware(BaseHTTPMiddleware):
