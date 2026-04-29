@@ -1,7 +1,3 @@
-# Build & Publish — builds container images, scans with Trivy, then pushes.
-# NOTE: Deployment jobs will be added once infrastructure is provisioned. See issue #391.
-# Rollback strategy: redeploy the previous image tag via workflow_dispatch.
-
 name: Build & Publish
 
 on:
@@ -10,13 +6,29 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      rollback_image_tag:
+        description: "Image tag to rollback to"
+        required: false
+        type: string
 
 permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  SERVICE_NAME: api
+  IMAGE_REPOSITORY: ${{ github.repository }}
+  HEALTHCHECK_URL: ${{ vars.PRODUCTION_URL }}
+
 jobs:
   build-scan-push:
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -76,65 +88,105 @@ jobs:
           docker push ghcr.io/${{ github.repository }}/${{ matrix.service }}:main-${{ steps.vars.outputs.sha_short }}
           docker push ghcr.io/${{ github.repository }}/${{ matrix.service }}:latest
 
-  deploy-staging:
+  deploy-production:
     needs: [build-scan-push]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    environment: staging
+    environment: production
+    env:
+      DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+      DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
+      IMAGE_TAG: latest
     steps:
-      - name: Deploy to staging
+      - name: Deploy to production
         run: |
-          echo "Deploy step placeholder — configure with your infrastructure"
-          echo "Image: ghcr.io/${{ github.repository }}/api:latest"
-          echo "Rollback: re-run this workflow with a previous commit SHA"
+          set -euo pipefail
+          IMAGE="${REGISTRY}/${IMAGE_REPOSITORY}/${SERVICE_NAME}:${IMAGE_TAG}"
+          if [ -z "${DEPLOY_WEBHOOK_URL:-}" ]; then
+            echo "DEPLOY_WEBHOOK_URL is not configured for production environment"
+            exit 1
+          fi
+          curl -fsSL -X POST "$DEPLOY_WEBHOOK_URL" \
+            -H "Authorization: Bearer ${DEPLOY_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"image\":\"${IMAGE}\",\"service\":\"${SERVICE_NAME}\",\"source\":\"cd-workflow\"}"
 
       - name: Verify deployment health
-        # Post-deploy health check with retry logic
-        # Verifies the staging deployment is healthy before marking as successful
-        # Exits with error code if all retry attempts fail, triggering rollback job
         run: |
           echo "Starting health check verification..."
-          STAGING_URL="${{ vars.STAGING_URL }}"
-          if [ -z "$STAGING_URL" ]; then
-            echo "Warning: STAGING_URL not configured, skipping health check"
+          if [ -z "${HEALTHCHECK_URL:-}" ]; then
+            echo "Warning: PRODUCTION_URL not configured, skipping health check"
             exit 0
           fi
-          
+
           for i in 1 2 3 4 5; do
             echo "Health check attempt $i/5..."
-            if curl -sf "${STAGING_URL}/healthz" -o /dev/null 2>/dev/null; then
-              echo "✓ Health check passed"
+            if curl -sf "${HEALTHCHECK_URL}/healthz" -o /dev/null 2>/dev/null; then
+              echo "Health check passed"
               exit 0
             fi
-            echo "✗ Attempt $i failed, retrying in 10s..."
+            echo "Attempt $i failed, retrying in 10s..."
             sleep 10
           done
-          echo "✗ Health check failed after 5 attempts - triggering rollback"
+
+          echo "Health check failed after 5 attempts"
           exit 1
 
-  # Rollback job triggered if deploy-staging fails health check
-  # Documents rollback procedure and provides manual intervention point
-  rollback-staging:
-    if: failure()
-    needs: [deploy-staging]
+  rollback:
+    if: github.event_name == 'workflow_dispatch' && inputs.rollback_image_tag != ''
     runs-on: ubuntu-latest
-    environment: staging
+    environment: production
+    env:
+      DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+      DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
+      ROLLBACK_IMAGE_TAG: ${{ inputs.rollback_image_tag }}
     steps:
-      - name: Log rollback event
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Retag rollback image as latest
         run: |
-          echo "=== ROLLBACK INITIATED ==="
-          echo "Health check verification failed. Initiating rollback procedure."
-          echo ""
-          echo "Rollback procedure:"
-          echo "1. Get the previously stable image tag from your container registry"
-          echo "2. Re-deploy using that image tag to the staging environment"
-          echo "3. Verify new deployment health at: ${{ vars.STAGING_URL }}/healthz"
-          echo "4. If health check passes, investigate the failed deployment"
-          echo ""
-          echo "To manually trigger rollback:"
-          echo "1. Go to GitHub Actions → Build & Publish workflow"
-          echo "2. Click 'Run workflow' with a known-good commit SHA"
-          echo "3. This will rebuild and redeploy the stable version"
-          echo ""
-          echo "Alternative: Update deployment manifest to use previous image tag"
-          echo "and trigger a fresh deployment."
+          set -euo pipefail
+          SOURCE_IMAGE="${REGISTRY}/${IMAGE_REPOSITORY}/${SERVICE_NAME}:${ROLLBACK_IMAGE_TAG}"
+          TARGET_IMAGE="${REGISTRY}/${IMAGE_REPOSITORY}/${SERVICE_NAME}:latest"
+          docker pull "$SOURCE_IMAGE"
+          docker tag "$SOURCE_IMAGE" "$TARGET_IMAGE"
+          docker push "$TARGET_IMAGE"
+
+      - name: Trigger rollback deploy
+        run: |
+          set -euo pipefail
+          IMAGE="${REGISTRY}/${IMAGE_REPOSITORY}/${SERVICE_NAME}:${ROLLBACK_IMAGE_TAG}"
+          if [ -z "${DEPLOY_WEBHOOK_URL:-}" ]; then
+            echo "DEPLOY_WEBHOOK_URL is not configured for production environment"
+            exit 1
+          fi
+          curl -fsSL -X POST "$DEPLOY_WEBHOOK_URL" \
+            -H "Authorization: Bearer ${DEPLOY_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "{\"image\":\"${IMAGE}\",\"service\":\"${SERVICE_NAME}\",\"source\":\"rollback\"}"
+
+      - name: Verify deployment health
+        run: |
+          echo "Starting health check verification..."
+          if [ -z "${HEALTHCHECK_URL:-}" ]; then
+            echo "Warning: PRODUCTION_URL not configured, skipping health check"
+            exit 0
+          fi
+
+          for i in 1 2 3 4 5; do
+            echo "Health check attempt $i/5..."
+            if curl -sf "${HEALTHCHECK_URL}/healthz" -o /dev/null 2>/dev/null; then
+              echo "Health check passed"
+              exit 0
+            fi
+            echo "Attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
+
+          echo "Health check failed after 5 attempts"
+          exit 1
