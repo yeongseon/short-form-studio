@@ -1,41 +1,61 @@
-"""Integration tests for end-to-end telemetry and trace propagation.
-
-This module documents the full propagation test plan for verifying that traces
-are correctly created by the API middleware AND propagated to Celery workers.
-
-These tests require:
-- A running OTEL collector (listening on localhost:4317 or configured exporter)
-- An instrumented Celery worker with OTEL support
-- Integration test environment with both API and worker running
-
-Full propagation test scenarios (documented for future implementation):
-1. API receives HTTP request -> creates span
-2. API middleware adds trace context to Celery task message
-3. Celery worker receives task with trace context
-4. Worker creates child spans linked to parent API span
-5. Worker task completion updates parent span
-6. Full trace is exported to OTEL collector with all spans
-
-See apps/worker/telemetry.py for worker-side instrumentation.
-"""
+from unittest.mock import patch
 
 import pytest
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
 
-@pytest.mark.skip(reason="Requires running OTEL collector and Celery worker")
-def test_api_to_worker_trace_propagation():
-    """
-    Verify that a trace created in the API middleware is propagated to a Celery worker.
+@pytest.fixture
+def span_exporter():
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
 
-    This test validates the full distributed tracing flow:
-    - API middleware creates root span for HTTP request
-    - OTEL context is extracted and added to task message
-    - Celery worker receives context and creates child spans
-    - All spans are exported to OTEL collector in a single trace
+    old_provider = trace.get_tracer_provider()
+    with (
+        patch("opentelemetry.trace._TRACER_PROVIDER", None),
+        patch("opentelemetry.trace._TRACER_PROVIDER_SET_ONCE") as once,
+    ):
+        once.do_once.side_effect = lambda func: func()
+        trace.set_tracer_provider(provider)
+        yield exporter
 
-    Prerequisites:
-    - OTEL collector running (e.g., via Docker or local installation)
-    - Celery worker running with telemetry enabled
-    - Both API and worker configured to export to the same collector
-    """
-    pass
+    with (
+        patch("opentelemetry.trace._TRACER_PROVIDER", provider),
+        patch("opentelemetry.trace._TRACER_PROVIDER_SET_ONCE") as once,
+    ):
+        once.do_once.side_effect = lambda func: func()
+        trace.set_tracer_provider(old_provider)
+
+    exporter.shutdown()
+
+
+def test_tracer_emits_spans(span_exporter):
+    tracer = trace.get_tracer("test-tracer")
+
+    with tracer.start_as_current_span("test-operation") as span:
+        span.set_attribute("test.key", "test-value")
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 1
+    assert spans[0].name == "test-operation"
+    assert spans[0].attributes["test.key"] == "test-value"
+
+
+def test_nested_spans_preserve_context(span_exporter):
+    tracer = trace.get_tracer("test-tracer")
+
+    with tracer.start_as_current_span("parent"):
+        with tracer.start_as_current_span("child"):
+            pass
+
+    spans = span_exporter.get_finished_spans()
+    assert len(spans) == 2
+
+    child = next(span for span in spans if span.name == "child")
+    parent = next(span for span in spans if span.name == "parent")
+    assert child.context.trace_id == parent.context.trace_id
+    assert child.parent is not None
+    assert child.parent.span_id == parent.context.span_id
