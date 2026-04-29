@@ -97,8 +97,15 @@ jobs:
       IMAGE_TAG: ${{ github.sha }}
       API_HEALTHCHECK_URL: ${{ vars.STAGING_API_URL }}
       WEB_HEALTHCHECK_URL: ${{ vars.STAGING_WEB_URL }}
-      WORKER_HEALTHCHECK_URL: ${{ vars.STAGING_WORKER_HEALTHCHECK_URL }}
+      WORKER_REDIS_URL: ${{ secrets.STAGING_REDIS_URL }}
     steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Deploy to staging (${{ matrix.service }})
         run: |
           set -euo pipefail
@@ -154,14 +161,17 @@ jobs:
           fi
 
           if [ "${{ matrix.service }}" = "worker" ]; then
-            if [ -z "${WORKER_HEALTHCHECK_URL:-}" ]; then
-              echo "ERROR: HEALTHCHECK_URL not set"
+            if [ -z "${WORKER_REDIS_URL:-}" ]; then
+              echo "ERROR: WORKER_REDIS_URL not set"
               exit 1
             fi
 
             for i in 1 2 3 4 5; do
               echo "Worker health check attempt $i/5..."
-              if curl -sf "${WORKER_HEALTHCHECK_URL}" -o /dev/null 2>/dev/null; then
+              if docker run --rm \
+                -e REDIS_URL="${WORKER_REDIS_URL}" \
+                "${REGISTRY}/${IMAGE_REPOSITORY}/worker:${IMAGE_TAG}" \
+                python healthcheck.py; then
                 echo "Worker health check passed"
                 exit 0
               fi
@@ -187,8 +197,15 @@ jobs:
       IMAGE_TAG: ${{ github.sha }}
       API_HEALTHCHECK_URL: ${{ vars.PRODUCTION_API_URL }}
       WEB_HEALTHCHECK_URL: ${{ vars.PRODUCTION_WEB_URL }}
-      WORKER_HEALTHCHECK_URL: ${{ vars.PRODUCTION_WORKER_HEALTHCHECK_URL }}
+      WORKER_REDIS_URL: ${{ secrets.PRODUCTION_REDIS_URL }}
     steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Deploy to production (${{ matrix.service }})
         run: |
           set -euo pipefail
@@ -244,14 +261,17 @@ jobs:
           fi
 
           if [ "${{ matrix.service }}" = "worker" ]; then
-            if [ -z "${WORKER_HEALTHCHECK_URL:-}" ]; then
-              echo "ERROR: HEALTHCHECK_URL not set"
+            if [ -z "${WORKER_REDIS_URL:-}" ]; then
+              echo "ERROR: WORKER_REDIS_URL not set"
               exit 1
             fi
 
             for i in 1 2 3 4 5; do
               echo "Worker health check attempt $i/5..."
-              if curl -sf "${WORKER_HEALTHCHECK_URL}" -o /dev/null 2>/dev/null; then
+              if docker run --rm \
+                -e REDIS_URL="${WORKER_REDIS_URL}" \
+                "${REGISTRY}/${IMAGE_REPOSITORY}/worker:${IMAGE_TAG}" \
+                python healthcheck.py; then
                 echo "Worker health check passed"
                 exit 0
               fi
@@ -275,7 +295,7 @@ jobs:
       DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
       ROLLBACK_IMAGE_TAG: ${{ inputs.rollback_image_tag }}
       API_HEALTHCHECK_URL: ${{ vars.PRODUCTION_API_URL }}
-      WORKER_HEALTHCHECK_URL: ${{ vars.PRODUCTION_WORKER_HEALTHCHECK_URL }}
+      WORKER_REDIS_URL: ${{ secrets.PRODUCTION_REDIS_URL }}
       STUDIO_HEALTHCHECK_URL: ${{ vars.PRODUCTION_WEB_URL }}
     steps:
       - name: Log in to GitHub Container Registry
@@ -323,14 +343,17 @@ jobs:
           fi
 
           if [ "${{ matrix.service }}" = "worker" ]; then
-            if [ -z "${WORKER_HEALTHCHECK_URL:-}" ]; then
-              echo "ERROR: WORKER_HEALTHCHECK_URL not set"
+            if [ -z "${WORKER_REDIS_URL:-}" ]; then
+              echo "ERROR: WORKER_REDIS_URL not set"
               exit 1
             fi
 
             for i in 1 2 3 4 5; do
               echo "Worker health check attempt $i/5..."
-              if curl -sf "${WORKER_HEALTHCHECK_URL}" -o /dev/null 2>/dev/null; then
+              if docker run --rm \
+                -e REDIS_URL="${WORKER_REDIS_URL}" \
+                "${REGISTRY}/${IMAGE_REPOSITORY}/worker:${ROLLBACK_IMAGE_TAG}" \
+                python healthcheck.py; then
                 echo "Worker health check passed"
                 exit 0
               fi
