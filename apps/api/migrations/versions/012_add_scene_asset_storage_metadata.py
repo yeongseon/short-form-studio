@@ -1,4 +1,4 @@
-"""Add storage metadata columns to creator_scene_assets.
+"""Add storage metadata columns to artifact tables.
 
 Revision ID: 012
 Revises: 011
@@ -25,8 +25,28 @@ def upgrade() -> None:
         "creator_scene_assets",
         sa.Column("storage_key", sa.Text(), nullable=True),
     )
+    op.add_column(
+        "creator_artifacts",
+        sa.Column("storage_backend", sa.String(length=50), nullable=True),
+    )
+    op.add_column(
+        "creator_artifacts",
+        sa.Column("storage_key", sa.Text(), nullable=True),
+    )
+    op.add_column(
+        "creator_artifacts",
+        sa.Column("content_type", sa.String(length=100), nullable=True),
+    )
+    op.add_column(
+        "creator_artifacts",
+        sa.Column("size_bytes", sa.BigInteger(), nullable=True),
+    )
 
 
 def downgrade() -> None:
+    op.drop_column("creator_artifacts", "size_bytes")
+    op.drop_column("creator_artifacts", "content_type")
+    op.drop_column("creator_artifacts", "storage_key")
+    op.drop_column("creator_artifacts", "storage_backend")
     op.drop_column("creator_scene_assets", "storage_key")
     op.drop_column("creator_scene_assets", "storage_provider")

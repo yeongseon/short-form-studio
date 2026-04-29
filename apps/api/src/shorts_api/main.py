@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import logging
+import mimetypes
 import os
 import resource
 import signal
@@ -134,7 +135,6 @@ def _mark_shutdown() -> None:
         return
     shutdown_state.is_shutting_down = True
     logger.info("Graceful shutdown initiated; draining in-flight requests")
-
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -368,3 +368,22 @@ async def serve_artifact(artifact_path: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="Artifact not found")
 
     return FileResponse(resolved_path)
+
+
+@app.get("/api/artifacts/files/{path:path}")
+async def serve_local_artifact_file(path: str) -> FileResponse:
+    storage_root = os.path.realpath(
+        os.getenv("LOCAL_STORAGE_PATH", os.getenv("ARTIFACT_ROOT", "data/artifacts"))
+    )
+
+    if not path or path.startswith("/") or any(component == ".." for component in path.split("/")):
+        raise HTTPException(status_code=400, detail="Invalid artifact path")
+
+    resolved_path = os.path.realpath(os.path.join(storage_root, path))
+    if os.path.commonpath([storage_root, resolved_path]) != storage_root:
+        raise HTTPException(status_code=400, detail="Path traversal detected")
+    if not os.path.isfile(resolved_path):
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+    media_type, _ = mimetypes.guess_type(resolved_path)
+    return FileResponse(resolved_path, media_type=media_type or "application/octet-stream")
