@@ -2,6 +2,7 @@
 
 import json
 import logging
+import asyncio
 from collections.abc import Callable, Mapping
 from importlib import import_module
 from typing import Any, cast
@@ -9,6 +10,17 @@ from typing import Any, cast
 from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
+
+_DISPATCH_TASK_TYPES = {
+    "dispatch_generate_script": "generate_script",
+    "dispatch_generate_visual_plan": "generate_visual_plan",
+    "dispatch_generate_audio": "generate_audio",
+    "dispatch_generate_subtitles": "generate_subtitles",
+    "dispatch_render_video": "render_video",
+    "dispatch_generate_scene_image": "generate_scene_image",
+    "dispatch_paragraph_audio": "generate_paragraph_audio",
+    "dispatch_paragraph_subtitles": "generate_paragraph_subtitles",
+}
 
 
 def validate_model_key(model_key: str) -> None:
@@ -61,10 +73,7 @@ def validate_model_defaults(model_defaults: Mapping[str, str] | None) -> None:
         if validator is None:
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    f"Unknown model default key '{key}'. "
-                    f"Allowed keys: {sorted(validators)}."
-                ),
+                detail=(f"Unknown model default key '{key}'. Allowed keys: {sorted(validators)}."),
             )
         validator(value)
 
@@ -83,9 +92,7 @@ def dispatch_generate_script(
     return str(result.id)
 
 
-def dispatch_generate_visual_plan(
-    run_id: int, model_key: str, style_preset: str | None
-) -> str:
+def dispatch_generate_visual_plan(run_id: int, model_key: str, style_preset: str | None) -> str:
     """Dispatch generate_visual_plan Celery task. Returns task id.
 
     Separated into a function so tests can monkeypatch without importing Celery.
@@ -117,7 +124,9 @@ def dispatch_generate_subtitles(run_id: int, subtitle_model: str, subtitle_forma
     from importlib import import_module
 
     tasks = import_module("tasks.generate_subtitles")
-    result = tasks.generate_subtitles.delay(run_id, subtitle_model=subtitle_model, subtitle_format=subtitle_format)
+    result = tasks.generate_subtitles.delay(
+        run_id, subtitle_model=subtitle_model, subtitle_format=subtitle_format
+    )
     return str(result.id)
 
 
@@ -203,6 +212,9 @@ def _revoke_active_tasks(active_task_id: str | None) -> None:
         return
     try:
         celery_app = __import__("celery_app").celery_app
+        tracking_service = import_module(
+            "creator_service.task_tracking_service"
+        ).task_tracking_service
 
         # Parse as JSON list; fall back to single ID for backwards compat
         try:
@@ -214,6 +226,11 @@ def _revoke_active_tasks(active_task_id: str | None) -> None:
         for tid in task_ids:
             if tid:
                 celery_app.control.revoke(tid, terminate=True)
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(tracking_service.mark_revoked(str(tid)))
+                except RuntimeError:
+                    asyncio.run(tracking_service.mark_revoked(str(tid)))
     except Exception:
         logger.warning("Failed to revoke active tasks (task_id=%s)", active_task_id, exc_info=True)
 
@@ -285,10 +302,17 @@ async def cas_dispatch_with_rollback(
         raise HTTPException(status_code=503, detail=enqueue_error_detail) from None
 
     await _append_task_id(run_id, task_id, run_service=run_service_obj)
+    task_type = _DISPATCH_TASK_TYPES.get(getattr(dispatcher, "__name__", ""), "unknown")
+    if task_type != "unknown":
+        tracking_service = import_module(
+            "creator_service.task_tracking_service"
+        ).task_tracking_service
+        await tracking_service.record_task_queued(run_id, task_type, task_id)
     return {
         "task_id": task_id,
         "run_id": run_id,
         "current_stage": target_stage,
     }
+
 
 _EXPORTED_RUN_HELPERS = (_revoke_active_tasks, _append_task_id)
