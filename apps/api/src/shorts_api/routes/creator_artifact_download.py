@@ -10,7 +10,10 @@ router = APIRouter(tags=["runs"])
 
 
 @router.get("/runs/{run_id}/artifacts/{artifact_id}/download")
-async def download_artifact(run_id: int, artifact_id: int) -> FileResponse:
+async def download_artifact(
+    run_id: int,
+    artifact_id: int,
+) -> FileResponse:
     artifact = await artifact_download_service.get_artifact_by_id(artifact_id)
     if artifact is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
@@ -18,7 +21,7 @@ async def download_artifact(run_id: int, artifact_id: int) -> FileResponse:
     if artifact.get("run_id") != run_id:
         raise HTTPException(status_code=404, detail="Artifact not found")
 
-    # TODO: enforce workspace ownership checks after #385 is merged.
+    # NOTE: After #395 merge, add get_current_user dependency for workspace ownership.
     if artifact.get("storage_provider", "local") != "local":
         raise HTTPException(status_code=501, detail="Unsupported storage provider")
 

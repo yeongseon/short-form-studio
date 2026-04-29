@@ -147,11 +147,25 @@ async def health() -> dict[str, object]:
 async def serve_artifact(artifact_path: str) -> FileResponse:
     """Backward-compatible artifact serving — DEPRECATED.
 
-    This endpoint serves files directly from disk without DB-level access
-    control (no expires_at, no ownership check). Clients should migrate to
+    In production (API_KEY set), this returns 410 Gone to enforce migration
+    to the access-controlled endpoint. In dev mode, it serves files directly
+    for convenience but still emits deprecation headers.
+
+    Clients MUST migrate to:
     ``GET /api/creator/runs/{run_id}/artifacts/{artifact_id}/download``
     which enforces expiration and ownership.
     """
+    # Production: reject outright — legacy route bypasses access control
+    if os.getenv("API_KEY"):
+        raise HTTPException(
+            status_code=410,
+            detail=(
+                "This endpoint is removed in production. "
+                "Use GET /api/creator/runs/{run_id}/artifacts/{artifact_id}/download instead."
+            ),
+        )
+
+    # Dev mode: serve with deprecation warnings
     artifact_root = os.path.realpath(os.getenv("ARTIFACT_ROOT", "data/artifacts"))
     resolved = os.path.realpath(os.path.join(artifact_root, artifact_path))
     if os.path.commonpath([artifact_root, resolved]) != artifact_root:
