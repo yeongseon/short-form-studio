@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+# pyright: reportMissingImports=false
+
 import asyncio
 import logging
 import os
@@ -20,6 +22,7 @@ from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
+from telemetry import trace_task
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +31,12 @@ _ALLOWED_STAGES = frozenset({RunStage.IDEA_READY, RunStage.SCRIPT_GENERATING})
 # Stages where writing SCRIPT_REVIEW or FAILED is safe — the run hasn't
 # advanced past generation. The task may start directly from IDEA_READY
 # or from SCRIPT_GENERATING after the API-side CAS.
-_SAFE_STAGES = frozenset({
-    RunStage.IDEA_READY.value,
-    RunStage.SCRIPT_GENERATING.value,
-})
+_SAFE_STAGES = frozenset(
+    {
+        RunStage.IDEA_READY.value,
+        RunStage.SCRIPT_GENERATING.value,
+    }
+)
 
 
 class _StageGuardError(ValueError):
@@ -77,6 +82,7 @@ async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
 
 
 @celery_app.task(bind=True, name="generate_script")
+@trace_task("generate_script")
 def generate_script(
     self,
     run_id: int,
