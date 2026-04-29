@@ -156,6 +156,8 @@ def init_telemetry(service_name: str) -> None:
     the worker_process_init signal. The idempotency guard prevents
     reinitializing the SDK if called multiple times within the same process.
     """
+    logger = logging.getLogger(__name__)
+
     if _STATE.initialized:
         return
 
@@ -188,21 +190,37 @@ def init_telemetry(service_name: str) -> None:
     )
 
     tracer_provider = otel["TracerProvider"](resource=resource)
-    if is_otlp and otel["OTLPSpanExporter"] is not None:
-        span_exporter = otel["OTLPSpanExporter"](endpoint=endpoint)
+    otlp_span_exporter = otel.get("OTLPSpanExporter")
+    if is_otlp and otlp_span_exporter is not None:
+        span_exporter = otlp_span_exporter(endpoint=endpoint)
         tracer_provider.add_span_processor(otel["BatchSpanProcessor"](span_exporter))
     else:
+        if not is_otlp:
+            logger.warning(
+                "OTEL_EXPORTER_OTLP_ENDPOINT is not configured; falling back to ConsoleSpanExporter"
+            )
+        elif otlp_span_exporter is None:
+            logger.warning("OTLP span exporter is unavailable; falling back to ConsoleSpanExporter")
         tracer_provider.add_span_processor(
             otel["SimpleSpanProcessor"](otel["ConsoleSpanExporter"]())
         )
     otel["trace"].set_tracer_provider(tracer_provider)
 
     metric_readers = []
-    if is_otlp and otel["OTLPMetricExporter"] is not None:
+    otlp_metric_exporter = otel.get("OTLPMetricExporter")
+    if is_otlp and otlp_metric_exporter is not None:
         metric_readers.append(
-            otel["PeriodicExportingMetricReader"](otel["OTLPMetricExporter"](endpoint=endpoint))
+            otel["PeriodicExportingMetricReader"](otlp_metric_exporter(endpoint=endpoint))
         )
     else:
+        if not is_otlp:
+            logger.warning(
+                "OTEL_EXPORTER_OTLP_ENDPOINT is not configured; falling back to ConsoleMetricExporter"
+            )
+        elif otlp_metric_exporter is None:
+            logger.warning(
+                "OTLP metric exporter is unavailable; falling back to ConsoleMetricExporter"
+            )
         metric_readers.append(
             otel["PeriodicExportingMetricReader"](otel["ConsoleMetricExporter"]())
         )
@@ -210,22 +228,32 @@ def init_telemetry(service_name: str) -> None:
     otel["metrics"].set_meter_provider(meter_provider)
 
     logger_provider = otel["LoggerProvider"](resource=resource)
-    if is_otlp and otel["OTLPLogExporter"] is not None:
+    otlp_log_exporter = otel.get("OTLPLogExporter")
+    if is_otlp and otlp_log_exporter is not None:
         logger_provider.add_log_record_processor(
-            otel["BatchLogRecordProcessor"](otel["OTLPLogExporter"](endpoint=endpoint))
+            otel["BatchLogRecordProcessor"](otlp_log_exporter(endpoint=endpoint))
         )
     else:
+        if not is_otlp:
+            logger.warning(
+                "OTEL_EXPORTER_OTLP_ENDPOINT is not configured; falling back to ConsoleLogExporter"
+            )
+        elif otlp_log_exporter is None:
+            logger.warning("OTLP log exporter is unavailable; falling back to ConsoleLogExporter")
         logger_provider.add_log_record_processor(
             otel["SimpleLogRecordProcessor"](otel["ConsoleLogExporter"]())
         )
 
-    if otel["set_logger_provider"] is not None:
-        otel["set_logger_provider"](logger_provider)
-    if otel["LoggingHandler"] is not None and not any(
-        isinstance(handler, otel["LoggingHandler"]) for handler in root_logger.handlers
+    set_logger_provider = otel.get("set_logger_provider")
+    logging_handler_type = otel.get("LoggingHandler")
+
+    if set_logger_provider is not None:
+        set_logger_provider(logger_provider)
+    if logging_handler_type is not None and not any(
+        isinstance(handler, logging_handler_type) for handler in root_logger.handlers
     ):
         root_logger.addHandler(
-            otel["LoggingHandler"](level=logging.NOTSET, logger_provider=logger_provider)
+            logging_handler_type(level=logging.NOTSET, logger_provider=logger_provider)
         )
 
     _STATE.enabled = True
