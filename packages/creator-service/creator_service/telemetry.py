@@ -116,9 +116,41 @@ def _load_otel() -> dict[str, Any] | None:
 
 
 def init_telemetry(service_name: str) -> None:
+    """
+    Initialize OpenTelemetry tracing, metrics, and logging (idempotent).
+    
+    Safe to call multiple times and across forked processes. Second and
+    subsequent calls are no-ops. Each forked worker (e.g., Celery worker)
+    will call this independently via signal handlers.
+    
+    Production Configuration:
+    - OTEL_ENABLED: Set to 'true' to enable instrumentation (default: 'false')
+    - OTEL_EXPORTER_OTLP_ENDPOINT: gRPC endpoint for span/metric/log export
+      Example: 'http://localhost:4317' (default gRPC port)
+    
+    Sampling Configuration (OpenTelemetry SDK):
+    - OTEL_TRACES_SAMPLER: Sampler strategy for production
+      Recommended: 'parentbased_traceidratio' for distributed tracing
+      Other options: 'always_on', 'always_off', 'traceidratio'
+    - OTEL_TRACES_SAMPLER_ARG: Sampling probability (0.0-1.0)
+      Example: '0.1' for 10% sampling on high-throughput services
+      Example: '1.0' for 100% sampling during development/debugging
+    - OTEL_EXPORTER_OTLP_PROTOCOL: Protocol for export
+      Options: 'grpc' (default), 'http/protobuf'
+    
+    Environment Configuration:
+    - OTEL_ENVIRONMENT: Deployment environment (default: 'development')
+    - OTEL_SERVICE_NAME: Service identifier in traces (default: service_name arg)
+    - OTEL_SERVICE_VERSION: Service version in resource attributes
+    
+    Fork Safety:
+    Each forked Celery worker calls init_telemetry independently via
+    the worker_process_init signal. The idempotency guard prevents
+    reinitializing the SDK if called multiple times within the same process.
+    """
     if _STATE.initialized:
         return
-
+    
     _STATE.initialized = True
     root_logger = logging.getLogger()
     if not any(isinstance(existing, TraceContextFilter) for existing in root_logger.filters):

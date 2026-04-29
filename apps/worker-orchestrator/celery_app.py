@@ -37,6 +37,13 @@ def setup_celery_logger(logger: logging.Logger, **kwargs: object) -> None:
 
 @worker_process_init.connect
 def setup_worker_process_telemetry(**kwargs: object) -> None:
-    """Configure OpenTelemetry once per worker process."""
+    """
+    Configure OpenTelemetry once per worker process.
+    
+    Called automatically when a Celery worker process is initialized.
+    Safe across forked workers: each worker process calls init_telemetry
+    independently. The idempotency guard in init_telemetry() ensures that
+    multiple calls within the same process are no-ops.
+    """
     telemetry_module = import_module("telemetry")
     telemetry_module.init_telemetry(service_name="worker")
