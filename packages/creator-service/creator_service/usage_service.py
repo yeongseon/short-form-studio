@@ -213,3 +213,32 @@ def _create_storage() -> UsageStorageBackend:
 
 
 usage_service = UsageService(_create_storage())
+
+
+async def record_provider_call(
+    run_id: int,
+    provider_name: str,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cost_usd: float,
+) -> UsageEvent:
+    """Called by worker tasks after each provider call completes. Workers should call this in their finally/success blocks."""
+
+    return await usage_service.record_usage(
+        workspace_id=None,
+        run_id=run_id,
+        provider=provider_name,
+        model_key=model,
+        operation_type="llm",
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        estimated_cost_usd=cost_usd,
+        project_id=None,
+    )
+
+
+async def check_workspace_quota(workspace_id: int) -> tuple[bool, str]:
+    """Called at task start to verify the workspace hasn't exceeded its monthly budget."""
+
+    return await usage_service.check_quota(workspace_id, operation_type="llm")

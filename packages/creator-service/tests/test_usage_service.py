@@ -1,7 +1,13 @@
 import asyncio
 
 import pytest
-from creator_service.usage_service import InMemoryUsageStorage, UsageService
+from creator_service.usage_service import (
+    InMemoryUsageStorage,
+    UsageService,
+    check_workspace_quota,
+    record_provider_call,
+    usage_service,
+)
 
 
 def test_record_usage_creates_event_with_correct_fields() -> None:
@@ -125,3 +131,56 @@ def test_set_quota_and_get_quota_work() -> None:
     assert quota.monthly_image_generations == 45
     assert quota.monthly_tts_seconds == 678
     assert quota.monthly_cost_usd == 9.5
+
+
+def test_record_provider_call_wrapper_records_llm_usage() -> None:
+    original_service = usage_service
+    record_provider_call.__globals__["usage_service"] = UsageService(InMemoryUsageStorage())
+    try:
+        event = asyncio.run(
+            record_provider_call(
+                run_id=321,
+                provider_name="openai",
+                model="gpt-4o-mini",
+                input_tokens=120,
+                output_tokens=80,
+                cost_usd=0.001,
+            )
+        )
+    finally:
+        record_provider_call.__globals__["usage_service"] = original_service
+
+    assert event.run_id == 321
+    assert event.provider == "openai"
+    assert event.model_key == "gpt-4o-mini"
+    assert event.operation_type == "llm"
+    assert event.input_tokens == 120
+    assert event.output_tokens == 80
+    assert event.estimated_cost_usd == pytest.approx(0.001)
+
+
+def test_check_workspace_quota_wrapper_uses_llm_default() -> None:
+    original_service = usage_service
+    check_workspace_quota.__globals__["usage_service"] = UsageService(InMemoryUsageStorage())
+    try:
+        asyncio.run(
+            check_workspace_quota.__globals__["usage_service"].set_quota(
+                404, monthly_llm_calls=1, monthly_cost_usd=10.0
+            )
+        )
+        asyncio.run(
+            check_workspace_quota.__globals__["usage_service"].record_usage(
+                workspace_id=404,
+                run_id=1,
+                provider="openai",
+                model_key="gpt-4o-mini",
+                operation_type="llm",
+                estimated_cost_usd=0.1,
+            )
+        )
+        allowed, reason = asyncio.run(check_workspace_quota(404))
+    finally:
+        check_workspace_quota.__globals__["usage_service"] = original_service
+
+    assert allowed is False
+    assert "LLM call quota exceeded" in reason
