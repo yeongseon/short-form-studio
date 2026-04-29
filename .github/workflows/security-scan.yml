@@ -31,7 +31,7 @@ jobs:
         run: docker build --target runtime -f ${{ matrix.dockerfile }} -t local/${{ matrix.service }}:scan .
 
       - name: Trivy scan (${{ matrix.service }})
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.28.0
         with:
           scan-type: image
           image-ref: local/${{ matrix.service }}:scan
@@ -62,6 +62,12 @@ jobs:
 
       - name: Python dependency scan (Worker)
         run: pip-audit -r apps/worker-orchestrator/requirements.txt
+
+      - name: Python dependency scan (shared packages)
+        run: |
+          pip install packages/creator-domain packages/creator-service packages/creator-provider 2>/dev/null
+          pip-audit
+        continue-on-error: true
 
       - name: Install frontend dependencies
         run: npm --prefix apps/studio-web ci
