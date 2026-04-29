@@ -297,6 +297,11 @@ def render_video(
     try:
         return asyncio.run(_run_task())
     except _StageGuardError:
+        # Validation rejection — do NOT mutate run state to FAILED.
+        try:
+            asyncio.run(_task_tracking_service.mark_rejected(task_id, "stage_guard"))
+        except Exception:
+            logger.warning("Failed to record task rejection", exc_info=True)
         raise
     except Exception as exc:
         try:

@@ -310,6 +310,11 @@ def generate_visual_plan(
         return asyncio.run(_run_task())
     except _StageGuardError:
         # Validation rejection — do NOT mutate run state to FAILED.
+        # A stale/duplicate task should not downgrade a run already past generation.
+        try:
+            asyncio.run(_task_tracking_service.mark_rejected(task_id, "stage_guard"))
+        except Exception:
+            logger.warning("Failed to record task rejection", exc_info=True)
         raise
     except Exception as exc:
         try:
