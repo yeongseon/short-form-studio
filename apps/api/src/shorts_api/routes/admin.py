@@ -66,6 +66,7 @@ class RedisRateLimiter:
         self.window_seconds = window_seconds
         self._fallback = DestructiveOpRateLimiter(max_ops_per_minute=max_ops)
         self._redis: Redis | None = None
+        self._redis_retry_after: float = 0.0
         target_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379/0")
 
         try:
@@ -87,6 +88,16 @@ class RedisRateLimiter:
         return f"ratelimit:{endpoint_key}:{self._key_hash(admin_key)}"
 
     def is_allowed(self, endpoint: str, admin_key: str) -> bool:
+        if self._redis is None and time.time() >= self._redis_retry_after:
+            try:
+                target_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
+                client = Redis.from_url(target_url, decode_responses=True)
+                client.ping()
+                self._redis = client
+                logger.info("Redis rate limiter reconnected successfully")
+            except Exception:
+                self._redis_retry_after = time.time() + 60
+
         if self._redis is None:
             return self._fallback.is_allowed(admin_key)
 
@@ -99,10 +110,11 @@ class RedisRateLimiter:
             return int(count) <= self.max_ops
         except RedisError as exc:
             logger.warning(
-                "Redis rate limit operation failed; falling back to in-memory limiter: %s",
+                "Redis rate limit operation failed; falling back to in-memory limiter (will retry in 60s): %s",
                 exc,
             )
             self._redis = None
+            self._redis_retry_after = time.time() + 60
             return self._fallback.is_allowed(admin_key)
 
 
@@ -176,6 +188,7 @@ class UnstickRunResponse(BaseModel):
     run_id: str
     previous_stage: str | None = None
     current_stage: str | None = None
+    status: str | None = None
     error: str | None = None
 
 

@@ -215,9 +215,10 @@ class AdminService:
                     """
                     UPDATE creator_runs
                     SET current_stage = $2,
+                        status = 'pending',
                         active_task_id = NULL
                     WHERE id = $1
-                    RETURNING id, current_stage, updated_at
+                    RETURNING id, current_stage, status, updated_at
                     """,
                     run_id_int,
                     target_stage,
@@ -238,6 +239,7 @@ class AdminService:
                     "run_id": str(updated["id"]),
                     "previous_stage": current_stage,
                     "current_stage": updated["current_stage"],
+                    "status": updated["status"],
                 }
         except Exception as exc:
             return {"ok": False, "run_id": run_id, "error": str(exc)}
