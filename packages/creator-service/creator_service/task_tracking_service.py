@@ -173,6 +173,26 @@ class TaskTrackingService:
         )
         return RunTask.from_row(row) if row is not None else None
 
+    async def mark_rejected(
+        self, celery_task_id: str, reason: str = "stage_guard"
+    ) -> RunTask | None:
+        """Mark a task as rejected when it cannot proceed (e.g. stage guard failure).
+
+        This prevents tasks from remaining stuck as 'running' when they are
+        rejected before doing real work.
+        """
+        task = await self.storage.get_by_celery_id(celery_task_id)
+        if task is None:
+            return None
+        row = await self.storage.update_task_status(
+            task["id"],
+            "rejected",
+            finished_at=datetime.now(timezone.utc),
+            error_code="rejected",
+            error_message=reason,
+        )
+        return RunTask.from_row(row) if row is not None else None
+
     async def list_run_tasks(self, run_id: int) -> list[RunTask]:
         rows = await self.storage.list_by_run(run_id)
         return [RunTask.from_row(row) for row in rows]

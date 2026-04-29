@@ -77,3 +77,13 @@ def test_record_task_start_reuses_celery_task_id_and_increments_attempt() -> Non
     assert retried.attempt == 2
     assert retried.status == "running"
     assert retried.started_at is not None
+
+
+def test_mark_rejected_transitions_running_to_rejected() -> None:
+    service = TaskTrackingService(InMemoryTaskTrackingStorage())
+    asyncio.run(service.record_task_start(7, "generate_script", "celery-rej-1"))
+    asyncio.run(service.mark_running("celery-rej-1"))
+    result = asyncio.run(service.mark_rejected("celery-rej-1", "stage_guard"))
+    assert result is not None
+    assert result.status == "rejected"
+    assert result.finished_at is not None

@@ -11,7 +11,7 @@ class RunTask(BaseModel):
     run_id: int
     task_type: str
     celery_task_id: str
-    status: Literal["pending", "running", "success", "failed", "revoked"] = "pending"
+    status: Literal["pending", "running", "success", "failed", "revoked", "rejected"] = "pending"
     attempt: int = 1
     started_at: datetime | None = None
     finished_at: datetime | None = None
