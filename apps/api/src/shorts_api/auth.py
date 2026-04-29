@@ -79,9 +79,6 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             request.state.user = _resolve_authenticated_user(request)
             return await call_next(request)
 
-        # Docs paths go through normal auth when API_KEY is set
-        # (they were removed from _PUBLIC_PATHS so they're not auto-allowed)
-
         # Check header only (never accept keys via query params to avoid log leakage)
         provided = self._extract_api_key(request)
         if not provided:

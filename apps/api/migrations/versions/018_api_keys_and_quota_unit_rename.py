@@ -23,42 +23,6 @@ def upgrade() -> None:
         ),
     )
 
-    with op.batch_alter_table("workspace_quotas") as batch_op:
-        batch_op.alter_column(
-            "monthly_tts_seconds",
-            new_column_name="monthly_tts_requests",
-            existing_type=sa.Integer(),
-            existing_nullable=False,
-            existing_server_default=sa.text("'3600'::integer"),
-        )
-
-    with op.batch_alter_table("workspace_quota_reservations") as batch_op:
-        batch_op.alter_column(
-            "tts_count",
-            new_column_name="tts_request_count",
-            existing_type=sa.Integer(),
-            existing_nullable=False,
-            existing_server_default=sa.text("'0'::integer"),
-        )
-
 
 def downgrade() -> None:
-    with op.batch_alter_table("workspace_quota_reservations") as batch_op:
-        batch_op.alter_column(
-            "tts_request_count",
-            new_column_name="tts_count",
-            existing_type=sa.Integer(),
-            existing_nullable=False,
-            existing_server_default=sa.text("'0'::integer"),
-        )
-
-    with op.batch_alter_table("workspace_quotas") as batch_op:
-        batch_op.alter_column(
-            "monthly_tts_requests",
-            new_column_name="monthly_tts_seconds",
-            existing_type=sa.Integer(),
-            existing_nullable=False,
-            existing_server_default=sa.text("'3600'::integer"),
-        )
-
     op.drop_table("api_keys")
