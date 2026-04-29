@@ -25,8 +25,8 @@ class CurrentUser:
     workspace_name: str | None = None
 
 
-async def get_current_user() -> CurrentUser:
-    return CurrentUser()
+async def get_current_user(request: Request) -> CurrentUser:
+    return getattr(request.state, "user", CurrentUser())
 
 
 async def validate_workspace_header(request: Request) -> int | None:
@@ -38,11 +38,15 @@ async def validate_workspace_header(request: Request) -> int | None:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail="Invalid X-Workspace-Id header") from exc
 
-    user = await get_current_user()
+    user = await get_current_user(request)
     user_workspace_id = getattr(user, "workspace_id", None)
 
     # Once merged with feat/user-workspace-model (#395), workspace_id is always populated on the user
-    if request_workspace_id is not None and user_workspace_id is not None and request_workspace_id != user_workspace_id:
+    if (
+        request_workspace_id is not None
+        and user_workspace_id is not None
+        and request_workspace_id != user_workspace_id
+    ):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     if request_workspace_id is not None:
@@ -59,19 +63,20 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._api_key = api_key or os.getenv("API_KEY")
 
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         # Skip auth when no key is configured (local dev)
         if not self._api_key:
+            request.state.user = CurrentUser()  # No workspace enforcement in local dev
             return await call_next(request)
 
         # Always allow CORS preflight requests (OPTIONS with Origin header)
         if request.method == "OPTIONS" and "origin" in request.headers:
+            request.state.user = CurrentUser()
             return await call_next(request)
 
         # Always allow public paths
         if request.url.path in _PUBLIC_PATHS:
+            request.state.user = CurrentUser()
             return await call_next(request)
 
         # Docs paths go through normal auth when API_KEY is set
@@ -90,4 +95,5 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
                 content={"detail": "Invalid or missing API key"},
             )
 
+        request.state.user = CurrentUser(workspace_id=1, workspace_name="default")
         return await call_next(request)
