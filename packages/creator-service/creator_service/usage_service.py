@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
+from creator_service.cost_config import COST_CONFIG_VERSION
 from creator_domain.models import UsageEvent, UsageSummary, WorkspaceQuota
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,7 @@ class UsageService:
         image_count: int | None = None,
         audio_seconds: float | None = None,
         estimated_cost_usd: float | None = None,
+        cost_config_version: str | None = None,
         project_id: int | None = None,
     ) -> UsageEvent:
         row = await self.storage.record_event(
@@ -111,6 +113,7 @@ class UsageService:
                 "image_count": image_count,
                 "audio_seconds": audio_seconds,
                 "estimated_cost_usd": estimated_cost_usd,
+                "cost_config_version": cost_config_version,
             }
         )
         return UsageEvent.from_row(row)
@@ -229,6 +232,7 @@ async def record_provider_call(
     image_count: int | None = None,
     audio_seconds: float | None = None,
     cost_usd: float | None = None,
+    cost_config_version: str | None = None,
     workspace_id: int | None = None,
     project_id: int | None = None,
 ) -> UsageEvent:
@@ -255,9 +259,16 @@ async def record_provider_call(
             run_id, "elevenlabs", "multilingual-v2", "tts",
             audio_seconds=30.5, cost_usd=0.05,
         )
+
+    Note:
+        estimated_cost_usd values are approximations derived from the active
+        cost configuration version and are not auditable invoice amounts.
     """
     if workspace_id is None:
         logger.warning("Recording cost without workspace_id for run %s — possible data gap", run_id)
+
+    if cost_config_version is None and cost_usd is not None:
+        cost_config_version = COST_CONFIG_VERSION
 
     return await usage_service.record_usage(
         workspace_id=workspace_id,
@@ -270,6 +281,7 @@ async def record_provider_call(
         image_count=image_count,
         audio_seconds=audio_seconds,
         estimated_cost_usd=cost_usd,
+        cost_config_version=cost_config_version,
         project_id=project_id,
     )
 
