@@ -8,7 +8,6 @@ middleware is a transparent pass-through so local development stays frictionless
 
 import contextvars
 import hashlib
-import json
 import logging
 import os
 from dataclasses import dataclass
@@ -84,30 +83,6 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._auth_key = api_key or os.getenv("API_KEY")
 
-    @staticmethod
-    def _parse_workspace_map() -> dict[str, int]:
-        raw = os.getenv("API_KEY_WORKSPACE_MAP", "").strip()
-        if not raw:
-            return {}
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            logger.warning("Invalid API_KEY_WORKSPACE_MAP JSON; ignoring configured map")
-            return {}
-        if not isinstance(parsed, dict):
-            logger.warning("API_KEY_WORKSPACE_MAP must be a JSON object; ignoring configured map")
-            return {}
-
-        mapping: dict[str, int] = {}
-        for key, value in parsed.items():
-            if not isinstance(key, str):
-                continue
-            try:
-                mapping[key] = int(value)
-            except (TypeError, ValueError):
-                logger.warning("Ignoring API_KEY_WORKSPACE_MAP entry with non-integer workspace_id")
-        return mapping
-
     async def _get_pool(self):
         try:
             db_module = __import__("creator_service.db", fromlist=["get_pool"])
@@ -144,8 +119,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         request.state.user = CurrentUser()
 
         # Skip auth when no key is configured (local dev)
-        workspace_map = self._parse_workspace_map()
-        if not workspace_map and not self._auth_key:
+        if not self._auth_key:
             return await call_next(request)
 
         # Always allow CORS preflight requests (OPTIONS with Origin header)
@@ -208,24 +182,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         if not member_workspace_ids:
             return JSONResponse(status_code=403, content={"detail": "Forbidden"})
 
-        workspace_id: int | None = None
-        workspace_header = request.headers.get("X-Workspace-Id")
-        if workspace_header is not None:
-            try:
-                workspace_id = int(workspace_header)
-            except ValueError:
-                return JSONResponse(
-                    status_code=400, content={"detail": "Invalid X-Workspace-Id header"}
-                )
-
-            if workspace_id not in member_workspace_ids:
-                return JSONResponse(status_code=403, content={"detail": "Forbidden"})
-        else:
-            workspace_id = member_workspace_ids[0]
-
-        mapped_workspace_id = workspace_map.get(provided)
-        if mapped_workspace_id is not None and mapped_workspace_id in member_workspace_ids:
-            workspace_id = mapped_workspace_id
+        workspace_id = member_workspace_ids[0]
 
         user = CurrentUser(user_id=user_id_int, workspace_id=workspace_id)
         request.state.user = user
