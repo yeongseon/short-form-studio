@@ -1,4 +1,6 @@
 """Routes for creator project management."""
+
+import logging
 import os
 import shutil
 from typing import Any, Awaitable, Callable, Literal, cast
@@ -12,6 +14,7 @@ from shorts_api.auth import get_current_user
 from shorts_api.routes import creator_runs_utils
 
 router = APIRouter(prefix="/projects", tags=["projects"])
+logger = logging.getLogger(__name__)
 
 
 class CreateProjectRequest(BaseModel):
@@ -62,6 +65,10 @@ async def update_project(
     if current_project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     project_workspace_id = getattr(current_project, "workspace_id", None)
+    if project_workspace_id is None and user_workspace_id is None:
+        logger.warning(
+            "Project update without workspace scoping - both project and user workspace_id are NULL"
+        )
     if (
         project_workspace_id is not None
         and user_workspace_id is not None
@@ -85,6 +92,10 @@ async def get_project_detail(
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     project_workspace_id = getattr(project, "workspace_id", None)
+    if project_workspace_id is None and user_workspace_id is None:
+        logger.warning(
+            "Project read without workspace scoping - both project and user workspace_id are NULL"
+        )
     if (
         project_workspace_id is not None
         and user_workspace_id is not None
@@ -103,6 +114,8 @@ async def list_projects(
 ) -> dict[str, object]:
     user_workspace_id = getattr(user, "workspace_id", None)
     if user_workspace_id is None:
+        if os.getenv("API_KEY"):
+            logger.warning("Listing projects without workspace scoping — user has no workspace_id")
         projects = await project_service.list_projects(limit=limit, offset=offset)
         total = await project_service.count_projects()
     else:
@@ -151,6 +164,10 @@ async def delete_project(
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
         project_workspace_id = getattr(project, "workspace_id", None)
+        if project_workspace_id is None and user_workspace_id is None:
+            logger.warning(
+                "Project delete without workspace scoping - both project and user workspace_id are NULL"
+            )
         if (
             project_workspace_id is not None
             and user_workspace_id is not None

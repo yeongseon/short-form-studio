@@ -10,9 +10,15 @@ from collections.abc import Sequence
 from alembic import op
 
 revision: str = "016"
+"""Intentional base revision for merge-time linearization.
+
+All feature branch migrations in this series use down_revision="011" and are
+linearized at merge time per the recommended order:
+#394 -> #395 -> #400 -> #396 -> #398 -> #397 -> #399 -> #402 -> #403 -> #401.
+"""
 down_revision: str | None = "011"
 branch_labels: str | Sequence[str] | None = None
-depends_on: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = ("012", "013")
 
 
 def upgrade() -> None:
