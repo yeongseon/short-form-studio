@@ -18,11 +18,22 @@ from shorts_api.routes.creator_runs_utils import (
 
 router = APIRouter(tags=["runs"])
 
-_VALID_SAMPLERS = frozenset({
-    "Euler a", "Euler", "LMS", "Heun", "DPM2", "DPM2 a",
-    "DPM++ 2S a", "DPM++ 2M", "DPM++ SDE", "DPM++ 2M Karras",
-    "DPM++ SDE Karras", "DPM++ 2M SDE Karras",
-})
+_VALID_SAMPLERS = frozenset(
+    {
+        "Euler a",
+        "Euler",
+        "LMS",
+        "Heun",
+        "DPM2",
+        "DPM2 a",
+        "DPM++ 2S a",
+        "DPM++ 2M",
+        "DPM++ SDE",
+        "DPM++ 2M Karras",
+        "DPM++ SDE Karras",
+        "DPM++ 2M SDE Karras",
+    }
+)
 
 
 class ImageTuningParams(BaseModel):
@@ -46,7 +57,9 @@ class GenerateVisualAssetsRequest(BaseModel):
 
 
 @router.post("/runs/{run_id}/generate-visual-plan", status_code=202)
-async def generate_visual_plan_trigger(run_id: int, request: GenerateVisualPlanRequest) -> dict[str, object]:
+async def generate_visual_plan_trigger(
+    run_id: int, request: GenerateVisualPlanRequest
+) -> dict[str, object]:
     run = await run_service.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -76,6 +89,7 @@ async def generate_visual_plan_trigger(run_id: int, request: GenerateVisualPlanR
         rollback_stage=run.current_stage,
         rollback_restart_from=run.restart_from,
         enqueue_error_detail="Failed to enqueue visual plan generation task",
+        quota_operation_type="llm",
     )
 
 
@@ -115,4 +129,5 @@ async def generate_visual_assets_trigger(
         rollback_stage=run.current_stage,
         rollback_restart_from=run.restart_from,
         enqueue_error_detail="Failed to enqueue image generation task",
+        quota_operation_type="image_gen",
     )

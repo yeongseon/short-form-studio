@@ -21,9 +21,10 @@ class PostgresUsageStorage:
                 output_tokens,
                 image_count,
                 audio_seconds,
-                estimated_cost_usd
+                estimated_cost_usd,
+                cost_config_version
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             RETURNING *
             """,
             row.get("workspace_id"),
@@ -37,6 +38,7 @@ class PostgresUsageStorage:
             row.get("image_count"),
             row.get("audio_seconds"),
             row.get("estimated_cost_usd"),
+            row.get("cost_config_version"),
         )
         if saved is None:
             raise ValueError("Failed to create usage event")

@@ -9,6 +9,13 @@ from creator_domain.models import UsageEvent, UsageSummary, WorkspaceQuota
 
 logger = logging.getLogger(__name__)
 
+QUOTAS: dict[str, float] = {
+    "monthly_llm_calls": 1000,
+    "monthly_image_generations": 200,
+    "monthly_tts_seconds": 3600,
+    "monthly_cost_usd": 50.0,
+}
+
 
 class UsageStorageBackend(Protocol):
     async def record_event(self, row: dict[str, Any]) -> dict[str, Any]: ...
@@ -163,22 +170,31 @@ class UsageService:
         rows = await self.storage.list_by_run(run_id)
         return [UsageEvent.from_row(row) for row in rows]
 
-    async def check_quota(self, workspace_id: int, operation_type: str) -> tuple[bool, str]:
-        summary = await self.get_monthly_summary(workspace_id)
-        quota = await self.get_quota(workspace_id)
-
+    def _quota_exceeded_reason(
+        self, summary: UsageSummary, quota: WorkspaceQuota, operation_type: str
+    ) -> str | None:
         if summary.total_estimated_cost_usd >= quota.monthly_cost_usd:
-            return False, "Monthly cost quota exceeded"
+            return "Monthly cost quota exceeded"
         if operation_type == "llm" and summary.total_llm_calls >= quota.monthly_llm_calls:
-            return False, "Monthly LLM call quota exceeded"
+            return "Monthly LLM call quota exceeded"
         if (
             operation_type == "image_gen"
             and summary.total_image_generations >= quota.monthly_image_generations
         ):
-            return False, "Monthly image generation quota exceeded"
+            return "Monthly image generation quota exceeded"
         if operation_type == "tts" and summary.total_tts_seconds >= quota.monthly_tts_seconds:
-            return False, "Monthly TTS seconds quota exceeded"
-        return True, "ok"
+            return "Monthly TTS seconds quota exceeded"
+        return None
+
+    async def check_quota(self, workspace_id: int, operation: str) -> bool:
+        summary = await self.get_monthly_summary(workspace_id)
+        quota = await self.get_quota(workspace_id)
+        return self._quota_exceeded_reason(summary, quota, operation) is None
+
+    async def check_quota_reason(self, workspace_id: int, operation: str) -> str | None:
+        summary = await self.get_monthly_summary(workspace_id)
+        quota = await self.get_quota(workspace_id)
+        return self._quota_exceeded_reason(summary, quota, operation)
 
     async def get_quota(self, workspace_id: int) -> WorkspaceQuota:
         row = await self.storage.get_workspace_quota(workspace_id)
@@ -186,10 +202,10 @@ class UsageService:
             row = await self.storage.set_workspace_quota(
                 workspace_id,
                 {
-                    "monthly_llm_calls": 1000,
-                    "monthly_image_generations": 200,
-                    "monthly_tts_seconds": 3600,
-                    "monthly_cost_usd": 50.0,
+                    "monthly_llm_calls": int(QUOTAS["monthly_llm_calls"]),
+                    "monthly_image_generations": int(QUOTAS["monthly_image_generations"]),
+                    "monthly_tts_seconds": int(QUOTAS["monthly_tts_seconds"]),
+                    "monthly_cost_usd": float(QUOTAS["monthly_cost_usd"]),
                 },
             )
         return WorkspaceQuota.from_row(row)
@@ -323,4 +339,8 @@ async def check_workspace_quota(workspace_id: int, operation_type: str = "llm") 
 
     Supported operation_type values: 'llm', 'image_gen', 'tts'.
     """
-    return await usage_service.check_quota(workspace_id, operation_type=operation_type)
+    # Task dispatch routes should call this before enqueueing async jobs.
+    reason = await usage_service.check_quota_reason(workspace_id, operation=operation_type)
+    if reason is not None:
+        return False, reason
+    return True, "ok"

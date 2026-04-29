@@ -31,6 +31,7 @@ def upgrade() -> None:
         sa.Column("image_count", sa.Integer(), nullable=True),
         sa.Column("audio_seconds", sa.Numeric(10, 2), nullable=True),
         sa.Column("estimated_cost_usd", sa.Numeric(10, 6), nullable=True),
+        sa.Column("cost_config_version", sa.String(length=32), nullable=True),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),

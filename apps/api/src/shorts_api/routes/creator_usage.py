@@ -1,7 +1,7 @@
 # pyright: reportMissingImports=false
 
 from creator_service.usage_service import usage_service
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header, HTTPException, status
 
 from shorts_api.auth import get_api_key
 
@@ -12,7 +12,13 @@ router = APIRouter(prefix="/usage", tags=["usage"])
 async def get_workspace_usage(
     workspace_id: int,
     _api_key: str = Depends(get_api_key),
+    authenticated_workspace_id: int = Header(alias="X-Workspace-Id"),
 ) -> dict[str, object]:
+    if authenticated_workspace_id != workspace_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Forbidden: workspace access denied",
+        )
     summary = await usage_service.get_monthly_summary(workspace_id)
     return summary.model_dump(mode="json")
 
