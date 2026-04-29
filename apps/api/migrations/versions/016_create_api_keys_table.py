@@ -14,7 +14,7 @@ def upgrade():
         "api_keys",
         sa.Column("id", sa.Integer, primary_key=True, autoincrement=True),
         sa.Column("key_hash", sa.String(64), nullable=False, unique=True, index=True),
-        sa.Column("user_id", sa.String(36), sa.ForeignKey("users.id"), nullable=False),
+        sa.Column("user_id", sa.Integer, sa.ForeignKey("users.id"), nullable=False),
         sa.Column("created_at", sa.DateTime, server_default=sa.func.now()),
         sa.Column("revoked_at", sa.DateTime, nullable=True),
     )

@@ -63,9 +63,6 @@ def upgrade() -> None:
         ["workspace_id", "run_id"],
     )
 
-    # TODO(#385): Populate workspace_id/project_id for artifacts once workspace
-    # ownership is integrated into run/project creation flow.
-
 
 def downgrade() -> None:
     op.drop_index("ix_creator_artifacts_workspace_run", "creator_artifacts")

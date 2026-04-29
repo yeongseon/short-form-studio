@@ -20,10 +20,10 @@ depends_on: str | Sequence[str] | None = ("012", "013")
 def upgrade() -> None:
     op.execute(
         """
-        UPDATE artifacts SET workspace_id = cr.workspace_id
+        UPDATE creator_artifacts SET workspace_id = cr.workspace_id
         FROM creator_runs cr
-        WHERE artifacts.run_id = cr.id
-          AND artifacts.workspace_id IS NULL
+        WHERE creator_artifacts.run_id = cr.id
+          AND creator_artifacts.workspace_id IS NULL
           AND cr.workspace_id IS NOT NULL
         """
     )

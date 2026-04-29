@@ -8,7 +8,6 @@ middleware is a transparent pass-through so local development stays frictionless
 
 import contextvars
 import hashlib
-import hmac
 import json
 import logging
 import os
@@ -83,7 +82,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
 
     def __init__(self, app, *, api_key: str | None = None) -> None:
         super().__init__(app)
-        self._api_key = api_key or os.getenv("API_KEY")
+        self._auth_key = api_key or os.getenv("API_KEY")
 
     @staticmethod
     def _parse_workspace_map() -> dict[str, int]:
@@ -146,11 +145,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
 
         # Skip auth when no key is configured (local dev)
         workspace_map = self._parse_workspace_map()
-        valid_keys = set(workspace_map.keys())
-        if self._api_key:
-            valid_keys.add(self._api_key)
-
-        if not valid_keys:
+        if not workspace_map and not self._auth_key:
             return await call_next(request)
 
         # Always allow CORS preflight requests (OPTIONS with Origin header)
@@ -178,7 +173,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             if auth_header.startswith("Bearer "):
                 provided = auth_header[7:]  # len("Bearer ") == 7
 
-        if not provided or not any(hmac.compare_digest(provided, key) for key in valid_keys):
+        if not provided:
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Invalid or missing API key"},
@@ -186,11 +181,9 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
 
         pool = await self._get_pool()
         if pool is None:
-            if self._api_key and hmac.compare_digest(provided, self._api_key):
-                return await call_next(request)
             return JSONResponse(
-                status_code=401,
-                content={"detail": "API key is not associated with any user"},
+                status_code=503,
+                content={"detail": "Service unavailable"},
             )
 
         async with pool.acquire() as connection:
@@ -198,8 +191,6 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
                 provided, _AsyncpgSessionAdapter(connection)
             )
         if user_id is None:
-            if self._api_key and hmac.compare_digest(provided, self._api_key):
-                return await call_next(request)
             return JSONResponse(
                 status_code=401,
                 content={"detail": "API key is not associated with any user"},

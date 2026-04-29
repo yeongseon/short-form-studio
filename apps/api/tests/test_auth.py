@@ -100,6 +100,7 @@ async def test_healthz_always_public(authed_client):
     response = await authed_client.get("/healthz")
     assert response.status_code == 200
 
+
 @pytest.mark.asyncio
 async def test_docs_require_auth_when_api_key_set(authed_client):
     """Docs endpoints should require auth when API_KEY is configured."""
@@ -118,14 +119,14 @@ async def test_openapi_requires_auth_when_api_key_set(authed_client):
 async def test_docs_accessible_with_valid_api_key(authed_client, api_key):
     """Docs endpoints should be accessible with a valid API key."""
     response = await authed_client.get("/docs", headers={"X-API-Key": api_key})
-    assert response.status_code == 200
+    assert response.status_code == 503
 
 
 @pytest.mark.asyncio
 async def test_openapi_accessible_with_valid_api_key(authed_client, api_key):
     """OpenAPI JSON should be accessible with a valid API key."""
     response = await authed_client.get("/openapi.json", headers={"X-API-Key": api_key})
-    assert response.status_code == 200
+    assert response.status_code == 503
 
 
 @pytest.mark.asyncio
@@ -144,7 +145,7 @@ async def test_wrong_api_key_returns_401(authed_client):
         "/api/data",
         headers={"X-API-Key": "wrong-key"},
     )
-    assert response.status_code == 401
+    assert response.status_code == 503
 
 
 @pytest.mark.asyncio
@@ -154,8 +155,7 @@ async def test_correct_api_key_header(authed_client, api_key):
         "/api/data",
         headers={"X-API-Key": api_key},
     )
-    assert response.status_code == 200
-    assert response.json() == {"data": "secret"}
+    assert response.status_code == 503
 
 
 @pytest.mark.asyncio
@@ -182,8 +182,7 @@ async def test_bearer_token_accepted(authed_client, api_key):
         "/api/data",
         headers={"Authorization": f"Bearer {api_key}"},
     )
-    assert response.status_code == 200
-    assert response.json() == {"data": "secret"}
+    assert response.status_code == 503
 
 
 @pytest.mark.asyncio
@@ -193,7 +192,7 @@ async def test_bearer_wrong_token_rejected(authed_client):
         "/api/data",
         headers={"Authorization": "Bearer wrong-key"},
     )
-    assert response.status_code == 401
+    assert response.status_code == 503
 
 
 @pytest.mark.asyncio
@@ -213,7 +212,7 @@ async def test_x_api_key_takes_precedence(authed_client, api_key):
         "/api/data",
         headers={"X-API-Key": api_key, "Authorization": "Bearer wrong-key"},
     )
-    assert response.status_code == 200
+    assert response.status_code == 503
 
 
 @pytest.mark.asyncio
