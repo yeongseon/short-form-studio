@@ -6,6 +6,9 @@ from pydantic import BaseModel, Field
 
 class Project(BaseModel):
     id: int
+    workspace_id: int | None = None
+    title: str | None = Field(default=None, max_length=200)
+    id: int
     title: str | None = Field(default=None, max_length=200)
     source_type: Literal["idea", "markdown", "pasted_json", "url"] = "idea"
     idea_brief: str | None = None
