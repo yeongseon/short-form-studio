@@ -28,6 +28,7 @@ except ImportError:
     redis = None
 
 redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
+dlq_max_size = max(1, int(os.getenv("DLQ_MAX_SIZE", "10000")))
 
 celery_app = Celery(
     "worker-orchestrator",
@@ -94,7 +95,8 @@ def _record_failed_task_to_dlq(
         "exception": repr(exception),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
-    client.rpush("dlq:creator", json.dumps(payload, default=str))
+    client.lpush("dlq:creator", json.dumps(payload, default=str))
+    client.ltrim("dlq:creator", 0, dlq_max_size - 1)
 
 
 @task_failure.connect
