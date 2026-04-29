@@ -61,7 +61,6 @@ def stub_artifact_download_services(monkeypatch: pytest.MonkeyPatch, tmp_path):
     artifact_file.write_text("ok", encoding="utf-8")
     monkeypatch.setenv("ARTIFACT_ROOT", str(tmp_path))
     monkeypatch.setenv("ARTIFACT_ACCESS_STRICT", "true")
-    monkeypatch.setenv("API_KEY", "test-api-key")
 
     route = _find_route("download_artifact")
     stub_project_service = StubProjectService()

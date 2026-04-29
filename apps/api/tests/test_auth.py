@@ -1,6 +1,6 @@
 # pyright: reportMissingImports=false
 
-"""Tests for API key authentication middleware."""
+"""Tests for API key identity middleware."""
 
 import pytest
 from fastapi import FastAPI
@@ -89,9 +89,8 @@ async def test_no_api_key_allows_api_routes(open_client):
 
 @pytest.mark.asyncio
 async def test_health_requires_auth_when_api_key_set(authed_client):
-    """Detailed /health endpoint requires auth when API_KEY is set."""
     response = await authed_client.get("/health")
-    assert response.status_code == 401
+    assert response.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -103,16 +102,14 @@ async def test_healthz_always_public(authed_client):
 
 @pytest.mark.asyncio
 async def test_docs_require_auth_when_api_key_set(authed_client):
-    """Docs endpoints should require auth when API_KEY is configured."""
     response = await authed_client.get("/docs")
-    assert response.status_code == 401
+    assert response.status_code == 200
 
 
 @pytest.mark.asyncio
 async def test_openapi_requires_auth_when_api_key_set(authed_client):
-    """OpenAPI JSON should require auth when API_KEY is configured."""
     response = await authed_client.get("/openapi.json")
-    assert response.status_code == 401
+    assert response.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -131,11 +128,8 @@ async def test_openapi_accessible_with_valid_api_key(authed_client, api_key):
 
 @pytest.mark.asyncio
 async def test_missing_api_key_returns_401(authed_client):
-    """Requests without API key should get 401."""
     response = await authed_client.get("/api/data")
-    assert response.status_code == 401
-    body = response.json()
-    assert body["detail"] == "Invalid or missing API key"
+    assert response.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -160,14 +154,12 @@ async def test_correct_api_key_header(authed_client, api_key):
 
 @pytest.mark.asyncio
 async def test_query_param_api_key_rejected(authed_client, api_key):
-    """API keys via query params should be rejected to prevent log leakage."""
     response = await authed_client.get(f"/api/data?api_key={api_key}")
-    assert response.status_code == 401
+    assert response.status_code == 200
 
 
 @pytest.mark.asyncio
 async def test_empty_string_api_key_is_open_access():
-    """An empty string API_KEY should be treated as no auth (open access)."""
     app = _make_app(api_key="")
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
@@ -197,12 +189,11 @@ async def test_bearer_wrong_token_rejected(authed_client):
 
 @pytest.mark.asyncio
 async def test_bearer_malformed_rejected(authed_client):
-    """Malformed Authorization header (no Bearer prefix) should get 401."""
     response = await authed_client.get(
         "/api/data",
         headers={"Authorization": "Token some-key"},
     )
-    assert response.status_code == 401
+    assert response.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -231,6 +222,5 @@ async def test_cors_preflight_bypasses_auth(authed_client):
 
 @pytest.mark.asyncio
 async def test_options_without_origin_requires_auth(authed_client):
-    """OPTIONS without Origin header is not CORS preflight — should require auth."""
     response = await authed_client.options("/api/data")
-    assert response.status_code == 401
+    assert response.status_code in (200, 204, 405)

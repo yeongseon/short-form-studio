@@ -10,8 +10,6 @@ from collections.abc import Sequence
 from alembic import op
 
 revision: str = "015"
-# Intentionally points to 011 for merge-time linearization; logical table prerequisites
-# are documented via depends_on below so this revision can remain on the PR branch chain.
 down_revision: str | None = "011"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = ("012", "013")

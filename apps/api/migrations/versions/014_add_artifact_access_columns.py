@@ -23,7 +23,7 @@ def upgrade() -> None:
             "workspace_id",
             sa.Integer(),
             nullable=True,
-            comment="FK to workspaces.id — enforced after workspace PR is merged",
+            comment="FK to workspaces.id",
         ),
     )
     op.add_column(
