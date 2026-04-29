@@ -1,4 +1,4 @@
-"""Admin API endpoints service operations for run management and safeguards."""
+"""Admin API endpoints service operations for run management, system health, cache clearing, queue depth, storage stats, and auth/rate-limit infrastructure."""
 
 from __future__ import annotations
 
