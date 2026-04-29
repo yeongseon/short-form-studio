@@ -143,13 +143,22 @@ async def health() -> dict[str, object]:
     }
 
 
-@app.get("/artifacts/{artifact_path:path}")
+@app.get("/artifacts/{artifact_path:path}", deprecated=True)
 async def serve_artifact(artifact_path: str) -> FileResponse:
-    """Backward-compatible artifact serving. Redirects to new download route."""
+    """Backward-compatible artifact serving — DEPRECATED.
+
+    This endpoint serves files directly from disk without DB-level access
+    control (no expires_at, no ownership check). Clients should migrate to
+    ``GET /api/creator/runs/{run_id}/artifacts/{artifact_id}/download``
+    which enforces expiration and ownership.
+    """
     artifact_root = os.path.realpath(os.getenv("ARTIFACT_ROOT", "data/artifacts"))
     resolved = os.path.realpath(os.path.join(artifact_root, artifact_path))
     if os.path.commonpath([artifact_root, resolved]) != artifact_root:
         raise HTTPException(status_code=404, detail="Artifact not found")
     if not os.path.isfile(resolved):
         raise HTTPException(status_code=404, detail="Artifact not found")
-    return FileResponse(resolved)
+    response = FileResponse(resolved)
+    response.headers["Deprecation"] = "true"
+    response.headers["Link"] = '</api/creator/runs/{run_id}/artifacts/{artifact_id}/download>; rel="successor-version"'
+    return response
