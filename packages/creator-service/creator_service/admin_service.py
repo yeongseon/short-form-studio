@@ -159,7 +159,7 @@ class AdminService:
             pool = await get_pool()
             async with pool.acquire() as connection:
                 row = await connection.fetchrow(
-                    "SELECT id, current_stage, updated_at FROM creator_runs WHERE id = $1",
+                    "SELECT id, current_stage, status, updated_at FROM creator_runs WHERE id = $1",
                     run_id_int,
                 )
                 if row is None:
@@ -174,6 +174,17 @@ class AdminService:
                         "current_stage": current_stage,
                         "error": "Run is not in a generating stage",
                     }
+
+                run_status = row["status"]
+                if run_status != "running":
+                    return {
+                        "ok": False,
+                        "run_id": run_id,
+                        "current_stage": current_stage,
+                        "status": run_status,
+                        "error": "Run is not in 'running' status",
+                    }
+
 
                 updated_at = row["updated_at"]
                 if not isinstance(updated_at, datetime):
@@ -231,6 +242,16 @@ class AdminService:
         protected_keys = {"celery", "gpu_queue"}
         deleted = 0
         resolved_pattern = key_pattern or os.getenv("ADMIN_CACHE_CLEAR_PREFIX", "cache:*")
+        # Restrict patterns to cache namespace to prevent accidental data wipe
+        if not resolved_pattern.startswith("cache:"):
+            return {
+                "ok": False,
+                "deleted_keys": 0,
+                "key_pattern": resolved_pattern,
+                "dry_run": dry_run,
+                "matched_keys": [],
+                "error": "Pattern must start with 'cache:' to prevent accidental data wipe",
+            }
         matched_keys: list[str] = []
         client: redis.Redis | None = None
         try:

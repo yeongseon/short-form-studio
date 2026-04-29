@@ -120,6 +120,7 @@ def test_unstick_run_updates_generating_stage(monkeypatch) -> None:
                 return {
                     "id": 42,
                     "current_stage": "SCRIPT_GENERATING",
+                    "status": "running",
                     "updated_at": datetime(2025, 1, 1, tzinfo=timezone.utc),
                 }
             return {
@@ -168,6 +169,7 @@ def test_unstick_run_rejects_if_not_stuck_long_enough(monkeypatch) -> None:
             return {
                 "id": 42,
                 "current_stage": "SCRIPT_GENERATING",
+                "status": "running",
                 "updated_at": datetime.now(tz=timezone.utc),
             }
 
