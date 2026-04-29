@@ -101,6 +101,7 @@ class RenderService:
         *,
         render_profile: str | None = None,
         storage_provider: str | None = None,
+        storage_key: str | None = None,
     ) -> VideoArtifact:
         """Create a new render artifact for a run.
 
@@ -112,6 +113,8 @@ class RenderService:
             metadata["render_profile"] = render_profile
         if storage_provider is not None:
             metadata["storage_provider"] = storage_provider
+        if storage_key is not None:
+            metadata["storage_key"] = storage_key
 
         row = {
             "run_id": run_id,

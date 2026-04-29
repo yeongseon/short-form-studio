@@ -40,10 +40,12 @@ _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
 # Stages where writing RENDER_GENERATING or FAILED is safe — the run
 # hasn't advanced past subtitle generation. The task may start directly
 # from AUDIO_GENERATING or from SUBTITLE_GENERATING after API-side CAS.
-_SAFE_STAGES = frozenset({
-    "AUDIO_GENERATING",
-    "SUBTITLE_GENERATING",
-})
+_SAFE_STAGES = frozenset(
+    {
+        "AUDIO_GENERATING",
+        "SUBTITLE_GENERATING",
+    }
+)
 
 
 class _StageGuardError(ValueError):
@@ -99,7 +101,9 @@ def generate_subtitles(
         nonlocal redis_client, lock_acquired
         try:
             if subtitle_format not in ("srt", "vtt"):
-                raise ValueError(f"Invalid subtitle_format: {subtitle_format!r}. Must be 'srt' or 'vtt'.")
+                raise ValueError(
+                    f"Invalid subtitle_format: {subtitle_format!r}. Must be 'srt' or 'vtt'."
+                )
 
             # 1. Stage guard — reject before any side effects.
             run = await _run_service.storage.get_run(run_id)
@@ -166,8 +170,26 @@ def generate_subtitles(
                 params["format"] = subtitle_format
                 params["output_path"] = subtitle_path
                 if not audio_path:
-                    raise RuntimeError(f"No audio artifact found for run {run_id}; cannot transcribe")
+                    raise RuntimeError(
+                        f"No audio artifact found for run {run_id}; cannot transcribe"
+                    )
                 await provider.transcribe(audio_path, params=params)
+
+                storage_provider: str | None = None
+                storage_key: str | None = None
+                try:
+                    from creator_service.artifact_storage_integration import store_artifact_file
+
+                    uploaded = store_artifact_file(
+                        run_id, subtitle_path, f"application/{subtitle_format}"
+                    )
+                    if uploaded is not None:
+                        storage_provider = uploaded.storage_provider
+                        storage_key = uploaded.key
+                except Exception:
+                    logger.warning(
+                        "Object storage upload failed for run %d, local file retained", run_id
+                    )
 
                 # 7. Save subtitle artifact via service.
                 artifact = await _subtitle_service.create_artifact(
@@ -176,6 +198,8 @@ def generate_subtitles(
                     format=subtitle_format,
                     model_used=subtitle_model,
                     provider_type=entry.provider_type,
+                    storage_provider=storage_provider,
+                    storage_key=storage_key,
                 )
 
                 # 8. Atomic success transition.

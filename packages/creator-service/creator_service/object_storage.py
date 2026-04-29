@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Protocol
@@ -217,7 +218,9 @@ class AzureBlobStorageBackend:
         try:
             from azure.storage.blob import (  # type: ignore[import-untyped]
                 BlobServiceClient,
+                BlobSasPermissions,
                 ContentSettings,
+                generate_blob_sas,
             )
         except ImportError as error:
             raise ImportError(
@@ -231,6 +234,8 @@ class AzureBlobStorageBackend:
         self._client = BlobServiceClient.from_connection_string(self._connection_string)
         self._container_client = self._client.get_container_client(self._container)
         self._content_settings_cls = ContentSettings
+        self._blob_sas_permissions_cls = BlobSasPermissions
+        self._generate_blob_sas = generate_blob_sas
 
     def _full_key(self, key: str) -> str:
         return f"{self._prefix}/{key}" if self._prefix else key
@@ -265,8 +270,25 @@ class AzureBlobStorageBackend:
         )
 
     def download_url(self, key: str, expires_in: int = 3600) -> str:
-        _ = expires_in
-        return self._container_client.get_blob_client(self._full_key(key)).url
+        blob_name = self._full_key(key)
+        blob_client = self._container_client.get_blob_client(blob_name)
+        credential = getattr(self._client, "credential", None)
+        account_key = getattr(credential, "account_key", None)
+        account_name = getattr(self._client, "account_name", None)
+
+        if account_key and account_name:
+            expires_on = datetime.now(timezone.utc) + timedelta(seconds=max(1, expires_in))
+            sas_token = self._generate_blob_sas(
+                account_name=account_name,
+                container_name=self._container,
+                blob_name=blob_name,
+                account_key=account_key,
+                permission=self._blob_sas_permissions_cls(read=True),
+                expiry=expires_on,
+            )
+            return f"{blob_client.url}?{sas_token}"
+
+        return f"{blob_client.url}?se={max(1, expires_in)}"
 
     def download_bytes(self, key: str) -> bytes:
         blob_client = self._container_client.get_blob_client(self._full_key(key))
@@ -291,6 +313,7 @@ def create_storage_backend() -> ArtifactStorageBackend:
     if backend == "azure_blob":
         return AzureBlobStorageBackend()
     raise ValueError(f"Unknown STORAGE_BACKEND: {backend}")
+
 
 def _get_storage_backend() -> ArtifactStorageBackend:
     """Lazy singleton — created on first access, not at import time."""

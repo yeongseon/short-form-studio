@@ -161,12 +161,14 @@ def generate_audio(
                 await provider.generate(script_text, voice=voice, params=params)
 
                 storage_provider: str | None = None
+                storage_key: str | None = None
                 try:
                     from creator_service.artifact_storage_integration import store_artifact_file
 
                     uploaded = store_artifact_file(run_id, audio_path, "audio/wav")
                     if uploaded is not None:
                         storage_provider = uploaded.storage_provider
+                        storage_key = uploaded.key
                 except Exception:
                     logger.warning(
                         "Object storage upload failed for run %d, local file retained", run_id
@@ -180,6 +182,7 @@ def generate_audio(
                     provider_type=entry.provider_type,
                     voice=voice,
                     storage_provider=storage_provider,
+                    storage_key=storage_key,
                 )
 
                 # 7. Atomic success transition.

@@ -137,6 +137,7 @@ class AudioService:
         provider_type: str | None = None,
         voice: str | None = None,
         storage_provider: str | None = None,
+        storage_key: str | None = None,
     ) -> AudioArtifact:
         """Create a new audio artifact for a run.
 
@@ -152,6 +153,8 @@ class AudioService:
             metadata["voice"] = voice
         if storage_provider is not None:
             metadata["storage_provider"] = storage_provider
+        if storage_key is not None:
+            metadata["storage_key"] = storage_key
 
         row = {
             "run_id": run_id,
@@ -194,6 +197,8 @@ class AudioService:
         model_used: str | None = None,
         provider_type: str | None = None,
         voice: str | None = None,
+        storage_provider: str | None = None,
+        storage_key: str | None = None,
     ) -> AudioArtifact:
         """Create an audio artifact for a specific paragraph/section."""
         metadata: dict[str, object] = {}
@@ -203,6 +208,10 @@ class AudioService:
             metadata["provider_type"] = provider_type
         if voice is not None:
             metadata["voice"] = voice
+        if storage_provider is not None:
+            metadata["storage_provider"] = storage_provider
+        if storage_key is not None:
+            metadata["storage_key"] = storage_key
 
         row: dict[str, object] = {
             "run_id": run_id,

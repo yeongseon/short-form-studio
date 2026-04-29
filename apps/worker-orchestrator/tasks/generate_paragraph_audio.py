@@ -46,6 +46,7 @@ def _get_redis_client() -> Any | None:
         return None
     return redis.Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"))
 
+
 async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
     remover: Any = getattr(_run_service.storage, "remove_active_task_id", None)
     if not callable(remover):
@@ -84,7 +85,9 @@ def generate_paragraph_audio(
     """
     start_time = datetime.now(timezone.utc)
     start_iso = start_time.isoformat()
-    task_id = str(getattr(getattr(self, "request", None), "id", None) or f"para-{run_id}-{section_id}")
+    task_id = str(
+        getattr(getattr(self, "request", None), "id", None) or f"para-{run_id}-{section_id}"
+    )
 
     provider_type: str | None = None
     endpoint: str | None = None
@@ -129,6 +132,20 @@ def generate_paragraph_audio(
             params["output_path"] = audio_path
             await provider.generate(section_text, voice=voice, params=params)
 
+            storage_provider: str | None = None
+            storage_key: str | None = None
+            try:
+                from creator_service.artifact_storage_integration import store_artifact_file
+
+                uploaded = store_artifact_file(run_id, audio_path, "audio/wav")
+                if uploaded is not None:
+                    storage_provider = uploaded.storage_provider
+                    storage_key = uploaded.key
+            except Exception:
+                logger.warning(
+                    "Object storage upload failed for run %d, local file retained", run_id
+                )
+
             # 4. Save per-paragraph artifact
             artifact = await _audio_service.create_paragraph_artifact(
                 run_id=run_id,
@@ -137,6 +154,8 @@ def generate_paragraph_audio(
                 model_used=tts_model,
                 provider_type=entry.provider_type,
                 voice=voice,
+                storage_provider=storage_provider,
+                storage_key=storage_key,
             )
         finally:
             if lock_acquired:
@@ -184,5 +203,7 @@ def generate_paragraph_audio(
         except Exception:
             logger.warning(
                 "Could not remove active task id %s for run %d",
-                task_id, run_id, exc_info=True,
+                task_id,
+                run_id,
+                exc_info=True,
             )

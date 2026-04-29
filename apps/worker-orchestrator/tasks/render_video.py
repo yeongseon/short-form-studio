@@ -243,12 +243,14 @@ def render_video(
             ffmpeg.render(render_input, Path(output_path))
 
             storage_provider: str | None = None
+            storage_key: str | None = None
             try:
                 from creator_service.artifact_storage_integration import store_artifact_file
 
                 uploaded = store_artifact_file(run_id, output_path, "video/mp4")
                 if uploaded is not None:
                     storage_provider = uploaded.storage_provider
+                    storage_key = uploaded.key
             except Exception:
                 logger.warning(
                     "Object storage upload failed for run %d, local file retained", run_id
@@ -259,6 +261,7 @@ def render_video(
                 path=output_path,
                 render_profile=render_profile,
                 storage_provider=storage_provider,
+                storage_key=storage_key,
             )
 
             applied, _ = await _run_service.storage.conditional_update_run(
