@@ -39,10 +39,12 @@ _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
 # Stages where writing SUBTITLE_GENERATING or FAILED is safe — the run
 # hasn't advanced past audio generation. The task may start directly from
 # VISUAL_ASSET_REVIEW or from AUDIO_GENERATING after API-side CAS.
-_SAFE_STAGES = frozenset({
-    RunStage.VISUAL_ASSET_REVIEW.value,
-    RunStage.AUDIO_GENERATING.value,
-})
+_SAFE_STAGES = frozenset(
+    {
+        RunStage.VISUAL_ASSET_REVIEW.value,
+        RunStage.AUDIO_GENERATING.value,
+    }
+)
 
 
 class _StageGuardError(ValueError):
@@ -166,6 +168,14 @@ def generate_audio(
                     provider_type=entry.provider_type,
                     voice=voice,
                 )
+                try:
+                    from creator_service.artifact_storage_integration import store_artifact_file
+
+                    store_artifact_file(run_id, audio_path, "audio/wav")
+                except Exception:
+                    logger.warning(
+                        "Object storage upload failed for run %d, local file retained", run_id
+                    )
 
                 # 7. Atomic success transition.
                 applied, _ = await _run_service.storage.conditional_update_run(

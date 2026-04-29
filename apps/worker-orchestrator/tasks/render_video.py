@@ -39,6 +39,7 @@ _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
 class _StageGuardError(ValueError):
     pass
 
+
 # Map profile name → RenderProfile constructor
 _PROFILE_REGISTRY: dict[str, Callable[[], RenderProfile]] = {
     "shorts_default": RenderProfile.default,
@@ -65,6 +66,7 @@ async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
             await maybe_result
     except Exception:
         logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
+
 
 @celery_app.task(bind=True, name="render_video")
 def render_video(
@@ -171,10 +173,9 @@ def render_video(
                     ffmpeg.concatenate_audio(ordered_audio_paths, concat_path)
                     audio_path = Path(concat_path)
 
-                    scene_durations = [
-                        duration_by_section[sid]
-                        for sid in ordered_sections
-                    ][:scene_count]
+                    scene_durations = [duration_by_section[sid] for sid in ordered_sections][
+                        :scene_count
+                    ]
                     if len(scene_durations) < scene_count:
                         total_known = sum(scene_durations)
                         remaining = max(0.0, profile_data["max_duration_seconds"] - total_known)
@@ -193,9 +194,15 @@ def render_video(
                             sid in sub_by_section for sid in ordered_sections
                         )
                         if all_subtitles_covered:
-                            ordered_sub_paths = [sub_by_section[sid].path for sid in ordered_sections]
-                            ordered_sub_durations = [duration_by_section[sid] for sid in ordered_sections]
-                            merged_sub_path = f"{_ARTIFACT_ROOT}/{run_id}/render/subtitles_merged.srt"
+                            ordered_sub_paths = [
+                                sub_by_section[sid].path for sid in ordered_sections
+                            ]
+                            ordered_sub_durations = [
+                                duration_by_section[sid] for sid in ordered_sections
+                            ]
+                            merged_sub_path = (
+                                f"{_ARTIFACT_ROOT}/{run_id}/render/subtitles_merged.srt"
+                            )
                             ffmpeg.merge_subtitles(
                                 ordered_sub_paths, ordered_sub_durations, merged_sub_path
                             )
@@ -240,6 +247,14 @@ def render_video(
                 path=output_path,
                 render_profile=render_profile,
             )
+            try:
+                from creator_service.artifact_storage_integration import store_artifact_file
+
+                store_artifact_file(run_id, output_path, "video/mp4")
+            except Exception:
+                logger.warning(
+                    "Object storage upload failed for run %d, local file retained", run_id
+                )
 
             applied, _ = await _run_service.storage.conditional_update_run(
                 run_id,
