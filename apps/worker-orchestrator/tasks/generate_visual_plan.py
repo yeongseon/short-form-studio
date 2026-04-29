@@ -3,10 +3,33 @@
 Consumes an approved script draft and generates a visual plan — one scene
 per script section with image-generation prompts, style tags, and mood.
 Follows the same pattern as generate_script.
+
+Idempotency:
+    IDEMPOTENT - Safe to retry. Uses stage guards identical to generate_script:
+    - Checks run is in VISUAL_PLAN_SETUP or VISUAL_PLAN_GENERATING before any side effects.
+    - If run has advanced to VISUAL_PLAN_REVIEW or later, raises _StageGuardError without
+      mutating run state.
+    - Multiple invocations attempt generation; only first successful stage transition sticks
+      (conditional_update_run uses compare-and-set).
+    - Idempotency guaranteed by acks_late + task_reject_on_worker_lost.
+
+Side effects:
+    - Database: Saves visual plan with VisualScene objects (one per script section).
+    - Database: Atomically transitions run stage to VISUAL_PLAN_REVIEW (via conditional_update_run).
+    - GPU Resource: Acquires/releases GPU lock in Redis (if provider requires GPU).
+    - No file creation: Results stored in database.
+
+Retry safety:
+    SAFE FOR RETRY - Same configuration as generate_script:
+    - max_retries=3
+    - autoretry_for=(ProviderTimeoutError, RateLimitError)
+    - retry_backoff=True, retry_jitter=True
+    - soft_time_limit=300s, hard time_limit=360s
+    On timeout: Task transitions run to FAILED atomically before raising.
 """
 
-# ruff: noqa: E402
 # pyright: reportMissingImports=false
+# ruff: noqa: E402
 
 from __future__ import annotations
 
@@ -23,9 +46,11 @@ try:
 except ImportError:
     redis = None
 
+from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
 from creator_domain.models.visual_plan import VisualScene
+from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.run_service import run_service as _run_service
@@ -95,7 +120,6 @@ def _parse_llm_response(
     # Try to parse JSON — strip markdown fencing if present
     cleaned = raw.strip()
     if cleaned.startswith("```"):
-        # Remove ```json ... ``` fencing
         lines = cleaned.split("\n")
         lines = [line for line in lines if not line.strip().startswith("```")]
         cleaned = "\n".join(lines)
@@ -162,7 +186,16 @@ async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
         logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
 
 
-@celery_app.task(bind=True, name="generate_visual_plan")
+@celery_app.task(
+    bind=True,
+    autoretry_for=(ProviderTimeoutError, RateLimitError),
+    retry_backoff=True,
+    retry_jitter=True,
+    max_retries=3,
+    soft_time_limit=300,
+    time_limit=360,
+    name="generate_visual_plan",
+)
 def generate_visual_plan(
     self,
     run_id: int,
@@ -172,6 +205,9 @@ def generate_visual_plan(
     start_time = datetime.now(timezone.utc)
     start_iso = start_time.isoformat()
     task_id = str(getattr(getattr(self, "request", None), "id", None) or f"run-{run_id}")
+    # Idempotency: acks_late + task_reject_on_worker_lost ensures redelivery on crash.
+    # If the run has already advanced past this stage, the worker's stage check will
+    # naturally skip processing (handled by run_service stage validation).
 
     provider_type: str | None = None
     endpoint: str | None = None
@@ -248,7 +284,23 @@ def generate_visual_plan(
                 full_prompt = f"{system_prompt}\n\n---\nScript sections:\n{sections_prompt}"
 
                 params = dict(entry.default_params or {})
-                raw_response = await provider.generate(full_prompt, params)
+                try:
+                    raw_response = await provider.generate(full_prompt, params)
+                except (TimeoutError, ConnectionError) as exc:
+                    raise ProviderTimeoutError(
+                        f"Provider timed out during visual plan generation for run {run_id}"
+                    ) from exc
+                except SoftTimeLimitExceeded:
+                    raise
+                except Exception as exc:
+                    message = str(exc).lower()
+                    if "429" in message or "rate" in message:
+                        raise RateLimitError(
+                            f"Provider rate limited visual plan generation for run {run_id}"
+                        ) from exc
+                    raise ProviderError(
+                        f"Provider failed visual plan generation for run {run_id}"
+                    ) from exc
 
                 # 6. Parse LLM response into VisualScene objects.
                 visual_scenes = _parse_llm_response(raw_response, sections)
@@ -316,7 +368,29 @@ def generate_visual_plan(
         except Exception:
             logger.warning("Failed to record task rejection", exc_info=True)
         raise
+    except SoftTimeLimitExceeded:
+        logger.error("Task timed out for run %s", run_id)
+        # Transition run to FAILED so it doesn't stay stuck in generating stage
+        try:
+            asyncio.run(
+                _run_service.storage.conditional_update_run(
+                    run_id,
+                    {
+                        "current_stage": RunStage.FAILED.value,
+                        "status": "failed",
+                    },
+                    expected_stages=_SAFE_STAGES,
+                )
+            )
+        except Exception:
+            logger.exception("Failed to mark run %d as FAILED after timeout", run_id)
+        raise
     except Exception as exc:
+        if (
+            isinstance(exc, (ProviderTimeoutError, RateLimitError))
+            and self.request.retries < self.max_retries
+        ):
+            raise
         try:
             asyncio.run(
                 _task_tracking_service.mark_failed(task_id, type(exc).__name__, str(exc)[:500])

@@ -18,6 +18,7 @@ from .stage import (
 )
 from .storyboard import ParagraphStatus, StaleFlags, StoryboardParagraph, StoryboardResponse
 from .subtitle_artifact import SubtitleArtifact
+from .user import User, Workspace, WorkspaceMember
 from .video_artifact import VideoArtifact
 from .visual_asset import VisualAsset
 from .visual_plan import VisualPlan, VisualScene
@@ -46,6 +47,9 @@ __all__ = [
     "AudioArtifact",
     "SubtitleArtifact",
     "VideoArtifact",
+    "User",
+    "Workspace",
+    "WorkspaceMember",
     "ParagraphStatus",
     "StaleFlags",
     "StoryboardParagraph",

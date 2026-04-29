@@ -157,7 +157,9 @@ def test_generate_paragraph_audio_with_gpu_lock(monkeypatch: pytest.MonkeyPatch)
     lock_calls: list[str] = []
     release_calls: list[str] = []
     monkeypatch.setattr(module, "acquire_gpu_lock", lambda _, task_id: lock_calls.append(task_id))
-    monkeypatch.setattr(module, "release_gpu_lock", lambda _, task_id: release_calls.append(task_id))
+    monkeypatch.setattr(
+        module, "release_gpu_lock", lambda _, task_id: release_calls.append(task_id)
+    )
 
     audio_service = FakeAudioService(artifact_id=61)
     monkeypatch.setattr(module, "_audio_service", audio_service)
@@ -182,12 +184,14 @@ def test_generate_paragraph_audio_provider_failure(monkeypatch: pytest.MonkeyPat
     lock_calls: list[str] = []
     release_calls: list[str] = []
     monkeypatch.setattr(module, "acquire_gpu_lock", lambda _, task_id: lock_calls.append(task_id))
-    monkeypatch.setattr(module, "release_gpu_lock", lambda _, task_id: release_calls.append(task_id))
+    monkeypatch.setattr(
+        module, "release_gpu_lock", lambda _, task_id: release_calls.append(task_id)
+    )
 
     audio_service = FakeAudioService()
     monkeypatch.setattr(module, "_audio_service", audio_service)
 
-    with pytest.raises(RuntimeError, match="audio provider failed"):
+    with pytest.raises(module.ProviderError, match="Provider failed paragraph audio generation"):
         _invoke_task(run_id=106, section_id="hook-3", section_text="Failure paragraph")
 
     assert lock_calls == ["para-106-hook-3"]

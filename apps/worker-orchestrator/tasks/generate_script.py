@@ -1,7 +1,38 @@
-"""Celery task for script generation via model providers."""
+"""Celery task for script generation via model providers.
 
-# ruff: noqa: E402
+Idempotency:
+    IDEMPOTENT - Safe to retry. Task uses stage guards to reject stale invocations:
+    - Before writing any side effects (save_draft, stage transition), it checks that the run
+      is still in an acceptable stage (IDEA_READY or SCRIPT_GENERATING).
+    - If the run has advanced to SCRIPT_REVIEW or later, the task detects this and raises
+      _StageGuardError without mutating the run state. This allows duplicate tasks from
+      crashed workers to safely no-op.
+    - Multiple invocations with the same (run_id, idea_brief, model_key) will each attempt
+      generation, but only the first successful invocation's stage transition will stick
+      (conditional_update_run uses compare-and-set).
+    - Idempotency is guaranteed by acks_late + task_reject_on_worker_lost:
+      If a worker crashes mid-execution, the task message is redelivered.
+
+Side effects:
+    - Database: Saves script draft (run_id, source_type='generated_by_model', markdown_content).
+    - Database: Atomically transitions run stage to SCRIPT_REVIEW (via conditional_update_run).
+    - GPU Resource: Acquires/releases GPU lock in Redis (if provider requires GPU).
+    - No file creation: Results are stored in database, not filesystem.
+
+Retry safety:
+    SAFE FOR RETRY - Configured with:
+    - max_retries=3
+    - autoretry_for=(ProviderTimeoutError, RateLimitError)
+    - retry_backoff=True, retry_jitter=True (exponential backoff with jitter)
+    - soft_time_limit=300s, hard time_limit=360s
+    Transient failures (timeouts, rate limits) are retried; permanent failures (ProviderError)
+    are raised immediately and sent to DLQ.
+    On timeout (soft_time_limit exceeded): Task transitions run to FAILED atomically
+    before raising, ensuring the run doesn't stay stuck in SCRIPT_GENERATING.
+"""
+
 # pyright: reportMissingImports=false
+# ruff: noqa: E402
 
 from __future__ import annotations
 
@@ -17,8 +48,10 @@ try:
 except ImportError:
     redis = None
 
+from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
+from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.run_service import run_service as _run_service
@@ -82,7 +115,16 @@ async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
         logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
 
 
-@celery_app.task(bind=True, name="generate_script")
+@celery_app.task(
+    bind=True,
+    autoretry_for=(ProviderTimeoutError, RateLimitError),
+    retry_backoff=True,
+    retry_jitter=True,
+    max_retries=3,
+    soft_time_limit=300,
+    time_limit=360,
+    name="generate_script",
+)
 def generate_script(
     self,
     run_id: int,
@@ -93,6 +135,9 @@ def generate_script(
     start_time = datetime.now(timezone.utc)
     start_iso = start_time.isoformat()
     task_id = str(getattr(getattr(self, "request", None), "id", None) or f"run-{run_id}")
+    # Idempotency: acks_late + task_reject_on_worker_lost ensures redelivery on crash.
+    # If the run has already advanced past this stage, the worker's stage check will
+    # naturally skip processing (handled by run_service stage validation).
     prompt = _build_prompt(idea_brief, instructions)
 
     provider_type: str | None = None
@@ -150,7 +195,23 @@ def generate_script(
             try:
                 # 4. Generation, save, advance stage.
                 params = dict(entry.default_params or {})
-                generated = await provider.generate(prompt, params)
+                try:
+                    generated = await provider.generate(prompt, params)
+                except (TimeoutError, ConnectionError) as exc:
+                    raise ProviderTimeoutError(
+                        f"Provider timed out during script generation for run {run_id}"
+                    ) from exc
+                except SoftTimeLimitExceeded:
+                    raise
+                except Exception as exc:
+                    message = str(exc).lower()
+                    if "429" in message or "rate" in message:
+                        raise RateLimitError(
+                            f"Provider rate limited script generation for run {run_id}"
+                        ) from exc
+                    raise ProviderError(
+                        f"Provider failed script generation for run {run_id}"
+                    ) from exc
                 await _script_service.save_draft(
                     run_id=run_id,
                     source_type="generated_by_model",
@@ -214,7 +275,29 @@ def generate_script(
         except Exception:
             logger.warning("Failed to record task rejection", exc_info=True)
         raise
+    except SoftTimeLimitExceeded:
+        logger.error("Task timed out for run %s", run_id)
+        # Transition run to FAILED so it doesn't stay stuck in generating stage
+        try:
+            asyncio.run(
+                _run_service.storage.conditional_update_run(
+                    run_id,
+                    {
+                        "current_stage": RunStage.FAILED.value,
+                        "status": "failed",
+                    },
+                    expected_stages=_SAFE_STAGES,
+                )
+            )
+        except Exception:
+            logger.exception("Failed to mark run %d as FAILED after timeout", run_id)
+        raise
     except Exception as exc:
+        if (
+            isinstance(exc, (ProviderTimeoutError, RateLimitError))
+            and self.request.retries < self.max_retries
+        ):
+            raise
         try:
             asyncio.run(
                 _task_tracking_service.mark_failed(task_id, type(exc).__name__, str(exc)[:500])
