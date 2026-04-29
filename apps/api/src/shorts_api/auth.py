@@ -50,34 +50,21 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             return CurrentUser()
 
         key_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
-        user_id: int | None = None
+        api_key_row = await fetch_one(
+            """
+            SELECT user_id
+            FROM api_keys
+            WHERE key_hash = $1
+              AND revoked_at IS NULL
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            key_hash,
+        )
+        if api_key_row is None:
+            return CurrentUser()
 
-        try:
-            api_key_row = await fetch_one(
-                """
-                SELECT user_id
-                FROM api_keys
-                WHERE key_hash = $1
-                  AND revoked_at IS NULL
-                ORDER BY created_at DESC
-                LIMIT 1
-                """,
-                key_hash,
-            )
-            if api_key_row is not None:
-                user_id = int(api_key_row["user_id"])
-        except Exception:
-            _logger.debug("Failed to resolve user via api_keys table")
-
-        if user_id is None:
-            auth_subject = key_hash[:12]
-            user_row = await fetch_one(
-                "SELECT id FROM users WHERE auth_subject = $1 LIMIT 1",
-                auth_subject,
-            )
-            if user_row is None:
-                return CurrentUser()
-            user_id = int(user_row["id"])
+        user_id = int(api_key_row["user_id"])
 
         membership_row = await fetch_one(
             """
@@ -131,4 +118,9 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             )
 
         request.state.user = await self._resolve_user(provided)
+        if getattr(request.state.user, "workspace_id", None) is None:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid or missing API key"},
+            )
         return await call_next(request)
