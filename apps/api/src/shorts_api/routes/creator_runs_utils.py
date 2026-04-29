@@ -254,6 +254,7 @@ async def cas_dispatch_with_rollback(
     quota_operation_type: str | None = None,
 ) -> dict[str, object]:
     run_service_obj = cast(Any, run_service)
+    workspace_id_for_reservation: int | None = None
     if quota_operation_type is not None:
         from creator_service.project_service import project_service
         from creator_service.usage_service import check_workspace_quota
@@ -267,6 +268,7 @@ async def cas_dispatch_with_rollback(
         workspace_id = cast(int | None, getattr(project, "workspace_id", None))
         if workspace_id is None:
             raise HTTPException(status_code=400, detail="Project workspace is not configured")
+        workspace_id_for_reservation = workspace_id
 
         allowed, reason = await check_workspace_quota(
             workspace_id,
@@ -296,6 +298,13 @@ async def cas_dispatch_with_rollback(
     try:
         task_id = dispatcher(**dict(dispatcher_args))
     except Exception:
+        if workspace_id_for_reservation is not None and quota_operation_type is not None:
+            from creator_service.usage_service import cancel_workspace_quota_reservation
+
+            await cancel_workspace_quota_reservation(
+                workspace_id_for_reservation,
+                quota_operation_type,
+            )
         await run_service_obj.storage.conditional_update_run(
             run_id,
             {"current_stage": rollback_stage, "restart_from": rollback_restart_from},

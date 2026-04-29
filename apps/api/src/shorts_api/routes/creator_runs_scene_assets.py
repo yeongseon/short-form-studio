@@ -31,7 +31,7 @@ from shorts_api.routes.creator_runs_visuals import ImageTuningParams
 router = APIRouter(tags=["runs"])
 
 
-async def _enforce_run_quota(run_id: int, operation_type: str) -> None:
+async def _enforce_run_quota(run_id: int, operation_type: str) -> int:
     from creator_service.usage_service import check_workspace_quota
 
     run = await run_service.get_run(run_id)
@@ -47,6 +47,7 @@ async def _enforce_run_quota(run_id: int, operation_type: str) -> None:
     allowed, reason = await check_workspace_quota(int(workspace_id), operation_type=operation_type)
     if not allowed:
         raise HTTPException(status_code=429, detail=reason)
+    return int(workspace_id)
 
 
 class RegenerateSceneImageRequest(BaseModel):
@@ -83,7 +84,7 @@ async def generate_scene_image_endpoint(
         )
 
     validate_model_key(effective_request.model_key)
-    await _enforce_run_quota(run_id, "image_gen")
+    workspace_id = await _enforce_run_quota(run_id, "image_gen")
     try:
         task_id = dispatch_generate_scene_image(
             run_id=run_id,
@@ -96,6 +97,9 @@ async def generate_scene_image_endpoint(
             else None,
         )
     except Exception:
+        from creator_service.usage_service import cancel_workspace_quota_reservation
+
+        await cancel_workspace_quota_reservation(workspace_id, "image_gen")
         raise HTTPException(
             status_code=503,
             detail="Failed to enqueue image generation task",
@@ -130,7 +134,7 @@ async def regenerate_scene_image_endpoint(
         )
 
     validate_model_key(request.model_key)
-    await _enforce_run_quota(run_id, "image_gen")
+    workspace_id = await _enforce_run_quota(run_id, "image_gen")
     try:
         task_id = dispatch_generate_scene_image(
             run_id=run_id,
@@ -141,6 +145,9 @@ async def regenerate_scene_image_endpoint(
             image_params=request.image_params.model_dump() if request.image_params else None,
         )
     except Exception:
+        from creator_service.usage_service import cancel_workspace_quota_reservation
+
+        await cancel_workspace_quota_reservation(workspace_id, "image_gen")
         raise HTTPException(
             status_code=503,
             detail="Failed to enqueue image generation task",

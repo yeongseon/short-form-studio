@@ -165,7 +165,7 @@ class PostgresUsageStorage:
                             ),
                             0
                         )::integer AS image_count,
-                        COALESCE(SUM(CASE WHEN operation_type = 'tts' THEN 1 ELSE 0 END), 0)::integer AS tts_count
+                        COALESCE(SUM(CASE WHEN operation_type = 'tts' THEN COALESCE(audio_seconds, 0) ELSE 0 END), 0)::double precision AS tts_seconds
                     FROM usage_events
                     WHERE workspace_id = $1 AND created_at >= $2
                     """,
@@ -198,7 +198,7 @@ class PostgresUsageStorage:
                         quota["monthly_image_generations"]
                     )
                 elif operation_type in {"tts", "stt", "render"}:
-                    allowed = int(usage_row["tts_count"]) + reserved_tts < int(
+                    allowed = float(usage_row["tts_seconds"]) + reserved_tts < int(
                         quota["monthly_tts_seconds"]
                     )
 
@@ -232,3 +232,52 @@ class PostgresUsageStorage:
                     tts_increment,
                 )
                 return True
+
+    async def release_reservation(
+        self, workspace_id: int, operation_type: str, units: int = 1
+    ) -> None:
+        await self._decrement_reservation(workspace_id, operation_type, units)
+
+    async def cancel_reservation(
+        self, workspace_id: int, operation_type: str, units: int = 1
+    ) -> None:
+        await self._decrement_reservation(workspace_id, operation_type, units)
+
+    async def _decrement_reservation(
+        self, workspace_id: int, operation_type: str, units: int
+    ) -> None:
+        if operation_type not in {"llm", "image_gen", "tts", "stt", "render"}:
+            return
+        decrement = max(0, int(units))
+        if decrement == 0:
+            return
+
+        pool = await get_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                await connection.execute("SELECT pg_advisory_xact_lock($1)", workspace_id)
+                month_start = await connection.fetchval(
+                    "SELECT date_trunc('month', NOW() AT TIME ZONE 'UTC')::timestamptz"
+                )
+                if month_start is None:
+                    return
+
+                llm_decrement = decrement if operation_type == "llm" else 0
+                image_decrement = decrement if operation_type == "image_gen" else 0
+                tts_decrement = decrement if operation_type in {"tts", "stt", "render"} else 0
+                await connection.execute(
+                    """
+                    UPDATE workspace_quota_reservations
+                    SET
+                        llm_count = GREATEST(0, llm_count - $3),
+                        image_count = GREATEST(0, image_count - $4),
+                        tts_count = GREATEST(0, tts_count - $5),
+                        updated_at = NOW()
+                    WHERE workspace_id = $1 AND period_start = $2
+                    """,
+                    workspace_id,
+                    month_start,
+                    llm_decrement,
+                    image_decrement,
+                    tts_decrement,
+                )

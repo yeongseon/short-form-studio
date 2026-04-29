@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
@@ -36,6 +37,14 @@ class UsageStorageBackend(Protocol):
     ) -> dict[str, Any]: ...
 
     async def try_reserve_quota(self, workspace_id: int, operation_type: str) -> bool: ...
+
+    async def release_reservation(
+        self, workspace_id: int, operation_type: str, units: int = 1
+    ) -> None: ...
+
+    async def cancel_reservation(
+        self, workspace_id: int, operation_type: str, units: int = 1
+    ) -> None: ...
 
 
 class InMemoryUsageStorage:
@@ -124,7 +133,7 @@ class InMemoryUsageStorage:
                     },
                 )
 
-            usage = {"llm": 0, "image_gen": 0, "tts": 0}
+            usage = {"llm": 0, "image_gen": 0, "tts": 0.0}
             for row in self._events.values():
                 if row.get("workspace_id") != workspace_id or row["created_at"] < period_start:
                     continue
@@ -135,7 +144,7 @@ class InMemoryUsageStorage:
                     image_count = int(row.get("image_count") or 0)
                     usage["image_gen"] += image_count if image_count > 0 else 1
                 elif row_operation == "tts":
-                    usage["tts"] += 1
+                    usage["tts"] += float(row.get("audio_seconds") or 0.0)
 
             reserved = self._reservations.setdefault(key, {"llm": 0, "image_gen": 0, "tts": 0})
             if operation_type == "llm":
@@ -156,6 +165,41 @@ class InMemoryUsageStorage:
                 reserved["tts"] += 1
                 return True
             return True
+
+    async def release_reservation(
+        self, workspace_id: int, operation_type: str, units: int = 1
+    ) -> None:
+        await self._decrement_reservation(workspace_id, operation_type, units)
+
+    async def cancel_reservation(
+        self, workspace_id: int, operation_type: str, units: int = 1
+    ) -> None:
+        await self._decrement_reservation(workspace_id, operation_type, units)
+
+    async def _decrement_reservation(
+        self, workspace_id: int, operation_type: str, units: int
+    ) -> None:
+        if operation_type not in {"llm", "image_gen", "tts", "stt", "render"}:
+            return
+
+        now = datetime.now(timezone.utc)
+        period_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+        key = (workspace_id, period_start)
+        decrement = max(0, int(units))
+        if decrement == 0:
+            return
+
+        async with self._lock_for_workspace(workspace_id):
+            reserved = self._reservations.get(key)
+            if reserved is None:
+                return
+
+            if operation_type == "llm":
+                reserved["llm"] = max(0, reserved["llm"] - decrement)
+            elif operation_type == "image_gen":
+                reserved["image_gen"] = max(0, reserved["image_gen"] - decrement)
+            elif operation_type in {"tts", "stt", "render"}:
+                reserved["tts"] = max(0, reserved["tts"] - decrement)
 
 
 class UsageService:
@@ -194,6 +238,13 @@ class UsageService:
                 "cost_config_version": cost_config_version,
             }
         )
+        if workspace_id is not None:
+            reservation_units = 1
+            if operation_type == "tts" and audio_seconds is not None:
+                reservation_units = max(1, math.ceil(audio_seconds))
+            await self.storage.release_reservation(
+                workspace_id, operation_type, units=reservation_units
+            )
         return UsageEvent.from_row(row)
 
     async def get_monthly_summary(self, workspace_id: int) -> UsageSummary:
@@ -421,3 +472,12 @@ async def check_workspace_quota(workspace_id: int, operation_type: str = "llm") 
     """
     # Task dispatch routes should call this before enqueueing async jobs.
     return await usage_service.check_quota(workspace_id, operation=operation_type)
+
+
+async def cancel_workspace_quota_reservation(
+    workspace_id: int,
+    operation_type: str,
+    *,
+    units: int = 1,
+) -> None:
+    await usage_service.storage.cancel_reservation(workspace_id, operation_type, units=units)

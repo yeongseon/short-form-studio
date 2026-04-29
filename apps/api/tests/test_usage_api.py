@@ -27,12 +27,12 @@ class StubUsageService:
             },
         )()
 
-    async def list_run_events(self, run_id: int):
+    async def list_run_events(self, run_id: int, workspace_id: int | None = None):
         from datetime import datetime, timezone
 
         row = {
             "id": 1,
-            "workspace_id": 1,
+            "workspace_id": workspace_id or 1,
             "project_id": 2,
             "run_id": run_id,
             "provider": "openai",
@@ -60,7 +60,10 @@ def stub_usage_service(monkeypatch: pytest.MonkeyPatch) -> StubUsageService:
 @pytest.mark.asyncio
 async def test_get_workspace_usage_returns_summary(client, stub_usage_service: StubUsageService):
     _ = stub_usage_service
-    response = await client.get("/api/creator/usage/workspace/5")
+    response = await client.get(
+        "/api/creator/usage/workspace/5",
+        headers={"X-Workspace-Id": "5"},
+    )
 
     assert response.status_code == 200
     body = response.json()
@@ -71,7 +74,10 @@ async def test_get_workspace_usage_returns_summary(client, stub_usage_service: S
 @pytest.mark.asyncio
 async def test_get_run_usage_returns_events(client, stub_usage_service: StubUsageService):
     _ = stub_usage_service
-    response = await client.get("/api/creator/usage/run/42")
+    response = await client.get(
+        "/api/creator/usage/run/42",
+        headers={"X-Workspace-Id": "1"},
+    )
 
     assert response.status_code == 200
     body = response.json()
