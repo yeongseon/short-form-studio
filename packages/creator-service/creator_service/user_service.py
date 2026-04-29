@@ -5,6 +5,7 @@ import re
 import secrets
 from typing import Any, Protocol
 
+from asyncpg.exceptions import UniqueViolationError
 from creator_domain.models import User
 
 
@@ -77,7 +78,9 @@ class UserService:
         auth_provider: str = "api_key",
         auth_subject: str = "",
     ) -> User:
-        existing = await self.storage.get_user_by_email(email)
+        existing = await self.storage.get_user_by_auth(auth_provider, auth_subject)
+        if existing is None:
+            existing = await self.storage.get_user_by_email(email)
         if existing is not None:
             user = User.model_validate(existing)
             return await self._attach_workspace(user)
@@ -101,28 +104,28 @@ class UserService:
             user.workspace_id = user_workspaces[0].id
             return user
 
-        workspace = await workspace_service.create_workspace(
-            name=f"{user.email}'s Workspace",
-            slug=await self._default_workspace_slug(user.email),
-            owner_id=user.id,
-        )
-        user.workspace_id = workspace.id
-        return user
-
-    async def _default_workspace_slug(self, email: str) -> str:
-        from .workspace_service import workspace_service
-
-        slug_base = re.sub(r"[^a-z0-9]+", "-", email.strip().lower()).strip("-")
-        if not slug_base:
-            slug_base = "workspace"
-
+        slug_base = self._workspace_slug_base(user.email)
         for attempt in range(4):
             slug_candidate = slug_base if attempt == 0 else f"{slug_base}-{secrets.token_hex(2)}"
-            existing = await workspace_service.storage.get_workspace_by_slug(slug_candidate)
-            if existing is None:
-                return slug_candidate
+            try:
+                workspace = await workspace_service.create_workspace(
+                    name=f"{user.email}'s Workspace",
+                    slug=slug_candidate,
+                    owner_id=user.id,
+                )
+            except UniqueViolationError:
+                continue
 
-        raise RuntimeError("Unable to generate unique workspace slug after retries")
+            user.workspace_id = workspace.id
+            return user
+
+        raise RuntimeError("Unable to create unique workspace slug after retries")
+
+    def _workspace_slug_base(self, email: str) -> str:
+        slug_base = re.sub(r"[^a-z0-9]+", "-", email.strip().lower()).strip("-")
+        if not slug_base:
+            return "workspace"
+        return slug_base
 
     async def get_user(self, user_id: int) -> User | None:
         row = await self.storage.get_user(user_id)

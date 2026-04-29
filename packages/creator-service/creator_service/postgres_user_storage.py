@@ -11,7 +11,11 @@ class PostgresUserStorage:
             """
             INSERT INTO users (email, name, auth_provider, auth_subject)
             VALUES ($1, $2, $3, $4)
-            ON CONFLICT (email) DO UPDATE SET updated_at = NOW()
+            ON CONFLICT (auth_provider, auth_subject)
+            DO UPDATE SET
+                email = EXCLUDED.email,
+                name = EXCLUDED.name,
+                updated_at = NOW()
             RETURNING *
             """,
             payload.get("email"),
