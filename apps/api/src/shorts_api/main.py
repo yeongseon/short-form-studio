@@ -1,3 +1,5 @@
+# pyright: reportMissingImports=false
+
 """FastAPI entrypoint for shorts_api."""
 
 import logging
@@ -176,5 +178,7 @@ async def serve_artifact(artifact_path: str) -> FileResponse:
         raise HTTPException(status_code=404, detail="Artifact not found")
     response = FileResponse(resolved)
     response.headers["Deprecation"] = "true"
-    response.headers["Link"] = '</api/creator/runs/{run_id}/artifacts/{artifact_id}/download>; rel="successor-version"'
+    response.headers["Link"] = (
+        '</api/creator/runs/{run_id}/artifacts/{artifact_id}/download>; rel="successor-version"'
+    )
     return response

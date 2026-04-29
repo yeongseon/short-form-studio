@@ -1,10 +1,13 @@
+# pyright: reportMissingImports=false
+
 import os
 from datetime import datetime, timezone
 
 from creator_domain.sanitize import UnsafePathComponent, sanitize_path_component
 from creator_service.artifact_download_service import artifact_download_service
+from creator_service.project_service import project_service
 from creator_service.run_service import run_service
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from starlette.responses import FileResponse, RedirectResponse
 
 router = APIRouter(tags=["runs"])
@@ -14,11 +17,34 @@ router = APIRouter(tags=["runs"])
 async def download_artifact(
     run_id: int,
     artifact_id: int,
+    request: Request,
 ):
-    if os.getenv("API_KEY"):
-        run = await run_service.storage.get_run(run_id)
-        if run is None:
-            raise HTTPException(status_code=404, detail="Run not found")
+    run = await run_service.storage.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    project_id = run.get("project_id")
+    if not isinstance(project_id, int):
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    project = await project_service.get_project(project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    request_workspace_id_raw = request.headers.get("X-Workspace-Id")
+    request_workspace_id: int | None = None
+    if request_workspace_id_raw is not None:
+        try:
+            request_workspace_id = int(request_workspace_id_raw)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid X-Workspace-Id header") from exc
+
+    if (
+        request_workspace_id is not None
+        and project.workspace_id is not None
+        and request_workspace_id != project.workspace_id
+    ):
+        raise HTTPException(status_code=403, detail="Forbidden")
 
     artifact = await artifact_download_service.get_artifact_by_id(artifact_id)
     if artifact is None:
@@ -37,7 +63,6 @@ async def download_artifact(
         except Exception as exc:
             raise HTTPException(status_code=502, detail="Storage backend error") from exc
 
-    # Check expiration
     expires_at = artifact.get("expires_at")
     if (
         expires_at is not None
