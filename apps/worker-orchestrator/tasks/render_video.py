@@ -262,6 +262,8 @@ def render_video(
                 raise ProviderTimeoutError(
                     f"Provider timed out during video render for run {run_id}"
                 ) from exc
+            except SoftTimeLimitExceeded:
+                raise
             except Exception as exc:
                 message = str(exc).lower()
                 if "429" in message or "rate" in message:

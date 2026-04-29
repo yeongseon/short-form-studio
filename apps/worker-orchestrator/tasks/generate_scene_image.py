@@ -256,6 +256,8 @@ def generate_scene_image(
                                 "Provider timed out during scene image generation "
                                 f"for run {run_id} scene {target_scene.scene_id}"
                             ) from exc
+                        except SoftTimeLimitExceeded:
+                            raise
                         except Exception as exc:
                             message = str(exc).lower()
                             if "429" in message or "rate" in message:
@@ -303,6 +305,8 @@ def generate_scene_image(
 
                     results.append(scene_result)
 
+                except SoftTimeLimitExceeded:
+                    raise
                 except Exception as exc:
                     scene_result.update(
                         {

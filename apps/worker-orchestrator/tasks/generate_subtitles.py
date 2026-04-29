@@ -196,6 +196,8 @@ def generate_subtitles(
                     raise ProviderTimeoutError(
                         f"Provider timed out during subtitle generation for run {run_id}"
                     ) from exc
+                except SoftTimeLimitExceeded:
+                    raise
                 except Exception as exc:
                     message = str(exc).lower()
                     if "429" in message or "rate" in message:
