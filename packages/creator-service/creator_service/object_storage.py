@@ -68,7 +68,8 @@ class LocalStorageBackend:
     def _safe_key(self, key: str) -> str:
         """Validate key to prevent path traversal attacks."""
         resolved = (self._root / key).resolve()
-        if not str(resolved).startswith(str(self._root.resolve())):
+        root_resolved = self._root.resolve()
+        if not resolved.is_relative_to(root_resolved):
             raise ValueError(f"Invalid key (path traversal): {key}")
         return key
 
