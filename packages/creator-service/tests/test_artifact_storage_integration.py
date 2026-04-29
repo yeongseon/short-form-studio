@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from creator_service.object_storage import StorageResult
 
 
@@ -59,7 +57,10 @@ def test_store_artifact_file_returns_none_on_upload_failure(tmp_path, monkeypatc
 
     class _FailingBackend:
         def upload(
-            self, key: str, data: bytes, content_type: str = "application/octet-stream"
+            self,
+            _key: str,
+            _data: bytes,
+            _content_type: str = "application/octet-stream",
         ) -> StorageResult:
             raise RuntimeError("upload failed")
 
