@@ -7,7 +7,7 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 import redis.asyncio as redis
 from celery import current_app as celery_app
@@ -27,9 +27,19 @@ _UNSTICK_MIN_AGE_SECONDS = 30 * 60
 logger = logging.getLogger(__name__)
 
 
+class TaskBroker(Protocol):
+    async def revoke_task(self, task_id: str) -> None: ...
+
+
+class CeleryTaskBroker:
+    async def revoke_task(self, task_id: str) -> None:
+        cast(Any, celery_app).control.revoke(task_id, terminate=True)
+
+
 class AdminService:
-    def __init__(self) -> None:
+    def __init__(self, task_broker: TaskBroker | None = None) -> None:
         self._started_at = time.time()
+        self._task_broker = task_broker or CeleryTaskBroker()
 
     def _redis_client(self) -> redis.Redis:
         redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
@@ -39,10 +49,6 @@ class AdminService:
         if inspect.isawaitable(value):
             return await value
         return value
-
-    async def revoke_task(self, task_id: str) -> None:
-        """Revoke a Celery task."""
-        cast(Any, celery_app).control.revoke(task_id, terminate=True)
 
     def _parse_active_task_ids(self, active_task_id: str | None) -> list[str]:
         if not active_task_id:
@@ -130,7 +136,7 @@ class AdminService:
             return []
 
     async def get_queue_depth(self) -> dict[str, int]:
-        queue_names = ["celery", "gpu_queue"]
+        queue_names = ["creator"]
         result: dict[str, int] = {name: 0 for name in queue_names}
         client: redis.Redis | None = None
         try:
@@ -225,10 +231,6 @@ class AdminService:
                     }
 
                 active_task_id = row["active_task_id"]
-                if active_task_id:
-                    for task_id in self._parse_active_task_ids(active_task_id):
-                        await self.revoke_task(task_id)
-
                 updated = await connection.fetchrow(
                     """
                     UPDATE creator_runs
@@ -236,13 +238,27 @@ class AdminService:
                         status = 'pending',
                         active_task_id = NULL
                     WHERE id = $1
+                      AND current_stage = $3
+                      AND status = $4
+                      AND updated_at = $5
                     RETURNING id, current_stage, status, updated_at
                     """,
                     run_id_int,
                     target_stage,
+                    current_stage,
+                    run_status,
+                    row["updated_at"],
                 )
                 if updated is None:
-                    return {"ok": False, "run_id": run_id, "error": "Failed to update run"}
+                    return {
+                        "ok": False,
+                        "run_id": run_id,
+                        "error": "Run changed concurrently; retry unstick",
+                    }
+
+                if active_task_id:
+                    for task_id in self._parse_active_task_ids(active_task_id):
+                        await self._task_broker.revoke_task(task_id)
 
                 logger.warning(
                     "Admin mutation executed: unstick run_id=%s from=%s to=%s age_seconds=%.1f",

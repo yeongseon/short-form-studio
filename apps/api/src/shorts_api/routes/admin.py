@@ -174,8 +174,7 @@ class RunInfo(BaseModel):
 
 
 class QueueDepthResponse(BaseModel):
-    celery: int
-    gpu_queue: int
+    creator: int
 
 
 class StorageStatsResponse(BaseModel):
