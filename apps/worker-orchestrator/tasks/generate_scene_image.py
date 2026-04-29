@@ -34,7 +34,7 @@ from creator_domain.sanitize import sanitize_path_component
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.run_service import run_service as _run_service
-from creator_service.usage_service import record_provider_call
+from creator_service.usage_service import record_provider_call, resolve_workspace_id_from_run
 from creator_service.visual_asset_service import visual_asset_service as _visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
 
@@ -234,12 +234,15 @@ def generate_scene_image(
                         target_path = str(asset_dir / f"{safe_scene_id}-{uuid4().hex}.png")
                         params["output_path"] = target_path
                         await provider.generate(effective_prompt, params)
+                        workspace_id = await resolve_workspace_id_from_run(run_id)
                         try:
                             await record_provider_call(
                                 run_id,
                                 entry.provider_type,
                                 model_key,
                                 "image_gen",
+                                cost_usd=0.04,
+                                workspace_id=workspace_id,
                                 project_id=run.get("project_id"),
                             )
                         except Exception:

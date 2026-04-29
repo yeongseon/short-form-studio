@@ -27,7 +27,7 @@ from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
-from creator_service.usage_service import record_provider_call
+from creator_service.usage_service import record_provider_call, resolve_workspace_id_from_run
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
 
 logger = logging.getLogger(__name__)
@@ -239,12 +239,15 @@ def generate_visual_plan(
 
                 params = dict(entry.default_params or {})
                 raw_response = await provider.generate(full_prompt, params)
+                workspace_id = await resolve_workspace_id_from_run(run_id)
                 try:
                     await record_provider_call(
                         run_id,
                         entry.provider_type,
                         model_key,
                         "llm",
+                        cost_usd=0.002,
+                        workspace_id=workspace_id,
                         project_id=run.get("project_id"),
                     )
                 except Exception:

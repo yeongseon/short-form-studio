@@ -268,6 +268,30 @@ async def record_provider_call(
     )
 
 
+async def resolve_workspace_id_from_run(run_id: int) -> int | None:
+    """Resolve workspace_id through run -> project linkage."""
+    from .project_service import project_service
+    from .run_service import run_service
+
+    run = await run_service.storage.get_run(run_id)
+    if run is None:
+        return None
+
+    project_id = run.get("project_id")
+    if project_id is None:
+        return None
+
+    project = await project_service.db.fetch_project(int(project_id))
+    if project is None:
+        return None
+
+    workspace_id = project.get("workspace_id")
+    if workspace_id is None:
+        return None
+
+    return int(workspace_id)
+
+
 async def check_workspace_quota(workspace_id: int, operation_type: str = "llm") -> tuple[bool, str]:
     """Check if a workspace can perform the given operation type.
 

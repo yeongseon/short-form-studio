@@ -31,7 +31,7 @@ from creator_service.audio_service import audio_service as _audio_service
 from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
-from creator_service.usage_service import record_provider_call
+from creator_service.usage_service import record_provider_call, resolve_workspace_id_from_run
 
 logger = logging.getLogger(__name__)
 
@@ -175,12 +175,15 @@ def generate_subtitles(
                         f"No audio artifact found for run {run_id}; cannot transcribe"
                     )
                 await provider.transcribe(audio_path, params=params)
+                workspace_id = await resolve_workspace_id_from_run(run_id)
                 try:
                     await record_provider_call(
                         run_id,
                         entry.provider_type,
                         subtitle_model,
                         "stt",
+                        cost_usd=0.001,
+                        workspace_id=workspace_id,
                         project_id=run.get("project_id"),
                     )
                 except Exception:

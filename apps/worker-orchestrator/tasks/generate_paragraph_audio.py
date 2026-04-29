@@ -27,7 +27,7 @@ from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.audio_service import audio_service as _audio_service
 from creator_service.run_service import run_service as _run_service
-from creator_service.usage_service import record_provider_call
+from creator_service.usage_service import record_provider_call, resolve_workspace_id_from_run
 
 logger = logging.getLogger(__name__)
 
@@ -132,12 +132,15 @@ def generate_paragraph_audio(
             params = dict(entry.default_params or {})
             params["output_path"] = audio_path
             await provider.generate(section_text, voice=voice, params=params)
+            workspace_id = await resolve_workspace_id_from_run(run_id)
             try:
                 await record_provider_call(
                     run_id,
                     entry.provider_type,
                     tts_model,
                     "tts",
+                    cost_usd=0.005,
+                    workspace_id=workspace_id,
                     project_id=run.get("project_id") if run else None,
                 )
             except Exception:
