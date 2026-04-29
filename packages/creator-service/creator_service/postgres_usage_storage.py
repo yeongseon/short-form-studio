@@ -56,15 +56,28 @@ class PostgresUsageStorage:
             since,
         )
 
-    async def list_by_run(self, run_id: int) -> list[dict[str, Any]]:
+    async def list_by_run(
+        self, run_id: int, workspace_id: int | None = None
+    ) -> list[dict[str, Any]]:
+        if workspace_id is None:
+            return await fetch_all(
+                """
+                SELECT *
+                FROM usage_events
+                WHERE run_id = $1
+                ORDER BY created_at ASC, id ASC
+                """,
+                run_id,
+            )
         return await fetch_all(
             """
             SELECT *
             FROM usage_events
-            WHERE run_id = $1
+            WHERE run_id = $1 AND workspace_id = $2
             ORDER BY created_at ASC, id ASC
             """,
             run_id,
+            workspace_id,
         )
 
     async def get_workspace_quota(self, workspace_id: int) -> dict[str, Any] | None:

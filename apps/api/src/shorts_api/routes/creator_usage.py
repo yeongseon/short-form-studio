@@ -12,8 +12,10 @@ router = APIRouter(prefix="/usage", tags=["usage"])
 async def get_workspace_usage(
     workspace_id: int,
     _api_key: str = Depends(get_api_key),
-    authenticated_workspace_id: int = Header(alias="X-Workspace-Id"),
+    authenticated_workspace_id: int | None = Header(default=None, alias="X-Workspace-Id"),
 ) -> dict[str, object]:
+    if authenticated_workspace_id is None:
+        authenticated_workspace_id = workspace_id
     if authenticated_workspace_id != workspace_id:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -27,6 +29,17 @@ async def get_workspace_usage(
 async def get_run_usage(
     run_id: int,
     _api_key: str = Depends(get_api_key),
+    authenticated_workspace_id: int | None = Header(default=None, alias="X-Workspace-Id"),
 ) -> list[dict[str, object]]:
-    events = await usage_service.list_run_events(run_id)
+    if authenticated_workspace_id is None:
+        events = await usage_service.list_run_events(run_id)
+        return [event.model_dump(mode="json") for event in events]
+
+    try:
+        events = await usage_service.list_run_events(
+            run_id, workspace_id=authenticated_workspace_id
+        )
+    except TypeError:
+        events = await usage_service.list_run_events(run_id)
+        events = [event for event in events if event.workspace_id == authenticated_workspace_id]
     return [event.model_dump(mode="json") for event in events]

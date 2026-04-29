@@ -24,7 +24,9 @@ class UsageStorageBackend(Protocol):
         self, workspace_id: int, since: datetime
     ) -> list[dict[str, Any]]: ...
 
-    async def list_by_run(self, run_id: int) -> list[dict[str, Any]]: ...
+    async def list_by_run(
+        self, run_id: int, workspace_id: int | None = None
+    ) -> list[dict[str, Any]]: ...
 
     async def get_workspace_quota(self, workspace_id: int) -> dict[str, Any] | None: ...
 
@@ -59,8 +61,15 @@ class InMemoryUsageStorage:
         rows.sort(key=lambda row: (row["created_at"], row["id"]))
         return rows
 
-    async def list_by_run(self, run_id: int) -> list[dict[str, Any]]:
-        rows = [dict(row) for row in self._events.values() if row.get("run_id") == run_id]
+    async def list_by_run(
+        self, run_id: int, workspace_id: int | None = None
+    ) -> list[dict[str, Any]]:
+        rows = [
+            dict(row)
+            for row in self._events.values()
+            if row.get("run_id") == run_id
+            and (workspace_id is None or row.get("workspace_id") == workspace_id)
+        ]
         rows.sort(key=lambda row: (row["created_at"], row["id"]))
         return rows
 
@@ -166,8 +175,10 @@ class UsageService:
             period_end=now,
         )
 
-    async def list_run_events(self, run_id: int) -> list[UsageEvent]:
-        rows = await self.storage.list_by_run(run_id)
+    async def list_run_events(
+        self, run_id: int, workspace_id: int | None = None
+    ) -> list[UsageEvent]:
+        rows = await self.storage.list_by_run(run_id, workspace_id=workspace_id)
         return [UsageEvent.from_row(row) for row in rows]
 
     def _quota_exceeded_reason(
