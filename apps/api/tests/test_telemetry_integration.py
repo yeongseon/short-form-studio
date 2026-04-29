@@ -1,61 +1,97 @@
-from unittest.mock import patch
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
 
 import pytest
-from opentelemetry import trace
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
+_TELEMETRY_PATH = Path(__file__).resolve().parents[1] / "src/shorts_api/middleware/telemetry.py"
+_telemetry_spec = spec_from_file_location("shorts_api.middleware.telemetry", _TELEMETRY_PATH)
+assert _telemetry_spec is not None
+assert _telemetry_spec.loader is not None
+middleware_telemetry = module_from_spec(_telemetry_spec)
+_telemetry_spec.loader.exec_module(middleware_telemetry)
+
 
 @pytest.fixture
-def span_exporter():
+def instrumented_client(monkeypatch):
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
 
-    old_provider = trace.get_tracer_provider()
-    with (
-        patch("opentelemetry.trace._TRACER_PROVIDER", None),
-        patch("opentelemetry.trace._TRACER_PROVIDER_SET_ONCE") as once,
-    ):
-        once.do_once.side_effect = lambda func: func()
-        trace.set_tracer_provider(provider)
-        yield exporter
+    monkeypatch.setenv("OTEL_ENABLED", "true")
 
-    with (
-        patch("opentelemetry.trace._TRACER_PROVIDER", provider),
-        patch("opentelemetry.trace._TRACER_PROVIDER_SET_ONCE") as once,
-    ):
-        once.do_once.side_effect = lambda func: func()
-        trace.set_tracer_provider(old_provider)
+    class _NoopCounter:
+        def add(self, _value, attributes=None):
+            return None
+
+    class _NoopHistogram:
+        def record(self, _value, attributes=None):
+            return None
+
+    class _NoopMeter:
+        def create_counter(self, _name, unit=None, description=None):
+            return _NoopCounter()
+
+        def create_histogram(self, _name, unit=None, description=None):
+            return _NoopHistogram()
+
+    class _TelemetryProxy:
+        def init_telemetry(self, _service_name: str) -> None:
+            return None
+
+        def get_meter(self, _name: str):
+            return _NoopMeter()
+
+        def get_tracer(self, name: str):
+            return provider.get_tracer(name)
+
+    monkeypatch.setattr(middleware_telemetry, "import_module", lambda _name: _TelemetryProxy())
+
+    middleware_telemetry.TelemetryMiddleware._initialized = False
+    app = FastAPI()
+
+    @app.get("/health")
+    async def health() -> dict[str, str]:
+        return {"status": "ok"}
+
+    app.add_middleware(middleware_telemetry.TelemetryMiddleware)
+    client = TestClient(app)
+
+    yield client, exporter
 
     exporter.shutdown()
 
 
-def test_tracer_emits_spans(span_exporter):
-    tracer = trace.get_tracer("test-tracer")
+def test_fastapi_instrumentation_emits_http_spans(instrumented_client):
+    client, exporter = instrumented_client
 
-    with tracer.start_as_current_span("test-operation") as span:
-        span.set_attribute("test.key", "test-value")
+    response = client.get("/health")
+    assert response.status_code == 200
 
-    spans = span_exporter.get_finished_spans()
-    assert len(spans) == 1
-    assert spans[0].name == "test-operation"
-    assert spans[0].attributes["test.key"] == "test-value"
+    spans = exporter.get_finished_spans()
+    assert len(spans) >= 1
+
+    http_span = spans[-1]
+    assert http_span.name == "GET /health"
+
+    attrs = dict(http_span.attributes)
+    assert attrs["http.method"] == "GET"
+    assert attrs["http.route"] == "/health"
+    assert attrs["http.status_code"] == 200
 
 
-def test_nested_spans_preserve_context(span_exporter):
-    tracer = trace.get_tracer("test-tracer")
+def test_fastapi_instrumentation_sets_trace_id_header(instrumented_client):
+    client, exporter = instrumented_client
 
-    with tracer.start_as_current_span("parent"):
-        with tracer.start_as_current_span("child"):
-            pass
+    response = client.get("/health")
+    assert response.status_code == 200
 
-    spans = span_exporter.get_finished_spans()
-    assert len(spans) == 2
+    spans = exporter.get_finished_spans()
+    assert len(spans) >= 1
 
-    child = next(span for span in spans if span.name == "child")
-    parent = next(span for span in spans if span.name == "parent")
-    assert child.context.trace_id == parent.context.trace_id
-    assert child.parent is not None
-    assert child.parent.span_id == parent.context.span_id
+    http_span = spans[-1]
+    assert response.headers.get("X-Trace-Id") == format(http_span.context.trace_id, "032x")
