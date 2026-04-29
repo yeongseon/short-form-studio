@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 
@@ -33,6 +34,36 @@ class CurrentUser:
     user_id: int | None = None
     workspace_id: int | None = None
     workspace_name: str | None = None
+
+
+class _FetchOneResult:
+    def __init__(self, row: tuple[object, ...] | None) -> None:
+        self._row = row
+
+    def fetchone(self) -> tuple[object, ...] | None:
+        return self._row
+
+
+class _AsyncpgSessionAdapter:
+    def __init__(self, connection) -> None:
+        self._connection = connection
+
+    async def execute(self, query, params: dict[str, object]):
+        row = await self._connection.fetchrow(str(query), params["h"])
+        if row is None:
+            return _FetchOneResult(None)
+        return _FetchOneResult((row.get("user_id"),))
+
+
+async def _resolve_user_id_from_api_key(api_key: str, db_session) -> str | None:
+    """Resolve user_id from API key via api_keys table."""
+    key_hash = hashlib.sha256(api_key.encode()).hexdigest()
+    result = await db_session.execute(
+        text("SELECT user_id FROM api_keys WHERE key_hash = :h AND revoked_at IS NULL"),
+        {"h": key_hash},
+    )
+    row = result.fetchone()
+    return row[0] if row else None
 
 
 async def get_current_user(request: Request) -> CurrentUser:
@@ -85,57 +116,6 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         except Exception:
             return None
 
-    async def _resolve_user_id_from_api_key(self, api_key_value: str) -> int | None:
-        pool = await self._get_pool()
-        if pool is None:
-            return None
-
-        api_key_hash = hashlib.sha256(api_key_value.encode("utf-8")).hexdigest()
-        candidate_queries: tuple[tuple[str, str], ...] = (
-            (
-                "SELECT user_id FROM api_keys WHERE api_key = $1 ORDER BY user_id LIMIT 1",
-                api_key_value,
-            ),
-            ("SELECT user_id FROM api_keys WHERE key = $1 ORDER BY user_id LIMIT 1", api_key_value),
-            (
-                "SELECT user_id FROM user_api_keys WHERE api_key = $1 ORDER BY user_id LIMIT 1",
-                api_key_value,
-            ),
-            (
-                "SELECT user_id FROM user_api_keys WHERE key = $1 ORDER BY user_id LIMIT 1",
-                api_key_value,
-            ),
-            (
-                "SELECT user_id FROM api_keys WHERE api_key_hash = $1 ORDER BY user_id LIMIT 1",
-                api_key_hash,
-            ),
-            (
-                "SELECT user_id FROM api_keys WHERE key_hash = $1 ORDER BY user_id LIMIT 1",
-                api_key_hash,
-            ),
-            (
-                "SELECT user_id FROM user_api_keys WHERE api_key_hash = $1 ORDER BY user_id LIMIT 1",
-                api_key_hash,
-            ),
-            (
-                "SELECT user_id FROM user_api_keys WHERE key_hash = $1 ORDER BY user_id LIMIT 1",
-                api_key_hash,
-            ),
-        )
-
-        async with pool.acquire() as connection:
-            for query, query_arg in candidate_queries:
-                try:
-                    row = await connection.fetchrow(query, query_arg)
-                except Exception:
-                    continue
-                if row is not None and row.get("user_id") is not None:
-                    try:
-                        return int(row["user_id"])
-                    except (TypeError, ValueError):
-                        continue
-        return None
-
     async def _resolve_member_workspaces(self, user_id: int) -> list[int]:
         pool = await self._get_pool()
         if pool is None:
@@ -183,6 +163,12 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
 
         # Docs paths go through normal auth when API_KEY is set
         # (they were removed from _PUBLIC_PATHS so they're not auto-allowed)
+        if request.url.path == "/docs" and request.app.docs_url is None:
+            return await call_next(request)
+        if request.url.path == "/redoc" and request.app.redoc_url is None:
+            return await call_next(request)
+        if request.url.path == "/openapi.json" and request.app.openapi_url is None:
+            return await call_next(request)
 
         # Check header only (never accept keys via query params to avoid log leakage)
         provided = request.headers.get("X-API-Key")
@@ -198,14 +184,36 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
                 content={"detail": "Invalid or missing API key"},
             )
 
-        user_id = await self._resolve_user_id_from_api_key(provided)
-        if user_id is None:
+        pool = await self._get_pool()
+        if pool is None:
+            if self._api_key and hmac.compare_digest(provided, self._api_key):
+                return await call_next(request)
             return JSONResponse(
                 status_code=401,
                 content={"detail": "API key is not associated with any user"},
             )
 
-        member_workspace_ids = await self._resolve_member_workspaces(user_id)
+        async with pool.acquire() as connection:
+            user_id = await _resolve_user_id_from_api_key(
+                provided, _AsyncpgSessionAdapter(connection)
+            )
+        if user_id is None:
+            if self._api_key and hmac.compare_digest(provided, self._api_key):
+                return await call_next(request)
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "API key is not associated with any user"},
+            )
+
+        try:
+            user_id_int = int(user_id)
+        except (TypeError, ValueError):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "API key is not associated with any user"},
+            )
+
+        member_workspace_ids = await self._resolve_member_workspaces(user_id_int)
         if not member_workspace_ids:
             return JSONResponse(status_code=403, content={"detail": "Forbidden"})
 
@@ -228,7 +236,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         if mapped_workspace_id is not None and mapped_workspace_id in member_workspace_ids:
             workspace_id = mapped_workspace_id
 
-        user = CurrentUser(user_id=user_id, workspace_id=workspace_id)
+        user = CurrentUser(user_id=user_id_int, workspace_id=workspace_id)
         request.state.user = user
         _current_user_ctx.set(user)
 

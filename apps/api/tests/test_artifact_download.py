@@ -17,8 +17,42 @@ class StubArtifactDownloadService:
         return dict(self.artifact)
 
 
+class StubRunStorage:
+    async def get_run(self, run_id: int) -> dict[str, int]:
+        return {"id": run_id, "project_id": 1}
+
+
+class StubRunService:
+    def __init__(self) -> None:
+        self.storage = StubRunStorage()
+
+
+class StubProject:
+    def __init__(self) -> None:
+        self.workspace_id = 1
+
+
+class StubProjectService:
+    async def get_project(self, project_id: int) -> StubProject | None:
+        if project_id != 1:
+            return None
+        return StubProject()
+
+
 def _iter_api_routes() -> list[APIRoute]:
     return [route for route in app.routes if isinstance(route, APIRoute)]
+
+
+def _patch_route_services(
+    monkeypatch: pytest.MonkeyPatch, artifact_service: StubArtifactDownloadService
+) -> None:
+    for route in _iter_api_routes():
+        if route.name == "download_artifact":
+            monkeypatch.setitem(
+                route.endpoint.__globals__, "artifact_download_service", artifact_service
+            )
+            monkeypatch.setitem(route.endpoint.__globals__, "run_service", StubRunService())
+            monkeypatch.setitem(route.endpoint.__globals__, "project_service", StubProjectService())
 
 
 @pytest.mark.asyncio
@@ -40,9 +74,7 @@ async def test_download_artifact_returns_file(
         }
     )
 
-    for route in _iter_api_routes():
-        if route.name == "download_artifact":
-            monkeypatch.setitem(route.endpoint.__globals__, "artifact_download_service", stub)
+    _patch_route_services(monkeypatch, stub)
 
     monkeypatch.setenv("ARTIFACT_ROOT", str(tmp_path))
     response = await client.get("/api/creator/runs/100/artifacts/900/download")
@@ -65,9 +97,7 @@ async def test_download_artifact_mismatched_run_id_returns_404(
         }
     )
 
-    for route in _iter_api_routes():
-        if route.name == "download_artifact":
-            monkeypatch.setitem(route.endpoint.__globals__, "artifact_download_service", stub)
+    _patch_route_services(monkeypatch, stub)
 
     response = await client.get("/api/creator/runs/100/artifacts/901/download")
 
@@ -78,9 +108,7 @@ async def test_download_artifact_mismatched_run_id_returns_404(
 @pytest.mark.asyncio
 async def test_download_artifact_nonexistent_returns_404(client, monkeypatch: pytest.MonkeyPatch):
     stub = StubArtifactDownloadService(None)
-    for route in _iter_api_routes():
-        if route.name == "download_artifact":
-            monkeypatch.setitem(route.endpoint.__globals__, "artifact_download_service", stub)
+    _patch_route_services(monkeypatch, stub)
 
     response = await client.get("/api/creator/runs/100/artifacts/902/download")
 

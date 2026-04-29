@@ -13,6 +13,17 @@ class _StubRunService:
         self.storage = _StubRunStorage()
 
 
+class _StubProject:
+    workspace_id = 1
+
+
+class _StubProjectService:
+    async def get_project(self, project_id: int):
+        if project_id != 1:
+            return None
+        return _StubProject()
+
+
 class _StubArtifactDownloadService:
     def __init__(self, row):
         self._row = row
@@ -39,6 +50,7 @@ async def test_download_nonlocal_storage_redirects(client, monkeypatch: pytest.M
     }
 
     monkeypatch.setattr(route_mod, "run_service", _StubRunService())
+    monkeypatch.setattr(route_mod, "project_service", _StubProjectService())
     monkeypatch.setattr(
         route_mod, "artifact_download_service", _StubArtifactDownloadService(artifact)
     )

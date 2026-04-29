@@ -59,6 +59,8 @@ def stub_artifact_download_services(monkeypatch: pytest.MonkeyPatch, tmp_path):
     artifact_file = tmp_path / "ok.txt"
     artifact_file.write_text("ok", encoding="utf-8")
     monkeypatch.setenv("ARTIFACT_ROOT", str(tmp_path))
+    monkeypatch.setenv("ARTIFACT_ACCESS_STRICT", "true")
+    monkeypatch.setenv("API_KEY", "test-api-key")
 
     route = _find_route("download_artifact")
     stub_project_service = StubProjectService()
@@ -86,14 +88,23 @@ async def test_download_artifact_forbidden_workspace_mismatch(
 
 
 @pytest.mark.asyncio
-async def test_download_artifact_allows_legacy_none_workspace(
-    client, stub_artifact_download_services
-):
+async def test_download_artifact_rejects_none_workspace(client, stub_artifact_download_services):
     stub_artifact_download_services.workspace_id = None
     response = await client.get(
         "/api/creator/runs/10/artifacts/99/download",
         headers={"X-Workspace-Id": "2"},
     )
 
-    assert response.status_code == 200
-    assert response.text == "ok"
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Forbidden"}
+
+
+@pytest.mark.asyncio
+async def test_download_artifact_without_workspace_context_forbidden(
+    client, stub_artifact_download_services
+):
+    _ = stub_artifact_download_services
+    response = await client.get("/api/creator/runs/10/artifacts/99/download")
+
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Forbidden"}
