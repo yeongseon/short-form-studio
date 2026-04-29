@@ -11,6 +11,7 @@ import logging
 from dataclasses import dataclass
 
 from fastapi import Request
+from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
@@ -72,6 +73,13 @@ async def get_current_user(request: Request) -> CurrentUser:
         return context_user
 
     return CurrentUser()
+
+
+async def require_current_user(request: Request) -> CurrentUser:
+    user = await get_current_user(request)
+    if user.user_id is None or user.workspace_id is None:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    return user
 
 
 class ApiKeyMiddleware(BaseHTTPMiddleware):

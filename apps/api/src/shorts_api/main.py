@@ -14,7 +14,6 @@ from creator_service.model_health_service import ModelHealthService, ModelStatus
 from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from starlette.responses import FileResponse
 
 from shorts_api.auth import ApiKeyMiddleware
 from shorts_api.routes.creator_artifact_download import router as artifact_download_router
@@ -51,7 +50,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 environment = os.getenv("ENVIRONMENT", "development").strip().lower()
-production_hardened = environment == "production" and bool(os.getenv("API_KEY"))
+production_hardened = environment == "production"
 
 app = FastAPI(
     title="short-form-studio API",
@@ -169,37 +168,12 @@ async def health() -> dict[str, object]:
 
 
 @app.get("/artifacts/{artifact_path:path}", deprecated=True)
-async def serve_artifact(artifact_path: str) -> FileResponse:
-    """Backward-compatible artifact serving — DEPRECATED.
-
-    In production (API_KEY set), this returns 410 Gone to enforce migration
-    to the access-controlled endpoint. In dev mode, it serves files directly
-    for convenience but still emits deprecation headers.
-
-    Clients MUST migrate to:
-    ``GET /api/creator/runs/{run_id}/artifacts/{artifact_id}/download``
-    which enforces expiration and ownership.
-    """
-    # Production: reject outright — legacy route bypasses access control
-    if os.getenv("API_KEY"):
-        raise HTTPException(
-            status_code=410,
-            detail=(
-                "This endpoint is removed in production. "
-                "Use GET /api/creator/runs/{run_id}/artifacts/{artifact_id}/download instead."
-            ),
-        )
-
-    # Dev mode: serve with deprecation warnings
-    artifact_root = os.path.realpath(os.getenv("ARTIFACT_ROOT", "data/artifacts"))
-    resolved = os.path.realpath(os.path.join(artifact_root, artifact_path))
-    if os.path.commonpath([artifact_root, resolved]) != artifact_root:
-        raise HTTPException(status_code=404, detail="Artifact not found")
-    if not os.path.isfile(resolved):
-        raise HTTPException(status_code=404, detail="Artifact not found")
-    response = FileResponse(resolved)
-    response.headers["Deprecation"] = "true"
-    response.headers["Link"] = (
-        '</api/creator/runs/{run_id}/artifacts/{artifact_id}/download>; rel="successor-version"'
+async def serve_artifact(artifact_path: str):
+    _ = artifact_path
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "This endpoint is removed. "
+            "Use GET /api/creator/runs/{run_id}/artifacts/{artifact_id}/download instead."
+        ),
     )
-    return response

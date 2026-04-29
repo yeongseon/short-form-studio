@@ -3,8 +3,9 @@
 from datetime import datetime, timezone
 
 import pytest
+from fastapi import Request
 from fastapi.routing import APIRoute
-from shorts_api.auth import CurrentUser
+from shorts_api.auth import CurrentUser, require_current_user
 from shorts_api.main import app
 
 
@@ -66,16 +67,17 @@ def stub_artifact_download_services(monkeypatch: pytest.MonkeyPatch, tmp_path):
     stub_project_service = StubProjectService()
     auth_context = {"workspace_id": 1}
 
-    async def stub_get_current_user(_request):
+    async def stub_require_current_user(request: Request):
+        _ = request
         return CurrentUser(user_id=123, workspace_id=auth_context["workspace_id"])
+
+    monkeypatch.setitem(app.dependency_overrides, require_current_user, stub_require_current_user)
 
     monkeypatch.setitem(route.endpoint.__globals__, "run_service", StubRunService())
     monkeypatch.setitem(route.endpoint.__globals__, "project_service", stub_project_service)
     monkeypatch.setitem(
         route.endpoint.__globals__, "artifact_download_service", StubArtifactDownloadService()
     )
-    monkeypatch.setitem(route.endpoint.__globals__, "get_current_user", stub_get_current_user)
-
     return {"project_service": stub_project_service, "auth_context": auth_context}
 
 

@@ -1,8 +1,12 @@
+# pyright: reportMissingImports=false
+
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import Request
 from fastapi.routing import APIRoute
+from shorts_api.auth import require_current_user
 from shorts_api.main import app
 
 
@@ -47,8 +51,11 @@ def _iter_api_routes() -> list[APIRoute]:
 def _patch_route_services(
     monkeypatch: pytest.MonkeyPatch, artifact_service: StubArtifactDownloadService
 ) -> None:
-    async def stub_get_current_user(_request):
+    async def stub_require_current_user(request: Request):
+        _ = request
         return SimpleNamespace(user_id=101, workspace_id=1)
+
+    monkeypatch.setitem(app.dependency_overrides, require_current_user, stub_require_current_user)
 
     for route in _iter_api_routes():
         if route.name == "download_artifact":
@@ -57,9 +64,6 @@ def _patch_route_services(
             )
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", StubRunService())
             monkeypatch.setitem(route.endpoint.__globals__, "project_service", StubProjectService())
-            monkeypatch.setitem(
-                route.endpoint.__globals__, "get_current_user", stub_get_current_user
-            )
 
 
 @pytest.mark.asyncio
@@ -125,7 +129,5 @@ async def test_download_artifact_nonexistent_returns_404(client, monkeypatch: py
 
 @pytest.mark.asyncio
 async def test_old_artifact_endpoint_returns_404_for_missing_file(client):
-    """Old endpoint now serves files directly; missing files return 404."""
     response = await client.get("/artifacts/1/100/audio.wav")
-
-    assert response.status_code == 404
+    assert response.status_code == 410

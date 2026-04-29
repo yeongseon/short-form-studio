@@ -1,7 +1,12 @@
+# pyright: reportMissingImports=false
+
 import pytest
+from fastapi import Request
 from types import SimpleNamespace
 
-from shorts_api.routes import creator_artifact_download as route_mod
+from shorts_api.auth import require_current_user
+from shorts_api.main import app
+from shorts_api.routes import creator_artifact_download as route_mod  # type: ignore[attr-defined]
 
 
 class _StubRunStorage:
@@ -53,10 +58,11 @@ async def test_download_nonlocal_storage_redirects(client, monkeypatch: pytest.M
     monkeypatch.setattr(route_mod, "run_service", _StubRunService())
     monkeypatch.setattr(route_mod, "project_service", _StubProjectService())
 
-    async def _stub_get_current_user(_request):
+    async def _stub_require_current_user(request: Request):
+        _ = request
         return SimpleNamespace(user_id=101, workspace_id=1)
 
-    monkeypatch.setattr(route_mod, "get_current_user", _stub_get_current_user)
+    monkeypatch.setitem(app.dependency_overrides, require_current_user, _stub_require_current_user)
     monkeypatch.setattr(
         route_mod, "artifact_download_service", _StubArtifactDownloadService(artifact)
     )
