@@ -68,10 +68,12 @@ class InMemoryTaskTrackingStorage:
         if row is None:
             return None
         row["status"] = status
-        if kwargs.get("started_at") is not None:
+        if "started_at" in kwargs:
             row["started_at"] = kwargs["started_at"]
-        if kwargs.get("finished_at") is not None:
+        if "finished_at" in kwargs:
             row["finished_at"] = kwargs["finished_at"]
+        if kwargs.get("attempt") is not None:
+            row["attempt"] = kwargs["attempt"]
         row["error_code"] = kwargs.get("error_code")
         row["error_message"] = kwargs.get("error_message")
         self._rows[task_id] = row
@@ -122,7 +124,40 @@ class TaskTrackingService:
         return RunTask.from_row(row)
 
     async def record_task_start(self, run_id: int, task_type: str, celery_task_id: str) -> RunTask:
-        return await self.record_task_queued(run_id, task_type, celery_task_id)
+        existing = await self.storage.get_by_celery_id(celery_task_id)
+        started_at = datetime.now(timezone.utc)
+        if existing is None:
+            row = await self.storage.create_task(
+                {
+                    "run_id": run_id,
+                    "task_type": task_type,
+                    "celery_task_id": celery_task_id,
+                    "status": "running",
+                    "attempt": 1,
+                    "started_at": started_at,
+                    "finished_at": None,
+                    "error_code": None,
+                    "error_message": None,
+                }
+            )
+            return RunTask.from_row(row)
+
+        attempt = int(existing.get("attempt", 1))
+        if existing.get("status") == "queued":
+            attempt += 1
+
+        row = await self.storage.update_task_status(
+            existing["id"],
+            "running",
+            attempt=attempt,
+            started_at=started_at,
+            finished_at=None,
+            error_code=None,
+            error_message=None,
+        )
+        if row is None:
+            raise ValueError("Failed to mark task as running")
+        return RunTask.from_row(row)
 
     async def mark_running(self, celery_task_id: str) -> RunTask | None:
         task = await self.storage.get_by_celery_id(celery_task_id)

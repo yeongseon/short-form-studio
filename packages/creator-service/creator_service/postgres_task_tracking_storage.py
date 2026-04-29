@@ -22,12 +22,29 @@ class PostgresTaskTrackingStorage:
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
             ON CONFLICT (celery_task_id) DO UPDATE
-            SET status = 'queued',
-                attempt = creator_run_tasks.attempt + 1,
-                started_at = NULL,
-                finished_at = NULL,
-                error_code = NULL,
-                error_message = NULL
+            SET status = EXCLUDED.status,
+                attempt = CASE
+                    WHEN creator_run_tasks.status = 'queued' AND EXCLUDED.status = 'running'
+                        THEN creator_run_tasks.attempt + 1
+                    ELSE creator_run_tasks.attempt
+                END,
+                started_at = CASE
+                    WHEN EXCLUDED.status = 'running' THEN EXCLUDED.started_at
+                    WHEN EXCLUDED.status = 'queued' THEN NULL
+                    ELSE creator_run_tasks.started_at
+                END,
+                finished_at = CASE
+                    WHEN EXCLUDED.status IN ('queued', 'running') THEN NULL
+                    ELSE creator_run_tasks.finished_at
+                END,
+                error_code = CASE
+                    WHEN EXCLUDED.status IN ('queued', 'running') THEN NULL
+                    ELSE creator_run_tasks.error_code
+                END,
+                error_message = CASE
+                    WHEN EXCLUDED.status IN ('queued', 'running') THEN NULL
+                    ELSE creator_run_tasks.error_message
+                END
             RETURNING *
             """,
             row.get("run_id"),

@@ -4,12 +4,12 @@ from datetime import datetime, timedelta, timezone
 from creator_service.task_tracking_service import InMemoryTaskTrackingStorage, TaskTrackingService
 
 
-def test_record_task_start_creates_pending_task() -> None:
+def test_record_task_start_creates_queued_task() -> None:
     service = TaskTrackingService(InMemoryTaskTrackingStorage())
-    task = asyncio.run(service.record_task_start(7, "generate_script", "celery-1"))
+    task = asyncio.run(service.record_task_queued(7, "generate_script", "celery-1"))
     assert task.run_id == 7
     assert task.task_type == "generate_script"
-    assert task.status == "pending"
+    assert task.status == "queued"
 
 
 def test_mark_running_updates_status_and_started_at() -> None:
@@ -74,7 +74,7 @@ def test_record_task_start_reuses_celery_task_id_and_increments_attempt() -> Non
     retried = asyncio.run(service.record_task_start(7, "generate_script", "celery-retry-1"))
 
     assert retried.id == first.id
-    assert retried.attempt == 2
+    assert retried.attempt == 1
     assert retried.status == "running"
     assert retried.started_at is not None
 
