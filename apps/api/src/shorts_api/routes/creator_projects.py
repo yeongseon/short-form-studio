@@ -1,9 +1,8 @@
 """Routes for creator project management."""
 import os
 import shutil
-from typing import Literal
+from typing import Any, Awaitable, Callable, Literal, cast
 
-from creator_domain.models import User
 from creator_service.project_service import project_service
 from creator_service.run_service import run_service
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -23,26 +22,29 @@ class CreateProjectRequest(BaseModel):
     json_script: str | None = Field(default=None, max_length=200000)
     url_source: str | None = Field(default=None, max_length=2000)
 
+
 @router.post("", status_code=201)
 async def create_project(
     request: CreateProjectRequest,
-    user: User = Depends(get_current_user),
+    user: Any = Depends(get_current_user),
 ) -> dict[str, object]:
+    user_workspace_id = getattr(user, "workspace_id", None)
+    create_kwargs = {
+        "title": request.title,
+        "source_type": request.source_type,
+        "idea_brief": request.idea_brief,
+        "markdown_source": request.markdown_source,
+        "json_script": request.json_script,
+        "url_source": request.url_source,
+    }
+    if user_workspace_id is not None:
+        create_kwargs["workspace_id"] = user_workspace_id
     try:
-        project = await project_service.create_project(
-            title=request.title,
-            source_type=request.source_type,
-            idea_brief=request.idea_brief,
-            markdown_source=request.markdown_source,
-            json_script=request.json_script,
-            url_source=request.url_source,
-        )
+        project = await project_service.create_project(**create_kwargs)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return project.model_dump(mode="json")
-
-
 
 
 class UpdateProjectRequest(BaseModel):
@@ -53,20 +55,41 @@ class UpdateProjectRequest(BaseModel):
 async def update_project(
     project_id: int,
     request: UpdateProjectRequest,
-    user: User = Depends(get_current_user),
+    user: Any = Depends(get_current_user),
 ) -> dict[str, object]:
+    user_workspace_id = getattr(user, "workspace_id", None)
+    current_project = await project_service.get_project(project_id)
+    if current_project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    project_workspace_id = getattr(current_project, "workspace_id", None)
+    if (
+        project_workspace_id is not None
+        and user_workspace_id is not None
+        and project_workspace_id != user_workspace_id
+    ):
+        raise HTTPException(status_code=404, detail="Project not found")
+
     project = await project_service.update_project(project_id, title=request.title)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     return project.model_dump(mode="json")
 
+
 @router.get("/{project_id}")
 async def get_project_detail(
     project_id: int,
-    user: User = Depends(get_current_user),
+    user: Any = Depends(get_current_user),
 ) -> dict[str, object]:
+    user_workspace_id = getattr(user, "workspace_id", None)
     project = await project_service.get_project(project_id)
     if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    project_workspace_id = getattr(project, "workspace_id", None)
+    if (
+        project_workspace_id is not None
+        and user_workspace_id is not None
+        and project_workspace_id != user_workspace_id
+    ):
         raise HTTPException(status_code=404, detail="Project not found")
 
     return project.model_dump(mode="json")
@@ -76,10 +99,21 @@ async def get_project_detail(
 async def list_projects(
     limit: int = Query(default=20, ge=0),
     offset: int = Query(default=0, ge=0),
-    user: User = Depends(get_current_user),
+    user: Any = Depends(get_current_user),
 ) -> dict[str, object]:
-    projects = await project_service.list_projects(limit=limit, offset=offset)
-    total = await project_service.count_projects()
+    user_workspace_id = getattr(user, "workspace_id", None)
+    if user_workspace_id is None:
+        projects = await project_service.list_projects(limit=limit, offset=offset)
+        total = await project_service.count_projects()
+    else:
+        list_projects_fn = getattr(project_service, "list_projects")
+        count_projects_fn = getattr(project_service, "count_projects")
+        projects = await list_projects_fn(
+            limit=limit,
+            offset=offset,
+            workspace_id=user_workspace_id,
+        )
+        total = await count_projects_fn(workspace_id=user_workspace_id)
     return {
         "projects": [project.model_dump(mode="json") for project in projects],
         "total": total,
@@ -87,7 +121,6 @@ async def list_projects(
 
 
 async def _cleanup_project_resources(project_id: int) -> list[int]:
-    """Revoke active tasks and collect run IDs before project deletion."""
     runs = await run_service.list_runs_by_project(project_id)
     for r in runs:
         if r.active_task_id:
@@ -96,7 +129,6 @@ async def _cleanup_project_resources(project_id: int) -> list[int]:
 
 
 def _remove_run_artifacts(run_ids: list[int]) -> None:
-    """Best-effort artifact cleanup for the given run IDs."""
     artifact_root = os.getenv("ARTIFACT_ROOT", "data/artifacts")
     for rid in run_ids:
         run_dir = os.path.join(artifact_root, str(rid))
@@ -107,15 +139,29 @@ def _remove_run_artifacts(run_ids: list[int]) -> None:
 @router.delete("/{project_id}")
 async def delete_project(
     project_id: int,
-    user: User = Depends(get_current_user),
+    user: Any = Depends(get_current_user),
 ) -> dict[str, object]:
-    """Delete a project and all associated runs (FK cascade)."""
-    run_ids = await _cleanup_project_resources(project_id)
+    user_workspace_id = getattr(user, "workspace_id", None)
+    get_project = cast(
+        Callable[[int], Awaitable[Any]] | None,
+        getattr(project_service, "get_project", None),
+    )
+    if get_project is not None:
+        project = await get_project(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        project_workspace_id = getattr(project, "workspace_id", None)
+        if (
+            project_workspace_id is not None
+            and user_workspace_id is not None
+            and project_workspace_id != user_workspace_id
+        ):
+            raise HTTPException(status_code=404, detail="Project not found")
 
+    run_ids = await _cleanup_project_resources(project_id)
     deleted = await project_service.delete_project(project_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Project not found")
 
     _remove_run_artifacts(run_ids)
-
     return {"deleted": True, "project_id": project_id}

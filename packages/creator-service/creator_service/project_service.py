@@ -30,7 +30,7 @@ class ProjectStorageBackend(Protocol):
 
     async def fetch_latest_run_summary(self, project_id: int) -> LatestRunSummary | None: ...
 
-    async def count_projects(self) -> int: ...
+    async def count_projects(self, workspace_id: int | None = None) -> int: ...
 
     async def update_project(
         self, project_id: int, updates: dict[str, Any]
@@ -91,8 +91,10 @@ class InMemoryProjectStorage:
             ordered = [row for row in ordered if row.get("workspace_id") == workspace_id]
         return [dict(row) for row in ordered[offset : offset + limit]]
 
-    async def count_projects(self) -> int:
-        return len(self._projects)
+    async def count_projects(self, workspace_id: int | None = None) -> int:
+        if workspace_id is None:
+            return len(self._projects)
+        return sum(1 for row in self._projects.values() if row.get("workspace_id") == workspace_id)
 
     async def update_project(
         self, project_id: int, updates: dict[str, Any]
@@ -245,8 +247,8 @@ class ProjectService:
             projects.append(ProjectWithLatestRun.model_validate({**row, "latest_run": latest_run}))
         return projects
 
-    async def count_projects(self) -> int:
-        return await self.db.count_projects()
+    async def count_projects(self, workspace_id: int | None = None) -> int:
+        return await self.db.count_projects(workspace_id=workspace_id)
 
     async def update_project(self, project_id: int, title: str) -> Project | None:
         """Update project title."""

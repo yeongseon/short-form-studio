@@ -63,8 +63,14 @@ class PostgresProjectStorage:
             offset,
         )
 
-    async def count_projects(self) -> int:
-        row = await fetch_one("SELECT COUNT(*) AS count FROM creator_projects")
+    async def count_projects(self, workspace_id: int | None = None) -> int:
+        if workspace_id is None:
+            row = await fetch_one("SELECT COUNT(*) AS count FROM creator_projects")
+        else:
+            row = await fetch_one(
+                "SELECT COUNT(*) AS count FROM creator_projects WHERE workspace_id = $1",
+                workspace_id,
+            )
         if row is None:
             return 0
         return int(row["count"])
