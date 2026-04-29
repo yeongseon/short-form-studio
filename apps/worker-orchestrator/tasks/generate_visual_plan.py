@@ -29,7 +29,7 @@ from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
-from telemetry import trace_task
+from creator_service.telemetry import trace_task
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
 
 logger = logging.getLogger(__name__)

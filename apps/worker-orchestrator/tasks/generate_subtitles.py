@@ -33,7 +33,7 @@ from creator_service.audio_service import audio_service as _audio_service
 from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
-from telemetry import trace_task
+from creator_service.telemetry import trace_task
 
 logger = logging.getLogger(__name__)
 
