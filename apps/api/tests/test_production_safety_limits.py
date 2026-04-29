@@ -45,6 +45,7 @@ def test_worker_applies_memory_setrlimit_from_env(monkeypatch: pytest.MonkeyPatc
 async def test_cpu_monitor_triggers_shutdown_flag(monkeypatch: pytest.MonkeyPatch):
     main_module = _load_api_module(monkeypatch)
     main_module.shutdown_state.is_shutting_down = False
+    exit_mock = Mock(side_effect=SystemExit(1))
 
     async def fake_sleep(_seconds: float) -> None:
         return None
@@ -55,7 +56,24 @@ async def test_cpu_monitor_triggers_shutdown_flag(monkeypatch: pytest.MonkeyPatc
         "_cpu_usage_percent",
         lambda _cpu_seconds, _wall_seconds: (float(main_module.MAX_CPU_PERCENT) + 1.0, 0.0, 0.0),
     )
+    monkeypatch.setattr(main_module.os, "_exit", exit_mock)
 
-    await main_module._monitor_cpu_limit()
+    with pytest.raises(SystemExit, match="1"):
+        await main_module._monitor_cpu_limit()
 
     assert main_module.shutdown_state.is_shutting_down is True
+    exit_mock.assert_called_once_with(1)
+
+
+@pytest.mark.asyncio
+async def test_api_startup_fails_when_setrlimit_fails(monkeypatch: pytest.MonkeyPatch):
+    main_module = _load_api_module(monkeypatch)
+
+    def fail_setrlimit(_limit, _values):
+        raise OSError("setrlimit failed")
+
+    monkeypatch.setattr(main_module.resource, "setrlimit", fail_setrlimit)
+
+    with pytest.raises(OSError, match="setrlimit failed"):
+        async with main_module.lifespan(main_module.app):
+            pass

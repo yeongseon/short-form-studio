@@ -83,8 +83,15 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
 def _apply_resource_limits() -> None:
     memory_limit_bytes = MAX_MEMORY_MB * 1024 * 1024
-    with contextlib.suppress(OSError, ValueError):
+    try:
         resource.setrlimit(resource.RLIMIT_AS, (memory_limit_bytes, memory_limit_bytes))
+    except (OSError, ValueError):
+        logger.error(
+            "Failed to set RLIMIT_AS to %d bytes during startup",
+            memory_limit_bytes,
+            exc_info=True,
+        )
+        raise
 
 
 def _cpu_usage_percent(
@@ -117,7 +124,7 @@ async def _monitor_cpu_limit() -> None:
                 MAX_CPU_PERCENT,
             )
             _mark_shutdown()
-            return
+            os._exit(1)
 
 
 def _mark_shutdown() -> None:
