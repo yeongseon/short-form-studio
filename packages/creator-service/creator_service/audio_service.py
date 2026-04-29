@@ -41,6 +41,7 @@ class AudioStorageBackend(Protocol):
     async def get_latest_by_run(self, run_id: int) -> dict[str, Any] | None:
         """Fetch the most recent artifact for a run."""
         ...
+
     async def get_by_section(self, run_id: int, section_id: str) -> dict[str, Any] | None:
         """Fetch the latest artifact for a run+section."""
         ...
@@ -52,7 +53,6 @@ class AudioStorageBackend(Protocol):
     async def delete_by_section(self, run_id: int, section_id: str) -> None:
         """Delete artifacts for a run+section."""
         ...
-
 
 
 # ---------------------------------------------------------------------------
@@ -86,14 +86,9 @@ class InMemoryAudioStorage:
 
     async def list_by_run(self, run_id: int) -> list[dict[str, Any]]:
         run_artifacts = [
-            a
-            for a in self._artifacts
-            if a["run_id"] == run_id and a.get("scene_id") is None
+            a for a in self._artifacts if a["run_id"] == run_id and a.get("scene_id") is None
         ]
-        return [
-            dict(a)
-            for a in sorted(run_artifacts, key=lambda x: x["created_at"], reverse=True)
-        ]
+        return [dict(a) for a in sorted(run_artifacts, key=lambda x: x["created_at"], reverse=True)]
 
     async def get_latest_by_run(self, run_id: int) -> dict[str, Any] | None:
         artifacts = await self.list_by_run(run_id)
@@ -101,8 +96,7 @@ class InMemoryAudioStorage:
 
     async def get_by_section(self, run_id: int, section_id: str) -> dict[str, Any] | None:
         run_artifacts = [
-            a for a in self._artifacts
-            if a["run_id"] == run_id and a.get("scene_id") == section_id
+            a for a in self._artifacts if a["run_id"] == run_id and a.get("scene_id") == section_id
         ]
         if not run_artifacts:
             return None
@@ -110,13 +104,15 @@ class InMemoryAudioStorage:
 
     async def list_by_run_sections(self, run_id: int) -> list[dict[str, Any]]:
         return [
-            dict(a) for a in self._artifacts
+            dict(a)
+            for a in self._artifacts
             if a["run_id"] == run_id and a.get("scene_id") is not None
         ]
 
     async def delete_by_section(self, run_id: int, section_id: str) -> None:
         self._artifacts = [
-            a for a in self._artifacts
+            a
+            for a in self._artifacts
             if not (a["run_id"] == run_id and a.get("scene_id") == section_id)
         ]
 
@@ -140,6 +136,7 @@ class AudioService:
         model_used: str | None = None,
         provider_type: str | None = None,
         voice: str | None = None,
+        storage_provider: str | None = None,
     ) -> AudioArtifact:
         """Create a new audio artifact for a run.
 
@@ -153,6 +150,8 @@ class AudioService:
             metadata["provider_type"] = provider_type
         if voice is not None:
             metadata["voice"] = voice
+        if storage_provider is not None:
+            metadata["storage_provider"] = storage_provider
 
         row = {
             "run_id": run_id,
@@ -229,6 +228,7 @@ class AudioService:
     async def delete_paragraph_audio(self, run_id: int, section_id: str) -> None:
         """Delete audio artifacts for a specific paragraph (invalidation)."""
         await self.storage.delete_by_section(run_id, section_id)
+
     # -- Internal -----------------------------------------------------------
 
     @staticmethod

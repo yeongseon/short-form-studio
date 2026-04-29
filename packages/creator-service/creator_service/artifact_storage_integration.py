@@ -29,3 +29,13 @@ def store_artifact_file(
 def get_artifact_url(key: str, expires_in: int = 3600) -> str:
     backend = get_storage_backend()
     return backend.download_url(key, expires_in)
+
+
+def get_artifact_bytes(key: str) -> bytes:
+    """Download artifact data by storage key."""
+    return get_storage_backend().download_bytes(key)
+
+
+def get_artifact_download_path(key: str, expires_in: int = 3600) -> str:
+    """Get download URL/path for artifact by storage key."""
+    return get_storage_backend().download_url(key, expires_in)

@@ -6,6 +6,8 @@ from creator_service.object_storage import StorageResult
 class _MockBackend:
     def __init__(self) -> None:
         self.calls: list[tuple[str, bytes, str]] = []
+        self.download_byte_calls: list[str] = []
+        self.download_url_calls: list[tuple[str, int]] = []
 
     def upload(
         self,
@@ -23,7 +25,12 @@ class _MockBackend:
         )
 
     def download_url(self, key: str, expires_in: int = 3600) -> str:
+        self.download_url_calls.append((key, expires_in))
         return f"mock://{key}?expires_in={expires_in}"
+
+    def download_bytes(self, key: str) -> bytes:
+        self.download_byte_calls.append(key)
+        return f"bytes:{key}".encode()
 
 
 def test_store_artifact_file_uploads_relative_key(tmp_path, monkeypatch):
@@ -81,3 +88,28 @@ def test_get_artifact_url_delegates_to_backend(monkeypatch):
     url = mod.get_artifact_url("10/scenes/scene-1.png", expires_in=120)
 
     assert url == "mock://10/scenes/scene-1.png?expires_in=120"
+    assert backend.download_url_calls == [("10/scenes/scene-1.png", 120)]
+
+
+def test_get_artifact_bytes_delegates_to_backend(monkeypatch):
+    from creator_service import artifact_storage_integration as mod
+
+    backend = _MockBackend()
+    monkeypatch.setattr(mod, "get_storage_backend", lambda: backend)
+
+    data = mod.get_artifact_bytes("10/scenes/scene-2.png")
+
+    assert data == b"bytes:10/scenes/scene-2.png"
+    assert backend.download_byte_calls == ["10/scenes/scene-2.png"]
+
+
+def test_get_artifact_download_path_delegates_to_backend(monkeypatch):
+    from creator_service import artifact_storage_integration as mod
+
+    backend = _MockBackend()
+    monkeypatch.setattr(mod, "get_storage_backend", lambda: backend)
+
+    path = mod.get_artifact_download_path("10/scenes/scene-3.png", expires_in=45)
+
+    assert path == "mock://10/scenes/scene-3.png?expires_in=45"
+    assert backend.download_url_calls == [("10/scenes/scene-3.png", 45)]
