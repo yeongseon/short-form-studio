@@ -1,8 +1,8 @@
 # pyright: reportMissingImports=false
 
+import logging
 import os
 from datetime import datetime, timezone
-
 from creator_domain.sanitize import UnsafePathComponent, sanitize_path_component
 from creator_service.artifact_download_service import artifact_download_service
 from creator_service.project_service import project_service
@@ -10,6 +10,7 @@ from creator_service.run_service import run_service
 from fastapi import APIRouter, HTTPException, Request
 from starlette.responses import FileResponse, RedirectResponse
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["runs"])
 
 
@@ -40,11 +41,36 @@ async def download_artifact(
             raise HTTPException(status_code=400, detail="Invalid X-Workspace-Id header") from exc
 
     project_workspace_id = getattr(project, "workspace_id", None)
-    if (
-        request_workspace_id is not None
-        and project_workspace_id is not None
-        and request_workspace_id != project_workspace_id
-    ):
+
+    # ── Workspace access control: staged tightening plan ──────────────────
+    # Phase 1 (current default): Allow access when either workspace_id is None.
+    #   This preserves backward compatibility for pre-workspace data.
+    # Phase 2: Log warnings on None (enabled now for visibility).
+    #   Set STRICT_WORKSPACE_ACCESS=false (default) to stay in this phase.
+    # Phase 3: Deny by default. Set STRICT_WORKSPACE_ACCESS=true after running
+    #   migration 015_backfill_artifact_workspace_ids to ensure all projects/runs
+    #   have a workspace_id assigned. This eliminates the NULL bypass entirely.
+    # ─────────────────────────────────────────────────────────────────────────
+    strict_mode = os.getenv("STRICT_WORKSPACE_ACCESS", "false").lower() in ("true", "1", "yes")
+
+    if request_workspace_id is None or project_workspace_id is None:
+        if strict_mode:
+            logger.warning(
+                "Strict workspace access: denying artifact download — "+
+                "request_workspace_id=%s, project_workspace_id=%s, run_id=%s",
+                request_workspace_id, project_workspace_id, run_id,
+            )
+            raise HTTPException(status_code=403, detail="Forbidden")
+        else:
+            # Phase 2: log for visibility before enforcing
+            if request_workspace_id is None or project_workspace_id is None:
+                logger.warning(
+                    "Workspace access check skipped (NULL) — "+
+                    "request_workspace_id=%s, project_workspace_id=%s, run_id=%s. "+
+                    "Run backfill migration 015 and enable STRICT_WORKSPACE_ACCESS to close this gap.",
+                    request_workspace_id, project_workspace_id, run_id,
+                )
+    elif request_workspace_id != project_workspace_id:
         raise HTTPException(status_code=403, detail="Forbidden")
 
     artifact = await artifact_download_service.get_artifact_by_id(artifact_id)
