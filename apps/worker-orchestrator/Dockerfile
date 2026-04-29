@@ -18,6 +18,7 @@ COPY --from=builder /install /usr/local
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
 COPY --chown=appuser:appuser apps/worker-orchestrator/tasks ./tasks
 COPY --chown=appuser:appuser apps/worker-orchestrator/celery_app.py ./celery_app.py
+COPY --chown=appuser:appuser apps/worker-orchestrator/healthcheck.py ./healthcheck.py
 USER appuser
 CMD ["celery", "-A", "celery_app.celery_app", "worker", "--loglevel=info"]
 

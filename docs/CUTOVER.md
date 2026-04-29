@@ -147,6 +147,9 @@ curl -f http://localhost:8000/healthz
 # Studio Web
 curl -sf http://localhost:5174/ | head -1
 
+# Worker health (Celery inspect ping)
+docker compose exec worker python healthcheck.py
+
 # Flower (if monitoring profile enabled)
 curl -sf http://localhost:5555/
 
