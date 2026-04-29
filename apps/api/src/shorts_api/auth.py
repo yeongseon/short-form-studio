@@ -1,13 +1,3 @@
-"""Optional API-key authentication middleware.
-
-When the ``API_KEY`` environment variable is set, every request (except health
-checks) must carry a matching key via the ``X-API-Key`` header or the standard
-``Authorization: Bearer <key>`` header.  When the variable is unset the
-middleware is a transparent pass-through so local development stays frictionless.
-"""
-
-import hmac
-import os
 from hashlib import sha256
 from dataclasses import dataclass
 
@@ -40,26 +30,32 @@ def _resolve_authenticated_user(request: Request) -> AuthenticatedUser:
 
 
 class ApiKeyMiddleware(BaseHTTPMiddleware):
-    """Starlette middleware that enforces an optional API key."""
-
     def __init__(self, app, *, api_key: str | None = None) -> None:
         super().__init__(app)
-        self._api_key = api_key or os.getenv("API_KEY")
+        _ = api_key
+
+    @staticmethod
+    def _extract_api_key(request: Request) -> str | None:
+        provided = request.headers.get("X-API-Key")
+        if provided:
+            return provided
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            return auth_header[7:]
+        return None
 
     async def _resolve_user_from_api_key(self, api_key: str) -> AuthenticatedUser:
         fetch_one = __import__("creator_service.db", fromlist=["fetch_one"]).fetch_one
 
         api_key_hash = sha256(api_key.encode("utf-8")).hexdigest()
-        auth_subject = f"api_key:{api_key_hash}"
         user = await fetch_one(
-            "SELECT id FROM users WHERE auth_subject = $1 OR auth_subject = $2",
-            auth_subject,
+            "SELECT user_id FROM api_keys WHERE key_hash = $1",
             api_key_hash,
         )
         if user is None:
             return AuthenticatedUser(user_id=None, workspace_id=None)
 
-        user_id = int(user["id"])
+        user_id = int(user["user_id"])
         membership = await fetch_one(
             """
             SELECT workspace_id
@@ -74,11 +70,6 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         return AuthenticatedUser(user_id=user_id, workspace_id=workspace_id)
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        # Skip auth when no key is configured (local dev)
-        if not self._api_key:
-            request.state.user = _resolve_authenticated_user(request)
-            return await call_next(request)
-
         # Always allow CORS preflight requests (OPTIONS with Origin header)
         if request.method == "OPTIONS" and "origin" in request.headers:
             return await call_next(request)
@@ -92,13 +83,8 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         # (they were removed from _PUBLIC_PATHS so they're not auto-allowed)
 
         # Check header only (never accept keys via query params to avoid log leakage)
-        provided = request.headers.get("X-API-Key")
+        provided = self._extract_api_key(request)
         if not provided:
-            # Fall back to Authorization: Bearer <key>
-            auth_header = request.headers.get("Authorization", "")
-            if auth_header.startswith("Bearer "):
-                provided = auth_header[7:]  # len("Bearer ") == 7
-        if not provided or not hmac.compare_digest(provided, self._api_key):
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Invalid or missing API key"},
@@ -108,21 +94,24 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             request.state.user = await self._resolve_user_from_api_key(provided)
         except Exception:
             request.state.user = AuthenticatedUser(user_id=None, workspace_id=None)
+        if request.state.user.user_id is None:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid or missing API key"},
+            )
         return await call_next(request)
 
 
 async def get_api_key(request: Request) -> str:
-    api_key = os.getenv("API_KEY")
-    if not api_key:
-        return ""
-
-    provided = request.headers.get("X-API-Key")
+    provided = ApiKeyMiddleware._extract_api_key(request)
     if not provided:
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            provided = auth_header[7:]
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing API key",
+        )
 
-    if not provided or not hmac.compare_digest(provided, api_key):
+    user = _resolve_authenticated_user(request)
+    if user.user_id is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing API key",

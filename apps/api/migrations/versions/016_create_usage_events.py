@@ -59,7 +59,7 @@ def upgrade() -> None:
             nullable=False,
             server_default="200",
         ),
-        sa.Column("monthly_tts_seconds", sa.Integer(), nullable=False, server_default="3600"),
+        sa.Column("monthly_tts_requests", sa.Integer(), nullable=False, server_default="3600"),
         sa.Column(
             "monthly_cost_usd",
             sa.Numeric(10, 2),

@@ -30,7 +30,7 @@ class WorkspaceQuota(BaseModel):
     workspace_id: int
     monthly_llm_calls: int = 1000
     monthly_image_generations: int = 200
-    monthly_tts_seconds: int = 3600
+    monthly_tts_requests: int = 3600
     monthly_cost_usd: float = 50.0
     created_at: datetime
     updated_at: datetime

@@ -16,7 +16,7 @@ def upgrade() -> None:
         sa.Column("period_start", sa.DateTime(timezone=True), nullable=False),
         sa.Column("llm_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("image_count", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("tts_count", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("tts_request_count", sa.Integer(), nullable=False, server_default="0"),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),

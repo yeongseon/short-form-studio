@@ -93,7 +93,7 @@ class PostgresUsageStorage:
                 workspace_id,
                 monthly_llm_calls,
                 monthly_image_generations,
-                monthly_tts_seconds,
+                monthly_tts_requests,
                 monthly_cost_usd
             )
             VALUES ($1, $2, $3, $4, $5)
@@ -101,7 +101,7 @@ class PostgresUsageStorage:
             DO UPDATE SET
                 monthly_llm_calls = EXCLUDED.monthly_llm_calls,
                 monthly_image_generations = EXCLUDED.monthly_image_generations,
-                monthly_tts_seconds = EXCLUDED.monthly_tts_seconds,
+                monthly_tts_requests = EXCLUDED.monthly_tts_requests,
                 monthly_cost_usd = EXCLUDED.monthly_cost_usd,
                 updated_at = NOW()
             RETURNING *
@@ -109,7 +109,7 @@ class PostgresUsageStorage:
             workspace_id,
             quota["monthly_llm_calls"],
             quota["monthly_image_generations"],
-            quota["monthly_tts_seconds"],
+            quota["monthly_tts_requests"],
             quota["monthly_cost_usd"],
         )
         if saved is None:
@@ -135,7 +135,7 @@ class PostgresUsageStorage:
                             workspace_id,
                             monthly_llm_calls,
                             monthly_image_generations,
-                            monthly_tts_seconds,
+                            monthly_tts_requests,
                             monthly_cost_usd
                         )
                         VALUES ($1, 1000, 200, 3600, 50.00)
@@ -165,7 +165,10 @@ class PostgresUsageStorage:
                             ),
                             0
                         )::integer AS image_count,
-                        COALESCE(SUM(CASE WHEN operation_type = 'tts' THEN COALESCE(audio_seconds, 0) ELSE 0 END), 0)::double precision AS tts_seconds
+                        COALESCE(
+                            SUM(CASE WHEN operation_type IN ('tts', 'stt', 'render') THEN 1 ELSE 0 END),
+                            0
+                        )::integer AS tts_request_count
                     FROM usage_events
                     WHERE workspace_id = $1 AND created_at >= $2
                     """,
@@ -177,7 +180,7 @@ class PostgresUsageStorage:
 
                 reservation_row = await connection.fetchrow(
                     """
-                    SELECT llm_count, image_count, tts_count
+                    SELECT llm_count, image_count, tts_request_count
                     FROM workspace_quota_reservations
                     WHERE workspace_id = $1 AND period_start = $2
                     """,
@@ -186,7 +189,7 @@ class PostgresUsageStorage:
                 )
                 reserved_llm = int(reservation_row["llm_count"]) if reservation_row else 0
                 reserved_image = int(reservation_row["image_count"]) if reservation_row else 0
-                reserved_tts = int(reservation_row["tts_count"]) if reservation_row else 0
+                reserved_tts = int(reservation_row["tts_request_count"]) if reservation_row else 0
 
                 allowed = True
                 if operation_type == "llm":
@@ -197,12 +200,9 @@ class PostgresUsageStorage:
                     allowed = int(usage_row["image_count"]) + reserved_image < int(
                         quota["monthly_image_generations"]
                     )
-                # STT/render intentionally share the audio reservation bucket with
-                # TTS because workspace_quota_reservations currently has only
-                # llm_count, image_count, and tts_count columns.
                 elif operation_type in {"tts", "stt", "render"}:
-                    allowed = float(usage_row["tts_seconds"]) + reserved_tts < int(
-                        quota["monthly_tts_seconds"]
+                    allowed = int(usage_row["tts_request_count"]) + reserved_tts < int(
+                        quota["monthly_tts_requests"]
                     )
 
                 if not allowed:
@@ -218,14 +218,14 @@ class PostgresUsageStorage:
                         period_start,
                         llm_count,
                         image_count,
-                        tts_count
+                        tts_request_count
                     )
                     VALUES ($1, $2, $3, $4, $5)
                     ON CONFLICT (workspace_id, period_start)
                     DO UPDATE SET
                         llm_count = workspace_quota_reservations.llm_count + EXCLUDED.llm_count,
                         image_count = workspace_quota_reservations.image_count + EXCLUDED.image_count,
-                        tts_count = workspace_quota_reservations.tts_count + EXCLUDED.tts_count,
+                        tts_request_count = workspace_quota_reservations.tts_request_count + EXCLUDED.tts_request_count,
                         updated_at = NOW()
                     """,
                     workspace_id,
@@ -274,7 +274,7 @@ class PostgresUsageStorage:
                     SET
                         llm_count = GREATEST(0, llm_count - $3),
                         image_count = GREATEST(0, image_count - $4),
-                        tts_count = GREATEST(0, tts_count - $5),
+                        tts_request_count = GREATEST(0, tts_request_count - $5),
                         updated_at = NOW()
                     WHERE workspace_id = $1 AND period_start = $2
                     """,

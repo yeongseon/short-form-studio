@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 QUOTAS: dict[str, float] = {
     "monthly_llm_calls": 1000,
     "monthly_image_generations": 200,
-    "monthly_tts_seconds": 3600,
+    "monthly_tts_requests": 3600,
     "monthly_cost_usd": 50.0,
 }
 
@@ -105,7 +105,7 @@ class InMemoryUsageStorage:
             "workspace_id": workspace_id,
             "monthly_llm_calls": int(quota["monthly_llm_calls"]),
             "monthly_image_generations": int(quota["monthly_image_generations"]),
-            "monthly_tts_seconds": int(quota["monthly_tts_seconds"]),
+            "monthly_tts_requests": int(quota["monthly_tts_requests"]),
             "monthly_cost_usd": float(quota["monthly_cost_usd"]),
             "created_at": current["created_at"] if current else now,
             "updated_at": now,
@@ -127,12 +127,12 @@ class InMemoryUsageStorage:
                     {
                         "monthly_llm_calls": int(QUOTAS["monthly_llm_calls"]),
                         "monthly_image_generations": int(QUOTAS["monthly_image_generations"]),
-                        "monthly_tts_seconds": int(QUOTAS["monthly_tts_seconds"]),
+                        "monthly_tts_requests": int(QUOTAS["monthly_tts_requests"]),
                         "monthly_cost_usd": float(QUOTAS["monthly_cost_usd"]),
                     },
                 )
 
-            usage = {"llm": 0, "image_gen": 0, "tts": 0.0}
+            usage = {"llm": 0, "image_gen": 0, "tts_requests": 0}
             for row in self._events.values():
                 if row.get("workspace_id") != workspace_id or row["created_at"] < period_start:
                     continue
@@ -142,10 +142,12 @@ class InMemoryUsageStorage:
                 elif row_operation == "image_gen":
                     image_count = int(row.get("image_count") or 0)
                     usage["image_gen"] += image_count if image_count > 0 else 1
-                elif row_operation == "tts":
-                    usage["tts"] += float(row.get("audio_seconds") or 0.0)
+                elif row_operation in {"tts", "stt", "render"}:
+                    usage["tts_requests"] += 1
 
-            reserved = self._reservations.setdefault(key, {"llm": 0, "image_gen": 0, "tts": 0})
+            reserved = self._reservations.setdefault(
+                key, {"llm": 0, "image_gen": 0, "tts_requests": 0}
+            )
             if operation_type == "llm":
                 if usage["llm"] + reserved["llm"] >= int(quota["monthly_llm_calls"]):
                     return False
@@ -162,9 +164,11 @@ class InMemoryUsageStorage:
             # dedicated monthly_stt/monthly_render quota fields are added.
             # This keeps quota enforcement conservative without changing schema.
             if operation_type in {"tts", "stt", "render"}:
-                if usage["tts"] + reserved["tts"] >= int(quota["monthly_tts_seconds"]):
+                if usage["tts_requests"] + reserved["tts_requests"] >= int(
+                    quota["monthly_tts_requests"]
+                ):
                     return False
-                reserved["tts"] += 1
+                reserved["tts_requests"] += 1
                 return True
             return True
 
@@ -201,7 +205,7 @@ class InMemoryUsageStorage:
             elif operation_type == "image_gen":
                 reserved["image_gen"] = max(0, reserved["image_gen"] - decrement)
             elif operation_type in {"tts", "stt", "render"}:
-                reserved["tts"] = max(0, reserved["tts"] - decrement)
+                reserved["tts_requests"] = max(0, reserved["tts_requests"] - decrement)
 
 
 class UsageService:
@@ -209,10 +213,8 @@ class UsageService:
 
     Quota unit semantics:
     - `monthly_llm_calls` and `monthly_image_generations` are request/image-count based.
-    - `monthly_tts_seconds` is a legacy field name but is enforced as generic
-      audio/render request units for `tts`/`stt`/`render` operations.
-    - Reservation and release for `tts`/`stt`/`render` therefore use `units=1`
-      per request to match enforcement.
+    - `monthly_tts_requests` is request-count based for `tts`/`stt`/`render`.
+    - Reservation and release for `tts`/`stt`/`render` use `units=1` per request.
     """
 
     def __init__(self, storage: UsageStorageBackend):
@@ -317,7 +319,7 @@ class UsageService:
             audio_operation_count = sum(
                 summary.by_operation.get(op, 0) for op in ("tts", "stt", "render")
             )
-            if audio_operation_count >= quota.monthly_tts_seconds:
+            if audio_operation_count >= quota.monthly_tts_requests:
                 return "Monthly audio/render request quota exceeded"
         return None
 
@@ -346,7 +348,7 @@ class UsageService:
                 {
                     "monthly_llm_calls": int(QUOTAS["monthly_llm_calls"]),
                     "monthly_image_generations": int(QUOTAS["monthly_image_generations"]),
-                    "monthly_tts_seconds": int(QUOTAS["monthly_tts_seconds"]),
+                    "monthly_tts_requests": int(QUOTAS["monthly_tts_requests"]),
                     "monthly_cost_usd": float(QUOTAS["monthly_cost_usd"]),
                 },
             )
@@ -359,7 +361,9 @@ class UsageService:
             "monthly_image_generations": kwargs.get(
                 "monthly_image_generations", current.monthly_image_generations
             ),
-            "monthly_tts_seconds": kwargs.get("monthly_tts_seconds", current.monthly_tts_seconds),
+            "monthly_tts_requests": kwargs.get(
+                "monthly_tts_requests", current.monthly_tts_requests
+            ),
             "monthly_cost_usd": kwargs.get("monthly_cost_usd", current.monthly_cost_usd),
         }
         row = await self.storage.set_workspace_quota(workspace_id, payload)

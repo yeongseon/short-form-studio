@@ -120,7 +120,7 @@ def test_set_quota_and_get_quota_work() -> None:
             99,
             monthly_llm_calls=123,
             monthly_image_generations=45,
-            monthly_tts_seconds=678,
+            monthly_tts_requests=678,
             monthly_cost_usd=9.5,
         )
     )
@@ -129,7 +129,7 @@ def test_set_quota_and_get_quota_work() -> None:
     assert quota.workspace_id == 99
     assert quota.monthly_llm_calls == 123
     assert quota.monthly_image_generations == 45
-    assert quota.monthly_tts_seconds == 678
+    assert quota.monthly_tts_requests == 678
     assert quota.monthly_cost_usd == 9.5
 
 

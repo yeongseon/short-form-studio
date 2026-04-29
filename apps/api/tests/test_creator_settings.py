@@ -3,14 +3,30 @@
 """Tests for the settings endpoints."""
 
 import pytest
+from creator_service import db as db_module
 from httpx import ASGITransport, AsyncClient
 from shorts_api.main import app
 
 
 @pytest.fixture
-async def client():
+async def client(monkeypatch: pytest.MonkeyPatch):
+    api_key = "test-api-key"
+    api_key_hash = __import__("hashlib").sha256(api_key.encode("utf-8")).hexdigest()
+
+    async def fake_fetch_one(query: str, *args):
+        if "FROM api_keys" in query:
+            return {"user_id": 10} if args and args[0] == api_key_hash else None
+        if "FROM workspace_members" in query:
+            return None
+        return None
+
+    monkeypatch.setattr(db_module, "fetch_one", fake_fetch_one)
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with AsyncClient(
+        transport=transport,
+        base_url="http://test",
+        headers={"X-API-Key": api_key},
+    ) as ac:
         yield ac
 
 
@@ -94,14 +110,10 @@ async def test_api_keys_response_structure(client):
 @pytest.mark.asyncio
 async def test_settings_is_read_only(client):
     """POST/PUT/DELETE to settings should return 405 Method Not Allowed."""
-    response = await client.post(
-        "/api/creator/settings/api-keys", json={"key": "value"}
-    )
+    response = await client.post("/api/creator/settings/api-keys", json={"key": "value"})
     assert response.status_code == 405
 
-    response = await client.put(
-        "/api/creator/settings/api-keys", json={"key": "value"}
-    )
+    response = await client.put("/api/creator/settings/api-keys", json={"key": "value"})
     assert response.status_code == 405
 
     response = await client.delete("/api/creator/settings/api-keys")
