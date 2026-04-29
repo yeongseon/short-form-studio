@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import nullcontext
 from dataclasses import dataclass
@@ -8,10 +9,10 @@ from typing import Any
 
 
 class _NoOpInstrument:
-    def add(self, _value: int | float, attributes: dict[str, str] | None = None) -> None:
+    def add(self, _value: int | float, _attributes: dict[str, str] | None = None) -> None:
         return None
 
-    def record(self, _value: int | float, attributes: dict[str, str] | None = None) -> None:
+    def record(self, _value: int | float, _attributes: dict[str, str] | None = None) -> None:
         return None
 
 
@@ -35,6 +36,14 @@ class _TelemetryState:
 
 
 _STATE = _TelemetryState()
+
+
+class TraceContextFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        enriched = add_trace_context_to_log({})
+        for key, value in enriched.items():
+            setattr(record, key, value)
+        return True
 
 
 def _is_enabled() -> bool:
@@ -110,6 +119,10 @@ def init_telemetry(service_name: str) -> None:
         return
 
     _STATE.initialized = True
+    root_logger = logging.getLogger()
+    if not any(isinstance(existing, TraceContextFilter) for existing in root_logger.filters):
+        root_logger.addFilter(TraceContextFilter())
+
     if not _is_enabled():
         _STATE.enabled = False
         return

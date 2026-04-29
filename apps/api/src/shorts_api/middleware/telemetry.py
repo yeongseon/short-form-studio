@@ -15,17 +15,8 @@ class TelemetryMiddleware(BaseHTTPMiddleware):
 
     def __init__(self, app) -> None:
         super().__init__(app)
-        meter = _telemetry().get_meter("shorts_api.middleware.telemetry")
-        self._request_counter = meter.create_counter(
-            "http.server.requests",
-            unit="1",
-            description="Count of incoming HTTP requests",
-        )
-        self._request_latency = meter.create_histogram(
-            "http.server.request.duration",
-            unit="ms",
-            description="Request latency in milliseconds",
-        )
+        self._request_counter = None
+        self._request_latency = None
 
     @classmethod
     def _ensure_init(cls) -> None:
@@ -39,6 +30,19 @@ class TelemetryMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next) -> Response:
         self._ensure_init()
+        if self._request_counter is None or self._request_latency is None:
+            meter = _telemetry().get_meter("shorts_api.middleware.telemetry")
+            self._request_counter = meter.create_counter(
+                "http.server.requests",
+                unit="1",
+                description="Count of incoming HTTP requests",
+            )
+            self._request_latency = meter.create_histogram(
+                "http.server.request.duration",
+                unit="ms",
+                description="Request latency in milliseconds",
+            )
+
         tracer = _telemetry().get_tracer("shorts_api.middleware.telemetry")
 
         start = time.perf_counter()
@@ -50,7 +54,7 @@ class TelemetryMiddleware(BaseHTTPMiddleware):
             attributes={
                 "http.method": request.method,
                 "http.route": route_path,
-                "http.target": str(request.url),
+                "http.target": request.url.path,
             },
         ) as span:
             response = await call_next(request)
