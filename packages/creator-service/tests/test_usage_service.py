@@ -184,3 +184,40 @@ def test_check_workspace_quota_wrapper_uses_llm_default() -> None:
 
     assert allowed is False
     assert "LLM call quota exceeded" in reason
+
+
+def test_check_workspace_quota_image_gen_type() -> None:
+    original_service = usage_service
+    check_workspace_quota.__globals__["usage_service"] = UsageService(InMemoryUsageStorage())
+    try:
+        asyncio.run(
+            check_workspace_quota.__globals__["usage_service"].set_quota(
+                505, monthly_image_generations=1, monthly_cost_usd=100.0
+            )
+        )
+        asyncio.run(
+            check_workspace_quota.__globals__["usage_service"].record_usage(
+                workspace_id=505, run_id=1, provider="stability",
+                model_key="sd3", operation_type="image_gen", image_count=1,
+            )
+        )
+        allowed, reason = asyncio.run(check_workspace_quota(505, "image_gen"))
+    finally:
+        check_workspace_quota.__globals__["usage_service"] = original_service
+
+    assert allowed is False
+    assert "image generation quota" in reason.lower()
+
+
+def test_record_provider_call_image_gen() -> None:
+    original_service = usage_service
+    record_provider_call.__globals__["usage_service"] = UsageService(InMemoryUsageStorage())
+    try:
+        event = asyncio.run(
+            record_provider_call(1, "stability", "sd3", "image_gen", image_count=2, cost_usd=0.08)
+        )
+    finally:
+        record_provider_call.__globals__["usage_service"] = original_service
+
+    assert event.operation_type == "image_gen"
+    assert event.image_count == 2

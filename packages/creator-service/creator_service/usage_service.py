@@ -219,26 +219,67 @@ async def record_provider_call(
     run_id: int,
     provider_name: str,
     model: str,
-    input_tokens: int,
-    output_tokens: int,
-    cost_usd: float,
+    operation_type: str = "llm",
+    *,
+    input_tokens: int | None = None,
+    output_tokens: int | None = None,
+    image_count: int | None = None,
+    audio_seconds: float | None = None,
+    cost_usd: float | None = None,
+    workspace_id: int | None = None,
 ) -> UsageEvent:
-    """Called by worker tasks after each provider call completes. Workers should call this in their finally/success blocks."""
+    """Record a provider call from a worker task.
 
+    Call this after each successful provider invocation::
+
+        from creator_service.usage_service import record_provider_call
+
+        # After LLM call:
+        await record_provider_call(
+            run_id, "openai", "gpt-4o-mini", "llm",
+            input_tokens=500, output_tokens=200, cost_usd=0.001,
+        )
+
+        # After image generation:
+        await record_provider_call(
+            run_id, "stability", "sd3-medium", "image_gen",
+            image_count=1, cost_usd=0.04,
+        )
+
+        # After TTS:
+        await record_provider_call(
+            run_id, "elevenlabs", "multilingual-v2", "tts",
+            audio_seconds=30.5, cost_usd=0.05,
+        )
+    """
     return await usage_service.record_usage(
-        workspace_id=None,
+        workspace_id=workspace_id,
         run_id=run_id,
         provider=provider_name,
         model_key=model,
-        operation_type="llm",
+        operation_type=operation_type,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
+        image_count=image_count,
+        audio_seconds=audio_seconds,
         estimated_cost_usd=cost_usd,
         project_id=None,
     )
 
 
-async def check_workspace_quota(workspace_id: int) -> tuple[bool, str]:
-    """Called at task start to verify the workspace hasn't exceeded its monthly budget."""
+async def check_workspace_quota(
+    workspace_id: int, operation_type: str = "llm"
+) -> tuple[bool, str]:
+    """Check if a workspace can perform the given operation type.
 
-    return await usage_service.check_quota(workspace_id, operation_type="llm")
+    Call at task start to verify the workspace hasn't exceeded quota::
+
+        from creator_service.usage_service import check_workspace_quota
+
+        allowed, reason = await check_workspace_quota(workspace_id, "llm")
+        if not allowed:
+            raise QuotaExceededError(reason)
+
+    Supported operation_type values: 'llm', 'image_gen', 'tts'.
+    """
+    return await usage_service.check_quota(workspace_id, operation_type=operation_type)
