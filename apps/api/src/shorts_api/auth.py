@@ -7,12 +7,13 @@ middleware is a transparent pass-through so local development stays frictionless
 """
 
 import hmac
+import hashlib
 import logging
 import os
 from dataclasses import dataclass
 
 from creator_service.db import fetch_one
-from fastapi import HTTPException, Request
+from fastapi import Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
@@ -33,30 +34,8 @@ async def get_current_user(request: Request) -> CurrentUser:
 
 
 async def validate_workspace_header(request: Request) -> int | None:
-    request_workspace_id_raw = request.headers.get("X-Workspace-Id")
-    request_workspace_id: int | None = None
-    if request_workspace_id_raw is not None:
-        try:
-            request_workspace_id = int(request_workspace_id_raw)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid X-Workspace-Id header") from exc
-
     user = await get_current_user(request)
-    user_workspace_id = getattr(user, "workspace_id", None)
-
-    # Once merged with feat/user-workspace-model (#395), workspace_id is always populated on the user
-    if (
-        request_workspace_id is not None
-        and user_workspace_id is not None
-        and request_workspace_id != user_workspace_id
-    ):
-        raise HTTPException(status_code=403, detail="Forbidden")
-
-    if request_workspace_id is not None:
-        return request_workspace_id
-    if user_workspace_id is not None:
-        return user_workspace_id
-    return None
+    return getattr(user, "workspace_id", None)
 
 
 class ApiKeyMiddleware(BaseHTTPMiddleware):
@@ -66,56 +45,58 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._api_key = api_key or os.getenv("API_KEY")
 
-    async def _workspace_exists(self, workspace_id: int) -> bool:
-        if not os.getenv("DATABASE_URL"):
-            return False
+    async def _resolve_user(self, api_key: str) -> CurrentUser:
+        if not api_key or not os.getenv("DATABASE_URL"):
+            return CurrentUser()
+
+        key_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+        user_id: int | None = None
+
         try:
-            workspaces_table = await fetch_one(
+            api_key_row = await fetch_one(
                 """
-                SELECT 1 AS exists
-                FROM information_schema.tables
-                WHERE table_schema = ANY (current_schemas(false))
-                  AND table_name = 'workspaces'
+                SELECT user_id
+                FROM api_keys
+                WHERE key_hash = $1
+                  AND revoked_at IS NULL
+                ORDER BY created_at DESC
                 LIMIT 1
-                """
+                """,
+                key_hash,
             )
-
-            if workspaces_table is not None:
-                row = await fetch_one(
-                    "SELECT 1 AS exists FROM workspaces WHERE id = $1 LIMIT 1",
-                    workspace_id,
-                )
-                return row is not None
-
-            row = await fetch_one(
-                "SELECT 1 AS exists FROM creator_projects WHERE workspace_id = $1 LIMIT 1",
-                workspace_id,
-            )
-            return row is not None
+            if api_key_row is not None:
+                user_id = int(api_key_row["user_id"])
         except Exception:
-            _logger.warning(
-                "Failed to validate workspace id against DB", extra={"workspace_id": workspace_id}
+            _logger.debug("Failed to resolve user via api_keys table")
+
+        if user_id is None:
+            auth_subject = key_hash[:12]
+            user_row = await fetch_one(
+                "SELECT id FROM users WHERE auth_subject = $1 LIMIT 1",
+                auth_subject,
             )
-            return False
+            if user_row is None:
+                return CurrentUser()
+            user_id = int(user_row["id"])
 
-    async def _resolve_workspace(self, api_key: str, request: Request) -> CurrentUser:
-        if not api_key:
-            return CurrentUser(workspace_id=None, workspace_name=None)
-        requested_ws = request.headers.get("X-Workspace-Id")
-        if requested_ws is None:
-            return CurrentUser(workspace_id=None, workspace_name=None)
+        membership_row = await fetch_one(
+            """
+            SELECT wm.workspace_id, w.name AS workspace_name
+            FROM workspace_members wm
+            LEFT JOIN workspaces w ON w.id = wm.workspace_id
+            WHERE wm.user_id = $1
+            ORDER BY wm.workspace_id ASC
+            LIMIT 1
+            """,
+            user_id,
+        )
+        if membership_row is None:
+            return CurrentUser()
 
-        try:
-            ws_id = int(requested_ws)
-        except ValueError:
-            _logger.warning("Invalid X-Workspace-Id header", extra={"header": requested_ws})
-            return CurrentUser(workspace_id=None, workspace_name=None)
-
-        if not await self._workspace_exists(ws_id):
-            _logger.warning("Workspace id from header not found", extra={"workspace_id": ws_id})
-            return CurrentUser(workspace_id=None, workspace_name=None)
-
-        return CurrentUser(workspace_id=ws_id, workspace_name=f"workspace-{ws_id}")
+        return CurrentUser(
+            workspace_id=int(membership_row["workspace_id"]),
+            workspace_name=membership_row.get("workspace_name"),
+        )
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         # Skip auth when no key is configured (local dev)
@@ -149,5 +130,5 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
                 content={"detail": "Invalid or missing API key"},
             )
 
-        request.state.user = await self._resolve_workspace(provided, request)
+        request.state.user = await self._resolve_user(provided)
         return await call_next(request)

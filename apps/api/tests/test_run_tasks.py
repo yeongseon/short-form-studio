@@ -8,6 +8,7 @@ from shorts_api.main import app
 
 class StubRun(BaseModel):
     id: int
+    project_id: int = 1
 
 
 class StubTask(BaseModel):
@@ -59,6 +60,24 @@ class StubTaskTrackingService:
         ]
 
 
+class StubProject(BaseModel):
+    workspace_id: int = 1
+
+
+class StubProjectService:
+    async def get_project(self, project_id: int) -> StubProject | None:
+        _ = project_id
+        return StubProject(workspace_id=1)
+
+
+async def _authorized_workspace(_: object) -> int:
+    return 1
+
+
+async def _missing_workspace(_: object) -> int | None:
+    return None
+
+
 @pytest.fixture
 def stub_services(monkeypatch: pytest.MonkeyPatch) -> None:
     for route in app.routes:
@@ -68,6 +87,10 @@ def stub_services(monkeypatch: pytest.MonkeyPatch) -> None:
                 route.endpoint.__globals__,
                 "task_tracking_service",
                 StubTaskTrackingService(),
+            )
+            monkeypatch.setitem(route.endpoint.__globals__, "project_service", StubProjectService())
+            monkeypatch.setitem(
+                route.endpoint.__globals__, "validate_workspace_header", _authorized_workspace
             )
 
 
@@ -88,3 +111,18 @@ async def test_get_run_tasks_nonexistent_run_returns_404(client, stub_services) 
     response = await client.get("/api/creator/runs/999/tasks")
     assert response.status_code == 404
     assert response.json() == {"detail": "Run not found"}
+
+
+@pytest.mark.asyncio
+async def test_get_run_tasks_requires_authentication(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for route in app.routes:
+        if isinstance(route, APIRoute) and route.name == "list_run_tasks":
+            monkeypatch.setitem(
+                route.endpoint.__globals__, "validate_workspace_header", _missing_workspace
+            )
+
+    response = await client.get("/api/creator/runs/1/tasks")
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Authentication required"}
