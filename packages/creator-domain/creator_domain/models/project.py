@@ -13,11 +13,12 @@ class Project(BaseModel):
     url_source: str | None = None
     json_script: str | None = None
     status: Literal["draft", "active", "completed", "archived"] = "draft"
+    workspace_id: int | None = None
     created_at: datetime
     updated_at: datetime
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Project":
+    def from_dict(cls, data: dict[str, object]) -> "Project":
         return cls.model_validate(data)
 
     def to_json(self) -> str:

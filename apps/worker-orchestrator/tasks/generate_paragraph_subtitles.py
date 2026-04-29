@@ -219,6 +219,23 @@ def generate_paragraph_subtitles(
                     f"for run {run_id} section {section_id}"
                 ) from exc
 
+            from creator_service.artifact_storage_integration import store_artifact_file
+
+            try:
+                uploaded = store_artifact_file(
+                    run_id, subtitle_path, f"application/{subtitle_format}"
+                )
+            except Exception as exc:
+                logger.error(
+                    "Failed to upload artifact %s to remote storage: %s",
+                    subtitle_path,
+                    exc,
+                )
+                raise
+
+            storage_provider = uploaded.storage_provider
+            storage_key = uploaded.key
+
             # 4. Save per-paragraph subtitle artifact
             artifact = await _subtitle_service.create_paragraph_artifact(
                 run_id=run_id,
@@ -227,6 +244,8 @@ def generate_paragraph_subtitles(
                 fmt=subtitle_format,
                 model_used=subtitle_model,
                 provider_type=entry.provider_type,
+                storage_provider=storage_provider,
+                storage_key=storage_key,
             )
         finally:
             if lock_acquired:

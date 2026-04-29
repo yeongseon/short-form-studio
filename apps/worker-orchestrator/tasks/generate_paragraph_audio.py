@@ -207,6 +207,21 @@ def generate_paragraph_audio(
                     f"for run {run_id} section {section_id}"
                 ) from exc
 
+            from creator_service.artifact_storage_integration import store_artifact_file
+
+            try:
+                uploaded = store_artifact_file(run_id, audio_path, "audio/wav")
+            except Exception as exc:
+                logger.error(
+                    "Failed to upload artifact %s to remote storage: %s",
+                    audio_path,
+                    exc,
+                )
+                raise
+
+            storage_provider = uploaded.storage_provider
+            storage_key = uploaded.key
+
             # 4. Save per-paragraph artifact
             artifact = await _audio_service.create_paragraph_artifact(
                 run_id=run_id,
@@ -215,6 +230,8 @@ def generate_paragraph_audio(
                 model_used=tts_model,
                 provider_type=entry.provider_type,
                 voice=voice,
+                storage_provider=storage_provider,
+                storage_key=storage_key,
             )
         finally:
             if lock_acquired:

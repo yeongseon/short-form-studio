@@ -300,10 +300,27 @@ def render_video(
                     ) from exc
                 raise ProviderError(f"Provider failed video render for run {run_id}") from exc
 
+            from creator_service.artifact_storage_integration import store_artifact_file
+
+            try:
+                uploaded = store_artifact_file(run_id, output_path, "video/mp4")
+            except Exception as exc:
+                logger.error(
+                    "Failed to upload artifact %s to remote storage: %s",
+                    output_path,
+                    exc,
+                )
+                raise
+
+            storage_provider = uploaded.storage_provider
+            storage_key = uploaded.key
+
             artifact = await _render_service.create_artifact(
                 run_id=run_id,
                 path=output_path,
                 render_profile=render_profile,
+                storage_provider=storage_provider,
+                storage_key=storage_key,
             )
 
             applied, _ = await _run_service.storage.conditional_update_run(

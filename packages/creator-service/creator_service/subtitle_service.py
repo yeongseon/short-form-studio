@@ -41,6 +41,7 @@ class SubtitleStorageBackend(Protocol):
     async def get_latest_by_run(self, run_id: int) -> dict[str, Any] | None:
         """Fetch the most recent artifact for a run."""
         ...
+
     async def get_by_section(self, run_id: int, section_id: str) -> dict[str, Any] | None:
         """Fetch the latest artifact for a run+section."""
         ...
@@ -52,7 +53,6 @@ class SubtitleStorageBackend(Protocol):
     async def delete_by_section(self, run_id: int, section_id: str) -> None:
         """Delete artifacts for a run+section."""
         ...
-
 
 
 # ---------------------------------------------------------------------------
@@ -86,14 +86,9 @@ class InMemorySubtitleStorage:
 
     async def list_by_run(self, run_id: int) -> list[dict[str, Any]]:
         run_artifacts = [
-            a
-            for a in self._artifacts
-            if a["run_id"] == run_id and a.get("scene_id") is None
+            a for a in self._artifacts if a["run_id"] == run_id and a.get("scene_id") is None
         ]
-        return [
-            dict(a)
-            for a in sorted(run_artifacts, key=lambda x: x["created_at"], reverse=True)
-        ]
+        return [dict(a) for a in sorted(run_artifacts, key=lambda x: x["created_at"], reverse=True)]
 
     async def get_latest_by_run(self, run_id: int) -> dict[str, Any] | None:
         artifacts = await self.list_by_run(run_id)
@@ -101,8 +96,7 @@ class InMemorySubtitleStorage:
 
     async def get_by_section(self, run_id: int, section_id: str) -> dict[str, Any] | None:
         run_artifacts = [
-            a for a in self._artifacts
-            if a["run_id"] == run_id and a.get("scene_id") == section_id
+            a for a in self._artifacts if a["run_id"] == run_id and a.get("scene_id") == section_id
         ]
         if not run_artifacts:
             return None
@@ -110,13 +104,15 @@ class InMemorySubtitleStorage:
 
     async def list_by_run_sections(self, run_id: int) -> list[dict[str, Any]]:
         return [
-            dict(a) for a in self._artifacts
+            dict(a)
+            for a in self._artifacts
             if a["run_id"] == run_id and a.get("scene_id") is not None
         ]
 
     async def delete_by_section(self, run_id: int, section_id: str) -> None:
         self._artifacts = [
-            a for a in self._artifacts
+            a
+            for a in self._artifacts
             if not (a["run_id"] == run_id and a.get("scene_id") == section_id)
         ]
 
@@ -140,6 +136,8 @@ class SubtitleService:
         format: str = "srt",
         model_used: str | None = None,
         provider_type: str | None = None,
+        storage_provider: str | None = None,
+        storage_key: str | None = None,
     ) -> SubtitleArtifact:
         """Create a new subtitle artifact for a run.
 
@@ -153,6 +151,10 @@ class SubtitleService:
             metadata["model_used"] = model_used
         if provider_type is not None:
             metadata["provider_type"] = provider_type
+        if storage_provider is not None:
+            metadata["storage_provider"] = storage_provider
+        if storage_key is not None:
+            metadata["storage_key"] = storage_key
 
         row = {
             "run_id": run_id,
@@ -195,6 +197,8 @@ class SubtitleService:
         fmt: str = "srt",
         model_used: str | None = None,
         provider_type: str | None = None,
+        storage_provider: str | None = None,
+        storage_key: str | None = None,
     ) -> SubtitleArtifact:
         """Create a subtitle artifact for a specific paragraph/section."""
         metadata: dict[str, object] = {}
@@ -204,6 +208,10 @@ class SubtitleService:
             metadata["model_used"] = model_used
         if provider_type is not None:
             metadata["provider_type"] = provider_type
+        if storage_provider is not None:
+            metadata["storage_provider"] = storage_provider
+        if storage_key is not None:
+            metadata["storage_key"] = storage_key
 
         row: dict[str, object] = {
             "run_id": run_id,
@@ -214,7 +222,9 @@ class SubtitleService:
         saved = await self.storage.save_artifact(row)
         return self._row_to_artifact(saved)
 
-    async def get_paragraph_subtitles(self, run_id: int, section_id: str) -> SubtitleArtifact | None:
+    async def get_paragraph_subtitles(
+        self, run_id: int, section_id: str
+    ) -> SubtitleArtifact | None:
         """Get the latest subtitle artifact for a specific paragraph."""
         row = await self.storage.get_by_section(run_id, section_id)
         if row is None:
@@ -229,6 +239,7 @@ class SubtitleService:
     async def delete_paragraph_subtitles(self, run_id: int, section_id: str) -> None:
         """Delete subtitle artifacts for a specific paragraph (invalidation)."""
         await self.storage.delete_by_section(run_id, section_id)
+
     # -- Internal -----------------------------------------------------------
 
     @staticmethod

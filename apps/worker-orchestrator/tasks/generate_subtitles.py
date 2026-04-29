@@ -232,6 +232,23 @@ def generate_subtitles(
                         f"Provider failed subtitle generation for run {run_id}"
                     ) from exc
 
+                from creator_service.artifact_storage_integration import store_artifact_file
+
+                try:
+                    uploaded = store_artifact_file(
+                        run_id, subtitle_path, f"application/{subtitle_format}"
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "Failed to upload artifact %s to remote storage: %s",
+                        subtitle_path,
+                        exc,
+                    )
+                    raise
+
+                storage_provider = uploaded.storage_provider
+                storage_key = uploaded.key
+
                 # 7. Save subtitle artifact via service.
                 artifact = await _subtitle_service.create_artifact(
                     run_id=run_id,
@@ -239,6 +256,8 @@ def generate_subtitles(
                     format=subtitle_format,
                     model_used=subtitle_model,
                     provider_type=entry.provider_type,
+                    storage_provider=storage_provider,
+                    storage_key=storage_key,
                 )
 
                 # 8. Atomic success transition.

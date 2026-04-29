@@ -14,6 +14,7 @@ import logging
 import os
 import json
 from datetime import datetime, timezone
+import resource
 from typing import Any
 
 from celery import Celery
@@ -26,6 +27,31 @@ try:
     import redis
 except ImportError:
     redis = None
+from creator_service.production_checks import validate_production_config
+
+
+def _parse_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return default
+    if parsed <= 0:
+        return default
+    return parsed
+
+
+MAX_MEMORY_MB = _parse_int_env("MAX_MEMORY_MB", 1024)
+
+
+def _apply_resource_limits() -> None:
+    memory_limit_bytes = MAX_MEMORY_MB * 1024 * 1024
+    resource.setrlimit(resource.RLIMIT_AS, (memory_limit_bytes, memory_limit_bytes))
+
+
+_apply_resource_limits()
 
 redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
 dlq_max_size = max(1, int(os.getenv("DLQ_MAX_SIZE", "10000")))
@@ -68,6 +94,8 @@ celery_app.conf.update(
     # Cancel long-running tasks if worker disconnects
     worker_cancel_long_running_tasks_on_connection_loss=True,
 )
+
+validate_production_config(service_kind="worker")
 
 
 @after_setup_logger.connect

@@ -216,6 +216,21 @@ def generate_audio(
                         f"Provider failed audio generation for run {run_id}"
                     ) from exc
 
+                from creator_service.artifact_storage_integration import store_artifact_file
+
+                try:
+                    uploaded = store_artifact_file(run_id, audio_path, "audio/wav")
+                except Exception as exc:
+                    logger.error(
+                        "Failed to upload artifact %s to remote storage: %s",
+                        audio_path,
+                        exc,
+                    )
+                    raise
+
+                storage_provider = uploaded.storage_provider
+                storage_key = uploaded.key
+
                 # 6. Save audio artifact via service.
                 artifact = await _audio_service.create_artifact(
                     run_id=run_id,
@@ -223,6 +238,8 @@ def generate_audio(
                     model_used=tts_model,
                     provider_type=entry.provider_type,
                     voice=voice,
+                    storage_provider=storage_provider,
+                    storage_key=storage_key,
                 )
 
                 # 7. Atomic success transition.

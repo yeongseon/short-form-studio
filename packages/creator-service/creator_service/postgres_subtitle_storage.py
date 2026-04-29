@@ -9,10 +9,25 @@ from .db import fetch_all, fetch_one
 class PostgresSubtitleStorage:
     async def save_artifact(self, row: dict[str, Any]) -> dict[str, Any]:
         metadata_json = row.get("metadata_json")
+        metadata_dict = metadata_json if isinstance(metadata_json, dict) else {}
         if isinstance(metadata_json, dict):
             metadata_payload: str | None = json.dumps(metadata_json)
         else:
             metadata_payload = metadata_json
+
+        storage_backend = (
+            row.get("storage_backend")
+            or row.get("storage_provider")
+            or metadata_dict.get("storage_backend")
+            or metadata_dict.get("storage_provider")
+        )
+        storage_key = row.get("storage_key") or metadata_dict.get("storage_key")
+        content_type = (
+            row.get("content_type") or row.get("mime_type") or metadata_dict.get("content_type")
+        )
+        size_bytes = (
+            row.get("size_bytes") or row.get("file_size_bytes") or metadata_dict.get("size_bytes")
+        )
 
         saved = await fetch_one(
             """
@@ -23,9 +38,13 @@ class PostgresSubtitleStorage:
                 file_path,
                 file_size_bytes,
                 mime_type,
-                metadata_json
+                metadata_json,
+                storage_backend,
+                storage_key,
+                content_type,
+                size_bytes
             )
-            VALUES ($1, 'subtitle', $2, $3, $4, $5, $6)
+            VALUES ($1, 'subtitle', $2, $3, $4, $5, $6, $7, $8, $9, $10)
             RETURNING *
             """,
             row.get("run_id"),
@@ -34,6 +53,10 @@ class PostgresSubtitleStorage:
             row.get("file_size_bytes"),
             row.get("mime_type"),
             metadata_payload,
+            storage_backend,
+            storage_key,
+            content_type,
+            size_bytes,
         )
         if saved is None:
             raise ValueError("Failed to save subtitle artifact")
