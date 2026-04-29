@@ -67,8 +67,10 @@ from creator_domain.sanitize import sanitize_path_component
 from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
+from creator_service.cost_config import COST_SCENE_IMAGE
 from creator_service.run_service import run_service as _run_service
 from creator_service.task_tracking_service import task_tracking_service as _task_tracking_service
+from creator_service.usage_service import record_provider_call, resolve_workspace_id_from_run
 from creator_service.visual_asset_service import visual_asset_service as _visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
 
@@ -214,6 +216,8 @@ def generate_scene_image(
                 )
             if run.get("status") == "cancelled":
                 raise _StageGuardError(f"Run {run_id} is cancelled")
+            workspace_id = await resolve_workspace_id_from_run(run_id)
+            project_id = run.get("project_id")
 
             # 2. Fetch active visual plan.
             plan = await _visual_plan_service.get_active_plan(run_id)
@@ -306,6 +310,18 @@ def generate_scene_image(
                                 "Provider failed scene image generation "
                                 f"for run {run_id} scene {target_scene.scene_id}"
                             ) from exc
+                        try:
+                            await record_provider_call(
+                                run_id,
+                                entry.provider_type,
+                                model_key,
+                                "image_gen",
+                                cost_usd=COST_SCENE_IMAGE,
+                                workspace_id=workspace_id,
+                                project_id=project_id,
+                            )
+                        except Exception:
+                            logger.warning("Failed to record provider usage", exc_info=True)
 
                         from creator_service.artifact_storage_integration import (
                             store_artifact_file,

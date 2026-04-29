@@ -2,6 +2,7 @@
 
 from creator_domain.models import TRIGGER_POLICY
 from creator_service.audio_service import audio_service
+from creator_service.project_service import project_service
 from creator_service.render_service import render_service
 from creator_service.run_service import run_service
 from creator_service.subtitle_service import subtitle_service
@@ -29,6 +30,25 @@ from shorts_api.routes.creator_runs_utils import (
 from shorts_api.routes.creator_runs_visuals import ImageTuningParams
 
 router = APIRouter(tags=["runs"])
+
+
+async def _enforce_run_quota(run_id: int, operation_type: str) -> int:
+    from creator_service.usage_service import check_workspace_quota
+
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    project = await project_service.get_project(run.project_id)
+    if project is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    workspace_id = getattr(project, "workspace_id", None)
+    if workspace_id is None:
+        raise HTTPException(status_code=400, detail="Project workspace is not configured")
+
+    allowed, reason = await check_workspace_quota(int(workspace_id), operation_type=operation_type)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=reason)
+    return int(workspace_id)
 
 
 class RegenerateSceneImageRequest(BaseModel):
@@ -65,6 +85,7 @@ async def generate_scene_image_endpoint(
         )
 
     validate_model_key(effective_request.model_key)
+    workspace_id = await _enforce_run_quota(run_id, "image_gen")
     try:
         task_id = dispatch_generate_scene_image(
             run_id=run_id,
@@ -77,6 +98,9 @@ async def generate_scene_image_endpoint(
             else None,
         )
     except Exception:
+        from creator_service.usage_service import cancel_workspace_quota_reservation
+
+        await cancel_workspace_quota_reservation(workspace_id, "image_gen")
         raise HTTPException(
             status_code=503,
             detail="Failed to enqueue image generation task",
@@ -112,6 +136,7 @@ async def regenerate_scene_image_endpoint(
         )
 
     validate_model_key(request.model_key)
+    workspace_id = await _enforce_run_quota(run_id, "image_gen")
     try:
         task_id = dispatch_generate_scene_image(
             run_id=run_id,
@@ -122,6 +147,9 @@ async def regenerate_scene_image_endpoint(
             image_params=request.image_params.model_dump() if request.image_params else None,
         )
     except Exception:
+        from creator_service.usage_service import cancel_workspace_quota_reservation
+
+        await cancel_workspace_quota_reservation(workspace_id, "image_gen")
         raise HTTPException(
             status_code=503,
             detail="Failed to enqueue image generation task",
@@ -226,6 +254,7 @@ async def generate_audio_trigger(run_id: int, request: GenerateAudioRequest) -> 
         rollback_stage=run.current_stage,
         rollback_restart_from=run.restart_from,
         enqueue_error_detail="Failed to enqueue audio generation task",
+        quota_operation_type="tts",
     )
 
 
@@ -262,6 +291,7 @@ async def generate_subtitles_trigger(
         rollback_stage=run.current_stage,
         rollback_restart_from=run.restart_from,
         enqueue_error_detail="Failed to enqueue subtitle generation task",
+        quota_operation_type="stt",
     )
 
 
@@ -295,6 +325,7 @@ async def render_trigger(run_id: int, request: RenderRequest) -> dict[str, objec
         rollback_stage=run.current_stage,
         rollback_restart_from=run.restart_from,
         enqueue_error_detail="Failed to enqueue render task",
+        quota_operation_type="render",
     )
 
 

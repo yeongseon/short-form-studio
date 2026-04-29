@@ -169,7 +169,9 @@ async def approve_visual_plan(run_id: int, request: ApproveVisualPlanRequest) ->
 
 
 @router.post("/runs/{run_id}/approve-visual-assets")
-async def approve_visual_assets(run_id: int, request: ApproveVisualAssetsRequest) -> dict[str, object]:
+async def approve_visual_assets(
+    run_id: int, request: ApproveVisualAssetsRequest
+) -> dict[str, object]:
     try:
         updated_run = await stage_review_service.approve_and_advance(
             run_service=run_service,
@@ -229,4 +231,5 @@ async def generate_script_trigger(run_id: int, request: GenerateScriptRequest) -
         rollback_restart_from=run.restart_from,
         enqueue_error_detail="Failed to enqueue script generation task",
         restart_from_stage="SCRIPT_REVIEW",
+        quota_operation_type="llm",
     )

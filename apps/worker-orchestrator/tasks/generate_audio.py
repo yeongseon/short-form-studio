@@ -40,6 +40,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import wave
 from datetime import datetime, timezone
 from typing import Any
 
@@ -56,9 +57,11 @@ from creator_provider.exceptions import ProviderError, ProviderTimeoutError, Rat
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.audio_service import audio_service as _audio_service
+from creator_service.cost_config import COST_AUDIO_GENERATION
 from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
 from creator_service.task_tracking_service import task_tracking_service as _task_tracking_service
+from creator_service.usage_service import record_provider_call, resolve_workspace_id_from_run
 
 logger = logging.getLogger(__name__)
 
@@ -92,6 +95,18 @@ def _get_redis_client() -> Any | None:
     if redis is None:
         return None
     return redis.Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"))
+
+
+def _get_wav_duration_seconds(path: str) -> float | None:
+    try:
+        with wave.open(path, "rb") as wav_file:
+            frame_rate = wav_file.getframerate()
+            if frame_rate <= 0:
+                return None
+            return wav_file.getnframes() / float(frame_rate)
+    except Exception:
+        logger.warning("Could not determine audio duration for %s", path, exc_info=True)
+        return None
 
 
 async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
@@ -163,6 +178,8 @@ def generate_audio(
                 )
             if run.get("status") == "cancelled":
                 raise _StageGuardError(f"Run {run_id} is cancelled")
+            workspace_id = await resolve_workspace_id_from_run(run_id)
+            project_id = run.get("project_id")
 
             # 2. Fetch approved script draft.
             draft = await _script_service.get_active_draft(run_id)
@@ -221,6 +238,19 @@ def generate_audio(
                     raise ProviderError(
                         f"Provider failed audio generation for run {run_id}"
                     ) from exc
+                try:
+                    await record_provider_call(
+                        run_id,
+                        entry.provider_type,
+                        tts_model,
+                        "tts",
+                        audio_seconds=_get_wav_duration_seconds(audio_path),
+                        cost_usd=COST_AUDIO_GENERATION,
+                        workspace_id=workspace_id,
+                        project_id=project_id,
+                    )
+                except Exception:
+                    logger.warning("Failed to record provider usage", exc_info=True)
 
                 from creator_service.artifact_storage_integration import store_artifact_file
 

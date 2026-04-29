@@ -54,9 +54,11 @@ from creator_domain.models.stage import RunStage
 from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
+from creator_service.cost_config import COST_SCRIPT_GENERATION
 from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
 from creator_service.task_tracking_service import task_tracking_service as _task_tracking_service
+from creator_service.usage_service import record_provider_call, resolve_workspace_id_from_run
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +176,8 @@ def generate_script(
                 )
             if run.get("status") == "cancelled":
                 raise _StageGuardError(f"Run {run_id} is cancelled")
+            workspace_id = await resolve_workspace_id_from_run(run_id)
+            project_id = run.get("project_id")
 
             # 2. Provider resolution (sync — blocks briefly, fine in Celery worker).
             registry = ProviderRegistry.create_default()
@@ -212,6 +216,18 @@ def generate_script(
                     raise ProviderError(
                         f"Provider failed script generation for run {run_id}"
                     ) from exc
+                try:
+                    await record_provider_call(
+                        run_id,
+                        entry.provider_type,
+                        model_key,
+                        "llm",
+                        cost_usd=COST_SCRIPT_GENERATION,
+                        workspace_id=workspace_id,
+                        project_id=project_id,
+                    )
+                except Exception:
+                    logger.warning("Failed to record provider usage", exc_info=True)
                 await _script_service.save_draft(
                     run_id=run_id,
                     source_type="generated_by_model",

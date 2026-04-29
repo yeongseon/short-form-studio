@@ -41,6 +41,7 @@ from shorts_api.routes.creator_runs_visuals import router as runs_visuals_router
 from shorts_api.routes.creator_script import router as script_router
 from shorts_api.routes.creator_script import run_script_router
 from shorts_api.routes.creator_settings import router as settings_router
+from shorts_api.routes.creator_usage import router as usage_router
 from shorts_api.routes.creator_visual_plan import router as visual_plan_router
 from shorts_api.routes.creator_workspaces import router as workspaces_router
 from shorts_api.routes.creator_users import router as users_router
@@ -273,6 +274,7 @@ app.include_router(script_router, prefix="/api/creator")
 app.include_router(run_script_router, prefix="/api/creator")
 app.include_router(visual_plan_router, prefix="/api/creator")
 app.include_router(settings_router, prefix="/api/creator")
+app.include_router(usage_router, prefix="/api/creator")
 app.include_router(workspaces_router, prefix="/api/creator")
 app.include_router(users_router, prefix="/api/creator")
 

@@ -271,8 +271,32 @@ async def cas_dispatch_with_rollback(
     rollback_restart_from: str | None,
     enqueue_error_detail: str,
     restart_from_stage: str | None = None,
+    quota_operation_type: str | None = None,
 ) -> dict[str, object]:
     run_service_obj = cast(Any, run_service)
+    workspace_id_for_reservation: int | None = None
+    if quota_operation_type is not None:
+        from creator_service.project_service import project_service
+        from creator_service.usage_service import check_workspace_quota
+
+        run = await run_service_obj.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        project = await project_service.get_project(run.project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        workspace_id = cast(int | None, getattr(project, "workspace_id", None))
+        if workspace_id is None:
+            raise HTTPException(status_code=400, detail="Project workspace is not configured")
+        workspace_id_for_reservation = workspace_id
+
+        allowed, reason = await check_workspace_quota(
+            workspace_id,
+            operation_type=quota_operation_type,
+        )
+        if not allowed:
+            raise HTTPException(status_code=429, detail=reason)
+
     updates: dict[str, object] = {"current_stage": target_stage}
     restart_stage = restart_from_stage or target_stage
     if rollback_stage == restart_stage:
@@ -294,6 +318,13 @@ async def cas_dispatch_with_rollback(
     try:
         task_id = dispatcher(**dict(dispatcher_args))
     except Exception:
+        if workspace_id_for_reservation is not None and quota_operation_type is not None:
+            from creator_service.usage_service import cancel_workspace_quota_reservation
+
+            await cancel_workspace_quota_reservation(
+                workspace_id_for_reservation,
+                quota_operation_type,
+            )
         await run_service_obj.storage.conditional_update_run(
             run_id,
             {"current_stage": rollback_stage, "restart_from": rollback_restart_from},
