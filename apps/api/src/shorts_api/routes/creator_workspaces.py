@@ -4,14 +4,14 @@ from typing import Any
 from creator_service.db import get_pool
 from fastapi import APIRouter, Depends, HTTPException
 
-from shorts_api.auth import get_current_user
+from shorts_api.auth import require_current_user
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 
 
 @router.get("")
 async def list_workspaces(
-    user: Any = Depends(get_current_user),
+    user: Any = Depends(require_current_user),
 ) -> dict[str, list[dict[str, int | str]]]:
     user_id = getattr(user, "user_id", None)
     if not isinstance(user_id, int):
