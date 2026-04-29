@@ -200,12 +200,10 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
 
         user_id = await self._resolve_user_id_from_api_key(provided)
         if user_id is None:
-            if self._api_key and hmac.compare_digest(provided, self._api_key):
-                user = CurrentUser()
-                request.state.user = user
-                _current_user_ctx.set(user)
-                return await call_next(request)
-            return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "API key is not associated with any user"},
+            )
 
         member_workspace_ids = await self._resolve_member_workspaces(user_id)
         if not member_workspace_ids:
