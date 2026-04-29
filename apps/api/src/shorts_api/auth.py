@@ -1,19 +1,10 @@
-"""Optional API-key authentication middleware.
+"""API-key authentication helpers."""
 
-When the ``API_KEY`` environment variable is set, every request (except health
-checks) must carry a matching key via the ``X-API-Key`` header or the standard
-``Authorization: Bearer <key>`` header.  When the variable is unset the
-middleware is a transparent pass-through so local development stays frictionless.
-"""
-
-import hmac
 import hashlib
-import os
 
+from creator_service.db import fetch_one
 from creator_service.workspace_service import workspace_service
-from creator_service.user_service import user_service
 from fastapi import Depends, HTTPException, Request
-from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 
@@ -22,17 +13,12 @@ _PUBLIC_PATHS = frozenset({"/healthz"})
 
 
 class ApiKeyMiddleware(BaseHTTPMiddleware):
-    """Starlette middleware that enforces an optional API key."""
+    """Starlette middleware that keeps public-path behavior."""
 
     def __init__(self, app, *, api_key: str | None = None) -> None:
         super().__init__(app)
-        self._api_key = api_key or os.getenv("API_KEY")
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        # Skip auth when no key is configured (local dev)
-        if not self._api_key:
-            return await call_next(request)
-
         # Always allow CORS preflight requests (OPTIONS with Origin header)
         if request.method == "OPTIONS" and "origin" in request.headers:
             return await call_next(request)
@@ -41,27 +27,11 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         if request.url.path in _PUBLIC_PATHS:
             return await call_next(request)
 
-        # Docs paths go through normal auth when API_KEY is set
-        # (they were removed from _PUBLIC_PATHS so they're not auto-allowed)
-
-        # Check header only (never accept keys via query params to avoid log leakage)
-        provided = request.headers.get("X-API-Key")
-        if not provided:
-            # Fall back to Authorization: Bearer <key>
-            auth_header = request.headers.get("Authorization", "")
-            if auth_header.startswith("Bearer "):
-                provided = auth_header[7:]  # len("Bearer ") == 7
-        if not provided or not hmac.compare_digest(provided, self._api_key):
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "Invalid or missing API key"},
-            )
-
         return await call_next(request)
 
 
 async def get_current_user(request: Request) -> dict[str, str | int | None]:
-    """Resolve user from API key only. Returns 401 if no valid key."""
+    """Resolve user from api_keys table and workspace membership."""
     api_key = (
         request.headers.get("X-API-Key")
         or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
@@ -69,18 +39,36 @@ async def get_current_user(request: Request) -> dict[str, str | int | None]:
     if not api_key:
         raise HTTPException(status_code=401, detail="API key required")
 
-    fingerprint = hashlib.sha256(api_key.encode()).hexdigest()[:12]
-    user = await user_service.get_user_by_auth("api_key", fingerprint)
-    if not user:
+    key_hash = hashlib.sha256(api_key.encode()).hexdigest()
+    key_row = await fetch_one(
+        """
+        SELECT user_id
+        FROM api_keys
+        WHERE key_hash = $1 AND revoked_at IS NULL
+        LIMIT 1
+        """,
+        key_hash,
+    )
+    if key_row is None:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-    workspaces = await workspace_service.list_user_workspaces(user.id)
-    workspace_id = workspaces[0].id if workspaces else None
+    user_id = key_row["user_id"]
+    membership_row = await fetch_one(
+        """
+        SELECT workspace_id
+        FROM workspace_members
+        WHERE user_id = $1
+        ORDER BY workspace_id ASC
+        LIMIT 1
+        """,
+        user_id,
+    )
+    workspace_id = membership_row["workspace_id"] if membership_row is not None else None
 
     return {
-        "user_id": user.id,
+        "user_id": user_id,
         "auth_provider": "api_key",
-        "auth_subject": fingerprint,
+        "auth_subject": key_hash,
         "workspace_id": workspace_id,
     }
 
