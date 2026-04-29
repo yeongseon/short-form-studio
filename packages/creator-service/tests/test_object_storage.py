@@ -39,13 +39,13 @@ def test_upload_binary_io_returns_storage_result(tmp_path):
     assert result.storage_provider == "local"
 
 
-def test_download_url_returns_local_path(tmp_path):
+def test_download_url_returns_artifact_api_path(tmp_path):
     backend = _object_storage_module().LocalStorageBackend(root=str(tmp_path))
     key = "run-3/image.png"
 
     url = backend.download_url(key)
 
-    assert url == str(tmp_path / key)
+    assert url == f"/api/artifacts/files/{key}"
 
 
 def test_download_bytes_returns_uploaded_data(tmp_path):
