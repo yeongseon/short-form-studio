@@ -1,7 +1,5 @@
-from typing import Any
-
 from creator_service.workspace_service import workspace_service
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from shorts_api.auth import get_current_user
 
@@ -10,9 +8,13 @@ router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 
 @router.get("")
 async def list_workspaces(
-    user: Any = Depends(get_current_user),
+    user: dict[str, str | int | None] = Depends(get_current_user),
 ) -> dict[str, list[dict[str, int | str]]]:
-    workspaces = await workspace_service.list_user_workspaces(user.id)
+    user_id = user.get("user_id")
+    if not isinstance(user_id, int):
+        raise HTTPException(status_code=401, detail="Invalid user context")
+
+    workspaces = await workspace_service.list_user_workspaces(user_id)
     return {
         "workspaces": [
             {
