@@ -10,7 +10,29 @@ from starlette.responses import Response
 
 import re
 
-_ID_SEGMENT = re.compile(r"/\d+")
+_UUID_SEGMENT = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+_LONG_HEX_SEGMENT = re.compile(r"^[0-9a-fA-F]{32,}$")
+
+
+def _normalize_path(path: str) -> str:
+    parts = path.split("/")
+    normalized_parts = []
+    for part in parts:
+        if not part:
+            normalized_parts.append(part)
+            continue
+
+        if part.isdigit() or _UUID_SEGMENT.match(part) or _LONG_HEX_SEGMENT.match(part):
+            normalized_parts.append("{id}")
+            continue
+
+        normalized_parts.append(part)
+
+    normalized_path = "/".join(normalized_parts)
+    return normalized_path if normalized_path else "/"
+
 
 class TelemetryMiddleware(BaseHTTPMiddleware):
     _lock = Lock()
@@ -52,7 +74,7 @@ class TelemetryMiddleware(BaseHTTPMiddleware):
         status_code = 500
         # Normalize IDs to prevent high-cardinality metrics
         # e.g. /api/creator/runs/123/artifacts/456 -> /api/creator/runs/{id}/artifacts/{id}
-        route_path = _ID_SEGMENT.sub("/{id}", request.url.path)
+        route_path = _normalize_path(request.url.path)
 
         with tracer.start_as_current_span(
             f"{request.method} {route_path}",

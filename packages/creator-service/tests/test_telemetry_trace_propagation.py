@@ -14,6 +14,12 @@ class _CollectingSpanExporter(SpanExporter):
 
 
 def test_trace_context_propagates_from_parent_to_child() -> None:
+    """Unit-level trace context verification within one process.
+
+    This test confirms parent/child span linkage in-process. End-to-end API-to-worker
+    propagation requires an integration environment and is intentionally out of scope
+    for this unit test.
+    """
     exporter = _CollectingSpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
