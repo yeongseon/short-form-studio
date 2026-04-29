@@ -1,3 +1,5 @@
+import argparse
+import os
 import socket
 import sys
 
@@ -5,8 +7,19 @@ from celery import Celery
 from celery_app import celery_app as app
 
 
-def check_health() -> None:
-    hostname = f"celery@{socket.gethostname()}"
+def get_target_hostname(hostname_override: str | None = None) -> str:
+    if hostname_override:
+        return hostname_override
+
+    env_override = os.getenv("CELERY_WORKER_HOSTNAME") or os.getenv("WORKER_HOSTNAME")
+    if env_override:
+        return env_override
+
+    return f"celery@{socket.gethostname()}"
+
+
+def check_health(hostname_override: str | None = None) -> None:
+    hostname = get_target_hostname(hostname_override)
     response = app.control.ping(destination=[hostname], timeout=5.0)
 
     if not response:
@@ -22,8 +35,12 @@ def check_health() -> None:
     sys.exit(1)
 
 
-def check_worker_health(redis_url: str, timeout_seconds: float = 3.0) -> bool:
-    hostname = f"celery@{socket.gethostname()}"
+def check_worker_health(
+    redis_url: str,
+    timeout_seconds: float = 3.0,
+    hostname_override: str | None = None,
+) -> bool:
+    hostname = get_target_hostname(hostname_override)
     healthcheck_app = Celery("worker-healthcheck", broker=redis_url, backend=redis_url)
     if hasattr(healthcheck_app.control, "ping"):
         response = healthcheck_app.control.ping(destination=[hostname], timeout=timeout_seconds)
@@ -44,4 +61,7 @@ def check_worker_health(redis_url: str, timeout_seconds: float = 3.0) -> bool:
 
 
 if __name__ == "__main__":
-    check_health()
+    parser = argparse.ArgumentParser(description="Check Celery worker health")
+    parser.add_argument("--hostname", help="Target Celery worker hostname")
+    args = parser.parse_args()
+    check_health(args.hostname)

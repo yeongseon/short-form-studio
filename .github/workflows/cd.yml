@@ -98,6 +98,7 @@ jobs:
       API_HEALTHCHECK_URL: ${{ vars.STAGING_API_URL }}
       WEB_HEALTHCHECK_URL: ${{ vars.STAGING_WEB_URL }}
       WORKER_REDIS_URL: ${{ secrets.STAGING_REDIS_URL }}
+      WORKER_HEALTHCHECK_HOSTNAME: ${{ vars.STAGING_WORKER_HOSTNAME }}
     steps:
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -166,10 +167,16 @@ jobs:
               exit 1
             fi
 
+            if [ -z "${WORKER_HEALTHCHECK_HOSTNAME:-}" ]; then
+              echo "ERROR: WORKER_HEALTHCHECK_HOSTNAME not set"
+              exit 1
+            fi
+
             for i in 1 2 3 4 5; do
               echo "Worker health check attempt $i/5..."
               if docker run --rm \
                 -e REDIS_URL="${WORKER_REDIS_URL}" \
+                -e CELERY_WORKER_HOSTNAME="${WORKER_HEALTHCHECK_HOSTNAME}" \
                 "${REGISTRY}/${IMAGE_REPOSITORY}/worker:${IMAGE_TAG}" \
                 python healthcheck.py; then
                 echo "Worker health check passed"
@@ -198,6 +205,7 @@ jobs:
       API_HEALTHCHECK_URL: ${{ vars.PRODUCTION_API_URL }}
       WEB_HEALTHCHECK_URL: ${{ vars.PRODUCTION_WEB_URL }}
       WORKER_REDIS_URL: ${{ secrets.PRODUCTION_REDIS_URL }}
+      WORKER_HEALTHCHECK_HOSTNAME: ${{ vars.PRODUCTION_WORKER_HOSTNAME }}
     steps:
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -266,10 +274,16 @@ jobs:
               exit 1
             fi
 
+            if [ -z "${WORKER_HEALTHCHECK_HOSTNAME:-}" ]; then
+              echo "ERROR: WORKER_HEALTHCHECK_HOSTNAME not set"
+              exit 1
+            fi
+
             for i in 1 2 3 4 5; do
               echo "Worker health check attempt $i/5..."
               if docker run --rm \
                 -e REDIS_URL="${WORKER_REDIS_URL}" \
+                -e CELERY_WORKER_HOSTNAME="${WORKER_HEALTHCHECK_HOSTNAME}" \
                 "${REGISTRY}/${IMAGE_REPOSITORY}/worker:${IMAGE_TAG}" \
                 python healthcheck.py; then
                 echo "Worker health check passed"
@@ -296,6 +310,7 @@ jobs:
       ROLLBACK_IMAGE_TAG: ${{ inputs.rollback_image_tag }}
       API_HEALTHCHECK_URL: ${{ vars.PRODUCTION_API_URL }}
       WORKER_REDIS_URL: ${{ secrets.PRODUCTION_REDIS_URL }}
+      WORKER_HEALTHCHECK_HOSTNAME: ${{ vars.PRODUCTION_WORKER_HOSTNAME }}
       STUDIO_HEALTHCHECK_URL: ${{ vars.PRODUCTION_WEB_URL }}
     steps:
       - name: Log in to GitHub Container Registry
@@ -348,10 +363,16 @@ jobs:
               exit 1
             fi
 
+            if [ -z "${WORKER_HEALTHCHECK_HOSTNAME:-}" ]; then
+              echo "ERROR: WORKER_HEALTHCHECK_HOSTNAME not set"
+              exit 1
+            fi
+
             for i in 1 2 3 4 5; do
               echo "Worker health check attempt $i/5..."
               if docker run --rm \
                 -e REDIS_URL="${WORKER_REDIS_URL}" \
+                -e CELERY_WORKER_HOSTNAME="${WORKER_HEALTHCHECK_HOSTNAME}" \
                 "${REGISTRY}/${IMAGE_REPOSITORY}/worker:${ROLLBACK_IMAGE_TAG}" \
                 python healthcheck.py; then
                 echo "Worker health check passed"

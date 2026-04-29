@@ -38,3 +38,18 @@ def test_check_health_exits_one_when_target_worker_not_found(monkeypatch: Any) -
         healthcheck.check_health()
 
     assert exc.value.code == 1
+
+
+def test_get_target_hostname_defaults_to_local_hostname(monkeypatch: Any) -> None:
+    monkeypatch.delenv("CELERY_WORKER_HOSTNAME", raising=False)
+    monkeypatch.delenv("WORKER_HOSTNAME", raising=False)
+    monkeypatch.setattr(healthcheck.socket, "gethostname", lambda: "test-worker")
+
+    assert healthcheck.get_target_hostname() == "celery@test-worker"
+
+
+def test_get_target_hostname_uses_env_override(monkeypatch: Any) -> None:
+    monkeypatch.setenv("CELERY_WORKER_HOSTNAME", "celery@deployed-worker")
+    monkeypatch.setattr(healthcheck.socket, "gethostname", lambda: "test-worker")
+
+    assert healthcheck.get_target_hostname() == "celery@deployed-worker"
