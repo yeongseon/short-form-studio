@@ -197,6 +197,9 @@ class PostgresUsageStorage:
                     allowed = int(usage_row["image_count"]) + reserved_image < int(
                         quota["monthly_image_generations"]
                     )
+                # STT/render intentionally share the audio reservation bucket with
+                # TTS because workspace_quota_reservations currently has only
+                # llm_count, image_count, and tts_count columns.
                 elif operation_type in {"tts", "stt", "render"}:
                     allowed = float(usage_row["tts_seconds"]) + reserved_tts < int(
                         quota["monthly_tts_seconds"]

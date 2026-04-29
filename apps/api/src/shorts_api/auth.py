@@ -8,6 +8,7 @@ middleware is a transparent pass-through so local development stays frictionless
 
 import hmac
 import os
+from dataclasses import dataclass
 
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
@@ -16,6 +17,25 @@ from starlette.responses import Response
 
 # Paths that never require authentication
 _PUBLIC_PATHS = frozenset({"/healthz"})
+
+
+@dataclass(frozen=True)
+class AuthenticatedUser:
+    user_id: int | None
+    workspace_id: int | None
+
+
+def _resolve_authenticated_user(request: Request) -> AuthenticatedUser:
+    existing = getattr(request.state, "user", None)
+    if isinstance(existing, AuthenticatedUser):
+        return existing
+
+    user_id = getattr(existing, "user_id", None) if existing is not None else None
+    workspace_id = getattr(existing, "workspace_id", None) if existing is not None else None
+    return AuthenticatedUser(
+        user_id=int(user_id) if isinstance(user_id, int) else None,
+        workspace_id=int(workspace_id) if isinstance(workspace_id, int) else None,
+    )
 
 
 class ApiKeyMiddleware(BaseHTTPMiddleware):
@@ -28,6 +48,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         # Skip auth when no key is configured (local dev)
         if not self._api_key:
+            request.state.user = _resolve_authenticated_user(request)
             return await call_next(request)
 
         # Always allow CORS preflight requests (OPTIONS with Origin header)
@@ -36,6 +57,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
 
         # Always allow public paths
         if request.url.path in _PUBLIC_PATHS:
+            request.state.user = _resolve_authenticated_user(request)
             return await call_next(request)
 
         # Docs paths go through normal auth when API_KEY is set
@@ -54,6 +76,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
                 content={"detail": "Invalid or missing API key"},
             )
 
+        request.state.user = _resolve_authenticated_user(request)
         return await call_next(request)
 
 

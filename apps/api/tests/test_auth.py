@@ -33,6 +33,14 @@ def _make_app(api_key: str | None = None) -> FastAPI:
     async def get_data():
         return {"data": "secret"}
 
+    @test_app.get("/api/whoami")
+    async def whoami(request):
+        user = getattr(request.state, "user", None)
+        return {
+            "user_id": getattr(user, "user_id", None),
+            "workspace_id": getattr(user, "workspace_id", None),
+        }
+
     @test_app.get("/docs")
     async def docs():
         return {"docs": True}
@@ -99,6 +107,7 @@ async def test_healthz_always_public(authed_client):
     """Liveness probe /healthz should be accessible without auth even when API_KEY is set."""
     response = await authed_client.get("/healthz")
     assert response.status_code == 200
+
 
 @pytest.mark.asyncio
 async def test_docs_require_auth_when_api_key_set(authed_client):
@@ -214,6 +223,16 @@ async def test_x_api_key_takes_precedence(authed_client, api_key):
         headers={"X-API-Key": api_key, "Authorization": "Bearer wrong-key"},
     )
     assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_identity_headers_do_not_set_authenticated_subject(authed_client, api_key):
+    response = await authed_client.get(
+        "/api/whoami",
+        headers={"X-API-Key": api_key, "X-User-Id": "99", "X-Workspace-Id": "77"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"user_id": None, "workspace_id": None}
 
 
 @pytest.mark.asyncio

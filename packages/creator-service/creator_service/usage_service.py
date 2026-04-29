@@ -158,6 +158,9 @@ class InMemoryUsageStorage:
                     return False
                 reserved["image_gen"] += 1
                 return True
+            # STT/render intentionally share the TTS reservation bucket until
+            # dedicated monthly_stt/monthly_render quota fields are added.
+            # This keeps quota enforcement conservative without changing schema.
             if operation_type in {"tts", "stt", "render"}:
                 if usage["tts"] + reserved["tts"] >= int(quota["monthly_tts_seconds"]):
                     return False

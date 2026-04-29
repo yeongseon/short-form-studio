@@ -57,6 +57,11 @@ def stub_usage_service(monkeypatch: pytest.MonkeyPatch) -> StubUsageService:
             monkeypatch.setitem(
                 route.endpoint.__globals__, "_is_workspace_member", _allow_membership
             )
+            monkeypatch.setitem(
+                route.endpoint.__globals__,
+                "_get_authenticated_context",
+                _stub_authenticated_context,
+            )
     return stub
 
 
@@ -66,13 +71,14 @@ async def _allow_membership(workspace_id: int, user_id: int) -> bool:
     return True
 
 
+def _stub_authenticated_context(_request) -> tuple[int, int]:
+    return 10, 5
+
+
 @pytest.mark.asyncio
 async def test_get_workspace_usage_returns_summary(client, stub_usage_service: StubUsageService):
     _ = stub_usage_service
-    response = await client.get(
-        "/api/creator/usage/workspace/5",
-        headers={"X-Workspace-Id": "5", "X-User-Id": "10"},
-    )
+    response = await client.get("/api/creator/usage/workspace/5")
 
     assert response.status_code == 200
     body = response.json()
@@ -83,10 +89,7 @@ async def test_get_workspace_usage_returns_summary(client, stub_usage_service: S
 @pytest.mark.asyncio
 async def test_get_run_usage_returns_events(client, stub_usage_service: StubUsageService):
     _ = stub_usage_service
-    response = await client.get(
-        "/api/creator/usage/run/42",
-        headers={"X-Workspace-Id": "1", "X-User-Id": "10"},
-    )
+    response = await client.get("/api/creator/usage/run/42")
 
     assert response.status_code == 200
     body = response.json()
@@ -105,11 +108,13 @@ async def test_workspace_usage_for_non_member_returns_403(client, monkeypatch: p
     for route in app.routes:
         if isinstance(route, APIRoute) and route.name in {"get_workspace_usage", "get_run_usage"}:
             monkeypatch.setitem(route.endpoint.__globals__, "_is_workspace_member", deny_membership)
+            monkeypatch.setitem(
+                route.endpoint.__globals__,
+                "_get_authenticated_context",
+                _stub_authenticated_context,
+            )
 
-    response = await client.get(
-        "/api/creator/usage/workspace/5",
-        headers={"X-Workspace-Id": "5", "X-User-Id": "99"},
-    )
+    response = await client.get("/api/creator/usage/workspace/5")
 
     assert response.status_code == 403
     assert response.json()["detail"] == "Not a member of this workspace"
