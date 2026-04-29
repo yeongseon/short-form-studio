@@ -15,6 +15,7 @@ from shorts_api.routes import creator_runs_utils
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 logger = logging.getLogger(__name__)
+WORKSPACE_STRICT_MODE = os.getenv("WORKSPACE_STRICT_MODE", "").lower() in ("1", "true")
 
 
 class CreateProjectRequest(BaseModel):
@@ -61,6 +62,8 @@ async def update_project(
     user: Any = Depends(get_current_user),
 ) -> dict[str, object]:
     user_workspace_id = getattr(user, "workspace_id", None)
+    if WORKSPACE_STRICT_MODE and user_workspace_id is None:
+        raise HTTPException(status_code=403, detail="Workspace context required")
     current_project = await project_service.get_project(project_id)
     if current_project is None:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -88,6 +91,8 @@ async def get_project_detail(
     user: Any = Depends(get_current_user),
 ) -> dict[str, object]:
     user_workspace_id = getattr(user, "workspace_id", None)
+    if WORKSPACE_STRICT_MODE and user_workspace_id is None:
+        raise HTTPException(status_code=403, detail="Workspace context required")
     project = await project_service.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -114,6 +119,8 @@ async def list_projects(
 ) -> dict[str, object]:
     user_workspace_id = getattr(user, "workspace_id", None)
     if user_workspace_id is None:
+        if WORKSPACE_STRICT_MODE:
+            raise HTTPException(status_code=403, detail="Workspace context required")
         if os.getenv("API_KEY"):
             logger.warning("Listing projects without workspace scoping — user has no workspace_id")
         projects = await project_service.list_projects(limit=limit, offset=offset)
@@ -155,6 +162,8 @@ async def delete_project(
     user: Any = Depends(get_current_user),
 ) -> dict[str, object]:
     user_workspace_id = getattr(user, "workspace_id", None)
+    if WORKSPACE_STRICT_MODE and user_workspace_id is None:
+        raise HTTPException(status_code=403, detail="Workspace context required")
     get_project = cast(
         Callable[[int], Awaitable[Any]] | None,
         getattr(project_service, "get_project", None),

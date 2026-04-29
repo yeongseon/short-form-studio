@@ -24,6 +24,14 @@ depends_on: str | Sequence[str] | None = ("012", "013")
 def upgrade() -> None:
     op.execute(
         """
+    CREATE TABLE IF NOT EXISTS migration_016_created_workspaces (
+        workspace_id INTEGER PRIMARY KEY
+    );
+    """
+    )
+
+    op.execute(
+        """
     WITH users_without_membership AS (
         SELECT u.id, u.email
         FROM users u
@@ -49,10 +57,17 @@ def upgrade() -> None:
             u.id AS owner_id
         FROM users_without_membership u
         RETURNING id, owner_id
+    ), tracked_workspaces AS (
+        INSERT INTO migration_016_created_workspaces (workspace_id)
+        SELECT DISTINCT cw.id
+        FROM created_workspaces cw
+        ON CONFLICT (workspace_id) DO NOTHING
+        RETURNING workspace_id
     )
     INSERT INTO workspace_members (workspace_id, user_id, role)
     SELECT cw.id, cw.owner_id, 'owner'
-    FROM created_workspaces cw;
+    FROM created_workspaces cw
+    JOIN tracked_workspaces tw ON tw.workspace_id = cw.id;
     """
     )
 
@@ -65,5 +80,25 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_workspace_members_workspace_id")
-    op.drop_index("ix_workspace_members_user_id")
+    op.drop_index("ix_workspace_members_workspace_id", table_name="workspace_members")
+    op.drop_index("ix_workspace_members_user_id", table_name="workspace_members")
+
+    op.execute(
+        """
+    DELETE FROM workspace_members
+    WHERE workspace_id IN (
+        SELECT workspace_id FROM migration_016_created_workspaces
+    );
+    """
+    )
+
+    op.execute(
+        """
+    DELETE FROM workspaces
+    WHERE id IN (
+        SELECT workspace_id FROM migration_016_created_workspaces
+    );
+    """
+    )
+
+    op.execute("DROP TABLE IF EXISTS migration_016_created_workspaces;")
