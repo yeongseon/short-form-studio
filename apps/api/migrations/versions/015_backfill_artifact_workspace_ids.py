@@ -18,8 +18,66 @@ depends_on: str | Sequence[str] | None = ("012", "013")
 
 
 def upgrade() -> None:
-    op.execute("UPDATE creator_projects SET workspace_id = 1 WHERE workspace_id IS NULL")
-    op.execute("UPDATE creator_runs SET workspace_id = 1 WHERE workspace_id IS NULL")
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = 'workspace_members'
+            ) AND EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = 'creator_projects' AND column_name = 'created_by'
+            ) THEN
+                UPDATE creator_projects cp
+                SET workspace_id = wm.workspace_id
+                FROM LATERAL (
+                    SELECT workspace_id
+                    FROM workspace_members
+                    WHERE user_id = cp.created_by
+                    ORDER BY workspace_id
+                    LIMIT 1
+                ) AS wm
+                WHERE cp.workspace_id IS NULL;
+            END IF;
+        END $$;
+        """
+    )
+
+    op.execute(
+        """
+        DO $$
+        DECLARE
+            default_workspace_id integer;
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = 'workspaces'
+            ) THEN
+                EXECUTE 'SELECT MIN(id) FROM workspaces' INTO default_workspace_id;
+            END IF;
+
+            default_workspace_id := COALESCE(
+                default_workspace_id,
+                (SELECT MIN(workspace_id) FROM creator_projects WHERE workspace_id IS NOT NULL),
+                1
+            );
+
+            UPDATE creator_projects
+            SET workspace_id = default_workspace_id
+            WHERE workspace_id IS NULL;
+
+            UPDATE creator_runs r
+            SET workspace_id = COALESCE(p.workspace_id, default_workspace_id)
+            FROM creator_projects p
+            WHERE r.project_id = p.id
+              AND r.workspace_id IS NULL;
+        END $$;
+        """
+    )
 
 
 def downgrade() -> None:

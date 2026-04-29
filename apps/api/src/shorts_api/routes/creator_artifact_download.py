@@ -33,8 +33,7 @@ async def download_artifact(
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # Once #397 merges, this is populated from auth middleware workspace context.
-    user: CurrentUser = await get_current_user()
+    user: CurrentUser = await get_current_user(request)
     user_workspace_id = getattr(user, "workspace_id", None)
 
     request_workspace_id_raw = request.headers.get("X-Workspace-Id")
@@ -47,57 +46,42 @@ async def download_artifact(
 
     project_workspace_id = getattr(project, "workspace_id", None)
 
-    # ── Workspace access control: staged tightening plan ──────────────────
-    # Phase 1 (current default): Allow access when either workspace_id is None.
-    #   This preserves backward compatibility for pre-workspace data.
-    # Phase 2: Log warnings on None (enabled now for visibility).
-    #   Set STRICT_WORKSPACE_ACCESS=false (default) to stay in this phase.
-    # Phase 3: Deny by default. Set STRICT_WORKSPACE_ACCESS=true after running
-    #   migration 015_backfill_artifact_workspace_ids to ensure all projects/runs
-    #   have a workspace_id assigned. This eliminates the NULL bypass entirely.
-    # ─────────────────────────────────────────────────────────────────────────
-    strict_mode = os.getenv("STRICT_WORKSPACE_ACCESS", "false").lower() in ("true", "1", "yes")
+    strict_mode = os.getenv("ARTIFACT_ACCESS_STRICT", "true").lower() in ("1", "true")
 
-    if (
-        not strict_mode
-        and request_workspace_id is not None
-        and user_workspace_id is not None
-        and request_workspace_id != user_workspace_id
-    ):
+    if strict_mode and user_workspace_id is not None:
+        if request_workspace_id is not None and request_workspace_id != user_workspace_id:
+            raise HTTPException(status_code=403, detail="Forbidden")
+        access_workspace_id = user_workspace_id
+    elif strict_mode and request_workspace_id is not None:
         logger.warning(
-            "Workspace header/user mismatch in non-strict mode; honoring header for backward compatibility — "
-            "request_workspace_id=%s, user_workspace_id=%s, run_id=%s",
-            request_workspace_id,
-            user_workspace_id,
-            run_id,
+            "Using legacy X-Workspace-Id in strict mode because authenticated workspace context is missing; this fallback is deprecated"
         )
-
-    access_workspace_id = user_workspace_id if strict_mode else request_workspace_id
-    if strict_mode and access_workspace_id is None:
         access_workspace_id = request_workspace_id
-
-    if access_workspace_id is None or project_workspace_id is None:
-        if strict_mode:
+    elif strict_mode:
+        logger.warning(
+            "No authenticated workspace context on strict-mode artifact access; allowing legacy request for backward compatibility"
+        )
+        access_workspace_id = None
+    else:
+        access_workspace_id = request_workspace_id
+        if (
+            request_workspace_id is not None
+            and user_workspace_id is not None
+            and request_workspace_id != user_workspace_id
+        ):
             logger.warning(
-                "Strict workspace access: denying artifact download — "
-                + "access_workspace_id=%s, project_workspace_id=%s, run_id=%s",
-                access_workspace_id,
-                project_workspace_id,
+                "Workspace header/user mismatch in non-strict mode; honoring header for backward compatibility — "
+                "request_workspace_id=%s, user_workspace_id=%s, run_id=%s",
+                request_workspace_id,
+                user_workspace_id,
                 run_id,
             )
-            raise HTTPException(status_code=403, detail="Forbidden")
-        else:
-            # Phase 2: log for visibility before enforcing
-            if access_workspace_id is None or project_workspace_id is None:
-                logger.warning(
-                    "Workspace access check skipped (NULL) — "
-                    + "access_workspace_id=%s, project_workspace_id=%s, run_id=%s. "
-                    + "Run backfill migration 015 and enable STRICT_WORKSPACE_ACCESS to close this gap.",
-                    access_workspace_id,
-                    project_workspace_id,
-                    run_id,
-                )
-    elif access_workspace_id != project_workspace_id:
+
+    if (
+        access_workspace_id is not None
+        and project_workspace_id is not None
+        and access_workspace_id != project_workspace_id
+    ):
         raise HTTPException(status_code=403, detail="Forbidden")
 
     artifact = await artifact_download_service.get_artifact_by_id(artifact_id)
