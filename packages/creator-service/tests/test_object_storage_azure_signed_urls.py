@@ -67,11 +67,27 @@ def test_azure_download_url_includes_sas_token(monkeypatch):
     assert "sig=fake" in url
 
 
-def test_azure_download_url_fallback_when_no_account_key(monkeypatch):
+def test_azure_download_url_raises_when_no_account_key(monkeypatch):
     _install_fake_azure(account_key=None)
     monkeypatch.setenv("AZURE_STORAGE_CONNECTION_STRING", "UseDevelopmentStorage=true")
     monkeypatch.setenv("AZURE_STORAGE_CONTAINER", "artifacts")
     monkeypatch.delenv("AZURE_STORAGE_PREFIX", raising=False)
+    monkeypatch.delenv("STORAGE_ALLOW_UNSIGNED_URLS", raising=False)
+
+    module = importlib.import_module("creator_service.object_storage")
+    backend = module.AzureBlobStorageBackend()
+    import pytest
+
+    with pytest.raises(module.StorageCredentialMissingError, match="credential missing"):
+        backend.download_url("1/audio/audio.wav", expires_in=120)
+
+
+def test_azure_download_url_unsigned_allowed_with_env_var(monkeypatch):
+    _install_fake_azure(account_key=None)
+    monkeypatch.setenv("AZURE_STORAGE_CONNECTION_STRING", "UseDevelopmentStorage=true")
+    monkeypatch.setenv("AZURE_STORAGE_CONTAINER", "artifacts")
+    monkeypatch.delenv("AZURE_STORAGE_PREFIX", raising=False)
+    monkeypatch.setenv("STORAGE_ALLOW_UNSIGNED_URLS", "true")
 
     module = importlib.import_module("creator_service.object_storage")
     backend = module.AzureBlobStorageBackend()

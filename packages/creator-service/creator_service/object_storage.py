@@ -9,12 +9,25 @@ Selects backend based on STORAGE_BACKEND env var:
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
-from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import BinaryIO, Protocol
 
+logger = logging.getLogger(__name__)
+
+
+
+
+class StorageCredentialMissingError(RuntimeError):
+    """Raised when storage credentials are missing or insufficient.
+    
+    This is a critical error that must not be silently ignored.
+    Unsigned URLs are not acceptable in production.
+    """
+    pass
 
 @dataclass
 class StorageResult:
@@ -217,8 +230,8 @@ class AzureBlobStorageBackend:
     def __init__(self) -> None:
         try:
             from azure.storage.blob import (  # type: ignore[import-untyped]
-                BlobServiceClient,
                 BlobSasPermissions,
+                BlobServiceClient,
                 ContentSettings,
                 generate_blob_sas,
             )
@@ -288,6 +301,22 @@ class AzureBlobStorageBackend:
             )
             return f"{blob_client.url}?{sas_token}"
 
+        # SECURITY: Never fall back to unsigned URLs. Missing credentials = deployment error, not a runtime choice.
+        allow_unsigned = os.getenv("STORAGE_ALLOW_UNSIGNED_URLS", "false").lower() == "true"
+        if not allow_unsigned:
+            error_msg = (
+                "Azure Blob Storage credential missing (account_key unavailable). "
+                "Cannot generate signed URL. Set STORAGE_ALLOW_UNSIGNED_URLS=true in .env for local development. "
+                "In production, this is a deployment configuration error."
+            )
+            logger.critical(error_msg)
+            raise StorageCredentialMissingError(error_msg)
+
+        # Development fallback: unsigned URL allowed via explicit env variable
+        logger.warning(
+            "Generating unsigned Azure Blob URL for key=%s (STORAGE_ALLOW_UNSIGNED_URLS=true). ",
+            blob_name,
+        )
         return f"{blob_client.url}?se={max(1, expires_in)}"
 
     def download_bytes(self, key: str) -> bytes:
