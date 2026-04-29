@@ -119,21 +119,16 @@ async def list_projects(
 ) -> dict[str, object]:
     user_workspace_id = getattr(user, "workspace_id", None)
     if user_workspace_id is None:
-        if WORKSPACE_STRICT_MODE:
-            raise HTTPException(status_code=403, detail="Workspace context required")
-        if os.getenv("API_KEY"):
-            logger.warning("Listing projects without workspace scoping — user has no workspace_id")
-        projects = await project_service.list_projects(limit=limit, offset=offset)
-        total = await project_service.count_projects()
-    else:
-        list_projects_fn = getattr(project_service, "list_projects")
-        count_projects_fn = getattr(project_service, "count_projects")
-        projects = await list_projects_fn(
-            limit=limit,
-            offset=offset,
-            workspace_id=user_workspace_id,
-        )
-        total = await count_projects_fn(workspace_id=user_workspace_id)
+        raise HTTPException(status_code=403, detail="Workspace context required")
+
+    list_projects_fn = getattr(project_service, "list_projects")
+    count_projects_fn = getattr(project_service, "count_projects")
+    projects = await list_projects_fn(
+        limit=limit,
+        offset=offset,
+        workspace_id=user_workspace_id,
+    )
+    total = await count_projects_fn(workspace_id=user_workspace_id)
     return {
         "projects": [project.model_dump(mode="json") for project in projects],
         "total": total,
