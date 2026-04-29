@@ -50,6 +50,13 @@ class InMemoryUserStorage:
         rows = sorted(self._users.values(), key=lambda row: row["id"], reverse=True)
         return [dict(row) for row in rows[offset : offset + limit]]
 
+    async def get_user_by_auth(
+        self, auth_provider: str, auth_subject: str
+    ) -> dict[str, Any] | None:
+        for row in self._users.values():
+            if row["auth_provider"] == auth_provider and row["auth_subject"] == auth_subject:
+                return dict(row)
+        return None
 
 class UserService:
     def __init__(self, storage: UserStorageBackend | None = None) -> None:
@@ -78,6 +85,14 @@ class UserService:
 
     async def get_user(self, user_id: int) -> User | None:
         row = await self.storage.get_user(user_id)
+        if row is None:
+            return None
+        return User.model_validate(row)
+
+    async def get_user_by_auth(
+        self, auth_provider: str, auth_subject: str
+    ) -> User | None:
+        row = await self.storage.get_user_by_auth(auth_provider, auth_subject)
         if row is None:
             return None
         return User.model_validate(row)

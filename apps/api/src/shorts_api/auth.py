@@ -59,29 +59,13 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-async def _resolve_user_from_jwt_or_oauth(request: Request) -> User | None:
-    authorization = request.headers.get("Authorization", "")
-    if not authorization.startswith("Bearer "):
-        return None
-    token = authorization[7:].strip()
-    if not token or token == os.getenv("API_KEY", ""):
-        return None
-
-    jwt_email = request.headers.get("X-Auth-Email")
-    if not jwt_email:
-        return None
-    return await user_service.create_or_get_user(
-        email=jwt_email,
-        auth_provider="jwt",
-        auth_subject=token,
-    )
-
-
 async def get_current_user(request: Request) -> User:
-    jwt_user = await _resolve_user_from_jwt_or_oauth(request)
-    if jwt_user is not None:
-        return jwt_user
+    """Resolve user identity after API key middleware has authenticated the request.
 
+    If X-User-Email header is present, looks up or creates a user with that email.
+    Otherwise falls back to a system user. JWT/OAuth support will be added in a
+    future PR.
+    """
     user_email = request.headers.get("X-User-Email")
     if user_email:
         return await user_service.create_or_get_user(

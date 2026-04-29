@@ -11,6 +11,7 @@ class PostgresUserStorage:
             """
             INSERT INTO users (email, name, auth_provider, auth_subject)
             VALUES ($1, $2, $3, $4)
+            ON CONFLICT (email) DO UPDATE SET updated_at = NOW()
             RETURNING *
             """,
             payload.get("email"),
@@ -38,4 +39,13 @@ class PostgresUserStorage:
             """,
             limit,
             offset,
+        )
+
+    async def get_user_by_auth(
+        self, auth_provider: str, auth_subject: str
+    ) -> dict[str, Any] | None:
+        return await fetch_one(
+            "SELECT * FROM users WHERE auth_provider = $1 AND auth_subject = $2",
+            auth_provider,
+            auth_subject,
         )
