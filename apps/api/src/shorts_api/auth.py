@@ -1,15 +1,6 @@
-"""Optional API-key authentication middleware.
+"""DB-backed API-key authentication middleware."""
 
-When the ``API_KEY`` environment variable is set, every request (except health
-checks) must carry a matching key via the ``X-API-Key`` header or the standard
-``Authorization: Bearer <key>`` header.  When the variable is unset the
-middleware is a transparent pass-through so local development stays frictionless.
-"""
-
-import hmac
 import hashlib
-import logging
-import os
 from dataclasses import dataclass
 
 from creator_service.db import fetch_one
@@ -20,7 +11,6 @@ from starlette.responses import Response
 
 # Paths that never require authentication
 _PUBLIC_PATHS = frozenset({"/healthz"})
-_logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -39,14 +29,13 @@ async def validate_workspace_header(request: Request) -> int | None:
 
 
 class ApiKeyMiddleware(BaseHTTPMiddleware):
-    """Starlette middleware that enforces an optional API key."""
+    """Starlette middleware that enforces DB-backed API key auth."""
 
     def __init__(self, app, *, api_key: str | None = None) -> None:
         super().__init__(app)
-        self._api_key = api_key or os.getenv("API_KEY")
 
     async def _resolve_user(self, api_key: str) -> CurrentUser:
-        if not api_key or not os.getenv("DATABASE_URL"):
+        if not api_key:
             return CurrentUser()
 
         key_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
@@ -86,11 +75,6 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         )
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        # Skip auth when no key is configured (local dev)
-        if not self._api_key:
-            request.state.user = CurrentUser()  # No workspace enforcement in local dev
-            return await call_next(request)
-
         # Always allow CORS preflight requests (OPTIONS with Origin header)
         if request.method == "OPTIONS" and "origin" in request.headers:
             request.state.user = CurrentUser()
@@ -101,9 +85,6 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             request.state.user = CurrentUser()
             return await call_next(request)
 
-        # Docs paths go through normal auth when API_KEY is set
-        # (they were removed from _PUBLIC_PATHS so they're not auto-allowed)
-
         # Check header only (never accept keys via query params to avoid log leakage)
         provided = request.headers.get("X-API-Key")
         if not provided:
@@ -111,7 +92,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             auth_header = request.headers.get("Authorization", "")
             if auth_header.startswith("Bearer "):
                 provided = auth_header[7:]  # len("Bearer ") == 7
-        if not provided or not hmac.compare_digest(provided, self._api_key):
+        if not provided:
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Invalid or missing API key"},

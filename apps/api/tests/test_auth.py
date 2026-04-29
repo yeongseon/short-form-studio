@@ -78,59 +78,26 @@ async def authed_client(api_key, monkeypatch: pytest.MonkeyPatch):
         yield ac
 
 
-@pytest.fixture
-async def open_client():
-    """Client for an app with no API_KEY (open access)."""
-    app = _make_app(api_key=None)
-    transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
-        yield ac
-
-
-# --- Tests with no API key (open access mode) ---
-
-
-@pytest.mark.asyncio
-async def test_no_api_key_allows_health(open_client):
-    """When API_KEY is not set, health should be accessible."""
-    response = await open_client.get("/health")
-    assert response.status_code == 200
-
-
-@pytest.mark.asyncio
-async def test_no_api_key_allows_api_routes(open_client):
-    """API routes should work without auth when API_KEY is unset."""
-    response = await open_client.get("/api/data")
-    assert response.status_code == 200
-
-
-# --- Tests with API key configured ---
-
-
 @pytest.mark.asyncio
 async def test_health_requires_auth_when_api_key_set(authed_client):
-    """Detailed /health endpoint requires auth when API_KEY is set."""
     response = await authed_client.get("/health")
     assert response.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_healthz_always_public(authed_client):
-    """Liveness probe /healthz should be accessible without auth even when API_KEY is set."""
     response = await authed_client.get("/healthz")
     assert response.status_code == 200
 
 
 @pytest.mark.asyncio
 async def test_docs_require_auth_when_api_key_set(authed_client):
-    """Docs endpoints should require auth when API_KEY is configured."""
     response = await authed_client.get("/docs")
     assert response.status_code == 401
 
 
 @pytest.mark.asyncio
 async def test_openapi_requires_auth_when_api_key_set(authed_client):
-    """OpenAPI JSON should require auth when API_KEY is configured."""
     response = await authed_client.get("/openapi.json")
     assert response.status_code == 401
 
@@ -187,13 +154,12 @@ async def test_query_param_api_key_rejected(authed_client, api_key):
 
 
 @pytest.mark.asyncio
-async def test_empty_string_api_key_is_open_access():
-    """An empty string API_KEY should be treated as no auth (open access)."""
+async def test_empty_string_api_key_requires_auth():
     app = _make_app(api_key="")
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         response = await ac.get("/api/data")
-        assert response.status_code == 200
+        assert response.status_code == 401
 
 
 @pytest.mark.asyncio
