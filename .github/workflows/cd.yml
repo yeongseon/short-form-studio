@@ -93,15 +93,19 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [api, worker, studio-web]
     env:
       DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
       DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
       IMAGE_TAG: latest
     steps:
-      - name: Deploy to production
+      - name: Deploy to production (${{ matrix.service }})
         run: |
           set -euo pipefail
-          IMAGE="${REGISTRY}/${IMAGE_REPOSITORY}/${SERVICE_NAME}:${IMAGE_TAG}"
+          IMAGE="${REGISTRY}/${IMAGE_REPOSITORY}/${{ matrix.service }}:${IMAGE_TAG}"
           if [ -z "${DEPLOY_WEBHOOK_URL:-}" ]; then
             echo "DEPLOY_WEBHOOK_URL is not configured for production environment"
             exit 1
@@ -109,9 +113,10 @@ jobs:
           curl -fsSL -X POST "$DEPLOY_WEBHOOK_URL" \
             -H "Authorization: Bearer ${DEPLOY_TOKEN}" \
             -H "Content-Type: application/json" \
-            -d "{\"image\":\"${IMAGE}\",\"service\":\"${SERVICE_NAME}\",\"source\":\"cd-workflow\"}"
+            -d "{\"image\":\"${IMAGE}\",\"service\":\"${{ matrix.service }}\",\"source\":\"cd-workflow\"}"
 
       - name: Verify deployment health
+        if: matrix.service == 'api'
         run: |
           echo "Starting health check verification..."
           if [ -z "${HEALTHCHECK_URL:-}" ]; then
@@ -136,6 +141,10 @@ jobs:
     if: github.event_name == 'workflow_dispatch' && inputs.rollback_image_tag != ''
     runs-on: ubuntu-latest
     environment: production
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [api, worker, studio-web]
     env:
       DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
       DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
@@ -148,19 +157,19 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Retag rollback image as latest
+      - name: Retag rollback image as latest (${{ matrix.service }})
         run: |
           set -euo pipefail
-          SOURCE_IMAGE="${REGISTRY}/${IMAGE_REPOSITORY}/${SERVICE_NAME}:${ROLLBACK_IMAGE_TAG}"
-          TARGET_IMAGE="${REGISTRY}/${IMAGE_REPOSITORY}/${SERVICE_NAME}:latest"
+          SOURCE_IMAGE="${REGISTRY}/${IMAGE_REPOSITORY}/${{ matrix.service }}:${ROLLBACK_IMAGE_TAG}"
+          TARGET_IMAGE="${REGISTRY}/${IMAGE_REPOSITORY}/${{ matrix.service }}:latest"
           docker pull "$SOURCE_IMAGE"
           docker tag "$SOURCE_IMAGE" "$TARGET_IMAGE"
           docker push "$TARGET_IMAGE"
 
-      - name: Trigger rollback deploy
+      - name: Trigger rollback deploy (${{ matrix.service }})
         run: |
           set -euo pipefail
-          IMAGE="${REGISTRY}/${IMAGE_REPOSITORY}/${SERVICE_NAME}:${ROLLBACK_IMAGE_TAG}"
+          IMAGE="${REGISTRY}/${IMAGE_REPOSITORY}/${{ matrix.service }}:${ROLLBACK_IMAGE_TAG}"
           if [ -z "${DEPLOY_WEBHOOK_URL:-}" ]; then
             echo "DEPLOY_WEBHOOK_URL is not configured for production environment"
             exit 1
@@ -168,9 +177,10 @@ jobs:
           curl -fsSL -X POST "$DEPLOY_WEBHOOK_URL" \
             -H "Authorization: Bearer ${DEPLOY_TOKEN}" \
             -H "Content-Type: application/json" \
-            -d "{\"image\":\"${IMAGE}\",\"service\":\"${SERVICE_NAME}\",\"source\":\"rollback\"}"
+            -d "{\"image\":\"${IMAGE}\",\"service\":\"${{ matrix.service }}\",\"source\":\"rollback\"}"
 
       - name: Verify deployment health
+        if: matrix.service == 'api'
         run: |
           echo "Starting health check verification..."
           if [ -z "${HEALTHCHECK_URL:-}" ]; then
