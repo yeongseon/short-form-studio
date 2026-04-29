@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 
 admin_service = import_module("creator_service.admin_service").admin_service
 logger = logging.getLogger(__name__)
+audit_logger = logging.getLogger("admin.audit")
 
 
 async def require_admin(x_admin_key: str = Header(...)) -> None:
@@ -101,6 +102,7 @@ async def admin_storage_stats() -> dict[str, Any]:
 @router.post("/runs/{run_id}/unstick", response_model=UnstickRunResponse)
 async def admin_unstick_run(run_id: str) -> dict[str, Any]:
     logger.warning("Admin mutation requested: unstick run_id=%s", run_id)
+    audit_logger.warning("ADMIN_ACTION: unstick_run | run_id=%s", run_id)
     return await admin_service.unstick_run(run_id)
 
 
@@ -114,4 +116,12 @@ async def admin_clear_cache(
         key_pattern,
         dry_run,
     )
+    if key_pattern is None:
+        audit_logger.warning("ADMIN_ACTION: cache_clear | dry_run=%s", dry_run)
+    else:
+        audit_logger.warning(
+            "ADMIN_ACTION: cache_clear | key_pattern=%s | dry_run=%s",
+            key_pattern,
+            dry_run,
+        )
     return await admin_service.clear_cache(key_pattern=key_pattern, dry_run=dry_run)

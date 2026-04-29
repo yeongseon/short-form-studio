@@ -4,6 +4,7 @@ import inspect
 import logging
 import os
 import time
+from importlib import import_module
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -159,7 +160,7 @@ class AdminService:
             pool = await get_pool()
             async with pool.acquire() as connection:
                 row = await connection.fetchrow(
-                    "SELECT id, current_stage, status, updated_at FROM creator_runs WHERE id = $1",
+                    "SELECT id, current_stage, status, active_task_id, updated_at FROM creator_runs WHERE id = $1",
                     run_id_int,
                 )
                 if row is None:
@@ -185,7 +186,6 @@ class AdminService:
                         "error": "Run is not in 'running' status",
                     }
 
-
                 updated_at = row["updated_at"]
                 if not isinstance(updated_at, datetime):
                     return {
@@ -206,10 +206,16 @@ class AdminService:
                         "error": "Run has not been stuck long enough",
                     }
 
+                active_task_id = row["active_task_id"]
+                if active_task_id:
+                    creator_runs_utils = import_module("shorts_api.routes.creator_runs_utils")
+                    creator_runs_utils._revoke_active_tasks(active_task_id)
+
                 updated = await connection.fetchrow(
                     """
                     UPDATE creator_runs
-                    SET current_stage = $2
+                    SET current_stage = $2,
+                        active_task_id = NULL
                     WHERE id = $1
                     RETURNING id, current_stage, updated_at
                     """,
