@@ -20,6 +20,7 @@ from typing import Any
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
 from creator_service.audio_service import audio_service as _audio_service
+from creator_service.cost_config import COST_RENDER_VIDEO
 from creator_service.ffmpeg_service import FFmpegService, RenderInput
 from creator_service.render_profile import RenderProfile
 from creator_service.render_service import render_service as _render_service
@@ -249,7 +250,7 @@ def render_video(
                     "ffmpeg",
                     render_profile,
                     "render",
-                    cost_usd=0.001,
+                    cost_usd=COST_RENDER_VIDEO,
                     workspace_id=workspace_id,
                     project_id=run.get("project_id"),
                 )

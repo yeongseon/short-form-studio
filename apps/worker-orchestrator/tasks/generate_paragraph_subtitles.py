@@ -26,6 +26,7 @@ from celery_app import celery_app
 from creator_domain.sanitize import sanitize_path_component
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
+from creator_service.cost_config import COST_PARAGRAPH_SUBTITLE
 from creator_service.run_service import run_service as _run_service
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
 from creator_service.usage_service import record_provider_call, resolve_workspace_id_from_run
@@ -149,7 +150,7 @@ def generate_paragraph_subtitles(
                     entry.provider_type,
                     subtitle_model,
                     "stt",
-                    cost_usd=0.001,
+                    cost_usd=COST_PARAGRAPH_SUBTITLE,
                     workspace_id=workspace_id,
                     project_id=run.get("project_id") if run else None,
                 )

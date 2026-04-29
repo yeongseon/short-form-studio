@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from creator_domain.models import UsageEvent, UsageSummary, WorkspaceQuota
+
+logger = logging.getLogger(__name__)
 
 
 class UsageStorageBackend(Protocol):
@@ -253,6 +256,9 @@ async def record_provider_call(
             audio_seconds=30.5, cost_usd=0.05,
         )
     """
+    if workspace_id is None:
+        logger.warning("Recording cost without workspace_id for run %s — possible data gap", run_id)
+
     return await usage_service.record_usage(
         workspace_id=workspace_id,
         run_id=run_id,

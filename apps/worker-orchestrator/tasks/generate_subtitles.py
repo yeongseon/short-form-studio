@@ -28,6 +28,7 @@ from creator_domain.models.stage import RunStage
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.audio_service import audio_service as _audio_service
+from creator_service.cost_config import COST_SUBTITLE_GENERATION
 from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
@@ -182,7 +183,7 @@ def generate_subtitles(
                         entry.provider_type,
                         subtitle_model,
                         "stt",
-                        cost_usd=0.001,
+                        cost_usd=COST_SUBTITLE_GENERATION,
                         workspace_id=workspace_id,
                         project_id=run.get("project_id"),
                     )
