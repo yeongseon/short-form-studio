@@ -27,6 +27,7 @@ from shorts_api.routes.creator_script import router as script_router
 from shorts_api.routes.creator_script import run_script_router
 from shorts_api.routes.creator_settings import router as settings_router
 from shorts_api.routes.creator_visual_plan import router as visual_plan_router
+from shorts_api.routes.creator_workspaces import router as workspaces_router
 
 # Combined runs router for backward compatibility (used by tests)
 runs_router = APIRouter()
@@ -109,6 +110,7 @@ app.include_router(script_router, prefix="/api/creator")
 app.include_router(run_script_router, prefix="/api/creator")
 app.include_router(visual_plan_router, prefix="/api/creator")
 app.include_router(settings_router, prefix="/api/creator")
+app.include_router(workspaces_router, prefix="/api/creator")
 
 
 @app.get("/healthz")

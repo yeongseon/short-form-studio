@@ -3,8 +3,9 @@ from datetime import datetime, timezone
 
 from creator_domain.sanitize import UnsafePathComponent, sanitize_path_component
 from creator_service.artifact_download_service import artifact_download_service
+from creator_service.run_service import run_service
 from fastapi import APIRouter, HTTPException
-from starlette.responses import FileResponse
+from starlette.responses import FileResponse, RedirectResponse
 
 router = APIRouter(tags=["runs"])
 
@@ -13,7 +14,12 @@ router = APIRouter(tags=["runs"])
 async def download_artifact(
     run_id: int,
     artifact_id: int,
-) -> FileResponse:
+):
+    if os.getenv("API_KEY"):
+        run = await run_service.storage.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+
     artifact = await artifact_download_service.get_artifact_by_id(artifact_id)
     if artifact is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
@@ -21,13 +27,23 @@ async def download_artifact(
     if artifact.get("run_id") != run_id:
         raise HTTPException(status_code=404, detail="Artifact not found")
 
-    # NOTE: After #395 merge, add get_current_user dependency for workspace ownership.
     if artifact.get("storage_provider", "local") != "local":
-        raise HTTPException(status_code=501, detail="Unsupported storage provider")
+        from creator_service.object_storage import get_storage_backend
+
+        key = artifact.get("storage_key") or artifact.get("file_path", "")
+        try:
+            url = get_storage_backend().download_url(str(key))
+            return RedirectResponse(url=url, status_code=307)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="Storage backend error") from exc
 
     # Check expiration
     expires_at = artifact.get("expires_at")
-    if expires_at is not None and isinstance(expires_at, datetime) and expires_at < datetime.now(timezone.utc):
+    if (
+        expires_at is not None
+        and isinstance(expires_at, datetime)
+        and expires_at < datetime.now(timezone.utc)
+    ):
         raise HTTPException(status_code=410, detail="Artifact has expired")
 
     artifact_root = os.path.realpath(os.getenv("ARTIFACT_ROOT", "data/artifacts"))

@@ -8,6 +8,7 @@ middleware is a transparent pass-through so local development stays frictionless
 
 import hmac
 import os
+from dataclasses import dataclass
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -18,6 +19,16 @@ from starlette.responses import Response
 _PUBLIC_PATHS = frozenset({"/healthz"})
 
 
+@dataclass
+class CurrentUser:
+    workspace_id: int | None = None
+    workspace_name: str | None = None
+
+
+async def get_current_user() -> CurrentUser:
+    return CurrentUser()
+
+
 class ApiKeyMiddleware(BaseHTTPMiddleware):
     """Starlette middleware that enforces an optional API key."""
 
@@ -25,9 +36,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self._api_key = api_key or os.getenv("API_KEY")
 
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         # Skip auth when no key is configured (local dev)
         if not self._api_key:
             return await call_next(request)
