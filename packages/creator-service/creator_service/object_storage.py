@@ -11,12 +11,30 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import BinaryIO, Protocol, cast
 
 logger = logging.getLogger(__name__)
+_STREAM_CHUNK_SIZE = 64 * 1024
+
+
+def _normalize_content_type(content_type: str) -> str:
+    return content_type or "application/octet-stream"
+
+
+def _spool_and_hash_stream(data: BinaryIO) -> tuple[BinaryIO, int, str]:
+    size = 0
+    md5 = hashlib.md5()
+    spooled = tempfile.SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b")
+    while chunk := data.read(_STREAM_CHUNK_SIZE):
+        spooled.write(chunk)
+        md5.update(chunk)
+        size += len(chunk)
+    spooled.seek(0)
+    return cast(BinaryIO, spooled), size, md5.hexdigest()
 
 
 class StorageCredentialMissingError(RuntimeError):
@@ -94,6 +112,7 @@ class LocalStorageBackend:
         content_type: str = "application/octet-stream",
     ) -> StorageResult:
         safe_key = self._safe_key(key)
+        normalized_content_type = _normalize_content_type(content_type)
         path = self._root / safe_key
         path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -112,16 +131,15 @@ class LocalStorageBackend:
         return StorageResult(
             key=key,
             size_bytes=size,
-            content_type=content_type,
+            content_type=normalized_content_type,
             checksum=md5.hexdigest(),
             storage_provider="local",
         )
 
     def download_url(self, key: str, expires_in: int = 3600) -> str:
-        """Return a file path for local storage (not a real URL)."""
         _ = expires_in
         safe_key = self._safe_key(key)
-        return str(self._root / safe_key)
+        return f"/api/artifacts/files/{safe_key}"
 
     def download_bytes(self, key: str) -> bytes:
         return (self._root / self._safe_key(key)).read_bytes()
@@ -171,24 +189,32 @@ class S3StorageBackend:
         content_type: str = "application/octet-stream",
     ) -> StorageResult:
         full_key = self._full_key(key)
+        normalized_content_type = _normalize_content_type(content_type)
         if isinstance(data, bytes):
             body = data
             size = len(data)
+            md5 = hashlib.md5(body).hexdigest()
+            self._client.put_object(
+                Bucket=self._bucket,
+                Key=full_key,
+                Body=body,
+                ContentType=normalized_content_type,
+            )
         else:
-            body = data.read()
-            size = len(body)
-
-        md5 = hashlib.md5(body).hexdigest()
-        self._client.put_object(
-            Bucket=self._bucket,
-            Key=full_key,
-            Body=body,
-            ContentType=content_type,
-        )
+            body, size, md5 = _spool_and_hash_stream(data)
+            try:
+                self._client.put_object(
+                    Bucket=self._bucket,
+                    Key=full_key,
+                    Body=body,
+                    ContentType=normalized_content_type,
+                )
+            finally:
+                body.close()
         return StorageResult(
             key=key,
             size_bytes=size,
-            content_type=content_type,
+            content_type=normalized_content_type,
             checksum=md5,
             storage_provider="s3",
         )
@@ -260,24 +286,34 @@ class AzureBlobStorageBackend:
         content_type: str = "application/octet-stream",
     ) -> StorageResult:
         full_key = self._full_key(key)
+        normalized_content_type = _normalize_content_type(content_type)
         if isinstance(data, bytes):
             body = data
             size = len(data)
+            checksum = hashlib.md5(body).hexdigest()
+            blob_client = self._container_client.get_blob_client(full_key)
+            blob_client.upload_blob(
+                body,
+                overwrite=True,
+                content_settings=self._content_settings_cls(content_type=normalized_content_type),
+            )
         else:
-            body = data.read()
-            size = len(body)
-
-        checksum = hashlib.md5(body).hexdigest()
-        blob_client = self._container_client.get_blob_client(full_key)
-        blob_client.upload_blob(
-            body,
-            overwrite=True,
-            content_settings=self._content_settings_cls(content_type=content_type),
-        )
+            body, size, checksum = _spool_and_hash_stream(data)
+            blob_client = self._container_client.get_blob_client(full_key)
+            try:
+                blob_client.upload_blob(
+                    body,
+                    overwrite=True,
+                    content_settings=self._content_settings_cls(
+                        content_type=normalized_content_type
+                    ),
+                )
+            finally:
+                body.close()
         return StorageResult(
             key=key,
             size_bytes=size,
-            content_type=content_type,
+            content_type=normalized_content_type,
             checksum=checksum,
             storage_provider="azure_blob",
         )
