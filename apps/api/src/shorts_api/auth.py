@@ -70,6 +70,23 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         if not os.getenv("DATABASE_URL"):
             return False
         try:
+            workspaces_table = await fetch_one(
+                """
+                SELECT 1 AS exists
+                FROM information_schema.tables
+                WHERE table_schema = ANY (current_schemas(false))
+                  AND table_name = 'workspaces'
+                LIMIT 1
+                """
+            )
+
+            if workspaces_table is not None:
+                row = await fetch_one(
+                    "SELECT 1 AS exists FROM workspaces WHERE id = $1 LIMIT 1",
+                    workspace_id,
+                )
+                return row is not None
+
             row = await fetch_one(
                 "SELECT 1 AS exists FROM creator_projects WHERE workspace_id = $1 LIMIT 1",
                 workspace_id,

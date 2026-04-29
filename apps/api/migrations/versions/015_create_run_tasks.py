@@ -45,7 +45,7 @@ def upgrade() -> None:
     op.create_check_constraint(
         "ck_creator_run_tasks_status",
         "creator_run_tasks",
-        "status IN ('pending', 'running', 'success', 'failed', 'revoked', 'rejected')",
+        "status IN ('queued', 'pending', 'running', 'success', 'failed', 'revoked', 'rejected')",
     )
 
     op.create_index("ix_run_tasks_run_id", "creator_run_tasks", ["run_id"])
