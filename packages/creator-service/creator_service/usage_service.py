@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
@@ -239,12 +238,7 @@ class UsageService:
             }
         )
         if workspace_id is not None:
-            reservation_units = 1
-            if operation_type == "tts" and audio_seconds is not None:
-                reservation_units = max(1, math.ceil(audio_seconds))
-            await self.storage.release_reservation(
-                workspace_id, operation_type, units=reservation_units
-            )
+            await self.storage.release_reservation(workspace_id, operation_type, units=1)
         return UsageEvent.from_row(row)
 
     async def get_monthly_summary(self, workspace_id: int) -> UsageSummary:

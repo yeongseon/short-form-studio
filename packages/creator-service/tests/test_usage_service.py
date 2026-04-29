@@ -197,8 +197,12 @@ def test_check_workspace_quota_image_gen_type() -> None:
         )
         asyncio.run(
             check_workspace_quota.__globals__["usage_service"].record_usage(
-                workspace_id=505, run_id=1, provider="stability",
-                model_key="sd3", operation_type="image_gen", image_count=1,
+                workspace_id=505,
+                run_id=1,
+                provider="stability",
+                model_key="sd3",
+                operation_type="image_gen",
+                image_count=1,
             )
         )
         allowed, reason = asyncio.run(check_workspace_quota(505, "image_gen"))
@@ -221,3 +225,35 @@ def test_record_provider_call_image_gen() -> None:
 
     assert event.operation_type == "image_gen"
     assert event.image_count == 2
+
+
+def test_record_usage_releases_single_reserved_tts_unit() -> None:
+    class TrackingStorage(InMemoryUsageStorage):
+        def __init__(self) -> None:
+            super().__init__()
+            self.released_units: int | None = None
+
+        async def release_reservation(
+            self, workspace_id: int, operation_type: str, units: int = 1
+        ) -> None:
+            _ = workspace_id
+            _ = operation_type
+            self.released_units = units
+
+    storage = TrackingStorage()
+    service = UsageService(storage)
+
+    asyncio.run(service.check_quota(606, "tts"))
+    asyncio.run(
+        service.record_usage(
+            workspace_id=606,
+            run_id=1,
+            provider="elevenlabs",
+            model_key="multilingual-v2",
+            operation_type="tts",
+            audio_seconds=12.5,
+            estimated_cost_usd=0.01,
+        )
+    )
+
+    assert storage.released_units == 1
