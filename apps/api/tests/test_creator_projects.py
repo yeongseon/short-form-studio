@@ -21,6 +21,7 @@ class StubProject(BaseModel):
     created_at: datetime
     updated_at: datetime
     latest_run: dict[str, int | str | None] | None = None
+    workspace_id: int | None = None
 
 
 class StubProjectService:
@@ -40,6 +41,7 @@ class StubProjectService:
                 created_at=now,
                 updated_at=now,
                 latest_run={"run_id": 11, "current_stage": "script", "status": "completed"},
+                workspace_id=1,
             ),
             2: StubProject(
                 id=2,
@@ -50,6 +52,7 @@ class StubProjectService:
                 created_at=now,
                 updated_at=now,
                 latest_run=None,
+                workspace_id=1,
             ),
         }
         self._next_id = 3
@@ -101,6 +104,7 @@ class StubProjectService:
             created_at=now,
             updated_at=now,
             latest_run=None,
+            workspace_id=workspace_id,
         )
         self._projects[self._next_id] = project
         self._next_id += 1

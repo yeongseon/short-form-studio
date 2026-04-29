@@ -117,8 +117,10 @@ async def test_get_current_user_handles_missing_workspace_membership(monkeypatch
 
     monkeypatch.setattr("shorts_api.auth.fetch_one", _fetch_one)
     request = Request({"type": "http", "headers": [(b"x-api-key", b"valid-key")]})
-    result = await get_current_user(request)
-    assert result["workspace_id"] is None
+    with pytest.raises(HTTPException) as exc_info:
+        await get_current_user(request)
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "No workspace membership"
 
 
 @pytest.mark.asyncio

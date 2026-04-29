@@ -15,7 +15,6 @@ from shorts_api.routes import creator_runs_utils
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 logger = logging.getLogger(__name__)
-WORKSPACE_STRICT_MODE = os.getenv("WORKSPACE_STRICT_MODE", "").lower() in ("1", "true")
 
 
 class CreateProjectRequest(BaseModel):
@@ -33,6 +32,8 @@ async def create_project(
     user: Any = Depends(get_current_user),
 ) -> dict[str, object]:
     user_workspace_id = user.get("workspace_id")
+    if user_workspace_id is None:
+        raise HTTPException(status_code=403, detail="Workspace context required")
     create_kwargs = {
         "title": request.title,
         "source_type": request.source_type,
@@ -41,8 +42,7 @@ async def create_project(
         "json_script": request.json_script,
         "url_source": request.url_source,
     }
-    if user_workspace_id is not None:
-        create_kwargs["workspace_id"] = user_workspace_id
+    create_kwargs["workspace_id"] = user_workspace_id
     try:
         project = await project_service.create_project(**create_kwargs)
     except ValueError as exc:
@@ -62,21 +62,13 @@ async def update_project(
     user: Any = Depends(get_current_user),
 ) -> dict[str, object]:
     user_workspace_id = user.get("workspace_id")
-    if WORKSPACE_STRICT_MODE and user_workspace_id is None:
+    if user_workspace_id is None:
         raise HTTPException(status_code=403, detail="Workspace context required")
     current_project = await project_service.get_project(project_id)
     if current_project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     project_workspace_id = getattr(current_project, "workspace_id", None)
-    if project_workspace_id is None and user_workspace_id is None:
-        logger.warning(
-            "Project update without workspace scoping - both project and user workspace_id are NULL"
-        )
-    if (
-        project_workspace_id is not None
-        and user_workspace_id is not None
-        and project_workspace_id != user_workspace_id
-    ):
+    if project_workspace_id is None or project_workspace_id != user_workspace_id:
         raise HTTPException(status_code=404, detail="Project not found")
 
     project = await project_service.update_project(project_id, title=request.title)
@@ -91,21 +83,13 @@ async def get_project_detail(
     user: Any = Depends(get_current_user),
 ) -> dict[str, object]:
     user_workspace_id = user.get("workspace_id")
-    if WORKSPACE_STRICT_MODE and user_workspace_id is None:
+    if user_workspace_id is None:
         raise HTTPException(status_code=403, detail="Workspace context required")
     project = await project_service.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     project_workspace_id = getattr(project, "workspace_id", None)
-    if project_workspace_id is None and user_workspace_id is None:
-        logger.warning(
-            "Project read without workspace scoping - both project and user workspace_id are NULL"
-        )
-    if (
-        project_workspace_id is not None
-        and user_workspace_id is not None
-        and project_workspace_id != user_workspace_id
-    ):
+    if project_workspace_id is None or project_workspace_id != user_workspace_id:
         raise HTTPException(status_code=404, detail="Project not found")
 
     return project.model_dump(mode="json")
@@ -157,7 +141,7 @@ async def delete_project(
     user: Any = Depends(get_current_user),
 ) -> dict[str, object]:
     user_workspace_id = user.get("workspace_id")
-    if WORKSPACE_STRICT_MODE and user_workspace_id is None:
+    if user_workspace_id is None:
         raise HTTPException(status_code=403, detail="Workspace context required")
     get_project = cast(
         Callable[[int], Awaitable[Any]] | None,
@@ -168,15 +152,7 @@ async def delete_project(
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
         project_workspace_id = getattr(project, "workspace_id", None)
-        if project_workspace_id is None and user_workspace_id is None:
-            logger.warning(
-                "Project delete without workspace scoping - both project and user workspace_id are NULL"
-            )
-        if (
-            project_workspace_id is not None
-            and user_workspace_id is not None
-            and project_workspace_id != user_workspace_id
-        ):
+        if project_workspace_id is None or project_workspace_id != user_workspace_id:
             raise HTTPException(status_code=404, detail="Project not found")
 
     run_ids = await _cleanup_project_resources(project_id)

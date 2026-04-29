@@ -63,7 +63,9 @@ async def get_current_user(request: Request) -> dict[str, str | int | None]:
         """,
         user_id,
     )
-    workspace_id = membership_row["workspace_id"] if membership_row is not None else None
+    if membership_row is None:
+        raise HTTPException(status_code=403, detail="No workspace membership")
+    workspace_id = membership_row["workspace_id"]
 
     return {
         "user_id": user_id,
