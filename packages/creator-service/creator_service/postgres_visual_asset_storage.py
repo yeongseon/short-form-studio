@@ -13,35 +13,35 @@ class PostgresVisualAssetStorage:
 
         pool = await get_pool()
         async with pool.acquire() as connection, connection.transaction():
-                await connection.execute(
-                    "SELECT pg_advisory_xact_lock($1::int, hashtext($2))",
-                    run_id,
-                    scene_id,
-                )
-                version_row = await connection.fetchrow(
-                    """
+            await connection.execute(
+                "SELECT pg_advisory_xact_lock($1::int, hashtext($2))",
+                run_id,
+                scene_id,
+            )
+            version_row = await connection.fetchrow(
+                """
                     SELECT COALESCE(MAX(version), 0) + 1 AS next_version
                     FROM creator_scene_assets
                     WHERE run_id = $1 AND scene_id = $2
                     """,
-                    run_id,
-                    scene_id,
-                )
-                next_version = int(version_row["next_version"]) if version_row is not None else 1
+                run_id,
+                scene_id,
+            )
+            next_version = int(version_row["next_version"]) if version_row is not None else 1
 
-                if is_active:
-                    await connection.execute(
-                        """
+            if is_active:
+                await connection.execute(
+                    """
                         UPDATE creator_scene_assets
                         SET is_active = false
                         WHERE run_id = $1 AND scene_id = $2 AND is_active = true
                         """,
-                        run_id,
-                        scene_id,
-                    )
+                    run_id,
+                    scene_id,
+                )
 
-                saved = await connection.fetchrow(
-                    """
+            saved = await connection.fetchrow(
+                """
                     INSERT INTO creator_scene_assets (
                         run_id,
                         scene_id,
@@ -50,20 +50,24 @@ class PostgresVisualAssetStorage:
                         prompt_snapshot,
                         model_used,
                         provider,
+                        storage_provider,
+                        storage_key,
                         is_active
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
                     RETURNING *
                     """,
-                    run_id,
-                    scene_id,
-                    next_version,
-                    row.get("asset_path"),
-                    row.get("prompt_snapshot"),
-                    row.get("model_used"),
-                    row.get("provider"),
-                    is_active,
-                )
+                run_id,
+                scene_id,
+                next_version,
+                row.get("asset_path"),
+                row.get("prompt_snapshot"),
+                row.get("model_used"),
+                row.get("provider"),
+                row.get("storage_provider"),
+                row.get("storage_key"),
+                is_active,
+            )
         if saved is None:
             raise ValueError("Failed to save visual asset")
         return dict(saved)
@@ -97,31 +101,31 @@ class PostgresVisualAssetStorage:
     async def set_active(self, run_id: int, scene_id: str, asset_id: int) -> bool:
         pool = await get_pool()
         async with pool.acquire() as connection, connection.transaction():
-                await connection.execute(
-                    "SELECT pg_advisory_xact_lock($1::int, hashtext($2))",
-                    run_id,
-                    scene_id,
-                )
-                await connection.execute(
-                    """
+            await connection.execute(
+                "SELECT pg_advisory_xact_lock($1::int, hashtext($2))",
+                run_id,
+                scene_id,
+            )
+            await connection.execute(
+                """
                     UPDATE creator_scene_assets
                     SET is_active = false
                     WHERE run_id = $1 AND scene_id = $2
                     """,
-                    run_id,
-                    scene_id,
-                )
-                target = await connection.fetchrow(
-                    """
+                run_id,
+                scene_id,
+            )
+            target = await connection.fetchrow(
+                """
                     UPDATE creator_scene_assets
                     SET is_active = true
                     WHERE run_id = $1 AND scene_id = $2 AND id = $3
                     RETURNING id
                     """,
-                    run_id,
-                    scene_id,
-                    asset_id,
-                )
+                run_id,
+                scene_id,
+                asset_id,
+            )
         return target is not None
 
     async def get_active_asset(self, run_id: int, scene_id: str) -> dict[str, Any] | None:

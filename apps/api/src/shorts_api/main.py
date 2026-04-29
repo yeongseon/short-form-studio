@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import logging
+import mimetypes
 import os
 import resource
 import signal
@@ -13,6 +14,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 from creator_domain.sanitize import UnsafePathComponent, sanitize_path_component
+from creator_service.artifact_download_service import read_artifact_bytes
 from creator_service.db import close_pool, get_pool
 from creator_service.logging_config import setup_json_logging
 from creator_service.model_health_service import ModelHealthService, ModelStatus
@@ -22,7 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 from starlette import status
-from starlette.responses import FileResponse
+from starlette.responses import FileResponse, Response
 
 from shorts_api.auth import ApiKeyMiddleware
 from shorts_api.routes.creator_models import router as models_router
@@ -134,7 +136,6 @@ def _mark_shutdown() -> None:
         return
     shutdown_state.is_shutting_down = True
     logger.info("Graceful shutdown initiated; draining in-flight requests")
-
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -347,8 +348,7 @@ async def health() -> dict[str, object]:
 
 
 @app.get("/artifacts/{artifact_path:path}")
-async def serve_artifact(artifact_path: str) -> FileResponse:
-    artifact_root = os.path.realpath(os.getenv("ARTIFACT_ROOT", "data/artifacts"))
+async def serve_artifact(artifact_path: str) -> Response:
     path_components = artifact_path.split("/")
     if not artifact_path or any(component in {"", ".", ".."} for component in path_components):
         raise HTTPException(status_code=400, detail="Invalid artifact path")
@@ -361,10 +361,42 @@ async def serve_artifact(artifact_path: str) -> FileResponse:
     except UnsafePathComponent as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    resolved_path = os.path.realpath(os.path.join(artifact_root, *safe_components))
-    if os.path.commonpath([artifact_root, resolved_path]) != artifact_root:
-        raise HTTPException(status_code=400, detail="Path traversal detected")
-    if not os.path.isfile(resolved_path):
+    storage_key = "/".join(safe_components)
+    try:
+        content = read_artifact_bytes(storage_key)
+        media_type, _ = mimetypes.guess_type(storage_key)
+        return Response(content=content, media_type=media_type or "application/octet-stream")
+    except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Artifact not found")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Artifact read failed") from exc
 
-    return FileResponse(resolved_path)
+
+@app.get("/api/artifacts/files/{path:path}")
+async def serve_local_artifact_file(path: str) -> Response:
+    path_components = path.split("/")
+    if (
+        not path
+        or path.startswith("/")
+        or any(component in {"", ".", ".."} for component in path_components)
+    ):
+        raise HTTPException(status_code=400, detail="Invalid artifact path")
+
+    try:
+        safe_components = [
+            sanitize_path_component(component, label=f"path[{index}]")
+            for index, component in enumerate(path_components)
+        ]
+    except UnsafePathComponent as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    storage_key = "/".join(safe_components)
+
+    try:
+        content = read_artifact_bytes(storage_key)
+        media_type, _ = mimetypes.guess_type(storage_key)
+        return Response(content=content, media_type=media_type or "application/octet-stream")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Artifact not found") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Artifact read failed") from exc

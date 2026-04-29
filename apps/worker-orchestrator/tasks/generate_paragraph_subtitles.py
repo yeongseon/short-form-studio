@@ -46,6 +46,7 @@ def _get_redis_client() -> Any | None:
         return None
     return redis.Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"))
 
+
 async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
     remover: Any = getattr(_run_service.storage, "remove_active_task_id", None)
     if not callable(remover):
@@ -84,7 +85,9 @@ def generate_paragraph_subtitles(
     """
     start_time = datetime.now(timezone.utc)
     start_iso = start_time.isoformat()
-    task_id = str(getattr(getattr(self, "request", None), "id", None) or f"sub-{run_id}-{section_id}")
+    task_id = str(
+        getattr(getattr(self, "request", None), "id", None) or f"sub-{run_id}-{section_id}"
+    )
 
     provider_type: str | None = None
     endpoint: str | None = None
@@ -102,7 +105,9 @@ def generate_paragraph_subtitles(
             raise _StageGuardError(f"Run {run_id} is cancelled")
 
         if subtitle_format not in ("srt", "vtt"):
-            raise ValueError(f"Invalid subtitle_format: {subtitle_format!r}. Must be 'srt' or 'vtt'.")
+            raise ValueError(
+                f"Invalid subtitle_format: {subtitle_format!r}. Must be 'srt' or 'vtt'."
+            )
 
         if not os.path.exists(audio_path):
             raise RuntimeError(f"Audio file not found: {audio_path}")
@@ -136,6 +141,23 @@ def generate_paragraph_subtitles(
             params["output_path"] = subtitle_path
             await provider.transcribe(audio_path, params=params)
 
+            from creator_service.artifact_storage_integration import store_artifact_file
+
+            try:
+                uploaded = store_artifact_file(
+                    run_id, subtitle_path, f"application/{subtitle_format}"
+                )
+            except Exception as exc:
+                logger.error(
+                    "Failed to upload artifact %s to remote storage: %s",
+                    subtitle_path,
+                    exc,
+                )
+                raise
+
+            storage_provider = uploaded.storage_provider
+            storage_key = uploaded.key
+
             # 4. Save per-paragraph subtitle artifact
             artifact = await _subtitle_service.create_paragraph_artifact(
                 run_id=run_id,
@@ -144,6 +166,8 @@ def generate_paragraph_subtitles(
                 fmt=subtitle_format,
                 model_used=subtitle_model,
                 provider_type=entry.provider_type,
+                storage_provider=storage_provider,
+                storage_key=storage_key,
             )
         finally:
             if lock_acquired:
@@ -192,5 +216,7 @@ def generate_paragraph_subtitles(
         except Exception:
             logger.warning(
                 "Could not remove active task id %s for run %d",
-                task_id, run_id, exc_info=True,
+                task_id,
+                run_id,
+                exc_info=True,
             )
