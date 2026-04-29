@@ -1,3 +1,5 @@
+# pyright: reportMissingImports=false
+
 """FastAPI entrypoint for shorts_api."""
 
 import asyncio
@@ -27,6 +29,7 @@ from starlette import status
 from starlette.responses import FileResponse, Response
 
 from shorts_api.auth import ApiKeyMiddleware
+from shorts_api.routes.creator_artifact_download import router as artifact_download_router
 from shorts_api.routes.creator_models import router as models_router
 from shorts_api.routes.creator_projects import router as projects_router
 from shorts_api.routes.creator_runs_core import router as runs_core_router
@@ -137,6 +140,7 @@ def _mark_shutdown() -> None:
     shutdown_state.is_shutting_down = True
     logger.info("Graceful shutdown initiated; draining in-flight requests")
 
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _apply_resource_limits()
@@ -170,14 +174,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     await close_pool()
 
 
-_is_production = os.getenv("ENVIRONMENT", "development").lower() == "production"
+environment = os.getenv("ENVIRONMENT", "development").strip().lower()
+production_hardened = environment == "production"
 
 app = FastAPI(
     title="short-form-studio API",
     lifespan=lifespan,
-    docs_url=None if _is_production else "/docs",
-    redoc_url=None if _is_production else "/redoc",
-    openapi_url=None if _is_production else "/openapi.json",
+    docs_url=None if production_hardened else "/docs",
+    redoc_url=None if production_hardened else "/redoc",
+    openapi_url=None if production_hardened else "/openapi.json",
 )
 
 cors_origins_env = os.getenv("CORS_ORIGINS")
@@ -221,9 +226,7 @@ async def request_logging_middleware(request: Request, call_next):
 @app.middleware("http")
 async def security_headers_middleware(request: Request, call_next):
     response = await call_next(request)
-    main_module = sys.modules.get("shorts_api.main")
-    is_production = getattr(main_module, "_is_production", _is_production)
-    if is_production:
+    if production_hardened:
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "1; mode=block"
@@ -262,6 +265,7 @@ app.include_router(runs_visuals_router, prefix="/api/creator")
 app.include_router(runs_scene_assets_router, prefix="/api/creator")
 app.include_router(runs_storyboard_router, prefix="/api/creator")
 app.include_router(runs_lifecycle_router, prefix="/api/creator")
+app.include_router(artifact_download_router, prefix="/api/creator")
 app.include_router(script_router, prefix="/api/creator")
 app.include_router(run_script_router, prefix="/api/creator")
 app.include_router(visual_plan_router, prefix="/api/creator")
@@ -347,8 +351,8 @@ async def health() -> dict[str, object]:
     }
 
 
-@app.get("/artifacts/{artifact_path:path}")
-async def serve_artifact(artifact_path: str) -> Response:
+@app.get("/artifacts/{artifact_path:path}", deprecated=True)
+async def serve_artifact(artifact_path: str):
     path_components = artifact_path.split("/")
     if not artifact_path or any(component in {"", ".", ".."} for component in path_components):
         raise HTTPException(status_code=400, detail="Invalid artifact path")
@@ -367,7 +371,7 @@ async def serve_artifact(artifact_path: str) -> Response:
         media_type, _ = mimetypes.guess_type(storage_key)
         return Response(content=content, media_type=media_type or "application/octet-stream")
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Artifact not found")
+        raise HTTPException(status_code=404, detail="Artifact not found") from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Artifact read failed") from exc
 
