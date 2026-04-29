@@ -32,7 +32,7 @@ async def create_project(
     request: CreateProjectRequest,
     user: Any = Depends(get_current_user),
 ) -> dict[str, object]:
-    user_workspace_id = getattr(user, "workspace_id", None)
+    user_workspace_id = user.get("workspace_id")
     create_kwargs = {
         "title": request.title,
         "source_type": request.source_type,
@@ -61,7 +61,7 @@ async def update_project(
     request: UpdateProjectRequest,
     user: Any = Depends(get_current_user),
 ) -> dict[str, object]:
-    user_workspace_id = getattr(user, "workspace_id", None)
+    user_workspace_id = user.get("workspace_id")
     if WORKSPACE_STRICT_MODE and user_workspace_id is None:
         raise HTTPException(status_code=403, detail="Workspace context required")
     current_project = await project_service.get_project(project_id)
@@ -90,7 +90,7 @@ async def get_project_detail(
     project_id: int,
     user: Any = Depends(get_current_user),
 ) -> dict[str, object]:
-    user_workspace_id = getattr(user, "workspace_id", None)
+    user_workspace_id = user.get("workspace_id")
     if WORKSPACE_STRICT_MODE and user_workspace_id is None:
         raise HTTPException(status_code=403, detail="Workspace context required")
     project = await project_service.get_project(project_id)
@@ -117,7 +117,7 @@ async def list_projects(
     offset: int = Query(default=0, ge=0),
     user: Any = Depends(get_current_user),
 ) -> dict[str, object]:
-    user_workspace_id = getattr(user, "workspace_id", None)
+    user_workspace_id = user.get("workspace_id")
     if user_workspace_id is None:
         raise HTTPException(status_code=403, detail="Workspace context required")
 
@@ -156,7 +156,7 @@ async def delete_project(
     project_id: int,
     user: Any = Depends(get_current_user),
 ) -> dict[str, object]:
-    user_workspace_id = getattr(user, "workspace_id", None)
+    user_workspace_id = user.get("workspace_id")
     if WORKSPACE_STRICT_MODE and user_workspace_id is None:
         raise HTTPException(status_code=403, detail="Workspace context required")
     get_project = cast(

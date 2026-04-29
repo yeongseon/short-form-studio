@@ -289,15 +289,27 @@ async def test_get_current_user_with_valid_api_key_resolves_user(monkeypatch):
             updated_at=datetime.now(timezone.utc),
         )
 
+    class _Workspace:
+        def __init__(self, wid: int):
+            self.id = wid
+
+    async def _list_user_workspaces(user_id: int):
+        assert user_id == 123
+        return [_Workspace(10)]
+
     monkeypatch.setattr("shorts_api.auth.user_service.get_user_by_auth", _user_for_auth)
+    monkeypatch.setattr(
+        "shorts_api.auth.workspace_service.list_user_workspaces", _list_user_workspaces
+    )
     scope = {"type": "http", "headers": [(b"x-api-key", key.encode())]}
     request = Request(scope)
 
     result = await get_current_user(request)
 
-    assert result.id == 123
-    assert result.auth_provider == "api_key"
-    assert result.auth_subject == expected_subject
+    assert result["user_id"] == 123
+    assert result["auth_provider"] == "api_key"
+    assert result["auth_subject"] == expected_subject
+    assert result["workspace_id"] == 10
 
 
 @pytest.mark.asyncio
@@ -306,16 +318,12 @@ async def test_require_workspace_access_denies_system_user_without_membership(mo
         return False
 
     monkeypatch.setattr("shorts_api.auth.workspace_service.check_access", _no_access)
-    user = User(
-        id=1,
-        email="system@example.com",
-        name="System",
-        workspace_id=None,
-        auth_provider="api_key",
-        auth_subject="system",
-        created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc),
-    )
+    user = {
+        "user_id": 1,
+        "auth_provider": "api_key",
+        "auth_subject": "system",
+        "workspace_id": None,
+    }
 
     with pytest.raises(HTTPException) as exc_info:
         await require_workspace_access(99, user)
@@ -330,16 +338,12 @@ async def test_require_workspace_access_allows_system_user_with_membership(monke
         return True
 
     monkeypatch.setattr("shorts_api.auth.workspace_service.check_access", _has_access)
-    user = User(
-        id=2,
-        email="system@example.com",
-        name="System",
-        workspace_id=None,
-        auth_provider="api_key",
-        auth_subject="system",
-        created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc),
-    )
+    user = {
+        "user_id": 2,
+        "auth_provider": "api_key",
+        "auth_subject": "system",
+        "workspace_id": None,
+    }
 
     result = await require_workspace_access(100, user)
-    assert result.id == 2
+    assert result["user_id"] == 2

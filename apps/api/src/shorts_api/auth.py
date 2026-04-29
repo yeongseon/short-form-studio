@@ -10,7 +10,6 @@ import hmac
 import hashlib
 import os
 
-from creator_domain.models import User
 from creator_service.workspace_service import workspace_service
 from creator_service.user_service import user_service
 from fastapi import Depends, HTTPException, Request
@@ -61,7 +60,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-async def get_current_user(request: Request) -> User:
+async def get_current_user(request: Request) -> dict[str, str | int | None]:
     """Resolve user from API key only. Returns 401 if no valid key."""
     api_key = (
         request.headers.get("X-API-Key")
@@ -75,15 +74,27 @@ async def get_current_user(request: Request) -> User:
     if not user:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-    return user
+    workspaces = await workspace_service.list_user_workspaces(user.id)
+    workspace_id = workspaces[0].id if workspaces else None
+
+    return {
+        "user_id": user.id,
+        "auth_provider": "api_key",
+        "auth_subject": fingerprint,
+        "workspace_id": workspace_id,
+    }
 
 
 async def require_workspace_access(
     workspace_id: int,
-    user: User = Depends(get_current_user),
-) -> User:
+    user: dict[str, str | int | None] = Depends(get_current_user),
+) -> dict[str, str | int | None]:
     """Verify the user has access to the given workspace."""
-    has_access = await workspace_service.check_access(workspace_id, user.id)
+    user_id = user.get("user_id")
+    if not isinstance(user_id, int):
+        raise HTTPException(status_code=401, detail="Invalid user context")
+
+    has_access = await workspace_service.check_access(workspace_id, user_id)
     if not has_access:
         raise HTTPException(status_code=403, detail="Workspace access denied")
 

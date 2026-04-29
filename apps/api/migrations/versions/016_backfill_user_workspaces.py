@@ -74,10 +74,6 @@ def upgrade() -> None:
     op.create_index("ix_workspace_members_user_id", "workspace_members", ["user_id"])
     op.create_index("ix_workspace_members_workspace_id", "workspace_members", ["workspace_id"])
 
-    # Follow-up plan (not enforced in this migration):
-    # 1) Backfill users.workspace_id from each user's primary workspace membership.
-    # 2) Enforce users.workspace_id as NOT NULL after all rows are populated.
-
 
 def downgrade() -> None:
     op.drop_index("ix_workspace_members_workspace_id", table_name="workspace_members")
