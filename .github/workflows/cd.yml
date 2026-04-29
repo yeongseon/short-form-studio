@@ -87,3 +87,54 @@ jobs:
           echo "Deploy step placeholder — configure with your infrastructure"
           echo "Image: ghcr.io/${{ github.repository }}/api:latest"
           echo "Rollback: re-run this workflow with a previous commit SHA"
+
+      - name: Verify deployment health
+        # Post-deploy health check with retry logic
+        # Verifies the staging deployment is healthy before marking as successful
+        # Exits with error code if all retry attempts fail, triggering rollback job
+        run: |
+          echo "Starting health check verification..."
+          STAGING_URL="${{ vars.STAGING_URL }}"
+          if [ -z "$STAGING_URL" ]; then
+            echo "Warning: STAGING_URL not configured, skipping health check"
+            exit 0
+          fi
+          
+          for i in 1 2 3 4 5; do
+            echo "Health check attempt $i/5..."
+            if curl -sf "${STAGING_URL}/healthz" -o /dev/null 2>/dev/null; then
+              echo "✓ Health check passed"
+              exit 0
+            fi
+            echo "✗ Attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
+          echo "✗ Health check failed after 5 attempts - triggering rollback"
+          exit 1
+
+  # Rollback job triggered if deploy-staging fails health check
+  # Documents rollback procedure and provides manual intervention point
+  rollback-staging:
+    if: failure()
+    needs: [deploy-staging]
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Log rollback event
+        run: |
+          echo "=== ROLLBACK INITIATED ==="
+          echo "Health check verification failed. Initiating rollback procedure."
+          echo ""
+          echo "Rollback procedure:"
+          echo "1. Get the previously stable image tag from your container registry"
+          echo "2. Re-deploy using that image tag to the staging environment"
+          echo "3. Verify new deployment health at: ${{ vars.STAGING_URL }}/healthz"
+          echo "4. If health check passes, investigate the failed deployment"
+          echo ""
+          echo "To manually trigger rollback:"
+          echo "1. Go to GitHub Actions → Build & Publish workflow"
+          echo "2. Click 'Run workflow' with a known-good commit SHA"
+          echo "3. This will rebuild and redeploy the stable version"
+          echo ""
+          echo "Alternative: Update deployment manifest to use previous image tag"
+          echo "and trigger a fresh deployment."
