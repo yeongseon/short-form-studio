@@ -1,4 +1,4 @@
-# Build & Publish — builds container images and scans them with Trivy.
+# Build & Publish — builds container images, scans with Trivy, then pushes.
 # NOTE: Deployment jobs will be added once infrastructure is provisioned. See issue #391.
 # Rollback strategy: redeploy the previous image tag via workflow_dispatch.
 
@@ -14,7 +14,7 @@ permissions:
   packages: write
 
 jobs:
-  build-push:
+  build-scan-push:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -46,35 +46,18 @@ jobs:
           echo "date_tag=$(date +%Y.%m.%d).${{ github.run_number }}" >> "$GITHUB_OUTPUT"
           echo "sha_short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push image
+      - name: Build image (local only)
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           target: runtime
-          push: true
+          push: false
+          load: true
           tags: |
             ghcr.io/${{ github.repository }}/${{ matrix.service }}:${{ steps.vars.outputs.date_tag }}
             ghcr.io/${{ github.repository }}/${{ matrix.service }}:main-${{ steps.vars.outputs.sha_short }}
             ghcr.io/${{ github.repository }}/${{ matrix.service }}:latest
-
-  image-scan:
-    runs-on: ubuntu-latest
-    needs: build-push
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - service: api
-          - service: studio-web
-          - service: worker
-    steps:
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Trivy scan (${{ matrix.service }})
         uses: aquasecurity/trivy-action@0.28.0
@@ -83,3 +66,10 @@ jobs:
           image-ref: ghcr.io/${{ github.repository }}/${{ matrix.service }}:latest
           severity: CRITICAL,HIGH
           exit-code: '1'
+
+      - name: Push image (after scan passes)
+        if: success()
+        run: |
+          docker push ghcr.io/${{ github.repository }}/${{ matrix.service }}:${{ steps.vars.outputs.date_tag }}
+          docker push ghcr.io/${{ github.repository }}/${{ matrix.service }}:main-${{ steps.vars.outputs.sha_short }}
+          docker push ghcr.io/${{ github.repository }}/${{ matrix.service }}:latest

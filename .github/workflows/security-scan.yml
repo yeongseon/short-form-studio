@@ -67,7 +67,6 @@ jobs:
         run: |
           pip install packages/creator-domain packages/creator-service packages/creator-provider 2>/dev/null
           pip-audit
-        continue-on-error: true
 
       - name: Install frontend dependencies
         run: npm --prefix apps/studio-web ci
