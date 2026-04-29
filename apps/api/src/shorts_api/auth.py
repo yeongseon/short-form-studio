@@ -11,7 +11,7 @@ import os
 
 from creator_domain.models import User
 from creator_service.user_service import user_service
-from fastapi import Request
+from fastapi import Depends, Request
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
@@ -62,10 +62,24 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
 async def get_current_user(request: Request) -> User:
     """Resolve user identity after API key middleware has authenticated the request.
 
-    If X-User-Email header is present, looks up or creates a user with that email.
-    Otherwise falls back to a system user. JWT/OAuth support will be added in a
-    future PR.
+    In production (API_KEY is set), all requests are attributed to the system user.
+    The X-User-Email header is ONLY honoured when API_KEY is unset (local dev)
+    because any caller who can set HTTP headers could impersonate another user.
+    JWT/OAuth support will replace this in a future PR.
     """
+    api_key_configured = bool(os.getenv("API_KEY"))
+
+    # In production, always use the system user — X-User-Email is untrusted
+    # when the only auth is a shared API key.
+    if api_key_configured:
+        return await user_service.create_or_get_user(
+            email="system@short-form-studio.local",
+            name="System",
+            auth_provider="api_key",
+            auth_subject="system",
+        )
+
+    # Dev mode: allow X-User-Email for convenience
     user_email = request.headers.get("X-User-Email")
     if user_email:
         return await user_service.create_or_get_user(
@@ -80,3 +94,22 @@ async def get_current_user(request: Request) -> User:
         auth_provider="api_key",
         auth_subject="system",
     )
+
+
+async def require_workspace_access(
+    workspace_id: int,
+    user: User = Depends(get_current_user),
+) -> User:
+    """Verify the user has access to the given workspace.
+
+    In production (shared API-key auth, system user), workspace access is
+    implicitly granted since there is only one system identity.
+    When per-user identity is enabled (JWT/OAuth, future PR), this will
+    check workspace membership.
+    """
+    # With shared-key auth all requests map to the system user,
+    # so membership checks are deferred until JWT/OAuth lands.
+    # This dependency exists as a structural placeholder: routes
+    # that require workspace access MUST declare it so the
+    # enforcement point is already in place.
+    return user

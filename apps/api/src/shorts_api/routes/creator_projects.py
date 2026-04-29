@@ -3,11 +3,13 @@ import os
 import shutil
 from typing import Literal
 
+from creator_domain.models import User
 from creator_service.project_service import project_service
 from creator_service.run_service import run_service
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
+from shorts_api.auth import get_current_user
 from shorts_api.routes import creator_runs_utils
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -22,7 +24,10 @@ class CreateProjectRequest(BaseModel):
     url_source: str | None = Field(default=None, max_length=2000)
 
 @router.post("", status_code=201)
-async def create_project(request: CreateProjectRequest) -> dict[str, object]:
+async def create_project(
+    request: CreateProjectRequest,
+    user: User = Depends(get_current_user),
+) -> dict[str, object]:
     try:
         project = await project_service.create_project(
             title=request.title,
@@ -45,14 +50,21 @@ class UpdateProjectRequest(BaseModel):
 
 
 @router.patch("/{project_id}")
-async def update_project(project_id: int, request: UpdateProjectRequest) -> dict[str, object]:
+async def update_project(
+    project_id: int,
+    request: UpdateProjectRequest,
+    user: User = Depends(get_current_user),
+) -> dict[str, object]:
     project = await project_service.update_project(project_id, title=request.title)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     return project.model_dump(mode="json")
 
 @router.get("/{project_id}")
-async def get_project_detail(project_id: int) -> dict[str, object]:
+async def get_project_detail(
+    project_id: int,
+    user: User = Depends(get_current_user),
+) -> dict[str, object]:
     project = await project_service.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -64,6 +76,7 @@ async def get_project_detail(project_id: int) -> dict[str, object]:
 async def list_projects(
     limit: int = Query(default=20, ge=0),
     offset: int = Query(default=0, ge=0),
+    user: User = Depends(get_current_user),
 ) -> dict[str, object]:
     projects = await project_service.list_projects(limit=limit, offset=offset)
     total = await project_service.count_projects()
@@ -92,7 +105,10 @@ def _remove_run_artifacts(run_ids: list[int]) -> None:
 
 
 @router.delete("/{project_id}")
-async def delete_project(project_id: int) -> dict[str, object]:
+async def delete_project(
+    project_id: int,
+    user: User = Depends(get_current_user),
+) -> dict[str, object]:
     """Delete a project and all associated runs (FK cascade)."""
     run_ids = await _cleanup_project_resources(project_id)
 
