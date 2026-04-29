@@ -24,7 +24,7 @@ class PostgresTaskTrackingStorage:
             ON CONFLICT (celery_task_id) DO UPDATE
             SET status = EXCLUDED.status,
                 attempt = CASE
-                    WHEN creator_run_tasks.status = 'queued' AND EXCLUDED.status = 'running'
+                    WHEN EXCLUDED.status = 'queued' AND creator_run_tasks.status IN ('failed', 'running')
                         THEN creator_run_tasks.attempt + 1
                     ELSE creator_run_tasks.attempt
                 END,

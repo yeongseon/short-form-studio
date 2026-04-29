@@ -143,8 +143,6 @@ class TaskTrackingService:
             return RunTask.from_row(row)
 
         attempt = int(existing.get("attempt", 1))
-        if existing.get("status") == "queued":
-            attempt += 1
 
         row = await self.storage.update_task_status(
             existing["id"],
