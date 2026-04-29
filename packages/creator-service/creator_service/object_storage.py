@@ -14,20 +14,20 @@ import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import BinaryIO, Protocol
+from typing import BinaryIO, Protocol, cast
 
 logger = logging.getLogger(__name__)
 
 
-
-
 class StorageCredentialMissingError(RuntimeError):
     """Raised when storage credentials are missing or insufficient.
-    
+
     This is a critical error that must not be silently ignored.
     Unsigned URLs are not acceptable in production.
     """
+
     pass
+
 
 @dataclass
 class StorageResult:
@@ -333,6 +333,26 @@ class AzureBlobStorageBackend:
         return bool(blob_client.exists())
 
 
+class GCSStorageBackend:
+    """Google Cloud Storage backend (not yet implemented).
+
+    Requires google-cloud-storage. Install: pip install google-cloud-storage
+
+    Configure via environment:
+        GCS_BUCKET: Bucket name
+        GCS_PREFIX: Optional key prefix
+        GOOGLE_APPLICATION_CREDENTIALS: Path to service account JSON
+    """
+
+    def __init__(self) -> None:
+        raise NotImplementedError(
+            "GCS storage backend is not yet implemented. "
+            "Use STORAGE_BACKEND=s3 or STORAGE_BACKEND=azure_blob. "
+            "To contribute GCS support, implement this class following "
+            "the S3StorageBackend pattern."
+        )
+
+
 def create_storage_backend() -> ArtifactStorageBackend:
     backend = os.getenv("STORAGE_BACKEND", "local")
     if backend == "local":
@@ -341,6 +361,8 @@ def create_storage_backend() -> ArtifactStorageBackend:
         return S3StorageBackend()
     if backend == "azure_blob":
         return AzureBlobStorageBackend()
+    if backend == "gcs":
+        return cast(ArtifactStorageBackend, GCSStorageBackend())
     raise ValueError(f"Unknown STORAGE_BACKEND: {backend}")
 
 
