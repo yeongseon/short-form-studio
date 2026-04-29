@@ -18,7 +18,8 @@ import resource
 from typing import Any
 
 from celery import Celery
-from celery.signals import after_setup_logger, task_failure
+from celery.signals import after_setup_logger, task_failure, worker_process_init
+from importlib import import_module
 from creator_service.logging_config import setup_json_logging
 from kombu import Exchange, Queue
 
@@ -102,6 +103,20 @@ validate_production_config(service_kind="worker")
 def setup_celery_logger(_logger: logging.Logger, **_kwargs: object) -> None:
     """Configure Celery logger with JSON formatting."""
     setup_json_logging(service_name="worker", level="INFO")
+
+
+@worker_process_init.connect
+def setup_worker_process_telemetry(**kwargs: object) -> None:
+    """
+    Configure OpenTelemetry once per worker process.
+
+    Called automatically when a Celery worker process is initialized.
+    Safe across forked workers: each worker process calls init_telemetry
+    independently. The idempotency guard in init_telemetry() ensures that
+    multiple calls within the same process are no-ops.
+    """
+    telemetry_module = import_module("telemetry")
+    telemetry_module.init_telemetry(service_name="worker")
 
 
 def _record_failed_task_to_dlq(

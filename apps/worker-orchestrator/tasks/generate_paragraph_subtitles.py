@@ -43,6 +43,8 @@ Retry safety:
 
 from __future__ import annotations
 
+# pyright: reportMissingImports=false
+
 import asyncio
 import logging
 import os
@@ -66,6 +68,7 @@ from creator_provider.registry import ProviderRegistry
 from creator_service.cost_config import COST_PARAGRAPH_SUBTITLE
 from creator_service.run_service import run_service as _run_service
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
+from creator_service.telemetry import trace_task
 from creator_service.task_tracking_service import task_tracking_service as _task_tracking_service
 from creator_service.usage_service import record_provider_call, resolve_workspace_id_from_run
 
@@ -119,6 +122,7 @@ async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
     time_limit=360,
     name="generate_paragraph_subtitles",
 )
+@trace_task("generate_paragraph_subtitles")
 def generate_paragraph_subtitles(
     self,
     run_id: int,

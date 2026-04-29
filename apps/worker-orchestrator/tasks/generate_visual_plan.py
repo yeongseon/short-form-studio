@@ -33,6 +33,8 @@ Retry safety:
 
 from __future__ import annotations
 
+# pyright: reportMissingImports=false
+
 import asyncio
 import json
 import logging
@@ -56,6 +58,7 @@ from creator_provider.registry import ProviderRegistry
 from creator_service.cost_config import COST_VISUAL_PLAN
 from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
+from creator_service.telemetry import trace_task
 from creator_service.task_tracking_service import task_tracking_service as _task_tracking_service
 from creator_service.usage_service import record_provider_call, resolve_workspace_id_from_run
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
@@ -198,6 +201,7 @@ async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
     time_limit=360,
     name="generate_visual_plan",
 )
+@trace_task("generate_visual_plan")
 def generate_visual_plan(
     self,
     run_id: int,

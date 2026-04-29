@@ -202,6 +202,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(ApiKeyMiddleware)
+if os.getenv("OTEL_ENABLED", "").lower() in ("true", "1", "yes", "on"):
+    from shorts_api.middleware.telemetry import TelemetryMiddleware
+
+    app.add_middleware(TelemetryMiddleware)
 
 
 @app.middleware("http")
