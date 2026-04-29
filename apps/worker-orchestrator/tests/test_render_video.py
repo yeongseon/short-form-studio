@@ -444,7 +444,7 @@ def test_render_video_ffmpeg_failure_marks_failed(monkeypatch: pytest.MonkeyPatc
         fake_ffmpeg=fake_ffmpeg,
     )
 
-    with pytest.raises(RuntimeError, match="ffmpeg crashed"):
+    with pytest.raises(render_video_module.ProviderError, match="Provider failed video render"):
         _invoke_task(run_id=204)
 
     assert len(fake_ffmpeg.calls) == 1

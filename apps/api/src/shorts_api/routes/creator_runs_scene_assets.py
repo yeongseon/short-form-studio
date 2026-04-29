@@ -6,6 +6,7 @@ from creator_service.project_service import project_service
 from creator_service.render_service import render_service
 from creator_service.run_service import run_service
 from creator_service.subtitle_service import subtitle_service
+from creator_service.task_tracking_service import task_tracking_service
 from creator_service.visual_asset_service import visual_asset_service
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -106,6 +107,7 @@ async def generate_scene_image_endpoint(
         ) from None
 
     await _append_task_id(run_id, task_id, run_service=run_service)
+    await task_tracking_service.record_task_queued(run_id, "generate_scene_image", task_id)
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -154,6 +156,7 @@ async def regenerate_scene_image_endpoint(
         ) from None
 
     await _append_task_id(run_id, task_id, run_service=run_service)
+    await task_tracking_service.record_task_queued(run_id, "generate_scene_image", task_id)
     return {
         "task_id": task_id,
         "run_id": run_id,

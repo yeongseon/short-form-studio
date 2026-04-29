@@ -43,9 +43,7 @@ class VisualAssetStorageBackend(Protocol):
         """Fetch a single asset by id."""
         ...
 
-    async def list_assets_by_scene(
-        self, run_id: int, scene_id: str
-    ) -> list[dict[str, Any]]:
+    async def list_assets_by_scene(self, run_id: int, scene_id: str) -> list[dict[str, Any]]:
         """List all asset versions for a scene, newest first."""
         ...
 
@@ -53,18 +51,14 @@ class VisualAssetStorageBackend(Protocol):
         """List all assets for a run, grouped by scene_id then newest first."""
         ...
 
-    async def set_active(
-        self, run_id: int, scene_id: str, asset_id: int
-    ) -> bool:
+    async def set_active(self, run_id: int, scene_id: str, asset_id: int) -> bool:
         """Mark *asset_id* as active for the given scene and deactivate others.
 
         Returns True if the asset was found and activated, False otherwise.
         """
         ...
 
-    async def get_active_asset(
-        self, run_id: int, scene_id: str
-    ) -> dict[str, Any] | None:
+    async def get_active_asset(self, run_id: int, scene_id: str) -> dict[str, Any] | None:
         """Fetch the currently active asset for a scene."""
         ...
 
@@ -99,8 +93,7 @@ class InMemoryVisualAssetStorage:
                         a["is_active"] = False
             # Compute next version for this scene
             scene_assets = [
-                a for a in self._assets
-                if a["run_id"] == run_id and a["scene_id"] == scene_id
+                a for a in self._assets if a["run_id"] == run_id and a["scene_id"] == scene_id
             ]
             next_version = max((a["version"] for a in scene_assets), default=0) + 1
             now = datetime.now(timezone.utc)
@@ -120,17 +113,11 @@ class InMemoryVisualAssetStorage:
                 return dict(a)
         return None
 
-    async def list_assets_by_scene(
-        self, run_id: int, scene_id: str
-    ) -> list[dict[str, Any]]:
+    async def list_assets_by_scene(self, run_id: int, scene_id: str) -> list[dict[str, Any]]:
         scene_assets = [
-            a for a in self._assets
-            if a["run_id"] == run_id and a["scene_id"] == scene_id
+            a for a in self._assets if a["run_id"] == run_id and a["scene_id"] == scene_id
         ]
-        return [
-            dict(a)
-            for a in sorted(scene_assets, key=lambda x: x["version"], reverse=True)
-        ]
+        return [dict(a) for a in sorted(scene_assets, key=lambda x: x["version"], reverse=True)]
 
     async def list_assets_by_run(self, run_id: int) -> list[dict[str, Any]]:
         run_assets = [a for a in self._assets if a["run_id"] == run_id]
@@ -143,9 +130,7 @@ class InMemoryVisualAssetStorage:
             )
         ]
 
-    async def set_active(
-        self, run_id: int, scene_id: str, asset_id: int
-    ) -> bool:
+    async def set_active(self, run_id: int, scene_id: str, asset_id: int) -> bool:
         key = (run_id, scene_id)
         lock = self._scene_locks.setdefault(key, asyncio.Lock())
         async with lock:
@@ -159,15 +144,9 @@ class InMemoryVisualAssetStorage:
                         a["is_active"] = False
             return found
 
-    async def get_active_asset(
-        self, run_id: int, scene_id: str
-    ) -> dict[str, Any] | None:
+    async def get_active_asset(self, run_id: int, scene_id: str) -> dict[str, Any] | None:
         for a in self._assets:
-            if (
-                a["run_id"] == run_id
-                and a["scene_id"] == scene_id
-                and a.get("is_active", False)
-            ):
+            if a["run_id"] == run_id and a["scene_id"] == scene_id and a.get("is_active", False):
                 return dict(a)
         return None
 
@@ -192,6 +171,8 @@ class VisualAssetService:
         prompt_snapshot: str | None = None,
         model_used: str | None = None,
         provider_type: str | None = None,
+        storage_provider: str | None = None,
+        storage_key: str | None = None,
         is_active: bool = True,
     ) -> VisualAsset:
         """Create a new asset version for a scene.
@@ -209,6 +190,8 @@ class VisualAssetService:
             "prompt_snapshot": prompt_snapshot,
             "model_used": model_used,
             "provider": provider_type,  # DB column is 'provider'
+            "storage_provider": storage_provider,
+            "storage_key": storage_key,
             "is_active": is_active,
         }
         # save_asset atomically: allocates version, deactivates previous
@@ -234,10 +217,7 @@ class VisualAssetService:
         if asset_row is None:
             raise ValueError(f"Asset {asset_id} not found")
         if asset_row["run_id"] != run_id or asset_row["scene_id"] != scene_id:
-            raise ValueError(
-                f"Asset {asset_id} does not belong to run {run_id} "
-                f"scene '{scene_id}'"
-            )
+            raise ValueError(f"Asset {asset_id} does not belong to run {run_id} scene '{scene_id}'")
 
         success = await self.storage.set_active(run_id, scene_id, asset_id)
         if not success:
@@ -251,9 +231,7 @@ class VisualAssetService:
 
     # -- Reads --------------------------------------------------------------
 
-    async def list_by_scene(
-        self, run_id: int, scene_id: str
-    ) -> list[VisualAsset]:
+    async def list_by_scene(self, run_id: int, scene_id: str) -> list[VisualAsset]:
         """List all asset versions for a scene, newest first."""
         rows = await self.storage.list_assets_by_scene(run_id, scene_id)
         return [self._row_to_asset(r) for r in rows]
@@ -271,9 +249,7 @@ class VisualAssetService:
             grouped.setdefault(asset.scene_id, []).append(asset)
         return grouped
 
-    async def get_active_asset(
-        self, run_id: int, scene_id: str
-    ) -> VisualAsset | None:
+    async def get_active_asset(self, run_id: int, scene_id: str) -> VisualAsset | None:
         """Get the currently active asset for a scene."""
         row = await self.storage.get_active_asset(run_id, scene_id)
         if row is None:

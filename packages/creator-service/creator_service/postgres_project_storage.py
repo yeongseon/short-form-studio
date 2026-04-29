@@ -36,20 +36,41 @@ class PostgresProjectStorage:
     async def fetch_project(self, project_id: int) -> dict[str, Any] | None:
         return await fetch_one("SELECT * FROM creator_projects WHERE id = $1", project_id)
 
-    async def list_projects(self, limit: int, offset: int) -> list[dict[str, Any]]:
+    async def list_projects(
+        self, limit: int, offset: int, workspace_id: int | None = None
+    ) -> list[dict[str, Any]]:
+        if workspace_id is None:
+            return await fetch_all(
+                """
+                SELECT *
+                FROM creator_projects
+                ORDER BY created_at DESC, id DESC
+                LIMIT $1 OFFSET $2
+                """,
+                limit,
+                offset,
+            )
         return await fetch_all(
             """
             SELECT *
             FROM creator_projects
+            WHERE workspace_id = $1
             ORDER BY created_at DESC, id DESC
-            LIMIT $1 OFFSET $2
+            LIMIT $2 OFFSET $3
             """,
+            workspace_id,
             limit,
             offset,
         )
 
-    async def count_projects(self) -> int:
-        row = await fetch_one("SELECT COUNT(*) AS count FROM creator_projects")
+    async def count_projects(self, workspace_id: int | None = None) -> int:
+        if workspace_id is None:
+            row = await fetch_one("SELECT COUNT(*) AS count FROM creator_projects")
+        else:
+            row = await fetch_one(
+                "SELECT COUNT(*) AS count FROM creator_projects WHERE workspace_id = $1",
+                workspace_id,
+            )
         if row is None:
             return 0
         return int(row["count"])
@@ -73,13 +94,22 @@ class PostgresProjectStorage:
             "status": row["status"],
         }
 
+    _ALLOWED_COLUMNS = frozenset(
+        {
+            "title",
+            "source_type",
+            "idea_brief",
+            "markdown_source",
+            "url_source",
+            "json_script",
+            "status",
+            "workspace_id",
+        }
+    )
 
-    _ALLOWED_COLUMNS = frozenset({
-        "title", "source_type", "idea_brief", "markdown_source",
-        "url_source", "json_script", "status",
-    })
-
-    async def update_project(self, project_id: int, updates: dict[str, Any]) -> dict[str, Any] | None:
+    async def update_project(
+        self, project_id: int, updates: dict[str, Any]
+    ) -> dict[str, Any] | None:
         """Update project fields. Returns updated row or None if not found.
 
         Only columns listed in ``_ALLOWED_COLUMNS`` are accepted; unknown
@@ -98,11 +128,12 @@ class PostgresProjectStorage:
         params.append(project_id)
         query = f"""
             UPDATE creator_projects
-            SET {', '.join(set_clauses)}, updated_at = NOW()
+            SET {", ".join(set_clauses)}, updated_at = NOW()
             WHERE id = ${idx}
             RETURNING *
         """
         return await fetch_one(query, *params)
+
     async def delete_project(self, project_id: int) -> bool:
         """Delete a project by id. Returns True if deleted.
 

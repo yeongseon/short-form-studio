@@ -14,15 +14,17 @@ class VisualAsset(BaseModel):
     prompt_snapshot: str | None = None
     model_used: str | None = None
     provider_type: str | None = None
+    storage_provider: str | None = None
+    storage_key: str | None = None
     is_active: bool = True
     created_at: datetime
 
     @classmethod
-    def from_dict(cls, data: dict) -> VisualAsset:
+    def from_dict(cls, data: dict[str, object]) -> VisualAsset:
         return cls.model_validate(data)
 
     @classmethod
-    def from_row(cls, row: dict) -> VisualAsset:
+    def from_row(cls, row: dict[str, object]) -> VisualAsset:
         """Construct from a DB row dict, mapping column names to domain fields.
 
         Handles:

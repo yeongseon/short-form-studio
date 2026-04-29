@@ -2,8 +2,9 @@
 
 """Tests for the settings endpoints."""
 
+import hashlib
+
 import pytest
-from creator_service import db as db_module
 from httpx import ASGITransport, AsyncClient
 from shorts_api.main import app
 
@@ -11,16 +12,24 @@ from shorts_api.main import app
 @pytest.fixture
 async def client(monkeypatch: pytest.MonkeyPatch):
     api_key = "test-api-key"
-    api_key_hash = __import__("hashlib").sha256(api_key.encode("utf-8")).hexdigest()
+    expected_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
 
-    async def fake_fetch_one(query: str, *args):
+    async def _fetch_one_stub(query: str, *args: object) -> dict[str, object] | None:
         if "FROM api_keys" in query:
-            return {"user_id": 10} if args and args[0] == api_key_hash else None
+            key_hash = args[0] if args else None
+            if key_hash == expected_hash:
+                return {"user_id": 1}
+            return None
         if "FROM workspace_members" in query:
+            user_id = args[0] if args else None
+            if user_id == 1:
+                return {"workspace_id": 1, "workspace_name": "workspace-1"}
             return None
         return None
 
-    monkeypatch.setattr(db_module, "fetch_one", fake_fetch_one)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost:5432/test")
+    monkeypatch.setattr("shorts_api.auth.fetch_one", _fetch_one_stub)
+
     transport = ASGITransport(app=app)
     async with AsyncClient(
         transport=transport,
