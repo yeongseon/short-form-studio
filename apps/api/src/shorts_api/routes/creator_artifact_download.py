@@ -8,6 +8,7 @@ from creator_service.artifact_download_service import artifact_download_service
 from creator_service.project_service import project_service
 from creator_service.run_service import run_service
 from fastapi import APIRouter, HTTPException, Request
+from shorts_api.auth import CurrentUser, get_current_user
 from starlette.responses import FileResponse, RedirectResponse
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,10 @@ async def download_artifact(
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
+    # Once #397 merges, this is populated from auth middleware workspace context.
+    user: CurrentUser = await get_current_user()
+    user_workspace_id = getattr(user, "workspace_id", None)
+
     request_workspace_id_raw = request.headers.get("X-Workspace-Id")
     request_workspace_id: int | None = None
     if request_workspace_id_raw is not None:
@@ -53,24 +58,46 @@ async def download_artifact(
     # ─────────────────────────────────────────────────────────────────────────
     strict_mode = os.getenv("STRICT_WORKSPACE_ACCESS", "false").lower() in ("true", "1", "yes")
 
-    if request_workspace_id is None or project_workspace_id is None:
+    if (
+        not strict_mode
+        and request_workspace_id is not None
+        and user_workspace_id is not None
+        and request_workspace_id != user_workspace_id
+    ):
+        logger.warning(
+            "Workspace header/user mismatch in non-strict mode; honoring header for backward compatibility — "
+            "request_workspace_id=%s, user_workspace_id=%s, run_id=%s",
+            request_workspace_id,
+            user_workspace_id,
+            run_id,
+        )
+
+    access_workspace_id = user_workspace_id if strict_mode else request_workspace_id
+    if strict_mode and access_workspace_id is None:
+        access_workspace_id = request_workspace_id
+
+    if access_workspace_id is None or project_workspace_id is None:
         if strict_mode:
             logger.warning(
-                "Strict workspace access: denying artifact download — "+
-                "request_workspace_id=%s, project_workspace_id=%s, run_id=%s",
-                request_workspace_id, project_workspace_id, run_id,
+                "Strict workspace access: denying artifact download — "
+                + "access_workspace_id=%s, project_workspace_id=%s, run_id=%s",
+                access_workspace_id,
+                project_workspace_id,
+                run_id,
             )
             raise HTTPException(status_code=403, detail="Forbidden")
         else:
             # Phase 2: log for visibility before enforcing
-            if request_workspace_id is None or project_workspace_id is None:
+            if access_workspace_id is None or project_workspace_id is None:
                 logger.warning(
-                    "Workspace access check skipped (NULL) — "+
-                    "request_workspace_id=%s, project_workspace_id=%s, run_id=%s. "+
-                    "Run backfill migration 015 and enable STRICT_WORKSPACE_ACCESS to close this gap.",
-                    request_workspace_id, project_workspace_id, run_id,
+                    "Workspace access check skipped (NULL) — "
+                    + "access_workspace_id=%s, project_workspace_id=%s, run_id=%s. "
+                    + "Run backfill migration 015 and enable STRICT_WORKSPACE_ACCESS to close this gap.",
+                    access_workspace_id,
+                    project_workspace_id,
+                    run_id,
                 )
-    elif request_workspace_id != project_workspace_id:
+    elif access_workspace_id != project_workspace_id:
         raise HTTPException(status_code=403, detail="Forbidden")
 
     artifact = await artifact_download_service.get_artifact_by_id(artifact_id)
