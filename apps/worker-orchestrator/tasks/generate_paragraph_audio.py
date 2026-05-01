@@ -110,60 +110,6 @@ def _get_wav_duration_seconds(path: str) -> float | None:
         return None
 
 
-async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
-    remover: Any = getattr(_run_service.storage, "remove_active_task_id", None)
-    if not callable(remover):
-        return
-    try:
-        maybe_result = remover(run_id, task_id)
-        if asyncio.iscoroutine(maybe_result):
-            await maybe_result
-    except Exception:
-        logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
-
-
-@celery_app.task(
-    bind=True,
-    autoretry_for=(ProviderTimeoutError, RateLimitError),
-    retry_backoff=True,
-    retry_jitter=True,
-    max_retries=3,
-    soft_time_limit=300,
-    time_limit=360,
-    name="generate_paragraph_audio",
-)
-@trace_task("generate_paragraph_audio")
-def generate_paragraph_audio(
-    self,
-    run_id: int,
-    section_id: str,
-    section_text: str,
-    tts_model: str = "qwen3-tts",
-    voice: str = "default",
-) -> dict[str, object]:
-    """Generate TTS audio for a single paragraph.
-
-    Parameters
-    ----------
-    run_id : int
-        Parent run ID (used for artifact storage path).
-    section_id : str
-        The ``section_id`` from the structured script.
-    section_text : str
-        Plain text of the paragraph to synthesise.
-    tts_model : str
-        Model key from the provider registry.
-    voice : str
-        Voice identifier for the TTS provider.
-    """
-    start_time = datetime.now(timezone.utc)
-    start_iso = start_time.isoformat()
-    task_id = str(
-        getattr(getattr(self, "request", None), "id", None) or f"para-{run_id}-{section_id}"
-    )
-    # Idempotency: acks_late + task_reject_on_worker_lost ensures redelivery on crash.
-    # If the run has already advanced past this stage, the worker's stage check will
-    # naturally skip processing (handled by run_service stage validation).
 
     provider_type: str | None = None
     endpoint: str | None = None
