@@ -67,7 +67,7 @@ def test_generate_script_propagates_soft_timeout(monkeypatch: pytest.MonkeyPatch
 
     with pytest.raises(SoftTimeLimitExceeded):
         # Celery bound tasks: call without self, Celery injects it
-        mod.generate_script.run(
+        mod.generate_script.run(  # type: ignore[union-attr]
             run_id=1,
             idea_brief="test idea",
             model_key="test-model",

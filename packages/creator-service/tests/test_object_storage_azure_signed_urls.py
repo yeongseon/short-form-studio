@@ -41,10 +41,10 @@ def _install_fake_azure(account_key: str | None = "secret") -> None:
     def _generate_blob_sas(**_kwargs: object) -> str:
         return "sig=fake"
 
-    blob_mod.BlobServiceClient = _BlobServiceClient
-    blob_mod.ContentSettings = _ContentSettings
-    blob_mod.BlobSasPermissions = _BlobSasPermissions
-    blob_mod.generate_blob_sas = _generate_blob_sas
+    blob_mod.BlobServiceClient = _BlobServiceClient  # type: ignore[attr-defined]
+    blob_mod.ContentSettings = _ContentSettings  # type: ignore[attr-defined]
+    blob_mod.BlobSasPermissions = _BlobSasPermissions  # type: ignore[attr-defined]
+    blob_mod.generate_blob_sas = _generate_blob_sas  # type: ignore[attr-defined]
     sys.modules["azure"] = azure_mod
     sys.modules["azure.storage"] = storage_mod
     sys.modules["azure.storage.blob"] = blob_mod
