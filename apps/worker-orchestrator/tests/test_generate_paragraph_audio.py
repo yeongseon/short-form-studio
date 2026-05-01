@@ -51,6 +51,8 @@ class FakeAudioService:
         model_used: str,
         provider_type: str,
         voice: str,
+        storage_provider: str | None = None,
+        storage_key: str | None = None,
     ) -> FakeAudioArtifact:
         call_data = {
             "run_id": run_id,

@@ -46,6 +46,8 @@ class FakeSubtitleService:
         fmt: str,
         model_used: str,
         provider_type: str,
+        storage_provider: str | None = None,
+        storage_key: str | None = None,
     ) -> FakeSubtitleArtifact:
         call_data = {
             "run_id": run_id,
