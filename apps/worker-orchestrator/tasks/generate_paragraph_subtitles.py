@@ -151,12 +151,9 @@ def generate_paragraph_subtitles(
     task_id = str(
         getattr(getattr(self, "request", None), "id", None) or f"sub-{run_id}-{section_id}"
     )
-<<<<<<< HEAD
     # Idempotency: acks_late + task_reject_on_worker_lost ensures redelivery on crash.
     # If the run has already advanced past this stage, the worker's stage check will
     # naturally skip processing (handled by run_service stage validation).
-=======
->>>>>>> b282ee1 (fix: resolve ruff lint errors and failing artifact storage test)
 
     provider_type: str | None = None
     endpoint: str | None = None
