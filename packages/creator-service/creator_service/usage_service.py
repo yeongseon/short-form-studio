@@ -5,8 +5,9 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from creator_service.cost_config import COST_CONFIG_VERSION
 from creator_domain.models import UsageEvent, UsageSummary, WorkspaceQuota
+
+from creator_service.cost_config import COST_CONFIG_VERSION
 
 logger = logging.getLogger(__name__)
 

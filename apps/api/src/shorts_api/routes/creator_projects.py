@@ -3,7 +3,8 @@
 import logging
 import os
 import shutil
-from typing import Any, Awaitable, Callable, Literal, cast
+from collections.abc import Awaitable, Callable
+from typing import Any, Literal, cast
 
 from creator_service.project_service import project_service
 from creator_service.run_service import run_service
@@ -29,7 +30,7 @@ class CreateProjectRequest(BaseModel):
 @router.post("", status_code=201)
 async def create_project(
     request: CreateProjectRequest,
-    user: Any = Depends(get_current_user),
+    user: Any = Depends(get_current_user),  # noqa: B008
 ) -> dict[str, object]:
     user_workspace_id = user.get("workspace_id")
     if user_workspace_id is None:
@@ -59,7 +60,7 @@ class UpdateProjectRequest(BaseModel):
 async def update_project(
     project_id: int,
     request: UpdateProjectRequest,
-    user: Any = Depends(get_current_user),
+    user: Any = Depends(get_current_user),  # noqa: B008
 ) -> dict[str, object]:
     user_workspace_id = user.get("workspace_id")
     if user_workspace_id is None:
@@ -80,7 +81,7 @@ async def update_project(
 @router.get("/{project_id}")
 async def get_project_detail(
     project_id: int,
-    user: Any = Depends(get_current_user),
+    user: Any = Depends(get_current_user),  # noqa: B008
 ) -> dict[str, object]:
     user_workspace_id = user.get("workspace_id")
     if user_workspace_id is None:
@@ -99,14 +100,14 @@ async def get_project_detail(
 async def list_projects(
     limit: int = Query(default=20, ge=0),
     offset: int = Query(default=0, ge=0),
-    user: Any = Depends(get_current_user),
+    user: Any = Depends(get_current_user),  # noqa: B008
 ) -> dict[str, object]:
     user_workspace_id = user.get("workspace_id")
     if user_workspace_id is None:
         raise HTTPException(status_code=403, detail="Workspace context required")
 
-    list_projects_fn = getattr(project_service, "list_projects")
-    count_projects_fn = getattr(project_service, "count_projects")
+    list_projects_fn = project_service.list_projects
+    count_projects_fn = project_service.count_projects
     projects = await list_projects_fn(
         limit=limit,
         offset=offset,
@@ -138,7 +139,7 @@ def _remove_run_artifacts(run_ids: list[int]) -> None:
 @router.delete("/{project_id}")
 async def delete_project(
     project_id: int,
-    user: Any = Depends(get_current_user),
+    user: Any = Depends(get_current_user),  # noqa: B008
 ) -> dict[str, object]:
     user_workspace_id = user.get("workspace_id")
     if user_workspace_id is None:

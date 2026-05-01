@@ -1,9 +1,8 @@
 import json
 from unittest.mock import MagicMock, patch
 
-from celery.signals import task_failure
-
 import celery_app
+from celery.signals import task_failure
 
 
 class _Sender:

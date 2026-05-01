@@ -59,8 +59,8 @@ from creator_service.render_service import render_service as _render_service
 from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
-from creator_service.telemetry import trace_task
 from creator_service.task_tracking_service import task_tracking_service as _task_tracking_service
+from creator_service.telemetry import trace_task
 from creator_service.usage_service import record_provider_call, resolve_workspace_id_from_run
 from creator_service.visual_asset_service import visual_asset_service as _visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
@@ -413,7 +413,7 @@ def render_video(
         raise
     except Exception as exc:
         if (
-            isinstance(exc, (ProviderTimeoutError, RateLimitError))
+            isinstance(exc, ProviderTimeoutError | RateLimitError)
             and self.request.retries < self.max_retries
         ):
             raise

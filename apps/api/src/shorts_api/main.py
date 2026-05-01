@@ -9,7 +9,6 @@ import mimetypes
 import os
 import resource
 import signal
-import sys
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -26,7 +25,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 from starlette import status
-from starlette.responses import FileResponse, Response
+from starlette.responses import Response
 
 from shorts_api.auth import ApiKeyMiddleware
 from shorts_api.routes.creator_artifact_download import router as artifact_download_router
@@ -42,9 +41,9 @@ from shorts_api.routes.creator_script import router as script_router
 from shorts_api.routes.creator_script import run_script_router
 from shorts_api.routes.creator_settings import router as settings_router
 from shorts_api.routes.creator_usage import router as usage_router
+from shorts_api.routes.creator_users import router as users_router
 from shorts_api.routes.creator_visual_plan import router as visual_plan_router
 from shorts_api.routes.creator_workspaces import router as workspaces_router
-from shorts_api.routes.creator_users import router as users_router
 
 # Combined runs router for backward compatibility (used by tests)
 runs_router = APIRouter()
@@ -178,6 +177,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 environment = os.getenv("ENVIRONMENT", "development").strip().lower()
 production_hardened = environment == "production"
+_is_production = production_hardened
 
 app = FastAPI(
     title="short-form-studio API",
@@ -232,7 +232,8 @@ async def request_logging_middleware(request: Request, call_next):
 @app.middleware("http")
 async def security_headers_middleware(request: Request, call_next):
     response = await call_next(request)
-    if production_hardened:
+    main_module = __import__("shorts_api.main", fromlist=["_is_production"])
+    if bool(getattr(main_module, "_is_production", _is_production)):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "1; mode=block"
@@ -380,7 +381,7 @@ async def serve_artifact(artifact_path: str):
         media_type, _ = mimetypes.guess_type(storage_key)
         return Response(content=content, media_type=media_type or "application/octet-stream")
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="Artifact not found") from exc
+        raise HTTPException(status_code=410, detail="Artifact not found") from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Artifact read failed") from exc
 

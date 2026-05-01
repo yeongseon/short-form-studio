@@ -6,6 +6,7 @@ import hashlib
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from shorts_api.auth import get_current_user
 from shorts_api.main import app
 
 
@@ -30,6 +31,16 @@ async def client(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost:5432/test")
     monkeypatch.setattr("shorts_api.auth.fetch_one", _fetch_one_stub)
 
+    async def _test_user_context() -> dict[str, str | int]:
+        return {
+            "user_id": 1,
+            "auth_provider": "api_key",
+            "auth_subject": "test",
+            "workspace_id": 1,
+        }
+
+    app.dependency_overrides[get_current_user] = _test_user_context
+
     transport = ASGITransport(app=app)
     async with AsyncClient(
         transport=transport,
@@ -37,6 +48,7 @@ async def client(monkeypatch: pytest.MonkeyPatch):
         headers={"X-API-Key": api_key},
     ) as ac:
         yield ac
+    app.dependency_overrides.pop(get_current_user, None)
 
 
 # --- /settings/api-keys ---

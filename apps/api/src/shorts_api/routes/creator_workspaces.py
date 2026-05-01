@@ -11,7 +11,7 @@ router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 
 @router.get("")
 async def list_workspaces(
-    user: Any = Depends(require_current_user),
+    user: Any = Depends(require_current_user),  # noqa: B008
 ) -> dict[str, list[dict[str, int | str]]]:
     user_id = user.get("user_id") if isinstance(user, dict) else getattr(user, "user_id", None)
     if not isinstance(user_id, int):

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExportResult, SpanExporter
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor, SpanExporter, SpanExportResult
 
 
 class _CollectingSpanExporter(SpanExporter):
@@ -25,9 +25,8 @@ def test_trace_context_propagates_from_parent_to_child() -> None:
     provider.add_span_processor(SimpleSpanProcessor(exporter))
     tracer = provider.get_tracer(__name__)
 
-    with tracer.start_as_current_span("parent") as parent:
-        with tracer.start_as_current_span("child"):
-            pass
+    with tracer.start_as_current_span("parent") as parent, tracer.start_as_current_span("child"):
+        pass
 
     parent_span = next(span for span in exporter.spans if span.name == "parent")
     child_span = next(span for span in exporter.spans if span.name == "child")

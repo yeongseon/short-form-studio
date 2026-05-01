@@ -10,16 +10,16 @@ Key operational features:
 See DLQ_MONITORING.md for operational procedures, alerting setup, and task recovery.
 """
 
+import json
 import logging
 import os
-import json
-from datetime import datetime, timezone
 import resource
+from datetime import datetime, timezone
+from importlib import import_module
 from typing import Any
 
 from celery import Celery
 from celery.signals import after_setup_logger, task_failure, worker_process_init
-from importlib import import_module
 from creator_service.logging_config import setup_json_logging
 from kombu import Exchange, Queue
 
@@ -28,7 +28,7 @@ try:
     import redis
 except ImportError:
     redis = None
-from creator_service.production_checks import validate_production_config
+from creator_service.production_checks import validate_production_config  # noqa: E402
 
 
 def _parse_int_env(name: str, default: int) -> int:
@@ -115,6 +115,7 @@ def setup_worker_process_telemetry(**kwargs: object) -> None:
     independently. The idempotency guard in init_telemetry() ensures that
     multiple calls within the same process are no-ops.
     """
+    _ = kwargs
     telemetry_module = import_module("telemetry")
     telemetry_module.init_telemetry(service_name="worker")
 

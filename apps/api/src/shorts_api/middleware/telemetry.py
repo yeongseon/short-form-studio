@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from importlib import import_module
 from threading import Lock
@@ -7,8 +8,6 @@ from threading import Lock
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
-
-import re
 
 _UUID_SEGMENT = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"

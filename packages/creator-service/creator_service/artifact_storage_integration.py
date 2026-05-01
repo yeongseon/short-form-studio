@@ -16,8 +16,7 @@ def store_artifact_file(
     path = Path(local_path).resolve()
     key = str(path.relative_to(_ARTIFACT_ROOT))
     backend = get_storage_backend()
-    with path.open("rb") as file_obj:
-        return backend.upload(key, file_obj, content_type=content_type)
+    return backend.upload(key, path.read_bytes(), content_type=content_type)
 
 
 def get_artifact_url(key: str, expires_in: int = 3600) -> str:

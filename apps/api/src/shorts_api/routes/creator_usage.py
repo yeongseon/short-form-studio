@@ -1,8 +1,8 @@
 # pyright: reportMissingImports=false
 
+from creator_service.db import fetch_one
 from creator_service.usage_service import usage_service
 from fastapi import APIRouter, Depends, HTTPException, status
-from creator_service.db import fetch_one
 from starlette.requests import Request
 
 from shorts_api.auth import get_api_key

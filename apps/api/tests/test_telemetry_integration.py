@@ -1,17 +1,17 @@
-from importlib.util import module_from_spec, spec_from_file_location
-from pathlib import Path
 import sys
 import types
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from opentelemetry import context as otel_context
 from opentelemetry.propagate import extract
-from opentelemetry.trace import SpanKind
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.trace import SpanKind
 
 _TELEMETRY_PATH = Path(__file__).resolve().parents[1] / "src/shorts_api/middleware/telemetry.py"
 _telemetry_spec = spec_from_file_location("shorts_api.middleware.telemetry", _TELEMETRY_PATH)

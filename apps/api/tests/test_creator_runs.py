@@ -1097,6 +1097,21 @@ def stub_generate_visual_plan_services(
     run_svc = StubRunService()
     dispatcher = StubVisualPlanDispatcher()
 
+    class _StubProject:
+        workspace_id = 1
+
+    async def _stub_get_project(_project_id: int):
+        return _StubProject()
+
+    async def _allow_quota(_workspace_id: int, operation_type: str):
+        _ = operation_type
+        return True, None
+
+    monkeypatch.setattr(
+        "creator_service.project_service.project_service.get_project", _stub_get_project
+    )
+    monkeypatch.setattr("creator_service.usage_service.check_workspace_quota", _allow_quota)
+
     for route in _iter_api_routes(runs_router.routes):
         if route.name == "generate_visual_plan_trigger":
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
@@ -1316,6 +1331,21 @@ def stub_generate_visual_assets_services(
 ) -> tuple[StubRunService, StubImageDispatcher]:
     run_svc = StubRunService()
     dispatcher = StubImageDispatcher()
+
+    class _StubProject:
+        workspace_id = 1
+
+    async def _stub_get_project(_project_id: int):
+        return _StubProject()
+
+    async def _allow_quota(_workspace_id: int, operation_type: str):
+        _ = operation_type
+        return True, None
+
+    monkeypatch.setattr(
+        "creator_service.project_service.project_service.get_project", _stub_get_project
+    )
+    monkeypatch.setattr("creator_service.usage_service.check_workspace_quota", _allow_quota)
 
     for route in _iter_api_routes(runs_router.routes):
         if route.name == "generate_visual_assets_trigger":

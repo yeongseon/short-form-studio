@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from fastapi.routing import APIRoute
-
 from shorts_api.auth import get_api_key
 from shorts_api.main import app
 

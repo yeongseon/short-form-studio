@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import re
 import secrets
+from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from asyncpg.exceptions import UniqueViolationError

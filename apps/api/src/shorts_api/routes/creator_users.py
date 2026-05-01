@@ -9,7 +9,7 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 @router.get("/me")
 async def get_me(
-    user: dict[str, str | int | None] = Depends(get_current_user),
+    user: dict[str, str | int | None] = Depends(get_current_user),  # noqa: B008
 ) -> dict[str, str | int | None]:
     """Return the authenticated user's identity."""
     return user

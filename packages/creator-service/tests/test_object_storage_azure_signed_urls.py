@@ -28,7 +28,7 @@ def _install_fake_azure(account_key: str | None = "secret") -> None:
             self.credential = types.SimpleNamespace(account_key=account_key)
 
         @classmethod
-        def from_connection_string(cls, _conn: str) -> "_BlobServiceClient":
+        def from_connection_string(cls, _conn: str) -> _BlobServiceClient:
             return cls()
 
         def get_container_client(self, _container: str) -> _ContainerClient:
@@ -41,10 +41,10 @@ def _install_fake_azure(account_key: str | None = "secret") -> None:
     def _generate_blob_sas(**_kwargs: object) -> str:
         return "sig=fake"
 
-    setattr(blob_mod, "BlobServiceClient", _BlobServiceClient)
-    setattr(blob_mod, "ContentSettings", _ContentSettings)
-    setattr(blob_mod, "BlobSasPermissions", _BlobSasPermissions)
-    setattr(blob_mod, "generate_blob_sas", _generate_blob_sas)
+    blob_mod.BlobServiceClient = _BlobServiceClient
+    blob_mod.ContentSettings = _ContentSettings
+    blob_mod.BlobSasPermissions = _BlobSasPermissions
+    blob_mod.generate_blob_sas = _generate_blob_sas
     sys.modules["azure"] = azure_mod
     sys.modules["azure.storage"] = storage_mod
     sys.modules["azure.storage.blob"] = blob_mod

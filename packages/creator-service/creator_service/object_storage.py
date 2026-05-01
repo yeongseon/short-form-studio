@@ -28,7 +28,7 @@ def _normalize_content_type(content_type: str) -> str:
 def _spool_and_hash_stream(data: BinaryIO) -> tuple[BinaryIO, int, str]:
     size = 0
     md5 = hashlib.md5()
-    spooled = tempfile.SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b")
+    spooled = tempfile.SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b")  # noqa: SIM115
     while chunk := data.read(_STREAM_CHUNK_SIZE):
         spooled.write(chunk)
         md5.update(chunk)
@@ -122,7 +122,7 @@ class LocalStorageBackend:
             md5.update(data)
             size = len(data)
         else:
-            with open(path, "wb") as file_obj:
+            with path.open("wb") as file_obj:
                 while chunk := data.read(8192):
                     file_obj.write(chunk)
                     md5.update(chunk)

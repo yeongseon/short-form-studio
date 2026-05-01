@@ -1,7 +1,7 @@
 """Create api_keys table for artifact access control."""
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 revision = "016"
 down_revision = "011"

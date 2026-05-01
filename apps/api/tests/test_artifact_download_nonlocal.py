@@ -1,9 +1,9 @@
 # pyright: reportMissingImports=false
 
-import pytest
-from fastapi import Request
 from types import SimpleNamespace
 
+import pytest
+from fastapi import Request
 from shorts_api.auth import require_current_user
 from shorts_api.main import app
 from shorts_api.routes import creator_artifact_download as route_mod  # type: ignore[attr-defined]

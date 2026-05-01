@@ -69,8 +69,8 @@ from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.cost_config import COST_SCENE_IMAGE
 from creator_service.run_service import run_service as _run_service
-from creator_service.telemetry import trace_task
 from creator_service.task_tracking_service import task_tracking_service as _task_tracking_service
+from creator_service.telemetry import trace_task
 from creator_service.usage_service import record_provider_call, resolve_workspace_id_from_run
 from creator_service.visual_asset_service import visual_asset_service as _visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
@@ -487,7 +487,7 @@ def generate_scene_image(
         raise
     except Exception as exc:
         if (
-            isinstance(exc, (ProviderTimeoutError, RateLimitError))
+            isinstance(exc, ProviderTimeoutError | RateLimitError)
             and self.request.retries < self.max_retries
         ):
             raise

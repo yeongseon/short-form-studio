@@ -60,8 +60,7 @@ def _load_otel() -> dict[str, Any] | None:
     try:
         from opentelemetry import metrics, trace
         from opentelemetry._logs import set_logger_provider
-        from opentelemetry.sdk._logs import LoggerProvider
-        from opentelemetry.sdk._logs import LoggingHandler
+        from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
         from opentelemetry.sdk._logs.export import (
             BatchLogRecordProcessor,
             ConsoleLogExporter,

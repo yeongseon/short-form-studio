@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from creator_service.object_storage import StorageResult
 
 

@@ -4,13 +4,15 @@ import logging
 import os
 from datetime import datetime, timezone
 from typing import Any, cast
+
 from creator_domain.sanitize import UnsafePathComponent, sanitize_path_component
 from creator_service.artifact_download_service import artifact_download_service
 from creator_service.project_service import project_service
 from creator_service.run_service import run_service
 from fastapi import APIRouter, Depends, HTTPException
-from shorts_api.auth import CurrentUser, require_current_user
 from starlette.responses import FileResponse, RedirectResponse
+
+from shorts_api.auth import CurrentUser, require_current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["runs"])
@@ -41,7 +43,7 @@ def _workspace_id_from_user(user: CurrentUser | dict[str, object] | object) -> i
 async def download_artifact(
     run_id: int,
     artifact_id: int,
-    user: CurrentUser = Depends(require_current_user),
+    user: CurrentUser = Depends(require_current_user),  # noqa: B008
 ):
     run = await run_service.storage.get_run(run_id)
     if run is None:

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import pytest
-
 from creator_service.audio_service import AudioService, InMemoryAudioStorage
 from creator_service.render_service import InMemoryRenderStorage, RenderService
 from creator_service.subtitle_service import InMemorySubtitleStorage, SubtitleService
