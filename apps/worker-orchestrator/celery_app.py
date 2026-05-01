@@ -116,9 +116,13 @@ def setup_worker_process_telemetry(**kwargs: object) -> None:
     multiple calls within the same process are no-ops.
     """
     _ = kwargs
-    telemetry_module = import_module("telemetry")
-    telemetry_module.init_telemetry(service_name="worker")
-
+    try:
+        telemetry_module = import_module("creator_service.telemetry")
+        telemetry_module.init_telemetry(service_name="worker")
+    except Exception:
+        logging.getLogger(__name__).debug(
+            "Telemetry init skipped (module not available)", exc_info=True
+        )
 
 def _record_failed_task_to_dlq(
     task_id: str | None,

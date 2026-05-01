@@ -92,12 +92,16 @@ jobs:
           docker compose up -d postgres redis api studio-web worker
           # Wait for API health endpoint
           timeout 60 bash -c 'until curl -sf http://localhost:8000/healthz; do sleep 2; done'
-          # Verify API responds
-          curl -sf http://localhost:8000/healthz
+          # Verify API responds with JSON
+          curl -sf http://localhost:8000/healthz | grep -q ok
           # Wait for frontend endpoint
           timeout 60 bash -c 'until curl -sf http://localhost:5174/; do sleep 2; done'
           # Verify frontend responds
-          curl -sf http://localhost:5174/
-          # Verify worker container is running
-          docker compose ps worker --format json | grep -q running
+          curl -sf http://localhost:5174/ | grep -q root
+          # Give worker time to fully initialize celery
+          sleep 5
+          # Show worker logs for debugging if check fails
+          docker compose logs worker --tail 50 || true
+          # Verify worker container is running (check State field)
+          docker compose ps worker --format json | grep -qi running
           docker compose down
