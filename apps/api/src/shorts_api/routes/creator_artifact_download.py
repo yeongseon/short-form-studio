@@ -3,7 +3,6 @@
 import logging
 import os
 from datetime import datetime, timezone
-from typing import Any, cast
 from creator_domain.sanitize import UnsafePathComponent, sanitize_path_component
 from creator_service.artifact_download_service import artifact_download_service
 from creator_service.project_service import project_service
@@ -16,25 +15,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["runs"])
 
 
-def _workspace_id_from_user(user: CurrentUser | dict[str, object] | object) -> int | None:
-    if isinstance(user, CurrentUser):
-        return user.workspace_id
-    if isinstance(user, dict):
-        workspace_id = user.get("workspace_id")
-    else:
-        workspace_id = cast(Any, user).workspace_id
-    if workspace_id is None:
-        return None
-    if isinstance(workspace_id, bool):
-        return None
-    if isinstance(workspace_id, int):
-        return workspace_id
-    if isinstance(workspace_id, str):
-        try:
-            return int(workspace_id)
-        except ValueError:
-            return None
-    return None
 
 
 @router.get("/runs/{run_id}/artifacts/{artifact_id}/download")
@@ -55,7 +35,7 @@ async def download_artifact(
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    user_workspace_id = _workspace_id_from_user(user)
+    user_workspace_id = user.workspace_id
     project_workspace_id = getattr(project, "workspace_id", None)
 
     if user_workspace_id is None:

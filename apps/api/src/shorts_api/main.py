@@ -273,7 +273,6 @@ app.include_router(runs_storyboard_router, prefix="/api/creator")
 app.include_router(runs_lifecycle_router, prefix="/api/creator")
 app.include_router(run_tasks_router, prefix="/api/creator")
 app.include_router(artifact_download_router, prefix="/api/creator")
-app.include_router(artifact_download_router, prefix="/api/creator")
 app.include_router(script_router, prefix="/api/creator")
 app.include_router(run_script_router, prefix="/api/creator")
 app.include_router(visual_plan_router, prefix="/api/creator")
@@ -362,6 +361,10 @@ async def health() -> dict[str, object]:
 
 @app.get("/artifacts/{artifact_path:path}", deprecated=True)
 async def serve_artifact(artifact_path: str):
+    environment = os.getenv("ENVIRONMENT", "development").lower()
+    if environment in ("production", "staging"):
+        raise HTTPException(status_code=404, detail="Not found")
+
     path_components = artifact_path.split("/")
     if not artifact_path or any(component in {"", ".", ".."} for component in path_components):
         raise HTTPException(status_code=400, detail="Invalid artifact path")
@@ -387,6 +390,10 @@ async def serve_artifact(artifact_path: str):
 
 @app.get("/api/artifacts/files/{path:path}")
 async def serve_local_artifact_file(path: str) -> Response:
+    environment = os.getenv("ENVIRONMENT", "development").lower()
+    if environment in ("production", "staging"):
+        raise HTTPException(status_code=404, detail="Not found")
+
     path_components = path.split("/")
     if (
         not path

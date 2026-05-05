@@ -146,28 +146,21 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
 
         user = CurrentUser(user_id=user_id_int, workspace_id=member_workspace_ids[0])
         request.state.user = user
-        _current_user_ctx.set(user)
-        return await call_next(request)
+        token = _current_user_ctx.set(user)
+        try:
+            return await call_next(request)
+        finally:
+            _current_user_ctx.reset(token)
 
 
-async def get_current_user(request: Request) -> dict[str, str | int | None]:
+async def get_current_user(request: Request) -> CurrentUser:
     user = getattr(request.state, "user", None)
     if isinstance(user, CurrentUser) and user.user_id is not None:
-        return {
-            "user_id": user.user_id,
-            "auth_provider": "api_key",
-            "auth_subject": "middleware",
-            "workspace_id": user.workspace_id,
-        }
+        return user
 
     context_user = _current_user_ctx.get()
     if isinstance(context_user, CurrentUser) and context_user.user_id is not None:
-        return {
-            "user_id": context_user.user_id,
-            "auth_provider": "api_key",
-            "auth_subject": "middleware",
-            "workspace_id": context_user.workspace_id,
-        }
+        return context_user
 
     api_key = (
         request.headers.get("X-API-Key")
@@ -203,34 +196,41 @@ async def get_current_user(request: Request) -> dict[str, str | int | None]:
     if membership_row is None:
         raise HTTPException(status_code=403, detail="No workspace membership")
 
-    return {
-        "user_id": user_id,
-        "auth_provider": "api_key",
-        "auth_subject": key_hash,
-        "workspace_id": membership_row["workspace_id"],
-    }
+    return CurrentUser(user_id=user_id, workspace_id=membership_row["workspace_id"])
 
 
-async def require_current_user(request: Request) -> dict[str, str | int | None]:
+async def require_current_user(request: Request) -> CurrentUser:
     return await get_current_user(request)
 
 
 async def validate_workspace_header(request: Request) -> int | None:
     user = await get_current_user(request)
-    workspace_id = user.get("workspace_id")
-    return workspace_id if isinstance(workspace_id, int) else None
+    return user.workspace_id
 
 
 async def require_workspace_access(
     workspace_id: int,
-    user: dict[str, str | int | None] = Depends(get_current_user),
-) -> dict[str, str | int | None]:
-    user_id = user.get("user_id")
-    if not isinstance(user_id, int):
+    user: CurrentUser = Depends(get_current_user),
+) -> CurrentUser:
+    if user.user_id is None:
         raise HTTPException(status_code=401, detail="Invalid user context")
 
-    has_access = await workspace_service.check_access(workspace_id, user_id)
+    has_access = await workspace_service.check_access(workspace_id, user.user_id)
     if not has_access:
         raise HTTPException(status_code=403, detail="Workspace access denied")
 
     return user
+
+
+async def get_api_key(request: Request) -> str:
+    """Dependency that extracts and validates the API key from the request.
+
+    Returns the raw API key string. Raises 401 if missing/invalid.
+    """
+    api_key = (
+        request.headers.get("X-API-Key")
+        or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    )
+    if not api_key:
+        raise HTTPException(status_code=401, detail="API key required")
+    return api_key
