@@ -10,7 +10,7 @@ from creator_service.subtitle_service import subtitle_service
 from creator_service.task_tracking_service import task_tracking_service
 from creator_service.visual_asset_service import visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from shorts_api.routes.creator_runs_utils import (
@@ -20,6 +20,7 @@ from shorts_api.routes.creator_runs_utils import (
     dispatch_paragraph_subtitles,
     validate_model_key,
 )
+from shorts_api.auth import CurrentUser, require_run_access
 
 logger = logging.getLogger(__name__)
 
@@ -57,10 +58,8 @@ class BulkParagraphSubtitlesRequest(BaseModel):
 
 
 @router.get("/runs/{run_id}/storyboard")
-async def get_storyboard(run_id: int) -> dict[str, object]:
-    run = await run_service.get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="Run not found")
+async def get_storyboard(run_id: int, access: tuple[CurrentUser, Any] = Depends(require_run_access)) -> dict[str, object]:
+    _, run = access
 
     draft = await script_service.get_active_draft(run_id)
     if draft is None or not draft.structured_script:
@@ -198,12 +197,10 @@ async def get_storyboard(run_id: int) -> dict[str, object]:
     status_code=202,
 )
 async def generate_paragraph_audio_endpoint(
-    run_id: int, section_id: str, request: ParagraphAudioRequest | None = None
+    run_id: int, section_id: str, request: ParagraphAudioRequest | None = None, access: tuple[CurrentUser, Any] = Depends(require_run_access)
 ) -> dict[str, object]:
     effective = request or ParagraphAudioRequest()
-    run = await run_service.get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="Run not found")
+    _, run = access
     if run.current_stage not in STORYBOARD_ALLOWED_STAGES:
         raise HTTPException(
             status_code=409,
@@ -255,12 +252,10 @@ async def generate_paragraph_audio_endpoint(
     status_code=202,
 )
 async def generate_paragraph_subtitles_endpoint(
-    run_id: int, section_id: str, request: ParagraphSubtitlesRequest | None = None
+    run_id: int, section_id: str, request: ParagraphSubtitlesRequest | None = None, access: tuple[CurrentUser, Any] = Depends(require_run_access)
 ) -> dict[str, object]:
     effective = request or ParagraphSubtitlesRequest()
-    run = await run_service.get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="Run not found")
+    _, run = access
     if run.current_stage not in STORYBOARD_ALLOWED_STAGES:
         raise HTTPException(
             status_code=409,
@@ -305,12 +300,10 @@ async def generate_paragraph_subtitles_endpoint(
 
 @router.post("/runs/{run_id}/storyboard/generate-all-audio", status_code=202)
 async def generate_all_paragraph_audio(
-    run_id: int, request: BulkParagraphAudioRequest | None = None
+    run_id: int, request: BulkParagraphAudioRequest | None = None, access: tuple[CurrentUser, Any] = Depends(require_run_access)
 ) -> dict[str, object]:
     effective = request or BulkParagraphAudioRequest()
-    run = await run_service.get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="Run not found")
+    _, run = access
     if run.current_stage not in STORYBOARD_ALLOWED_STAGES:
         raise HTTPException(
             status_code=409,
@@ -366,12 +359,10 @@ async def generate_all_paragraph_audio(
 
 @router.post("/runs/{run_id}/storyboard/generate-all-subtitles", status_code=202)
 async def generate_all_paragraph_subtitles(
-    run_id: int, request: BulkParagraphSubtitlesRequest | None = None
+    run_id: int, request: BulkParagraphSubtitlesRequest | None = None, access: tuple[CurrentUser, Any] = Depends(require_run_access)
 ) -> dict[str, object]:
     effective = request or BulkParagraphSubtitlesRequest()
-    run = await run_service.get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="Run not found")
+    _, run = access
     if run.current_stage not in STORYBOARD_ALLOWED_STAGES:
         raise HTTPException(
             status_code=409,

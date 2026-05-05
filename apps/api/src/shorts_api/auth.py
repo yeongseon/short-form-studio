@@ -4,6 +4,7 @@ import contextvars
 import hashlib
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 from creator_service.db import fetch_one
 from creator_service.workspace_service import workspace_service
@@ -234,3 +235,46 @@ async def get_api_key(request: Request) -> str:
     if not api_key:
         raise HTTPException(status_code=401, detail="API key required")
     return api_key
+
+
+
+async def require_run_access(
+    run_id: int,
+    user: CurrentUser = Depends(require_current_user),
+) -> tuple[CurrentUser, Any]:
+    """Verify the current user owns the workspace that contains the run.
+
+    Returns (user, run) so route handlers can skip re-fetching.
+    Raises 404 if run/project not found or workspace mismatch (prevents IDOR).
+    """
+    from creator_service.project_service import project_service
+    from creator_service.run_service import run_service
+
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    project = await project_service.get_project(run.project_id)
+    if project is None or getattr(project, "workspace_id", None) != user.workspace_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    return user, run
+
+
+async def require_project_access(
+    project_id: int,
+    user: CurrentUser = Depends(require_current_user),
+) -> tuple[CurrentUser, Any]:
+    """Verify the current user owns the workspace that contains the project.
+
+    Returns (user, project) so route handlers can skip re-fetching.
+    Raises 404 if project not found or workspace mismatch (prevents IDOR).
+    """
+    from creator_service.project_service import project_service
+
+    project = await project_service.get_project(project_id)
+    if project is None or getattr(project, "workspace_id", None) != user.workspace_id:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    return user, project
+
