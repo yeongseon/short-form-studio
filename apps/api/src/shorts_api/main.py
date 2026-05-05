@@ -133,7 +133,9 @@ async def _monitor_cpu_limit() -> None:
                 MAX_CPU_PERCENT,
             )
             _mark_shutdown()
-            os._exit(1)
+            # Raise SystemExit to let Python run cleanup handlers (atexit, finally blocks)
+            # instead of os._exit() which skips all of them.
+            raise SystemExit(1)
 
 
 def _mark_shutdown() -> None:
