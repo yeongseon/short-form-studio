@@ -117,6 +117,8 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
                 provided = auth_header[7:]
 
         if not provided:
+            if request.url.path.startswith("/api/creator"):
+                return JSONResponse(status_code=401, content={"detail": "API key required"})
             return await call_next(request)
 
         pool = await self._get_pool()
