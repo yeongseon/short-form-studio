@@ -4,14 +4,14 @@ from creator_service.project_service import project_service
 from creator_service.task_tracking_service import task_tracking_service
 from fastapi import APIRouter, HTTPException, Request
 
-from shorts_api.auth import validate_workspace_header
+from shorts_api.auth import get_authenticated_workspace_id
 
 router = APIRouter(tags=["runs"])
 
 
 @router.get("/runs/{run_id}/tasks")
 async def list_run_tasks(run_id: int, request: Request) -> list[dict[str, object]]:
-    workspace_id = await validate_workspace_header(request)
+    workspace_id = await get_authenticated_workspace_id(request)
     if workspace_id is None:
         raise HTTPException(status_code=401, detail="Authentication required")
 

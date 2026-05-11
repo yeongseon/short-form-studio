@@ -8,7 +8,7 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from httpx import ASGITransport, AsyncClient
-from shorts_api.auth import ApiKeyMiddleware, get_current_user, require_workspace_access
+from shorts_api.auth import ApiKeyMiddleware, CurrentUser, get_current_user, require_workspace_access
 from starlette.requests import Request
 
 
@@ -263,9 +263,9 @@ async def test_get_current_user_resolves_from_api_keys_and_membership(monkeypatc
     request = Request({"type": "http", "headers": [(b"x-api-key", b"valid-key")]})
     result = await get_current_user(request)
 
-    assert result["user_id"] == 123
-    assert result["workspace_id"] == 10
-    assert result["auth_provider"] == "api_key"
+    assert isinstance(result, CurrentUser)
+    assert result.user_id == 123
+    assert result.workspace_id == 10
     assert len(calls) == 2
 
 
@@ -275,12 +275,7 @@ async def test_require_workspace_access_denies_without_membership(monkeypatch):
         return False
 
     monkeypatch.setattr("shorts_api.auth.workspace_service.check_access", _no_access)
-    user = {
-        "user_id": 1,
-        "auth_provider": "api_key",
-        "auth_subject": "subject",
-        "workspace_id": None,
-    }
+    user = CurrentUser(user_id=1, workspace_id=None)
 
     with pytest.raises(HTTPException) as exc_info:
         await require_workspace_access(99, user)
@@ -293,12 +288,8 @@ async def test_require_workspace_access_allows_with_membership(monkeypatch):
         return True
 
     monkeypatch.setattr("shorts_api.auth.workspace_service.check_access", _has_access)
-    user = {
-        "user_id": 2,
-        "auth_provider": "api_key",
-        "auth_subject": "subject",
-        "workspace_id": 10,
-    }
+    user = CurrentUser(user_id=2, workspace_id=10)
 
     result = await require_workspace_access(100, user)
-    assert result["user_id"] == 2
+    assert isinstance(result, CurrentUser)
+    assert result.user_id == 2

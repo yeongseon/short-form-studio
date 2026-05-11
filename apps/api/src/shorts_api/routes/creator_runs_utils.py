@@ -373,6 +373,11 @@ async def cas_dispatch_with_rollback(
     except Exception:
         # Metadata recording failed after task was dispatched — revoke and rollback.
         _revoke_active_tasks(json.dumps([task_id]))
+        # Best-effort remove the task ID that may have been appended
+        try:
+            await run_service_obj.storage.remove_active_task_id(run_id, task_id)
+        except Exception:
+            logger.warning("Failed to remove active_task_id %s for run %d during rollback", task_id, run_id)
         if workspace_id_for_reservation is not None and quota_operation_type is not None:
             from creator_service.usage_service import cancel_workspace_quota_reservation
 

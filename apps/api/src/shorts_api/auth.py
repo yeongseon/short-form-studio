@@ -1,10 +1,15 @@
+from __future__ import annotations
 """API-key identity middleware and auth helpers."""
 
 import contextvars
 import hashlib
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from creator_domain.models.pipeline_run import PipelineRun
+    from creator_domain.models.project import Project
 
 from creator_service.db import fetch_one
 from creator_service.workspace_service import workspace_service
@@ -206,7 +211,7 @@ async def require_current_user(request: Request) -> CurrentUser:
     return await get_current_user(request)
 
 
-async def validate_workspace_header(request: Request) -> int | None:
+async def get_authenticated_workspace_id(request: Request) -> int | None:
     user = await get_current_user(request)
     return user.workspace_id
 
@@ -243,7 +248,7 @@ async def get_api_key(request: Request) -> str:
 async def require_run_access(
     run_id: int,
     user: CurrentUser = Depends(require_current_user),
-) -> tuple[CurrentUser, Any]:
+) -> tuple[CurrentUser, PipelineRun]:
     """Verify the current user owns the workspace that contains the run.
 
     Returns (user, run) so route handlers can skip re-fetching.
@@ -257,7 +262,7 @@ async def require_run_access(
         raise HTTPException(status_code=404, detail="Run not found")
 
     project = await project_service.get_project(run.project_id)
-    if project is None or getattr(project, "workspace_id", None) != user.workspace_id:
+    if project is None or getattr(project, "workspace_id", None) is None or getattr(project, "workspace_id", None) != user.workspace_id:
         raise HTTPException(status_code=404, detail="Run not found")
 
     return user, run
@@ -266,7 +271,7 @@ async def require_run_access(
 async def require_project_access(
     project_id: int,
     user: CurrentUser = Depends(require_current_user),
-) -> tuple[CurrentUser, Any]:
+) -> tuple[CurrentUser, Project]:
     """Verify the current user owns the workspace that contains the project.
 
     Returns (user, project) so route handlers can skip re-fetching.
@@ -275,7 +280,7 @@ async def require_project_access(
     from creator_service.project_service import project_service
 
     project = await project_service.get_project(project_id)
-    if project is None or getattr(project, "workspace_id", None) != user.workspace_id:
+    if project is None or getattr(project, "workspace_id", None) is None or getattr(project, "workspace_id", None) != user.workspace_id:
         raise HTTPException(status_code=404, detail="Project not found")
 
     return user, project

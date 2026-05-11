@@ -1,7 +1,8 @@
 """Storyboard assembly and paragraph operation routes."""
+from __future__ import annotations
 
 import logging
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from creator_service.audio_service import audio_service
 from creator_service.run_service import run_service
@@ -12,6 +13,10 @@ from creator_service.visual_asset_service import visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from creator_domain.models.pipeline_run import PipelineRun
+
 
 from shorts_api.routes.creator_runs_utils import (
     _append_task_id,
@@ -58,7 +63,7 @@ class BulkParagraphSubtitlesRequest(BaseModel):
 
 
 @router.get("/runs/{run_id}/storyboard")
-async def get_storyboard(run_id: int, access: tuple[CurrentUser, Any] = Depends(require_run_access)) -> dict[str, object]:
+async def get_storyboard(run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)) -> dict[str, object]:
     _, run = access
 
     draft = await script_service.get_active_draft(run_id)
@@ -197,7 +202,7 @@ async def get_storyboard(run_id: int, access: tuple[CurrentUser, Any] = Depends(
     status_code=202,
 )
 async def generate_paragraph_audio_endpoint(
-    run_id: int, section_id: str, request: ParagraphAudioRequest | None = None, access: tuple[CurrentUser, Any] = Depends(require_run_access)
+    run_id: int, section_id: str, request: ParagraphAudioRequest | None = None, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
 ) -> dict[str, object]:
     effective = request or ParagraphAudioRequest()
     _, run = access
@@ -252,7 +257,7 @@ async def generate_paragraph_audio_endpoint(
     status_code=202,
 )
 async def generate_paragraph_subtitles_endpoint(
-    run_id: int, section_id: str, request: ParagraphSubtitlesRequest | None = None, access: tuple[CurrentUser, Any] = Depends(require_run_access)
+    run_id: int, section_id: str, request: ParagraphSubtitlesRequest | None = None, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
 ) -> dict[str, object]:
     effective = request or ParagraphSubtitlesRequest()
     _, run = access
@@ -300,7 +305,7 @@ async def generate_paragraph_subtitles_endpoint(
 
 @router.post("/runs/{run_id}/storyboard/generate-all-audio", status_code=202)
 async def generate_all_paragraph_audio(
-    run_id: int, request: BulkParagraphAudioRequest | None = None, access: tuple[CurrentUser, Any] = Depends(require_run_access)
+    run_id: int, request: BulkParagraphAudioRequest | None = None, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
 ) -> dict[str, object]:
     effective = request or BulkParagraphAudioRequest()
     _, run = access
@@ -359,7 +364,7 @@ async def generate_all_paragraph_audio(
 
 @router.post("/runs/{run_id}/storyboard/generate-all-subtitles", status_code=202)
 async def generate_all_paragraph_subtitles(
-    run_id: int, request: BulkParagraphSubtitlesRequest | None = None, access: tuple[CurrentUser, Any] = Depends(require_run_access)
+    run_id: int, request: BulkParagraphSubtitlesRequest | None = None, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
 ) -> dict[str, object]:
     effective = request or BulkParagraphSubtitlesRequest()
     _, run = access

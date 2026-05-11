@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Callable
 
-from celery.exceptions import SoftTimeLimitExceeded
+from celery.exceptions import Ignore, SoftTimeLimitExceeded
 from creator_domain.models.stage import RunStage
 from creator_provider.exceptions import ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
@@ -169,7 +169,7 @@ async def _run_task_inner(
         result = await execute(ctx)
 
         # 5. Success stage transition
-        if config.success_stage is not None:
+        if config.success_stage is not None and result.status == "success":
             applied, _ = await _run_service.storage.conditional_update_run(
                 run_id,
                 {"current_stage": config.success_stage, "status": "running"},
@@ -182,12 +182,15 @@ async def _run_task_inner(
                     config.task_name,
                 )
 
-        # 6. Mark success
+        # 6. Mark success/failure based on result status
         end_time = datetime.now(timezone.utc)
         try:
-            await _task_tracking_service.mark_success(task_id)
+            if result.status == "success":
+                await _task_tracking_service.mark_success(task_id)
+            else:
+                await _task_tracking_service.mark_failed(task_id, "task_result", f"status={result.status}")
         except Exception:
-            logger.warning("Failed to record task success", exc_info=True)
+            logger.warning("Failed to record task outcome", exc_info=True)
 
         return {
             "task_id": task_id,
@@ -200,6 +203,35 @@ async def _run_task_inner(
         }
     finally:
         await _remove_active_task_id_best_effort(run_id, task_id)
+
+
+async def _handle_general_failure(
+    task_id: str,
+    run_id: int,
+    config_task_name: str,
+    safe_failure_stages: frozenset[str],
+    exc: Exception,
+) -> None:
+    """Consolidate error-handler async work into a single coroutine."""
+    try:
+        await _task_tracking_service.mark_failed(task_id, type(exc).__name__, str(exc)[:500])
+    except Exception:
+        logger.warning("Failed to record task failure", exc_info=True)
+    try:
+        applied, _ = await _run_service.storage.conditional_update_run(
+            run_id,
+            {"current_stage": RunStage.FAILED.value, "status": "failed"},
+            expected_stages=safe_failure_stages,
+        )
+        if not applied:
+            logger.info(
+                "Run %d stage changed during %s -- skipping FAILED transition",
+                run_id,
+                config_task_name,
+            )
+    except Exception:
+        logger.exception("Failed to mark run %d as FAILED after task error", run_id)
+
 
 
 def run_task(
@@ -226,7 +258,7 @@ def run_task(
             asyncio.run(_task_tracking_service.mark_rejected(task_id, "stage_guard"))
         except Exception:
             logger.warning("Failed to record task rejection", exc_info=True)
-        raise
+        raise Ignore()
     except SoftTimeLimitExceeded:
         logger.error("Task %s timed out for run %s", config.task_name, run_id)
         try:
@@ -247,27 +279,9 @@ def run_task(
         ):
             raise
         try:
-            asyncio.run(
-                _task_tracking_service.mark_failed(task_id, type(exc).__name__, str(exc)[:500])
-            )
+            asyncio.run(_handle_general_failure(task_id, run_id, config.task_name, safe_failure_stages, exc))
         except Exception:
-            logger.warning("Failed to record task failure", exc_info=True)
-        try:
-            applied, _ = asyncio.run(
-                _run_service.storage.conditional_update_run(
-                    run_id,
-                    {"current_stage": RunStage.FAILED.value, "status": "failed"},
-                    expected_stages=safe_failure_stages,
-                )
-            )
-            if not applied:
-                logger.info(
-                    "Run %d stage changed during %s -- skipping FAILED transition",
-                    run_id,
-                    config.task_name,
-                )
-        except Exception:
-            logger.exception("Failed to mark run %d as FAILED after task error", run_id)
+            logger.exception("Failed error cleanup for run %d", run_id)
         raise
 
 

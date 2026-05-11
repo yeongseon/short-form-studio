@@ -1,11 +1,17 @@
 """Visual plan and visual asset generation trigger routes."""
+from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated
 
 from creator_domain.models import TRIGGER_POLICY
 from creator_service.run_service import run_service
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    from creator_domain.models.pipeline_run import PipelineRun
+
+
 
 from shorts_api.routes.creator_runs_core import GenerateVisualPlanRequest
 from shorts_api.routes.creator_runs_utils import (
@@ -59,7 +65,7 @@ class GenerateVisualAssetsRequest(BaseModel):
 
 @router.post("/runs/{run_id}/generate-visual-plan", status_code=202)
 async def generate_visual_plan_trigger(
-    run_id: int, request: GenerateVisualPlanRequest, access: tuple[CurrentUser, Any] = Depends(require_run_access)
+    run_id: int, request: GenerateVisualPlanRequest, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
 ) -> dict[str, object]:
     _, run = access
     if run.current_stage == "VISUAL_PLAN_GENERATING" and _has_active_tasks(run.active_task_id):
@@ -94,7 +100,7 @@ async def generate_visual_plan_trigger(
 
 @router.post("/runs/{run_id}/generate-visual-assets", status_code=202)
 async def generate_visual_assets_trigger(
-    run_id: int, request: GenerateVisualAssetsRequest, access: tuple[CurrentUser, Any] = Depends(require_run_access)
+    run_id: int, request: GenerateVisualAssetsRequest, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
 ) -> dict[str, object]:
     _, run = access
     if run.current_stage == "VISUAL_ASSET_GENERATING" and _has_active_tasks(run.active_task_id):

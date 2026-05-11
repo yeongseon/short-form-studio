@@ -133,9 +133,9 @@ async def _monitor_cpu_limit() -> None:
                 MAX_CPU_PERCENT,
             )
             _mark_shutdown()
-            # Raise SystemExit to let Python run cleanup handlers (atexit, finally blocks)
-            # instead of os._exit() which skips all of them.
-            raise SystemExit(1)
+            # Send SIGTERM to self so uvicorn performs graceful shutdown.
+            # SystemExit in a background task only kills the task, not the process.
+            os.kill(os.getpid(), signal.SIGTERM)
 
 
 def _mark_shutdown() -> None:
