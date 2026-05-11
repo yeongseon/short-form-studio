@@ -40,10 +40,10 @@ async def download_artifact(
 
     if user_workspace_id is None:
         logger.warning("No authenticated workspace context on artifact access; rejecting request")
-        raise HTTPException(status_code=403, detail="Forbidden")
+        raise HTTPException(status_code=404, detail="Run not found")
 
     if project_workspace_id is None or user_workspace_id != project_workspace_id:
-        raise HTTPException(status_code=403, detail="Forbidden")
+        raise HTTPException(status_code=404, detail="Run not found")
 
     artifact = await artifact_download_service.get_artifact_by_id(artifact_id)
     if artifact is None:

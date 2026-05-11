@@ -135,7 +135,13 @@ async def _monitor_cpu_limit() -> None:
             _mark_shutdown()
             # Send SIGTERM to self so uvicorn performs graceful shutdown.
             # SystemExit in a background task only kills the task, not the process.
-            os.kill(os.getpid(), signal.SIGTERM)
+            try:
+                os.kill(os.getpid(), signal.SIGTERM)
+            except OSError:
+                # Fallback: if signal delivery fails (e.g. restricted environment),
+                # force exit so the process doesn't continue in a degraded state.
+                logger.warning("SIGTERM delivery failed; falling back to sys.exit(1)")
+                sys.exit(1)
 
 
 def _mark_shutdown() -> None:
