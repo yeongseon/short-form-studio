@@ -1,12 +1,19 @@
 """Routes for creator visual plan management."""
-from typing import Literal
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Literal
 
 from creator_domain.models import RunStage
 from creator_domain.models.visual_plan import VisualScene
 from creator_service.run_service import run_service
 from creator_service.visual_plan_service import VersionConflictError, visual_plan_service
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, ValidationError
+
+from shorts_api.auth import CurrentUser, require_run_access
+
+if TYPE_CHECKING:
+    from creator_domain.models.pipeline_run import PipelineRun
 
 router = APIRouter(prefix="/runs/{run_id}/visual-plan", tags=["visual-plan"])
 
@@ -22,10 +29,8 @@ class ReplaceVisualPlanRequest(BaseModel):
 
 
 @router.get("")
-async def get_visual_plan(run_id: int) -> dict[str, object]:
-    run = await run_service.get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+async def get_visual_plan(run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)) -> dict[str, object]:
+    _, run = access
     if run.current_stage not in _VISUAL_PLAN_EDIT_STAGES:
         raise HTTPException(
             status_code=409,
@@ -50,11 +55,10 @@ async def get_visual_plan(run_id: int) -> dict[str, object]:
 
 @router.put("")
 async def replace_visual_plan(
-    run_id: int, request: ReplaceVisualPlanRequest
+    run_id: int, request: ReplaceVisualPlanRequest,
+    access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
-    run = await run_service.get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    _, run = access
     if run.current_stage not in _VISUAL_PLAN_EDIT_STAGES:
         raise HTTPException(
             status_code=409,
@@ -92,11 +96,10 @@ class PatchSceneRequest(BaseModel):
 
 @router.patch("/scenes/{scene_id}")
 async def patch_scene(
-    run_id: int, scene_id: str, request: PatchSceneRequest
+    run_id: int, scene_id: str, request: PatchSceneRequest,
+    access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
-    run = await run_service.get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    _, run = access
     if run.current_stage not in _VISUAL_PLAN_EDIT_STAGES:
         raise HTTPException(
             status_code=409,

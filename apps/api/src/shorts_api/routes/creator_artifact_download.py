@@ -36,7 +36,7 @@ async def download_artifact(
         raise HTTPException(status_code=404, detail="Project not found")
 
     user_workspace_id = user.workspace_id
-    project_workspace_id = getattr(project, "workspace_id", None)
+    project_workspace_id = project.workspace_id
 
     if user_workspace_id is None:
         logger.warning("No authenticated workspace context on artifact access; rejecting request")

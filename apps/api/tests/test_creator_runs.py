@@ -1,13 +1,15 @@
 # pyright: reportMissingImports=false
 
 import json
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from datetime import datetime, timezone
 from typing import Literal, cast
 
 import pytest
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ValidationError
+from shorts_api.auth import CurrentUser, require_project_access, require_run_access
+from shorts_api.main import app
 from shorts_api.main import runs_router
 from shorts_api.routes.creator_runs_core import GenerateSubtitlesRequest
 from shorts_api.routes.creator_runs_storyboard import (
@@ -54,7 +56,9 @@ class StubRunService:
         model_defaults: dict[str, str] | None,
         style_preset: str,
         metadata: dict[str, object] | None,
+        workspace_id: int | None = None,
     ) -> StubPipelineRun:
+        _ = workspace_id
         self.create_run_calls.append(
             {
                 "project_id": project_id,
@@ -254,11 +258,11 @@ class StubProjectLookupService:
 
 
 @pytest.fixture
-def stub_run_service(monkeypatch: pytest.MonkeyPatch) -> StubRunService:
+def stub_run_service(monkeypatch: pytest.MonkeyPatch) -> Iterator[StubRunService]:
     service = StubRunService()
     project_lookup = StubProjectLookupService()
 
-    for route in _iter_api_routes(runs_router.routes):
+    for route in _iter_api_routes(app.routes):
         if route.name in {
             "create_run",
             "get_run_detail",
@@ -274,7 +278,29 @@ def stub_run_service(monkeypatch: pytest.MonkeyPatch) -> StubRunService:
         if route.name == "create_run":
             monkeypatch.setitem(route.endpoint.__globals__, "project_service", project_lookup)
 
-    return service
+    async def _require_run_access(run_id: int) -> tuple[CurrentUser, StubPipelineRun]:
+        run = service.runs.get(run_id)
+        if run is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Run not found")
+        return CurrentUser(user_id=1, workspace_id=1), run
+
+    async def _require_project_access(project_id: int) -> tuple[CurrentUser, object]:
+        project = await project_lookup.get_project(project_id)
+        if project is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Project not found")
+        return CurrentUser(user_id=1, workspace_id=1), project
+
+    app.dependency_overrides[require_run_access] = _require_run_access
+    app.dependency_overrides[require_project_access] = _require_project_access
+
+    yield service
+
+    app.dependency_overrides.pop(require_run_access, None)
+    app.dependency_overrides.pop(require_project_access, None)
 
 
 @pytest.mark.asyncio
@@ -372,14 +398,26 @@ async def test_create_run_rejects_invalid_render_profile(client, stub_run_servic
 
 
 @pytest.fixture
-def stub_model_defaults_services(monkeypatch: pytest.MonkeyPatch) -> StubRunService:
+def stub_model_defaults_services(monkeypatch: pytest.MonkeyPatch) -> Iterator[StubRunService]:
     run_svc = StubRunService()
 
-    for route in _iter_api_routes(runs_router.routes):
+    for route in _iter_api_routes(app.routes):
         if route.name == "update_model_defaults":
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
 
-    return run_svc
+    async def _require_run_access(run_id: int) -> tuple[CurrentUser, StubPipelineRun]:
+        run = run_svc.runs.get(run_id)
+        if run is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Run not found")
+        return CurrentUser(user_id=1, workspace_id=1), run
+
+    app.dependency_overrides[require_run_access] = _require_run_access
+
+    yield run_svc
+
+    app.dependency_overrides.pop(require_run_access, None)
 
 
 @pytest.mark.asyncio
@@ -506,22 +544,34 @@ async def test_restart_run_not_found(client, stub_run_service: StubRunService):
     )
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "Run 4242 not found"}
+    assert response.json() == {"detail": "Run not found"}
 
 
 @pytest.fixture
 def stub_approve_services(
     monkeypatch: pytest.MonkeyPatch,
-) -> tuple[StubRunService, StubStageReviewService]:
+) -> Iterator[tuple[StubRunService, StubStageReviewService]]:
     run_svc = StubRunService()
     review_svc = StubStageReviewService(run_svc)
 
-    for route in _iter_api_routes(runs_router.routes):
+    for route in _iter_api_routes(app.routes):
         if route.name == "approve_script":
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "stage_review_service", review_svc)
 
-    return run_svc, review_svc
+    async def _require_run_access(run_id: int) -> tuple[CurrentUser, StubPipelineRun]:
+        run = run_svc.runs.get(run_id)
+        if run is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Run not found")
+        return CurrentUser(user_id=1, workspace_id=1), run
+
+    app.dependency_overrides[require_run_access] = _require_run_access
+
+    yield run_svc, review_svc
+
+    app.dependency_overrides.pop(require_run_access, None)
 
 
 def _make_run(run_id: int, stage: str = "SCRIPT_REVIEW") -> StubPipelineRun:
@@ -631,16 +681,28 @@ async def test_approve_script_wrong_stage_generating(client, stub_approve_servic
 @pytest.fixture
 def stub_approve_vp_services(
     monkeypatch: pytest.MonkeyPatch,
-) -> tuple[StubRunService, StubStageReviewService]:
+) -> Iterator[tuple[StubRunService, StubStageReviewService]]:
     run_svc = StubRunService()
     review_svc = StubStageReviewService(run_svc)
 
-    for route in _iter_api_routes(runs_router.routes):
+    for route in _iter_api_routes(app.routes):
         if route.name == "approve_visual_plan":
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "stage_review_service", review_svc)
 
-    return run_svc, review_svc
+    async def _require_run_access(run_id: int) -> tuple[CurrentUser, StubPipelineRun]:
+        run = run_svc.runs.get(run_id)
+        if run is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Run not found")
+        return CurrentUser(user_id=1, workspace_id=1), run
+
+    app.dependency_overrides[require_run_access] = _require_run_access
+
+    yield run_svc, review_svc
+
+    app.dependency_overrides.pop(require_run_access, None)
 
 
 def _make_vp_run(run_id: int, stage: str = "VISUAL_PLAN_REVIEW") -> StubPipelineRun:
@@ -785,7 +847,7 @@ class StubDispatcher:
 @pytest.fixture
 def stub_generate_services(
     monkeypatch: pytest.MonkeyPatch,
-) -> tuple[StubRunService, StubProjectService, StubDispatcher]:
+) -> Iterator[tuple[StubRunService, StubProjectService, StubDispatcher]]:
     run_svc = StubRunService()
     project_svc = StubProjectService()
     dispatcher = StubDispatcher()
@@ -794,13 +856,25 @@ def stub_generate_services(
     )
     monkeypatch.setattr(project_service_module, "project_service", project_svc)
 
-    for route in _iter_api_routes(runs_router.routes):
+    for route in _iter_api_routes(app.routes):
         if route.name == "generate_script_trigger":
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "project_service", project_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "dispatch_generate_script", dispatcher)
 
-    return run_svc, project_svc, dispatcher
+    async def _require_run_access(run_id: int) -> tuple[CurrentUser, StubPipelineRun]:
+        run = run_svc.runs.get(run_id)
+        if run is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Run not found")
+        return CurrentUser(user_id=1, workspace_id=1), run
+
+    app.dependency_overrides[require_run_access] = _require_run_access
+
+    yield run_svc, project_svc, dispatcher
+
+    app.dependency_overrides.pop(require_run_access, None)
 
 
 def _make_project(project_id: int, idea_brief: str = "Test idea") -> StubProject:
@@ -1068,10 +1142,8 @@ async def test_list_runs_for_project_empty(client, stub_run_service: StubRunServ
     _ = stub_run_service
     response = await client.get("/api/creator/projects/999/runs")
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["total"] == 0
-    assert body["runs"] == []
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Project not found"}
 
 
 class StubVisualPlanDispatcher:
@@ -1093,18 +1165,41 @@ class StubVisualPlanDispatcher:
 @pytest.fixture
 def stub_generate_visual_plan_services(
     monkeypatch: pytest.MonkeyPatch,
-) -> tuple[StubRunService, StubVisualPlanDispatcher]:
+) -> Iterator[tuple[StubRunService, StubVisualPlanDispatcher]]:
     run_svc = StubRunService()
     dispatcher = StubVisualPlanDispatcher()
 
-    for route in _iter_api_routes(runs_router.routes):
-        if route.name == "generate_visual_plan_trigger":
-            monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
-            monkeypatch.setitem(
-                route.endpoint.__globals__, "dispatch_generate_visual_plan", dispatcher
-            )
+    monkeypatch.setattr("shorts_api.routes.creator_runs_visuals.run_service", run_svc)
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_visuals.dispatch_generate_visual_plan", dispatcher
+    )
 
-    return run_svc, dispatcher
+    async def _get_project(_project_id: int):
+        class _Project:
+            workspace_id = 1
+
+        return _Project()
+
+    async def _check_quota(_workspace_id: int, operation_type: str):
+        _ = operation_type
+        return True, ""
+
+    monkeypatch.setattr("creator_service.project_service.project_service.get_project", _get_project)
+    monkeypatch.setattr("creator_service.usage_service.check_workspace_quota", _check_quota)
+
+    async def _require_run_access(run_id: int) -> tuple[CurrentUser, StubPipelineRun]:
+        run = run_svc.runs.get(run_id)
+        if run is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Run not found")
+        return CurrentUser(user_id=1, workspace_id=1), run
+
+    app.dependency_overrides[require_run_access] = _require_run_access
+
+    yield run_svc, dispatcher
+
+    app.dependency_overrides.pop(require_run_access, None)
 
 
 @pytest.mark.asyncio
@@ -1313,18 +1408,41 @@ class StubImageDispatcher:
 @pytest.fixture
 def stub_generate_visual_assets_services(
     monkeypatch: pytest.MonkeyPatch,
-) -> tuple[StubRunService, StubImageDispatcher]:
+) -> Iterator[tuple[StubRunService, StubImageDispatcher]]:
     run_svc = StubRunService()
     dispatcher = StubImageDispatcher()
 
-    for route in _iter_api_routes(runs_router.routes):
-        if route.name == "generate_visual_assets_trigger":
-            monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
-            monkeypatch.setitem(
-                route.endpoint.__globals__, "dispatch_generate_scene_image", dispatcher
-            )
+    monkeypatch.setattr("shorts_api.routes.creator_runs_visuals.run_service", run_svc)
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_visuals.dispatch_generate_scene_image", dispatcher
+    )
 
-    return run_svc, dispatcher
+    async def _get_project(_project_id: int):
+        class _Project:
+            workspace_id = 1
+
+        return _Project()
+
+    async def _check_quota(_workspace_id: int, operation_type: str):
+        _ = operation_type
+        return True, ""
+
+    monkeypatch.setattr("creator_service.project_service.project_service.get_project", _get_project)
+    monkeypatch.setattr("creator_service.usage_service.check_workspace_quota", _check_quota)
+
+    async def _require_run_access(run_id: int) -> tuple[CurrentUser, StubPipelineRun]:
+        run = run_svc.runs.get(run_id)
+        if run is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Run not found")
+        return CurrentUser(user_id=1, workspace_id=1), run
+
+    app.dependency_overrides[require_run_access] = _require_run_access
+
+    yield run_svc, dispatcher
+
+    app.dependency_overrides.pop(require_run_access, None)
 
 
 @pytest.mark.asyncio
@@ -1512,18 +1630,41 @@ async def test_generate_visual_assets_dispatch_failure_rollback(
 @pytest.fixture
 def stub_single_scene_services(
     monkeypatch: pytest.MonkeyPatch,
-) -> tuple[StubRunService, StubImageDispatcher]:
+) -> Iterator[tuple[StubRunService, StubImageDispatcher]]:
     run_svc = StubRunService()
     dispatcher = StubImageDispatcher()
 
-    for route in _iter_api_routes(runs_router.routes):
-        if route.name in ("generate_scene_image_endpoint", "regenerate_scene_image_endpoint"):
-            monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
-            monkeypatch.setitem(
-                route.endpoint.__globals__, "dispatch_generate_scene_image", dispatcher
-            )
+    monkeypatch.setattr("shorts_api.routes.creator_runs_scene_assets.run_service", run_svc)
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_scene_assets.dispatch_generate_scene_image", dispatcher
+    )
 
-    return run_svc, dispatcher
+    async def _get_project(_project_id: int):
+        class _Project:
+            workspace_id = 1
+
+        return _Project()
+
+    async def _check_quota(_workspace_id: int, operation_type: str):
+        _ = operation_type
+        return True, ""
+
+    monkeypatch.setattr("creator_service.project_service.project_service.get_project", _get_project)
+    monkeypatch.setattr("creator_service.usage_service.check_workspace_quota", _check_quota)
+
+    async def _require_run_access(run_id: int) -> tuple[CurrentUser, StubPipelineRun]:
+        run = run_svc.runs.get(run_id)
+        if run is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Run not found")
+        return CurrentUser(user_id=1, workspace_id=1), run
+
+    app.dependency_overrides[require_run_access] = _require_run_access
+
+    yield run_svc, dispatcher
+
+    app.dependency_overrides.pop(require_run_access, None)
 
 
 @pytest.mark.asyncio
@@ -1600,7 +1741,7 @@ async def test_generate_scene_image_dispatch_failure(client, stub_single_scene_s
     ):
         raise RuntimeError("Celery broker down")
 
-    for route in _iter_api_routes(runs_router.routes):
+    for route in _iter_api_routes(app.routes):
         if route.name == "generate_scene_image_endpoint":
             route.endpoint.__globals__["dispatch_generate_scene_image"] = failing_dispatcher
 
@@ -1709,7 +1850,7 @@ async def test_regenerate_scene_image_dispatch_failure(client, stub_single_scene
     ):
         raise RuntimeError("Celery broker down")
 
-    for route in _iter_api_routes(runs_router.routes):
+    for route in _iter_api_routes(app.routes):
         if route.name == "regenerate_scene_image_endpoint":
             route.endpoint.__globals__["dispatch_generate_scene_image"] = failing_dispatcher
 
@@ -1814,16 +1955,28 @@ def _make_asset(
 @pytest.fixture
 def stub_listing_services(
     monkeypatch: pytest.MonkeyPatch,
-) -> tuple[StubRunService, StubVisualAssetService]:
+) -> Iterator[tuple[StubRunService, StubVisualAssetService]]:
     run_svc = StubRunService()
     asset_svc = StubVisualAssetService()
 
-    for route in _iter_api_routes(runs_router.routes):
+    for route in _iter_api_routes(app.routes):
         if route.name in ("list_visual_assets_by_run", "list_visual_assets_by_scene"):
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "visual_asset_service", asset_svc)
 
-    return run_svc, asset_svc
+    async def _require_run_access(run_id: int) -> tuple[CurrentUser, StubPipelineRun]:
+        run = run_svc.runs.get(run_id)
+        if run is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Run not found")
+        return CurrentUser(user_id=1, workspace_id=1), run
+
+    app.dependency_overrides[require_run_access] = _require_run_access
+
+    yield run_svc, asset_svc
+
+    app.dependency_overrides.pop(require_run_access, None)
 
 
 @pytest.mark.asyncio
@@ -1989,16 +2142,28 @@ async def test_list_visual_assets_by_scene_includes_fields(client, stub_listing_
 @pytest.fixture
 def stub_select_services(
     monkeypatch: pytest.MonkeyPatch,
-) -> tuple[StubRunService, StubVisualAssetService]:
+) -> Iterator[tuple[StubRunService, StubVisualAssetService]]:
     run_svc = StubRunService()
     asset_svc = StubVisualAssetService()
 
-    for route in _iter_api_routes(runs_router.routes):
+    for route in _iter_api_routes(app.routes):
         if route.name == "select_active_asset":
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "visual_asset_service", asset_svc)
 
-    return run_svc, asset_svc
+    async def _require_run_access(run_id: int) -> tuple[CurrentUser, StubPipelineRun]:
+        run = run_svc.runs.get(run_id)
+        if run is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Run not found")
+        return CurrentUser(user_id=1, workspace_id=1), run
+
+    app.dependency_overrides[require_run_access] = _require_run_access
+
+    yield run_svc, asset_svc
+
+    app.dependency_overrides.pop(require_run_access, None)
 
 
 @pytest.mark.asyncio
@@ -2091,16 +2256,41 @@ class StubAudioDispatcher:
 @pytest.fixture
 def stub_generate_audio_services(
     monkeypatch: pytest.MonkeyPatch,
-) -> tuple[StubRunService, StubAudioDispatcher]:
+) -> Iterator[tuple[StubRunService, StubAudioDispatcher]]:
     run_svc = StubRunService()
     dispatcher = StubAudioDispatcher()
 
-    for route in _iter_api_routes(runs_router.routes):
-        if route.name == "generate_audio_trigger":
-            monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
-            monkeypatch.setitem(route.endpoint.__globals__, "dispatch_generate_audio", dispatcher)
+    monkeypatch.setattr("shorts_api.routes.creator_runs_scene_assets.run_service", run_svc)
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_scene_assets.dispatch_generate_audio", dispatcher
+    )
 
-    return run_svc, dispatcher
+    async def _get_project(_project_id: int):
+        class _Project:
+            workspace_id = 1
+
+        return _Project()
+
+    async def _check_quota(_workspace_id: int, operation_type: str):
+        _ = operation_type
+        return True, ""
+
+    monkeypatch.setattr("creator_service.project_service.project_service.get_project", _get_project)
+    monkeypatch.setattr("creator_service.usage_service.check_workspace_quota", _check_quota)
+
+    async def _require_run_access(run_id: int) -> tuple[CurrentUser, StubPipelineRun]:
+        run = run_svc.runs.get(run_id)
+        if run is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Run not found")
+        return CurrentUser(user_id=1, workspace_id=1), run
+
+    app.dependency_overrides[require_run_access] = _require_run_access
+
+    yield run_svc, dispatcher
+
+    app.dependency_overrides.pop(require_run_access, None)
 
 
 def _make_audio_run(run_id: int, stage: str = "VISUAL_ASSET_REVIEW") -> StubPipelineRun:
@@ -2311,18 +2501,41 @@ class StubSubtitleDispatcher:
 @pytest.fixture
 def stub_generate_subtitles_services(
     monkeypatch: pytest.MonkeyPatch,
-) -> tuple[StubRunService, StubSubtitleDispatcher]:
+) -> Iterator[tuple[StubRunService, StubSubtitleDispatcher]]:
     run_svc = StubRunService()
     dispatcher = StubSubtitleDispatcher()
 
-    for route in _iter_api_routes(runs_router.routes):
-        if route.name == "generate_subtitles_trigger":
-            monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
-            monkeypatch.setitem(
-                route.endpoint.__globals__, "dispatch_generate_subtitles", dispatcher
-            )
+    monkeypatch.setattr("shorts_api.routes.creator_runs_scene_assets.run_service", run_svc)
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_scene_assets.dispatch_generate_subtitles", dispatcher
+    )
 
-    return run_svc, dispatcher
+    async def _get_project(_project_id: int):
+        class _Project:
+            workspace_id = 1
+
+        return _Project()
+
+    async def _check_quota(_workspace_id: int, operation_type: str):
+        _ = operation_type
+        return True, ""
+
+    monkeypatch.setattr("creator_service.project_service.project_service.get_project", _get_project)
+    monkeypatch.setattr("creator_service.usage_service.check_workspace_quota", _check_quota)
+
+    async def _require_run_access(run_id: int) -> tuple[CurrentUser, StubPipelineRun]:
+        run = run_svc.runs.get(run_id)
+        if run is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Run not found")
+        return CurrentUser(user_id=1, workspace_id=1), run
+
+    app.dependency_overrides[require_run_access] = _require_run_access
+
+    yield run_svc, dispatcher
+
+    app.dependency_overrides.pop(require_run_access, None)
 
 
 def _make_subtitle_run(run_id: int, stage: str = "AUDIO_GENERATING") -> StubPipelineRun:
@@ -2532,16 +2745,41 @@ class StubRenderDispatcher:
 @pytest.fixture
 def stub_generate_render_services(
     monkeypatch: pytest.MonkeyPatch,
-) -> tuple[StubRunService, StubRenderDispatcher]:
+) -> Iterator[tuple[StubRunService, StubRenderDispatcher]]:
     run_svc = StubRunService()
     dispatcher = StubRenderDispatcher()
 
-    for route in _iter_api_routes(runs_router.routes):
-        if route.name == "render_trigger":
-            monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
-            monkeypatch.setitem(route.endpoint.__globals__, "dispatch_render_video", dispatcher)
+    monkeypatch.setattr("shorts_api.routes.creator_runs_scene_assets.run_service", run_svc)
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_scene_assets.dispatch_render_video", dispatcher
+    )
 
-    return run_svc, dispatcher
+    async def _get_project(_project_id: int):
+        class _Project:
+            workspace_id = 1
+
+        return _Project()
+
+    async def _check_quota(_workspace_id: int, operation_type: str):
+        _ = operation_type
+        return True, ""
+
+    monkeypatch.setattr("creator_service.project_service.project_service.get_project", _get_project)
+    monkeypatch.setattr("creator_service.usage_service.check_workspace_quota", _check_quota)
+
+    async def _require_run_access(run_id: int) -> tuple[CurrentUser, StubPipelineRun]:
+        run = run_svc.runs.get(run_id)
+        if run is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Run not found")
+        return CurrentUser(user_id=1, workspace_id=1), run
+
+    app.dependency_overrides[require_run_access] = _require_run_access
+
+    yield run_svc, dispatcher
+
+    app.dependency_overrides.pop(require_run_access, None)
 
 
 def _make_render_run(run_id: int, stage: str = "SUBTITLE_GENERATING") -> StubPipelineRun:
@@ -2758,7 +2996,16 @@ class StubPreviewSubtitleService:
 
 
 @pytest.fixture
-def stub_preview_services(monkeypatch: pytest.MonkeyPatch):
+def stub_preview_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[
+    tuple[
+        StubRunService,
+        StubPreviewRenderService,
+        StubPreviewAudioService,
+        StubPreviewSubtitleService,
+    ]
+]:
     now = datetime.now(timezone.utc)
     run_svc = StubRunService()
     render_svc = StubPreviewRenderService(
@@ -2771,14 +3018,26 @@ def stub_preview_services(monkeypatch: pytest.MonkeyPatch):
         StubSubtitleArtifact(3, "data/artifacts/200/subtitles/subtitles.srt", "srt", now)
     )
 
-    for route in _iter_api_routes(runs_router.routes):
-        if route.name == "get_preview":
-            monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
-            monkeypatch.setitem(route.endpoint.__globals__, "render_service", render_svc)
-            monkeypatch.setitem(route.endpoint.__globals__, "audio_service", audio_svc)
-            monkeypatch.setitem(route.endpoint.__globals__, "subtitle_service", subtitle_svc)
+    monkeypatch.setattr("shorts_api.routes.creator_runs_scene_assets.run_service", run_svc)
+    monkeypatch.setattr("shorts_api.routes.creator_runs_scene_assets.render_service", render_svc)
+    monkeypatch.setattr("shorts_api.routes.creator_runs_scene_assets.audio_service", audio_svc)
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_scene_assets.subtitle_service", subtitle_svc
+    )
 
-    return run_svc, render_svc, audio_svc, subtitle_svc
+    async def _require_run_access(run_id: int) -> tuple[CurrentUser, StubPipelineRun]:
+        run = run_svc.runs.get(run_id)
+        if run is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Run not found")
+        return CurrentUser(user_id=1, workspace_id=1), run
+
+    app.dependency_overrides[require_run_access] = _require_run_access
+
+    yield run_svc, render_svc, audio_svc, subtitle_svc
+
+    app.dependency_overrides.pop(require_run_access, None)
 
 
 def _make_preview_run(run_id: int, stage: str = "FINAL_REVIEW") -> StubPipelineRun:

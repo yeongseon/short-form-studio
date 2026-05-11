@@ -1,5 +1,5 @@
-from __future__ import annotations
 """API-key identity middleware and auth helpers."""
+from __future__ import annotations
 
 import contextvars
 import hashlib
@@ -262,9 +262,12 @@ async def require_run_access(
         raise HTTPException(status_code=404, detail="Run not found")
 
     project = await project_service.get_project(run.project_id)
-    if project is None or getattr(project, "workspace_id", None) is None or getattr(project, "workspace_id", None) != user.workspace_id:
+    if project is None or project.workspace_id is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
+    has_access = await workspace_service.check_access(project.workspace_id, user.user_id)
+    if not has_access:
+        raise HTTPException(status_code=404, detail="Run not found")
     return user, run
 
 
@@ -280,7 +283,11 @@ async def require_project_access(
     from creator_service.project_service import project_service
 
     project = await project_service.get_project(project_id)
-    if project is None or getattr(project, "workspace_id", None) is None or getattr(project, "workspace_id", None) != user.workspace_id:
+    if project is None or project.workspace_id is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    has_access = await workspace_service.check_access(project.workspace_id, user.user_id)
+    if not has_access:
         raise HTTPException(status_code=404, detail="Project not found")
 
     return user, project

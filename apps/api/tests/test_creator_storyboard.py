@@ -7,6 +7,8 @@ import pytest
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
 from pydantic import BaseModel
+from shorts_api.auth import CurrentUser, require_run_access
+from shorts_api.main import app
 from shorts_api.main import runs_router
 
 
@@ -87,9 +89,23 @@ def stub_storyboard_services(monkeypatch: pytest.MonkeyPatch):
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "script_service", script_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "audio_service", audio_svc)
-            monkeypatch.setitem(route.endpoint.__globals__, "validate_model_key", fake_validate_model_key)
+            monkeypatch.setitem(
+                route.endpoint.__globals__, "validate_model_key", fake_validate_model_key
+            )
 
-    return run_svc, script_svc, audio_svc
+    async def _require_run_access(run_id: int) -> tuple[CurrentUser, StubPipelineRun]:
+        run = run_svc.runs.get(run_id)
+        if run is None:
+            from fastapi import HTTPException as FastApiHTTPException
+
+            raise FastApiHTTPException(status_code=404, detail="Run not found")
+        return CurrentUser(user_id=1, workspace_id=1), run
+
+    app.dependency_overrides[require_run_access] = _require_run_access
+
+    yield run_svc, script_svc, audio_svc
+
+    app.dependency_overrides.pop(require_run_access, None)
 
 
 def _make_run(run_id: int, stage: str = "VISUAL_ASSET_REVIEW") -> StubPipelineRun:
@@ -107,7 +123,9 @@ def _make_run(run_id: int, stage: str = "VISUAL_ASSET_REVIEW") -> StubPipelineRu
 async def test_generate_paragraph_audio_rejects_invalid_tts_model(client, stub_storyboard_services):
     run_svc, script_svc, _audio_svc = stub_storyboard_services
     run_svc.runs[10] = _make_run(10)
-    script_svc.drafts[10] = StubScriptDraft(structured_script=[StubSection(section_id="sec-1", text="hello")])
+    script_svc.drafts[10] = StubScriptDraft(
+        structured_script=[StubSection(section_id="sec-1", text="hello")]
+    )
 
     response = await client.post(
         "/api/creator/runs/10/storyboard/paragraphs/sec-1/generate-audio",
@@ -119,10 +137,14 @@ async def test_generate_paragraph_audio_rejects_invalid_tts_model(client, stub_s
 
 
 @pytest.mark.asyncio
-async def test_generate_paragraph_subtitles_rejects_invalid_subtitle_model(client, stub_storyboard_services):
+async def test_generate_paragraph_subtitles_rejects_invalid_subtitle_model(
+    client, stub_storyboard_services
+):
     run_svc, _script_svc, audio_svc = stub_storyboard_services
     run_svc.runs[11] = _make_run(11)
-    audio_svc.by_section[(11, "sec-1")] = StubAudioArtifact(id=1, section_id="sec-1", path="/tmp/audio.wav")
+    audio_svc.by_section[(11, "sec-1")] = StubAudioArtifact(
+        id=1, section_id="sec-1", path="/tmp/audio.wav"
+    )
 
     response = await client.post(
         "/api/creator/runs/11/storyboard/paragraphs/sec-1/generate-subtitles",
@@ -137,7 +159,9 @@ async def test_generate_paragraph_subtitles_rejects_invalid_subtitle_model(clien
 async def test_generate_all_audio_rejects_invalid_tts_model(client, stub_storyboard_services):
     run_svc, script_svc, _audio_svc = stub_storyboard_services
     run_svc.runs[12] = _make_run(12)
-    script_svc.drafts[12] = StubScriptDraft(structured_script=[StubSection(section_id="sec-1", text="hello")])
+    script_svc.drafts[12] = StubScriptDraft(
+        structured_script=[StubSection(section_id="sec-1", text="hello")]
+    )
 
     response = await client.post(
         "/api/creator/runs/12/storyboard/generate-all-audio",
@@ -149,7 +173,9 @@ async def test_generate_all_audio_rejects_invalid_tts_model(client, stub_storybo
 
 
 @pytest.mark.asyncio
-async def test_generate_all_subtitles_rejects_invalid_subtitle_model(client, stub_storyboard_services):
+async def test_generate_all_subtitles_rejects_invalid_subtitle_model(
+    client, stub_storyboard_services
+):
     run_svc, _script_svc, audio_svc = stub_storyboard_services
     run_svc.runs[13] = _make_run(13)
     audio_svc.by_run[13] = [StubAudioArtifact(id=2, section_id="sec-1", path="/tmp/audio.wav")]

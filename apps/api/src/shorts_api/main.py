@@ -161,26 +161,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     )
     cpu_monitor_task = asyncio.create_task(_monitor_cpu_limit())
 
-    signal_handlers_registered = False
-    loop: asyncio.AbstractEventLoop | None = None
-    try:
-        loop = asyncio.get_running_loop()
-        loop.add_signal_handler(signal.SIGTERM, _mark_shutdown)
-        loop.add_signal_handler(signal.SIGINT, _mark_shutdown)
-        signal_handlers_registered = True
-        logger.info("Registered SIGTERM/SIGINT handlers for graceful shutdown")
-    except (NotImplementedError, RuntimeError):
-        logger.warning("Signal handlers are unavailable in this runtime")
-
+    # NOTE: Do NOT override uvicorn's SIGTERM/SIGINT handlers here.
+    # Uvicorn installs its own handlers for graceful shutdown.
+    # Overriding them would prevent the process from actually exiting
+    # when _monitor_cpu_limit sends SIGTERM.
     yield
     _mark_shutdown()
     cpu_monitor_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await cpu_monitor_task
-    if signal_handlers_registered and loop is not None:
-        with contextlib.suppress(NotImplementedError, RuntimeError):
-            loop.remove_signal_handler(signal.SIGTERM)
-            loop.remove_signal_handler(signal.SIGINT)
     await close_pool()
 
 

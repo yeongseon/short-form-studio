@@ -143,6 +143,9 @@ def _iter_api_routes(routes: Sequence[object]) -> list[APIRoute]:
 def stub_lifecycle_services(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[StubRunService, StubProjectService, StubRevokeTasks]:
+    from shorts_api.auth import CurrentUser, require_run_access
+    from shorts_api.main import app
+
     run_svc = StubRunService()
     project_svc = StubProjectService()
     revoke_tasks = StubRevokeTasks()
@@ -159,7 +162,18 @@ def stub_lifecycle_services(
 
     monkeypatch.setattr(creator_runs_utils, "_revoke_active_tasks", revoke_tasks)
 
-    return run_svc, project_svc, revoke_tasks
+    async def _require_run_access(run_id: int) -> tuple[CurrentUser, StubPipelineRun]:
+        run = run_svc.runs.get(run_id)
+        if run is None:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="Run not found")
+        return CurrentUser(user_id=1, workspace_id=1), run
+
+    app.dependency_overrides[require_run_access] = _require_run_access
+
+    yield run_svc, project_svc, revoke_tasks
+
+    app.dependency_overrides.pop(require_run_access, None)
 
 
 def _make_run(
@@ -240,12 +254,13 @@ async def test_resume_run_not_found(client, stub_lifecycle_services):
     response = await client.post("/api/creator/runs/999/resume")
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "Run 999 not found"}
+    assert response.json() == {"detail": "Run not found"}
 
 
 @pytest.mark.asyncio
 async def test_resume_run_wrong_state(client, stub_lifecycle_services):
     run_svc, _, _ = stub_lifecycle_services
+    run_svc.runs[12] = _make_run(12)
     run_svc.resume_errors[12] = ValueError("Run 12 has status 'running', can only resume cancelled or failed runs")
 
     response = await client.post("/api/creator/runs/12/resume")
@@ -274,12 +289,13 @@ async def test_go_back_not_found(client, stub_lifecycle_services):
     response = await client.post("/api/creator/runs/888/go-back")
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "Run 888 not found"}
+    assert response.json() == {"detail": "Run not found"}
 
 
 @pytest.mark.asyncio
 async def test_go_back_invalid_state_returns_400(client, stub_lifecycle_services):
     run_svc, _, _ = stub_lifecycle_services
+    run_svc.runs[14] = _make_run(14)
     run_svc.go_back_errors[14] = ValueError("Cannot go back from stage 'IDEA_READY'")
 
     response = await client.post("/api/creator/runs/14/go-back")
@@ -291,6 +307,7 @@ async def test_go_back_invalid_state_returns_400(client, stub_lifecycle_services
 @pytest.mark.asyncio
 async def test_go_back_stage_conflict_returns_409(client, stub_lifecycle_services):
     run_svc, _, _ = stub_lifecycle_services
+    run_svc.runs[15] = _make_run(15)
     run_svc.go_back_errors[15] = RuntimeError("Stage conflict: expected 'SCRIPT_REVIEW' but run is at 'VISUAL_PLAN_SETUP'")
 
     response = await client.post("/api/creator/runs/15/go-back")
@@ -330,12 +347,14 @@ async def test_update_model_defaults_not_found(client, stub_lifecycle_services):
     )
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "Run 404 not found"}
+    assert response.json() == {"detail": "Run not found"}
 
 
 @pytest.mark.asyncio
 async def test_update_model_defaults_empty_body_returns_400(client, stub_lifecycle_services):
     run_svc, _, _ = stub_lifecycle_services
+
+    run_svc.runs[16] = _make_run(16)
 
     response = await client.patch(
         "/api/creator/runs/16/model-defaults",

@@ -88,8 +88,8 @@ async def test_download_artifact_forbidden_workspace_mismatch(
     stub_artifact_download_services["project_service"].workspace_id = 2
     response = await client.get("/api/creator/runs/10/artifacts/99/download")
 
-    assert response.status_code == 403
-    assert response.json() == {"detail": "Forbidden"}
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Run not found"}
 
 
 @pytest.mark.asyncio
@@ -97,8 +97,8 @@ async def test_download_artifact_rejects_none_workspace(client, stub_artifact_do
     stub_artifact_download_services["auth_context"]["workspace_id"] = None
     response = await client.get("/api/creator/runs/10/artifacts/99/download")
 
-    assert response.status_code == 403
-    assert response.json() == {"detail": "Forbidden"}
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Run not found"}
 
 
 @pytest.mark.asyncio
@@ -108,5 +108,5 @@ async def test_download_artifact_without_workspace_context_forbidden(
     stub_artifact_download_services["auth_context"]["workspace_id"] = None
     response = await client.get("/api/creator/runs/10/artifacts/99/download")
 
-    assert response.status_code == 403
-    assert response.json() == {"detail": "Forbidden"}
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Run not found"}
