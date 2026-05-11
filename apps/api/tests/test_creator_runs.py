@@ -532,8 +532,7 @@ async def test_restart_run_invalid_stage(client, stub_run_service: StubRunServic
 
     response = await client.post("/api/creator/runs/5/restart", json={"stage": "INVALID_STAGE"})
 
-    assert response.status_code == 400
-    assert response.json() == {"detail": "Invalid stage 'INVALID_STAGE'"}
+    assert response.status_code == 422  # Pydantic validates Literal stage values
 
 
 @pytest.mark.asyncio

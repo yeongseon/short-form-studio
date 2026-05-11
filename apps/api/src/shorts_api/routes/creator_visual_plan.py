@@ -8,7 +8,7 @@ from creator_domain.models.visual_plan import VisualScene
 from creator_service.run_service import run_service
 from creator_service.visual_plan_service import VersionConflictError, visual_plan_service
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from shorts_api.auth import CurrentUser, require_run_access
 
@@ -25,7 +25,7 @@ _VISUAL_PLAN_EDIT_STAGES = frozenset({
 
 
 class ReplaceVisualPlanRequest(BaseModel):
-    scenes: list[dict[str, object]]
+    scenes: list[dict[str, object]] = Field(min_length=1, max_length=200)
 
 
 @router.get("")

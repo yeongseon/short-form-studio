@@ -323,7 +323,7 @@ async def test_replace_visual_plan_invalid_scene(client, stub_visual_plan_servic
 
 @pytest.mark.asyncio
 async def test_replace_visual_plan_empty_scenes(client, stub_visual_plan_services):
-    """Empty scenes list is valid — clears the plan."""
+    """Empty scenes list is rejected by min_length=1 validation."""
     run_svc, vp_svc = stub_visual_plan_services
     run_svc.runs[23] = _make_run(23)
 
@@ -332,11 +332,7 @@ async def test_replace_visual_plan_empty_scenes(client, stub_visual_plan_service
         json={"scenes": []},
     )
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["scenes"] == []
-    assert body["version"] == 1
-    assert len(vp_svc.save_calls) == 1
+    assert response.status_code == 422  # Pydantic min_length=1 rejects empty scenes
 
 
 @pytest.mark.asyncio

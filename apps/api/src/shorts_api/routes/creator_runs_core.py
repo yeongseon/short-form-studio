@@ -35,7 +35,13 @@ class CreateRunRequest(BaseModel):
 
 
 class RestartRunRequest(BaseModel):
-    stage: str
+    stage: Literal[
+        "IDEA_READY", "SCRIPT_GENERATING", "SCRIPT_REVIEW",
+        "VISUAL_PLAN_SETUP", "VISUAL_PLAN_GENERATING", "VISUAL_PLAN_REVIEW",
+        "VISUAL_ASSET_GENERATING", "VISUAL_ASSET_REVIEW",
+        "AUDIO_GENERATING", "SUBTITLE_GENERATING",
+        "RENDER_GENERATING", "FINAL_REVIEW", "PUBLISHED", "FAILED",
+    ]
 
 
 class ApproveScriptRequest(BaseModel):
