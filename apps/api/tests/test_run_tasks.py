@@ -90,7 +90,7 @@ def stub_services(monkeypatch: pytest.MonkeyPatch) -> None:
             )
             monkeypatch.setitem(route.endpoint.__globals__, "project_service", StubProjectService())
             monkeypatch.setitem(
-                route.endpoint.__globals__, "validate_workspace_header", _authorized_workspace
+                route.endpoint.__globals__, "get_authenticated_workspace_id", _authorized_workspace
             )
 
 
@@ -120,7 +120,7 @@ async def test_get_run_tasks_requires_authentication(
     for route in app.routes:
         if isinstance(route, APIRoute) and route.name == "list_run_tasks":
             monkeypatch.setitem(
-                route.endpoint.__globals__, "validate_workspace_header", _missing_workspace
+                route.endpoint.__globals__, "get_authenticated_workspace_id", _missing_workspace
             )
 
     response = await client.get("/api/creator/runs/1/tasks")

@@ -21,7 +21,7 @@ async def list_run_tasks(run_id: int, request: Request) -> list[dict[str, object
 
     project = await project_service.get_project(run.project_id)
     project_workspace_id = getattr(project, "workspace_id", None) if project is not None else None
-    if project_workspace_id is not None and workspace_id != project_workspace_id:
+    if project_workspace_id is None or workspace_id != project_workspace_id:
         raise HTTPException(status_code=404, detail="Run not found")
 
     tasks = await task_tracking_service.list_run_tasks(run_id)

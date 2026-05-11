@@ -1,7 +1,11 @@
-"""Backfill workspace_id on projects and runs with NULL values.
+"""Backfill workspace_id on runs from their parent project.
 
-Legacy rows created before workspace_id enforcement may have NULL workspace_id.
-This migration assigns them the owner's first workspace.
+Legacy runs created before workspace_id enforcement may have NULL workspace_id.
+This migration copies workspace_id from the parent project where available.
+
+Note: creator_projects has no user_id column, so orphaned projects with
+NULL workspace_id cannot be automatically backfilled and require manual
+intervention via admin tooling.
 
 Revision ID: 019
 Revises: 018
@@ -19,23 +23,6 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    # Backfill projects with NULL workspace_id from the owner's first workspace
-    op.execute(
-        """
-    UPDATE creator_projects p
-    SET workspace_id = sub.workspace_id
-    FROM (
-        SELECT p2.id AS project_id, wm.workspace_id
-        FROM creator_projects p2
-        JOIN workspace_members wm ON wm.user_id = p2.user_id
-        WHERE p2.workspace_id IS NULL
-        ORDER BY p2.id, wm.workspace_id
-    ) sub
-    WHERE p.id = sub.project_id
-      AND p.workspace_id IS NULL;
-    """
-    )
-
     # Backfill runs with NULL workspace_id from their project's workspace_id
     op.execute(
         """

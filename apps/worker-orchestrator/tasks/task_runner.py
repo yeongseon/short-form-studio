@@ -168,19 +168,33 @@ async def _run_task_inner(
 
         result = await execute(ctx)
 
-        # 5. Success stage transition
-        if config.success_stage is not None and result.status == "success":
-            applied, _ = await _run_service.storage.conditional_update_run(
-                run_id,
-                {"current_stage": config.success_stage, "status": "running"},
-                expected_stages=config.safe_stages,
-            )
-            if not applied:
-                logger.info(
-                    "Run %d stage changed during %s -- skipping success transition",
+        # 5. Stage transition based on result status
+        if config.success_stage is not None:
+            safe_failure_stages = config.safe_failure_stages or config.safe_stages
+            if result.status == "success":
+                applied, _ = await _run_service.storage.conditional_update_run(
                     run_id,
-                    config.task_name,
+                    {"current_stage": config.success_stage, "status": "running"},
+                    expected_stages=config.safe_stages,
                 )
+                if not applied:
+                    logger.info(
+                        "Run %d stage changed during %s -- skipping success transition",
+                        run_id,
+                        config.task_name,
+                    )
+            else:
+                applied, _ = await _run_service.storage.conditional_update_run(
+                    run_id,
+                    {"current_stage": RunStage.FAILED.value, "status": "failed"},
+                    expected_stages=safe_failure_stages,
+                )
+                if not applied:
+                    logger.info(
+                        "Run %d stage changed during %s -- skipping FAILED transition",
+                        run_id,
+                        config.task_name,
+                    )
 
         # 6. Mark success/failure based on result status
         end_time = datetime.now(timezone.utc)
