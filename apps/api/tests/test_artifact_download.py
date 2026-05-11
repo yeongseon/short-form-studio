@@ -50,6 +50,9 @@ class StubProjectService:
 def _iter_api_routes() -> list[APIRoute]:
     return [route for route in app.routes if isinstance(route, APIRoute)]
 
+async def _stub_check_access(workspace_id: int, user_id: int) -> bool:
+    return workspace_id == 1 and user_id == 101
+
 
 def _patch_route_services(
     monkeypatch: pytest.MonkeyPatch, artifact_service: StubArtifactDownloadService
@@ -77,6 +80,11 @@ def _patch_route_services(
             )
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", StubRunService())
             monkeypatch.setitem(route.endpoint.__globals__, "project_service", StubProjectService())
+            monkeypatch.setitem(
+                route.endpoint.__globals__,
+                "workspace_service",
+                SimpleNamespace(check_access=_stub_check_access),
+            )
 
 
 @pytest.mark.asyncio

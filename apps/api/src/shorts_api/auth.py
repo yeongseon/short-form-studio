@@ -225,7 +225,7 @@ async def require_workspace_access(
 
     has_access = await workspace_service.check_access(workspace_id, user.user_id)
     if not has_access:
-        raise HTTPException(status_code=403, detail="Workspace access denied")
+        raise HTTPException(status_code=404, detail="Not found")
 
     return user
 

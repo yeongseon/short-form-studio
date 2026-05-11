@@ -291,46 +291,32 @@ async def health() -> dict[str, object]:
     if environment in {"production", "staging"}:
         db_ok = False
         redis_ok = False
-        db_error: str | None = None
-        redis_error: str | None = None
 
         try:
             pool = await get_pool()
             value = await pool.fetchval("SELECT 1")
             db_ok = value == 1
-            if not db_ok:
-                db_error = "Unexpected DB ping response"
-        except Exception as exc:
-            db_error = str(exc)
+        except Exception:
+            pass
 
         redis_client = Redis.from_url(REDIS_URL)
         try:
             redis_pong = await redis_client.ping()
             redis_ok = bool(redis_pong)
-            if not redis_ok:
-                redis_error = "Unexpected Redis ping response"
-        except Exception as exc:
-            redis_error = str(exc)
+        except Exception:
+            pass
         finally:
             await redis_client.aclose()
 
         overall_ok = db_ok and redis_ok and not shutdown_state.is_shutting_down
-        response_payload = {
+        response_payload: dict[str, object] = {
             "status": "ok" if overall_ok else "unavailable",
             "checks": {
                 "database": {"status": "ok" if db_ok else "down"},
                 "redis": {"status": "ok" if redis_ok else "down"},
             },
             "shutdown": shutdown_state.is_shutting_down,
-            "resource_limits": {
-                "max_memory_mb": MAX_MEMORY_MB,
-                "max_cpu_percent": MAX_CPU_PERCENT,
-            },
         }
-        if db_error:
-            response_payload["checks"]["database"]["error"] = db_error
-        if redis_error:
-            response_payload["checks"]["redis"]["error"] = redis_error
 
         if not overall_ok:
             raise HTTPException(

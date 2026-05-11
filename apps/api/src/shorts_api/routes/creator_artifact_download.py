@@ -8,7 +8,7 @@ from creator_service.artifact_download_service import artifact_download_service
 from creator_service.project_service import project_service
 from creator_service.run_service import run_service
 from fastapi import APIRouter, Depends, HTTPException
-from shorts_api.auth import CurrentUser, require_current_user
+from shorts_api.auth import CurrentUser, require_current_user, workspace_service
 from starlette.responses import FileResponse, RedirectResponse
 
 logger = logging.getLogger(__name__)
@@ -38,11 +38,9 @@ async def download_artifact(
     user_workspace_id = user.workspace_id
     project_workspace_id = project.workspace_id
 
-    if user_workspace_id is None:
-        logger.warning("No authenticated workspace context on artifact access; rejecting request")
+    if project_workspace_id is None:
         raise HTTPException(status_code=404, detail="Run not found")
-
-    if project_workspace_id is None or user_workspace_id != project_workspace_id:
+    if user.user_id is None or not await workspace_service.check_access(project_workspace_id, user.user_id):
         raise HTTPException(status_code=404, detail="Run not found")
 
     artifact = await artifact_download_service.get_artifact_by_id(artifact_id)

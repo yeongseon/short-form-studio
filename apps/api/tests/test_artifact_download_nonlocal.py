@@ -58,6 +58,13 @@ async def test_download_nonlocal_storage_redirects(client, monkeypatch: pytest.M
     monkeypatch.setattr(route_mod, "run_service", _StubRunService())
     monkeypatch.setattr(route_mod, "project_service", _StubProjectService())
 
+    async def _stub_check_access(workspace_id: int, user_id: int) -> bool:
+        return workspace_id == 1 and user_id == 101
+
+    monkeypatch.setattr(
+        route_mod, "workspace_service", SimpleNamespace(check_access=_stub_check_access)
+    )
+
     async def _stub_require_current_user(request: Request):
         _ = request
         return SimpleNamespace(user_id=101, workspace_id=1)

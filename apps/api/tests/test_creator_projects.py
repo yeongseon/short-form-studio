@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Literal, cast
 
 import pytest
@@ -136,12 +137,17 @@ def _iter_api_routes(routes: Sequence[object]) -> list[APIRoute]:
 def stub_project_service(monkeypatch: pytest.MonkeyPatch) -> StubProjectService:
     service = StubProjectService()
 
+    async def _stub_check_access(workspace_id: int, user_id: int) -> bool:
+        return workspace_id == 1 and user_id == 1
+
+    fake_ws = SimpleNamespace(check_access=_stub_check_access)
+
     for route in _iter_api_routes(projects_router.routes):
-        if route.name in {"create_project", "get_project_detail", "list_projects"}:
+        if route.name in {"create_project", "get_project_detail", "list_projects", "update_project", "delete_project"}:
             monkeypatch.setitem(route.endpoint.__globals__, "project_service", service)
+            monkeypatch.setitem(route.endpoint.__globals__, "workspace_service", fake_ws)
 
     return service
-
 
 @pytest.mark.asyncio
 async def test_create_project_idea(client, stub_project_service: StubProjectService):

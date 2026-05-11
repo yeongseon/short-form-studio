@@ -312,7 +312,7 @@ async def test_require_workspace_access_denies_without_membership(monkeypatch):
 
     with pytest.raises(HTTPException) as exc_info:
         await require_workspace_access(99, user)
-    assert exc_info.value.status_code == 403
+    assert exc_info.value.status_code == 404
 
 
 @pytest.mark.asyncio
