@@ -1,9 +1,11 @@
 """Pytest fixtures for API tests."""
 
 import hashlib
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 from httpx import ASGITransport, AsyncClient
-from shorts_api.auth import get_current_user
+from shorts_api.auth import CurrentUser, get_current_user
 from shorts_api.main import app
 
 
@@ -29,13 +31,24 @@ async def client(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost:5432/test")
     monkeypatch.setattr("shorts_api.auth.fetch_one", _fetch_one_stub)
 
-    async def _test_user_context() -> dict[str, str | int]:
-        return {
-            "user_id": 1,
-            "auth_provider": "api_key",
-            "auth_subject": "test",
-            "workspace_id": 1,
-        }
+    # Mock the DB pool used by ApiKeyMiddleware to resolve API keys
+    mock_connection = AsyncMock()
+    mock_connection.fetchrow = AsyncMock(return_value={"user_id": 1})
+    mock_connection.fetch = AsyncMock(return_value=[{"workspace_id": 1}])
+
+    mock_pool = AsyncMock()
+    mock_cm = AsyncMock()
+    mock_cm.__aenter__ = AsyncMock(return_value=mock_connection)
+    mock_cm.__aexit__ = AsyncMock(return_value=False)
+    mock_pool.acquire = MagicMock(return_value=mock_cm)
+
+    async def _get_pool_stub():
+        return mock_pool
+
+    monkeypatch.setattr("creator_service.db.get_pool", _get_pool_stub)
+
+    async def _test_user_context() -> CurrentUser:
+        return CurrentUser(user_id=1, workspace_id=1)
 
     app.dependency_overrides[get_current_user] = _test_user_context
     transport = ASGITransport(app=app)

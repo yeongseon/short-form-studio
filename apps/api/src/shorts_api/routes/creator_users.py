@@ -2,14 +2,18 @@
 
 from fastapi import APIRouter, Depends
 
-from shorts_api.auth import get_current_user
+from shorts_api.auth import CurrentUser, require_current_user
 
 router = APIRouter(prefix="/users", tags=["users"])
 
 
 @router.get("/me")
 async def get_me(
-    user: dict[str, str | int | None] = Depends(get_current_user),
+    user: CurrentUser = Depends(require_current_user),
 ) -> dict[str, str | int | None]:
     """Return the authenticated user's identity."""
-    return user
+    return {
+        "user_id": user.user_id,
+        "workspace_id": user.workspace_id,
+        "workspace_name": user.workspace_name,
+    }

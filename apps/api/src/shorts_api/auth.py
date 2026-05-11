@@ -1,9 +1,15 @@
 """API-key identity middleware and auth helpers."""
+from __future__ import annotations
 
 import contextvars
 import hashlib
 import logging
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from creator_domain.models.pipeline_run import PipelineRun
+    from creator_domain.models.project import Project
 
 from creator_service.db import fetch_one
 from creator_service.workspace_service import workspace_service
@@ -116,6 +122,8 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
                 provided = auth_header[7:]
 
         if not provided:
+            if request.url.path.startswith("/api/creator"):
+                return JSONResponse(status_code=401, content={"detail": "API key required"})
             return await call_next(request)
 
         pool = await self._get_pool()
@@ -146,28 +154,21 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
 
         user = CurrentUser(user_id=user_id_int, workspace_id=member_workspace_ids[0])
         request.state.user = user
-        _current_user_ctx.set(user)
-        return await call_next(request)
+        token = _current_user_ctx.set(user)
+        try:
+            return await call_next(request)
+        finally:
+            _current_user_ctx.reset(token)
 
 
-async def get_current_user(request: Request) -> dict[str, str | int | None]:
+async def get_current_user(request: Request) -> CurrentUser:
     user = getattr(request.state, "user", None)
     if isinstance(user, CurrentUser) and user.user_id is not None:
-        return {
-            "user_id": user.user_id,
-            "auth_provider": "api_key",
-            "auth_subject": "middleware",
-            "workspace_id": user.workspace_id,
-        }
+        return user
 
     context_user = _current_user_ctx.get()
     if isinstance(context_user, CurrentUser) and context_user.user_id is not None:
-        return {
-            "user_id": context_user.user_id,
-            "auth_provider": "api_key",
-            "auth_subject": "middleware",
-            "workspace_id": context_user.workspace_id,
-        }
+        return context_user
 
     api_key = (
         request.headers.get("X-API-Key")
@@ -203,34 +204,97 @@ async def get_current_user(request: Request) -> dict[str, str | int | None]:
     if membership_row is None:
         raise HTTPException(status_code=403, detail="No workspace membership")
 
-    return {
-        "user_id": user_id,
-        "auth_provider": "api_key",
-        "auth_subject": key_hash,
-        "workspace_id": membership_row["workspace_id"],
-    }
+    return CurrentUser(user_id=user_id, workspace_id=membership_row["workspace_id"])
 
 
-async def require_current_user(request: Request) -> dict[str, str | int | None]:
+async def require_current_user(request: Request) -> CurrentUser:
     return await get_current_user(request)
 
 
-async def validate_workspace_header(request: Request) -> int | None:
+async def get_authenticated_workspace_id(request: Request) -> int | None:
     user = await get_current_user(request)
-    workspace_id = user.get("workspace_id")
-    return workspace_id if isinstance(workspace_id, int) else None
+    return user.workspace_id
 
 
 async def require_workspace_access(
     workspace_id: int,
-    user: dict[str, str | int | None] = Depends(get_current_user),
-) -> dict[str, str | int | None]:
-    user_id = user.get("user_id")
-    if not isinstance(user_id, int):
+    user: CurrentUser = Depends(get_current_user),
+) -> CurrentUser:
+    if user.user_id is None:
         raise HTTPException(status_code=401, detail="Invalid user context")
 
-    has_access = await workspace_service.check_access(workspace_id, user_id)
+    has_access = await workspace_service.check_access(workspace_id, user.user_id)
     if not has_access:
-        raise HTTPException(status_code=403, detail="Workspace access denied")
+        raise HTTPException(status_code=404, detail="Not found")
 
     return user
+
+
+async def get_api_key(request: Request) -> str:
+    """Dependency that extracts and validates the API key from the request.
+
+    Returns the raw API key string. Raises 401 if missing/invalid.
+    """
+    api_key = (
+        request.headers.get("X-API-Key")
+        or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+    )
+    if not api_key:
+        raise HTTPException(status_code=401, detail="API key required")
+    return api_key
+
+
+
+async def require_run_access(
+    run_id: int,
+    user: CurrentUser = Depends(require_current_user),
+) -> tuple[CurrentUser, PipelineRun]:
+    """Verify the current user owns the workspace that contains the run.
+
+    Returns (user, run) so route handlers can skip re-fetching.
+    Raises 404 if run/project not found or workspace mismatch (prevents IDOR).
+    """
+    from creator_service.project_service import project_service
+    from creator_service.run_service import run_service
+
+    if user.user_id is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    run = await run_service.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    project = await project_service.get_project(run.project_id)
+    if project is None or project.workspace_id is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    has_access = await workspace_service.check_access(project.workspace_id, user.user_id)
+    if not has_access:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return user, run
+
+
+async def require_project_access(
+    project_id: int,
+    user: CurrentUser = Depends(require_current_user),
+) -> tuple[CurrentUser, Project]:
+    """Verify the current user owns the workspace that contains the project.
+
+    Returns (user, project) so route handlers can skip re-fetching.
+    Raises 404 if project not found or workspace mismatch (prevents IDOR).
+    """
+    from creator_service.project_service import project_service
+
+    if user.user_id is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    project = await project_service.get_project(project_id)
+    if project is None or project.workspace_id is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    has_access = await workspace_service.check_access(project.workspace_id, user.user_id)
+    if not has_access:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    return user, project
+

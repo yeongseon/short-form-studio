@@ -362,13 +362,35 @@ async def cas_dispatch_with_rollback(
         )
         raise HTTPException(status_code=503, detail=enqueue_error_detail) from None
 
-    await _append_task_id(run_id, task_id, run_service=run_service_obj)
-    task_type = _DISPATCH_TASK_TYPES.get(getattr(dispatcher, "__name__", ""), "unknown")
-    if task_type != "unknown":
-        tracking_service = import_module(
-            "creator_service.task_tracking_service"
-        ).task_tracking_service
-        await tracking_service.record_task_queued(run_id, task_type, task_id)
+    try:
+        await _append_task_id(run_id, task_id, run_service=run_service_obj)
+        task_type = _DISPATCH_TASK_TYPES.get(getattr(dispatcher, "__name__", ""), "unknown")
+        if task_type != "unknown":
+            tracking_service = import_module(
+                "creator_service.task_tracking_service"
+            ).task_tracking_service
+            await tracking_service.record_task_queued(run_id, task_type, task_id)
+    except Exception:
+        # Metadata recording failed after task was dispatched — revoke and rollback.
+        _revoke_active_tasks(json.dumps([task_id]))
+        # Best-effort remove the task ID that may have been appended
+        try:
+            await run_service_obj.storage.remove_active_task_id(run_id, task_id)
+        except Exception:
+            logger.warning("Failed to remove active_task_id %s for run %d during rollback", task_id, run_id)
+        if workspace_id_for_reservation is not None and quota_operation_type is not None:
+            from creator_service.usage_service import cancel_workspace_quota_reservation
+
+            await cancel_workspace_quota_reservation(
+                workspace_id_for_reservation,
+                quota_operation_type,
+            )
+        await run_service_obj.storage.conditional_update_run(
+            run_id,
+            {"current_stage": rollback_stage, "restart_from": rollback_restart_from},
+            expected_stages=frozenset({target_stage}),
+        )
+        raise HTTPException(status_code=503, detail=enqueue_error_detail) from None
     return {
         "task_id": task_id,
         "run_id": run_id,

@@ -1,12 +1,14 @@
 # pyright: reportMissingImports=false
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from datetime import datetime, timezone
 from typing import Literal
 
 import pytest
 from fastapi.routing import APIRoute
 from pydantic import BaseModel
+from shorts_api.auth import CurrentUser, require_project_access, require_run_access
+from shorts_api.main import app
 from shorts_api.routes.creator_script import router as script_router
 from shorts_api.routes.creator_script import run_script_router
 
@@ -59,6 +61,7 @@ class StubRunService:
         project_id: int,
         model_defaults: dict[str, str] | None,
         style_preset: str,
+        workspace_id: int | None = None,
         metadata: dict[str, object] | None = None,
         current_stage: str = "IDEA_READY",
         status: str = "pending",
@@ -94,6 +97,7 @@ class StubRunServiceRead:
 
     async def get_run(self, run_id: int) -> StubPipelineRun | None:
         return self.runs.get(run_id)
+
 
 class StubScriptService:
     def __init__(self) -> None:
@@ -150,7 +154,9 @@ def _iter_api_routes(routes: Sequence[object]) -> list[APIRoute]:
 
 
 @pytest.fixture
-def stub_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubProjectService, StubRunService, StubScriptService]:
+def stub_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[tuple[StubProjectService, StubRunService, StubScriptService]]:
     project = StubProjectService()
     run = StubRunService()
     script = StubScriptService()
@@ -160,11 +166,25 @@ def stub_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubProjectService, 
         monkeypatch.setitem(route.endpoint.__globals__, "run_service", run)
         monkeypatch.setitem(route.endpoint.__globals__, "script_service", script)
 
-    return project, run, script
+    async def _require_project_access(project_id: int) -> tuple[CurrentUser, StubProject]:
+        found = await project.get_project(project_id)
+        if found is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Project not found")
+        return CurrentUser(user_id=1, workspace_id=1), found
+
+    app.dependency_overrides[require_project_access] = _require_project_access
+
+    yield project, run, script
+
+    app.dependency_overrides.pop(require_project_access, None)
 
 
 @pytest.fixture
-def stub_run_script_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunServiceRead, StubScriptService]:
+def stub_run_script_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[tuple[StubRunServiceRead, StubScriptService]]:
     run = StubRunServiceRead()
     script = StubScriptService()
 
@@ -172,7 +192,20 @@ def stub_run_script_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunSe
         monkeypatch.setitem(route.endpoint.__globals__, "run_service", run)
         monkeypatch.setitem(route.endpoint.__globals__, "script_service", script)
 
-    return run, script
+    async def _require_run_access(run_id: int) -> tuple[CurrentUser, StubPipelineRun]:
+        found = run.runs.get(run_id)
+        if found is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+        return CurrentUser(user_id=1, workspace_id=1), found
+
+    app.dependency_overrides[require_run_access] = _require_run_access
+
+    yield run, script
+
+    app.dependency_overrides.pop(require_run_access, None)
+
 
 @pytest.mark.asyncio
 async def test_import_markdown_success(client, stub_services):
@@ -387,6 +420,7 @@ async def test_get_script_markdown_success(client, stub_run_script_services):
         "version": 1,
     }
 
+
 @pytest.mark.asyncio
 async def test_get_script_markdown_no_draft(client, stub_run_script_services):
     run_service, _script_service = stub_run_script_services
@@ -406,6 +440,7 @@ async def test_get_script_markdown_run_not_found(client, stub_run_script_service
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Run 888 not found"}
+
 
 @pytest.mark.asyncio
 async def test_update_script_markdown_success(client, stub_run_script_services):
@@ -433,6 +468,7 @@ async def test_update_script_markdown_success(client, stub_run_script_services):
         "source_type": "edited_manually",
         "markdown_content": "# V2\n\nUpdated",
     }
+
 
 @pytest.mark.asyncio
 async def test_update_script_markdown_run_not_found(client, stub_run_script_services):
@@ -482,9 +518,11 @@ async def test_update_script_markdown_first_draft(client, stub_run_script_servic
     assert body["draft"]["markdown_content"] == "# Fresh draft"
     assert script_service.active_drafts[77].version == 1
 
+
 @pytest.mark.asyncio
 async def test_update_script_markdown_empty(client, stub_run_script_services):
-    _run_service, script_service = stub_run_script_services
+    run_service, script_service = stub_run_script_services
+    run_service.runs[13] = StubPipelineRun(id=13, project_id=1)
 
     response = await client.put(
         "/api/creator/runs/13/script/markdown",
@@ -495,9 +533,11 @@ async def test_update_script_markdown_empty(client, stub_run_script_services):
     assert response.json() == {"detail": "markdown content must not be empty"}
     assert script_service.save_draft_calls == []
 
+
 @pytest.mark.asyncio
 async def test_update_script_markdown_whitespace_only(client, stub_run_script_services):
-    _run_service, script_service = stub_run_script_services
+    run_service, script_service = stub_run_script_services
+    run_service.runs[13] = StubPipelineRun(id=13, project_id=1)
 
     response = await client.put(
         "/api/creator/runs/13/script/markdown",
@@ -625,7 +665,10 @@ async def test_update_script_structured_success(client, stub_run_script_services
     assert body["draft"]["markdown_content"] == "## hook\n\nStart here\n\n## cta\n\nFollow for more"
     assert body["draft"]["structured_script"][0]["section_id"] == "sec-1"
     assert script_service.save_draft_calls[-1]["source_type"] == "edited_manually"
-    assert script_service.save_draft_calls[-1]["markdown_content"] == "## hook\n\nStart here\n\n## cta\n\nFollow for more"
+    assert (
+        script_service.save_draft_calls[-1]["markdown_content"]
+        == "## hook\n\nStart here\n\n## cta\n\nFollow for more"
+    )
 
 
 @pytest.mark.asyncio
@@ -709,7 +752,9 @@ class StubScriptSection:
 
 
 @pytest.fixture
-def stub_parse_markdown_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunServiceRead, StubScriptService, list]:
+def stub_parse_markdown_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[tuple[StubRunServiceRead, StubScriptService, list[dict]]]:
     """Fixture that also patches parse_markdown for run_script_router routes."""
     run = StubRunServiceRead()
     script = StubScriptService()
@@ -721,15 +766,17 @@ def stub_parse_markdown_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubR
         for line in markdown.split("\n"):
             if line.startswith("## "):
                 heading = line[3:].strip().lower()
-                sections.append(StubScriptSection(
-                    section_id=f"{heading}-{len(sections)+1}",
-                    type=heading,
-                    text=f"Text for {heading}",
-                ))
+                sections.append(
+                    StubScriptSection(
+                        section_id=f"{heading}-{len(sections) + 1}",
+                        type=heading,
+                        text=f"Text for {heading}",
+                    )
+                )
         if not sections:
-            sections.append(StubScriptSection(
-                section_id="body-1", type="body", text=markdown.strip()
-            ))
+            sections.append(
+                StubScriptSection(section_id="body-1", type="body", text=markdown.strip())
+            )
         return sections
 
     for route in _iter_api_routes(run_script_router.routes):
@@ -737,7 +784,19 @@ def stub_parse_markdown_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubR
         monkeypatch.setitem(route.endpoint.__globals__, "script_service", script)
         monkeypatch.setitem(route.endpoint.__globals__, "parse_markdown", fake_parse_markdown)
 
-    return run, script, parse_calls
+    async def _require_run_access(run_id: int) -> tuple[CurrentUser, StubPipelineRun]:
+        found = run.runs.get(run_id)
+        if found is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+        return CurrentUser(user_id=1, workspace_id=1), found
+
+    app.dependency_overrides[require_run_access] = _require_run_access
+
+    yield run, script, parse_calls
+
+    app.dependency_overrides.pop(require_run_access, None)
 
 
 @pytest.mark.asyncio

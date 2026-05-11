@@ -1,12 +1,13 @@
 # pyright: reportMissingImports=false
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from datetime import datetime, timezone
 
 import pytest
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.routing import APIRoute
 from pydantic import BaseModel
+from shorts_api.auth import CurrentUser, require_run_access
 from shorts_api.main import app, runs_router
 
 
@@ -100,7 +101,9 @@ class StubVisualAssetService:
 
 
 @pytest.fixture
-def contract_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubScriptService, StubAudioService]:
+def contract_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[tuple[StubRunService, StubScriptService, StubAudioService]]:
     run_svc = StubRunService()
     script_svc = StubScriptService()
     audio_svc = StubAudioService()
@@ -136,19 +139,47 @@ def contract_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, 
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "script_service", script_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "audio_service", audio_svc)
-            monkeypatch.setitem(route.endpoint.__globals__, "subtitle_service", StubSubtitleService())
-            monkeypatch.setitem(route.endpoint.__globals__, "visual_plan_service", StubVisualPlanService())
-            monkeypatch.setitem(route.endpoint.__globals__, "visual_asset_service", StubVisualAssetService())
-            monkeypatch.setitem(route.endpoint.__globals__, "dispatch_paragraph_audio", dispatch_audio)
-            monkeypatch.setitem(route.endpoint.__globals__, "dispatch_paragraph_subtitles", dispatch_subtitles)
+            monkeypatch.setitem(
+                route.endpoint.__globals__, "subtitle_service", StubSubtitleService()
+            )
+            monkeypatch.setitem(
+                route.endpoint.__globals__, "visual_plan_service", StubVisualPlanService()
+            )
+            monkeypatch.setitem(
+                route.endpoint.__globals__, "visual_asset_service", StubVisualAssetService()
+            )
+            monkeypatch.setitem(
+                route.endpoint.__globals__, "dispatch_paragraph_audio", dispatch_audio
+            )
+            monkeypatch.setitem(
+                route.endpoint.__globals__, "dispatch_paragraph_subtitles", dispatch_subtitles
+            )
             monkeypatch.setitem(route.endpoint.__globals__, "_append_task_id", append_task_id)
-            monkeypatch.setitem(route.endpoint.__globals__, "validate_model_key", validate_model_key)
-            monkeypatch.setitem(route.endpoint.__globals__, "validate_model_defaults", validate_model_defaults)
+            monkeypatch.setitem(
+                route.endpoint.__globals__, "validate_model_key", validate_model_key
+            )
+            monkeypatch.setitem(
+                route.endpoint.__globals__, "validate_model_defaults", validate_model_defaults
+            )
 
-    return run_svc, script_svc, audio_svc
+    async def _require_run_access(run_id: int) -> tuple[CurrentUser, StubRun]:
+        run = run_svc.runs.get(run_id)
+        if run is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Run not found")
+        return CurrentUser(user_id=1, workspace_id=1), run
+
+    app.dependency_overrides[require_run_access] = _require_run_access
+
+    yield run_svc, script_svc, audio_svc
+
+    app.dependency_overrides.pop(require_run_access, None)
 
 
-def _seed_storyboard_data(run_svc: StubRunService, script_svc: StubScriptService, audio_svc: StubAudioService) -> None:
+def _seed_storyboard_data(
+    run_svc: StubRunService, script_svc: StubScriptService, audio_svc: StubAudioService
+) -> None:
     now = datetime.now(timezone.utc)
     run_svc.runs[101] = StubRun(
         id=101,
@@ -178,7 +209,13 @@ async def test_storyboard_response_contract(client, contract_services):
     assert response.status_code == 200
     body = response.json()
 
-    assert set(body) == {"run_id", "paragraphs", "render_ready", "total_paragraphs", "ready_paragraphs"}
+    assert set(body) == {
+        "run_id",
+        "paragraphs",
+        "render_ready",
+        "total_paragraphs",
+        "ready_paragraphs",
+    }
     assert body["run_id"] == 101
     assert isinstance(body["paragraphs"], list)
     assert body["total_paragraphs"] == 2
@@ -227,6 +264,7 @@ async def test_bulk_audio_dispatch_contract(client, contract_services):
     assert isinstance(body["failed"], int)
     assert isinstance(body["tasks"], list)
     assert set(body["tasks"][0]) == {"section_id", "task_id"}
+
 
 @pytest.mark.asyncio
 async def test_bulk_subtitles_dispatch_contract(client, contract_services):
@@ -284,7 +322,9 @@ async def test_model_defaults_update_contract(client, contract_services):
         updated_at=now,
     )
 
-    response = await client.patch("/api/creator/runs/202/model-defaults", json={"tts_model": "qwen3-tts"})
+    response = await client.patch(
+        "/api/creator/runs/202/model-defaults", json={"tts_model": "qwen3-tts"}
+    )
     assert response.status_code == 200
     body = response.json()
     assert body["id"] == 202

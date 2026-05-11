@@ -10,7 +10,7 @@ from shorts_api.main import app
 
 
 @pytest.fixture
-async def client(monkeypatch: pytest.MonkeyPatch):
+async def settings_client(monkeypatch: pytest.MonkeyPatch):
     api_key = "test-api-key"
     expected_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
 
@@ -29,6 +29,7 @@ async def client(monkeypatch: pytest.MonkeyPatch):
 
     monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost:5432/test")
     monkeypatch.setattr("shorts_api.auth.fetch_one", _fetch_one_stub)
+    app.state.shutdown_requested = False
 
     transport = ASGITransport(app=app)
     async with AsyncClient(

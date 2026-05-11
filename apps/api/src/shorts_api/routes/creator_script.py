@@ -1,5 +1,9 @@
 """Routes for creator script management."""
+
+from __future__ import annotations
+
 import json
+from typing import TYPE_CHECKING
 
 from creator_domain.models import RunStage
 from creator_domain.models.script_draft import ScriptSection
@@ -8,16 +12,23 @@ from creator_service.markdown_parser import parse_markdown
 from creator_service.project_service import project_service
 from creator_service.run_service import run_service
 from creator_service.script_service import script_service
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, ValidationError
 
+from shorts_api.auth import CurrentUser, require_project_access, require_run_access
 from shorts_api.routes.creator_runs_utils import validate_model_defaults
 
-_SCRIPT_EDIT_STAGES = frozenset({
-    RunStage.IDEA_READY.value,
-    RunStage.SCRIPT_REVIEW.value,
-    RunStage.SCRIPT_GENERATING.value,
-})
+if TYPE_CHECKING:
+    from creator_domain.models.pipeline_run import PipelineRun
+    from creator_domain.models.project import Project
+
+_SCRIPT_EDIT_STAGES = frozenset(
+    {
+        RunStage.IDEA_READY.value,
+        RunStage.SCRIPT_REVIEW.value,
+        RunStage.SCRIPT_GENERATING.value,
+    }
+)
 
 router = APIRouter(prefix="/projects/{project_id}/script", tags=["script"])
 run_script_router = APIRouter(prefix="/runs/{run_id}/script", tags=["script"])
@@ -30,19 +41,21 @@ class ImportMarkdownRequest(BaseModel):
 
 
 @router.post("/import-markdown", status_code=201)
-async def import_markdown(project_id: int, request: ImportMarkdownRequest) -> dict[str, object]:
+async def import_markdown(
+    project_id: int,
+    request: ImportMarkdownRequest,
+    access: tuple[CurrentUser, Project] = Depends(require_project_access),
+) -> dict[str, object]:
+    user, project = access
     if not request.markdown.strip():
         raise HTTPException(status_code=400, detail="markdown content must not be empty")
-
-    project = await project_service.get_project(project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
 
     validate_model_defaults(request.model_defaults)
 
     try:
         run = await run_service.create_run(
             project_id=project_id,
+            workspace_id=user.workspace_id,
             model_defaults=request.model_defaults,
             style_preset=request.style_preset,
             current_stage=RunStage.SCRIPT_REVIEW.value,
@@ -70,13 +83,14 @@ class ImportJsonRequest(BaseModel):
 
 
 @router.post("/import-json", status_code=201)
-async def import_json(project_id: int, request: ImportJsonRequest) -> dict[str, object]:
+async def import_json(
+    project_id: int,
+    request: ImportJsonRequest,
+    access: tuple[CurrentUser, Project] = Depends(require_project_access),
+) -> dict[str, object]:
+    user, project = access
     if not request.json_script.strip():
         raise HTTPException(status_code=400, detail="JSON content must not be empty")
-
-    project = await project_service.get_project(project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
 
     validate_model_defaults(request.model_defaults)
 
@@ -93,6 +107,7 @@ async def import_json(project_id: int, request: ImportJsonRequest) -> dict[str, 
     try:
         run = await run_service.create_run(
             project_id=project_id,
+            workspace_id=user.workspace_id,
             model_defaults=request.model_defaults,
             style_preset=request.style_preset,
             current_stage=RunStage.SCRIPT_REVIEW.value,
@@ -127,10 +142,10 @@ class UpdateJsonScriptRequest(BaseModel):
 
 
 @run_script_router.get("/markdown")
-async def get_script_markdown(run_id: int) -> dict[str, object]:
-    run = await run_service.get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+async def get_script_markdown(
+    run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
+) -> dict[str, object]:
+    _, run = access
     if run.current_stage not in _SCRIPT_EDIT_STAGES:
         raise HTTPException(
             status_code=409,
@@ -152,10 +167,10 @@ async def get_script_markdown(run_id: int) -> dict[str, object]:
 
 
 @run_script_router.get("")
-async def get_script(run_id: int) -> dict[str, object]:
-    run = await run_service.get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+async def get_script(
+    run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
+) -> dict[str, object]:
+    _, run = access
     if run.current_stage not in _SCRIPT_EDIT_STAGES:
         raise HTTPException(
             status_code=409,
@@ -173,18 +188,17 @@ async def get_script(run_id: int) -> dict[str, object]:
         "run_id": run_id,
         "script": draft.markdown_content,
         "structured_script": [
-            section.model_dump(mode="json")
-            for section in (draft.structured_script or [])
+            section.model_dump(mode="json") for section in (draft.structured_script or [])
         ],
         "version": draft.version,
     }
 
 
 @run_script_router.get("/structured")
-async def get_script_structured(run_id: int) -> dict[str, object]:
-    run = await run_service.get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+async def get_script_structured(
+    run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
+) -> dict[str, object]:
+    _, run = access
     if run.current_stage not in _SCRIPT_EDIT_STAGES:
         raise HTTPException(
             status_code=409,
@@ -200,16 +214,18 @@ async def get_script_structured(run_id: int) -> dict[str, object]:
 
     return {
         "run_id": run_id,
-        "sections": [s.model_dump(mode="json") for s in draft.structured_script] if draft.structured_script else [],
+        "sections": [s.model_dump(mode="json") for s in draft.structured_script]
+        if draft.structured_script
+        else [],
         "version": draft.version,
     }
 
 
 @run_script_router.get("/json")
-async def get_script_json(run_id: int) -> dict[str, object]:
-    run = await run_service.get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+async def get_script_json(
+    run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
+) -> dict[str, object]:
+    _, run = access
     if run.current_stage not in _SCRIPT_EDIT_STAGES:
         raise HTTPException(
             status_code=409,
@@ -266,13 +282,14 @@ async def get_script_json(run_id: int) -> dict[str, object]:
 
 
 @run_script_router.put("/markdown")
-async def update_script_markdown(run_id: int, request: UpdateMarkdownRequest) -> dict[str, object]:
+async def update_script_markdown(
+    run_id: int,
+    request: UpdateMarkdownRequest,
+    access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
+) -> dict[str, object]:
+    _, run = access
     if not request.markdown.strip():
         raise HTTPException(status_code=400, detail="markdown content must not be empty")
-
-    run = await run_service.get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
     if run.current_stage not in _SCRIPT_EDIT_STAGES:
         raise HTTPException(
             status_code=409,
@@ -298,10 +315,12 @@ async def update_script_markdown(run_id: int, request: UpdateMarkdownRequest) ->
 
 
 @run_script_router.put("/structured")
-async def update_script_structured(run_id: int, request: UpdateStructuredRequest) -> dict[str, object]:
-    run = await run_service.get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+async def update_script_structured(
+    run_id: int,
+    request: UpdateStructuredRequest,
+    access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
+) -> dict[str, object]:
+    _, run = access
     if run.current_stage not in _SCRIPT_EDIT_STAGES:
         raise HTTPException(
             status_code=409,
@@ -332,13 +351,14 @@ async def update_script_structured(run_id: int, request: UpdateStructuredRequest
 
 
 @run_script_router.put("/json")
-async def update_script_json(run_id: int, request: UpdateJsonScriptRequest) -> dict[str, object]:
+async def update_script_json(
+    run_id: int,
+    request: UpdateJsonScriptRequest,
+    access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
+) -> dict[str, object]:
+    _, run = access
     if not request.json_script.strip():
         raise HTTPException(status_code=400, detail="JSON content must not be empty")
-
-    run = await run_service.get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
     if run.current_stage not in _SCRIPT_EDIT_STAGES:
         raise HTTPException(
             status_code=409,
@@ -371,10 +391,10 @@ async def update_script_json(run_id: int, request: UpdateJsonScriptRequest) -> d
 
 
 @run_script_router.post("/parse-markdown")
-async def parse_script_markdown(run_id: int) -> dict[str, object]:
-    run = await run_service.get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+async def parse_script_markdown(
+    run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
+) -> dict[str, object]:
+    _, run = access
     if run.current_stage not in _SCRIPT_EDIT_STAGES:
         raise HTTPException(
             status_code=409,
@@ -391,9 +411,7 @@ async def parse_script_markdown(run_id: int) -> dict[str, object]:
     if not draft.markdown_content or not draft.markdown_content.strip():
         raise HTTPException(status_code=400, detail="Draft has no markdown content to parse")
 
-    sections = parse_markdown(
-        draft.markdown_content, existing_sections=draft.structured_script
-    )
+    sections = parse_markdown(draft.markdown_content, existing_sections=draft.structured_script)
 
     saved_draft = await script_service.save_draft(
         run_id=run_id,

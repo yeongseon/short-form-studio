@@ -16,9 +16,10 @@ class PostgresProjectStorage:
                 markdown_source,
                 url_source,
                 json_script,
-                status
+                status,
+                workspace_id
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING *
             """,
             payload.get("title"),
@@ -28,6 +29,7 @@ class PostgresProjectStorage:
             payload.get("url_source"),
             payload.get("json_script"),
             payload.get("status", "draft"),
+            payload.get("workspace_id"),
         )
         if row is None:
             raise ValueError("Failed to insert project")

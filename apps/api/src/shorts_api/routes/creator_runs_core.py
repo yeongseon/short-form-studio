@@ -1,13 +1,20 @@
 """Core run CRUD, approvals, and script trigger routes."""
+from __future__ import annotations
 
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from creator_domain.models import TRIGGER_POLICY
 from creator_service.project_service import project_service
 from creator_service.run_service import run_service
 from creator_service.stage_review_service import stage_review_service
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from creator_domain.models.pipeline_run import PipelineRun
+    from creator_domain.models.project import Project
+
+
 
 from shorts_api.routes.creator_runs_utils import (
     _has_active_tasks,
@@ -16,6 +23,7 @@ from shorts_api.routes.creator_runs_utils import (
     validate_model_defaults,
     validate_model_key,
 )
+from shorts_api.auth import CurrentUser, require_project_access, require_run_access
 
 router = APIRouter(tags=["runs"])
 
@@ -27,7 +35,13 @@ class CreateRunRequest(BaseModel):
 
 
 class RestartRunRequest(BaseModel):
-    stage: str
+    stage: Literal[
+        "IDEA_READY", "SCRIPT_GENERATING", "SCRIPT_REVIEW",
+        "VISUAL_PLAN_SETUP", "VISUAL_PLAN_GENERATING", "VISUAL_PLAN_REVIEW",
+        "VISUAL_ASSET_GENERATING", "VISUAL_ASSET_REVIEW",
+        "AUDIO_GENERATING", "SUBTITLE_GENERATING",
+        "RENDER_GENERATING", "FINAL_REVIEW", "PUBLISHED", "FAILED",
+    ]
 
 
 class ApproveScriptRequest(BaseModel):
@@ -78,10 +92,8 @@ class UpdateModelDefaultsRequest(BaseModel):
 
 
 @router.post("/projects/{project_id}/runs", status_code=201)
-async def create_run(project_id: int, request: CreateRunRequest) -> dict[str, object]:
-    project = await project_service.get_project(project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
+async def create_run(project_id: int, request: CreateRunRequest, access: tuple[CurrentUser, Project] = Depends(require_project_access)) -> dict[str, object]:
+    user, project = access
 
     validate_model_defaults(request.model_defaults)
 
@@ -90,12 +102,13 @@ async def create_run(project_id: int, request: CreateRunRequest) -> dict[str, ob
         model_defaults=request.model_defaults,
         style_preset=request.style_preset,
         metadata=request.metadata,
+        workspace_id=user.workspace_id,
     )
     return run.model_dump(mode="json")
 
 
 @router.get("/projects/{project_id}/runs")
-async def list_runs_for_project(project_id: int) -> dict[str, object]:
+async def list_runs_for_project(project_id: int, access: tuple[CurrentUser, Project] = Depends(require_project_access)) -> dict[str, object]:
     runs = await run_service.list_runs_by_project(project_id)
     return {
         "runs": [r.model_dump(mode="json") for r in runs],
@@ -104,15 +117,13 @@ async def list_runs_for_project(project_id: int) -> dict[str, object]:
 
 
 @router.get("/runs/{run_id}")
-async def get_run_detail(run_id: int) -> dict[str, object]:
-    run = await run_service.get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="Run not found")
+async def get_run_detail(run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)) -> dict[str, object]:
+    _, run = access
     return run.model_dump(mode="json")
 
 
 @router.post("/runs/{run_id}/restart")
-async def restart_run(run_id: int, request: RestartRunRequest) -> dict[str, object]:
+async def restart_run(run_id: int, request: RestartRunRequest, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)) -> dict[str, object]:
     try:
         run = await run_service.restart_run(run_id=run_id, from_stage=request.stage)
     except ValueError as exc:
@@ -125,7 +136,7 @@ async def restart_run(run_id: int, request: RestartRunRequest) -> dict[str, obje
 
 
 @router.post("/runs/{run_id}/approve-script")
-async def approve_script(run_id: int, request: ApproveScriptRequest) -> dict[str, object]:
+async def approve_script(run_id: int, request: ApproveScriptRequest, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)) -> dict[str, object]:
     try:
         updated_run = await stage_review_service.approve_and_advance(
             run_service=run_service,
@@ -147,7 +158,7 @@ async def approve_script(run_id: int, request: ApproveScriptRequest) -> dict[str
 
 
 @router.post("/runs/{run_id}/approve-visual-plan")
-async def approve_visual_plan(run_id: int, request: ApproveVisualPlanRequest) -> dict[str, object]:
+async def approve_visual_plan(run_id: int, request: ApproveVisualPlanRequest, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)) -> dict[str, object]:
     try:
         updated_run = await stage_review_service.approve_and_advance(
             run_service=run_service,
@@ -170,7 +181,7 @@ async def approve_visual_plan(run_id: int, request: ApproveVisualPlanRequest) ->
 
 @router.post("/runs/{run_id}/approve-visual-assets")
 async def approve_visual_assets(
-    run_id: int, request: ApproveVisualAssetsRequest
+    run_id: int, request: ApproveVisualAssetsRequest, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
 ) -> dict[str, object]:
     try:
         updated_run = await stage_review_service.approve_and_advance(
@@ -193,10 +204,8 @@ async def approve_visual_assets(
 
 
 @router.post("/runs/{run_id}/generate-script", status_code=202)
-async def generate_script_trigger(run_id: int, request: GenerateScriptRequest) -> dict[str, object]:
-    run = await run_service.get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="Run not found")
+async def generate_script_trigger(run_id: int, request: GenerateScriptRequest, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)) -> dict[str, object]:
+    _, run = access
     if run.current_stage == "SCRIPT_GENERATING" and _has_active_tasks(run.active_task_id):
         raise HTTPException(status_code=409, detail="Script generation already in progress")
 

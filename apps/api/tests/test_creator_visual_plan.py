@@ -145,6 +145,9 @@ def _iter_api_routes(routes: Sequence[object]) -> list[APIRoute]:
 
 @pytest.fixture
 def stub_visual_plan_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubVisualPlanService]:
+    from shorts_api.auth import CurrentUser, require_run_access
+    from shorts_api.main import app
+
     run_svc = StubRunService()
     vp_svc = StubVisualPlanService()
 
@@ -153,7 +156,18 @@ def stub_visual_plan_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunS
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "visual_plan_service", vp_svc)
 
-    return run_svc, vp_svc
+    async def _require_run_access(run_id: int) -> tuple[CurrentUser, StubPipelineRun]:
+        run = run_svc.runs.get(run_id)
+        if run is None:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="Run not found")
+        return CurrentUser(user_id=1, workspace_id=1), run
+
+    app.dependency_overrides[require_run_access] = _require_run_access
+
+    yield run_svc, vp_svc
+
+    app.dependency_overrides.pop(require_run_access, None)
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +323,7 @@ async def test_replace_visual_plan_invalid_scene(client, stub_visual_plan_servic
 
 @pytest.mark.asyncio
 async def test_replace_visual_plan_empty_scenes(client, stub_visual_plan_services):
-    """Empty scenes list is valid — clears the plan."""
+    """Empty scenes list is rejected by min_length=1 validation."""
     run_svc, vp_svc = stub_visual_plan_services
     run_svc.runs[23] = _make_run(23)
 
@@ -318,11 +332,7 @@ async def test_replace_visual_plan_empty_scenes(client, stub_visual_plan_service
         json={"scenes": []},
     )
 
-    assert response.status_code == 200
-    body = response.json()
-    assert body["scenes"] == []
-    assert body["version"] == 1
-    assert len(vp_svc.save_calls) == 1
+    assert response.status_code == 422  # Pydantic min_length=1 rejects empty scenes
 
 
 @pytest.mark.asyncio

@@ -10,7 +10,7 @@ from creator_service.run_service import run_service
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from shorts_api.auth import get_current_user
+from shorts_api.auth import CurrentUser, require_current_user, workspace_service
 from shorts_api.routes import creator_runs_utils
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -29,11 +29,11 @@ class CreateProjectRequest(BaseModel):
 @router.post("", status_code=201)
 async def create_project(
     request: CreateProjectRequest,
-    user: Any = Depends(get_current_user),
+    user: CurrentUser = Depends(require_current_user),
 ) -> dict[str, object]:
-    user_workspace_id = user.get("workspace_id")
+    user_workspace_id = user.workspace_id
     if user_workspace_id is None:
-        raise HTTPException(status_code=403, detail="Workspace context required")
+        raise HTTPException(status_code=401, detail="Workspace context required")
     create_kwargs = {
         "title": request.title,
         "source_type": request.source_type,
@@ -59,16 +59,15 @@ class UpdateProjectRequest(BaseModel):
 async def update_project(
     project_id: int,
     request: UpdateProjectRequest,
-    user: Any = Depends(get_current_user),
+    user: CurrentUser = Depends(require_current_user),
 ) -> dict[str, object]:
-    user_workspace_id = user.get("workspace_id")
-    if user_workspace_id is None:
-        raise HTTPException(status_code=403, detail="Workspace context required")
-    current_project = await project_service.get_project(project_id)
-    if current_project is None:
+    project = await project_service.get_project(project_id)
+    if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    project_workspace_id = getattr(current_project, "workspace_id", None)
-    if project_workspace_id is None or project_workspace_id != user_workspace_id:
+    project_workspace_id = getattr(project, "workspace_id", None)
+    if project_workspace_id is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if user.user_id is None or not await workspace_service.check_access(project_workspace_id, user.user_id):
         raise HTTPException(status_code=404, detail="Project not found")
 
     project = await project_service.update_project(project_id, title=request.title)
@@ -80,16 +79,15 @@ async def update_project(
 @router.get("/{project_id}")
 async def get_project_detail(
     project_id: int,
-    user: Any = Depends(get_current_user),
+    user: CurrentUser = Depends(require_current_user),
 ) -> dict[str, object]:
-    user_workspace_id = user.get("workspace_id")
-    if user_workspace_id is None:
-        raise HTTPException(status_code=403, detail="Workspace context required")
     project = await project_service.get_project(project_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     project_workspace_id = getattr(project, "workspace_id", None)
-    if project_workspace_id is None or project_workspace_id != user_workspace_id:
+    if project_workspace_id is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    if user.user_id is None or not await workspace_service.check_access(project_workspace_id, user.user_id):
         raise HTTPException(status_code=404, detail="Project not found")
 
     return project.model_dump(mode="json")
@@ -99,11 +97,11 @@ async def get_project_detail(
 async def list_projects(
     limit: int = Query(default=20, ge=0),
     offset: int = Query(default=0, ge=0),
-    user: Any = Depends(get_current_user),
+    user: CurrentUser = Depends(require_current_user),
 ) -> dict[str, object]:
-    user_workspace_id = user.get("workspace_id")
+    user_workspace_id = user.workspace_id
     if user_workspace_id is None:
-        raise HTTPException(status_code=403, detail="Workspace context required")
+        raise HTTPException(status_code=401, detail="Workspace context required")
 
     list_projects_fn = getattr(project_service, "list_projects")
     count_projects_fn = getattr(project_service, "count_projects")
@@ -138,11 +136,8 @@ def _remove_run_artifacts(run_ids: list[int]) -> None:
 @router.delete("/{project_id}")
 async def delete_project(
     project_id: int,
-    user: Any = Depends(get_current_user),
+    user: CurrentUser = Depends(require_current_user),
 ) -> dict[str, object]:
-    user_workspace_id = user.get("workspace_id")
-    if user_workspace_id is None:
-        raise HTTPException(status_code=403, detail="Workspace context required")
     get_project = cast(
         Callable[[int], Awaitable[Any]] | None,
         getattr(project_service, "get_project", None),
@@ -152,7 +147,9 @@ async def delete_project(
         if project is None:
             raise HTTPException(status_code=404, detail="Project not found")
         project_workspace_id = getattr(project, "workspace_id", None)
-        if project_workspace_id is None or project_workspace_id != user_workspace_id:
+        if project_workspace_id is None:
+            raise HTTPException(status_code=404, detail="Project not found")
+        if user.user_id is None or not await workspace_service.check_access(project_workspace_id, user.user_id):
             raise HTTPException(status_code=404, detail="Project not found")
 
     run_ids = await _cleanup_project_resources(project_id)

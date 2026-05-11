@@ -133,7 +133,15 @@ async def _monitor_cpu_limit() -> None:
                 MAX_CPU_PERCENT,
             )
             _mark_shutdown()
-            os._exit(1)
+            # Send SIGTERM to self so uvicorn performs graceful shutdown.
+            # SystemExit in a background task only kills the task, not the process.
+            try:
+                os.kill(os.getpid(), signal.SIGTERM)
+            except OSError:
+                # Fallback: if signal delivery fails (e.g. restricted environment),
+                # force exit so the process doesn't continue in a degraded state.
+                logger.warning("SIGTERM delivery failed; falling back to sys.exit(1)")
+                sys.exit(1)
 
 
 def _mark_shutdown() -> None:
@@ -153,26 +161,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     )
     cpu_monitor_task = asyncio.create_task(_monitor_cpu_limit())
 
-    signal_handlers_registered = False
-    loop: asyncio.AbstractEventLoop | None = None
-    try:
-        loop = asyncio.get_running_loop()
-        loop.add_signal_handler(signal.SIGTERM, _mark_shutdown)
-        loop.add_signal_handler(signal.SIGINT, _mark_shutdown)
-        signal_handlers_registered = True
-        logger.info("Registered SIGTERM/SIGINT handlers for graceful shutdown")
-    except (NotImplementedError, RuntimeError):
-        logger.warning("Signal handlers are unavailable in this runtime")
-
+    # NOTE: Do NOT override uvicorn's SIGTERM/SIGINT handlers here.
+    # Uvicorn installs its own handlers for graceful shutdown.
+    # Overriding them would prevent the process from actually exiting
+    # when _monitor_cpu_limit sends SIGTERM.
     yield
     _mark_shutdown()
     cpu_monitor_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await cpu_monitor_task
-    if signal_handlers_registered and loop is not None:
-        with contextlib.suppress(NotImplementedError, RuntimeError):
-            loop.remove_signal_handler(signal.SIGTERM)
-            loop.remove_signal_handler(signal.SIGINT)
     await close_pool()
 
 
@@ -273,7 +270,6 @@ app.include_router(runs_storyboard_router, prefix="/api/creator")
 app.include_router(runs_lifecycle_router, prefix="/api/creator")
 app.include_router(run_tasks_router, prefix="/api/creator")
 app.include_router(artifact_download_router, prefix="/api/creator")
-app.include_router(artifact_download_router, prefix="/api/creator")
 app.include_router(script_router, prefix="/api/creator")
 app.include_router(run_script_router, prefix="/api/creator")
 app.include_router(visual_plan_router, prefix="/api/creator")
@@ -295,46 +291,32 @@ async def health() -> dict[str, object]:
     if environment in {"production", "staging"}:
         db_ok = False
         redis_ok = False
-        db_error: str | None = None
-        redis_error: str | None = None
 
         try:
             pool = await get_pool()
             value = await pool.fetchval("SELECT 1")
             db_ok = value == 1
-            if not db_ok:
-                db_error = "Unexpected DB ping response"
-        except Exception as exc:
-            db_error = str(exc)
+        except Exception:
+            pass
 
         redis_client = Redis.from_url(REDIS_URL)
         try:
             redis_pong = await redis_client.ping()
             redis_ok = bool(redis_pong)
-            if not redis_ok:
-                redis_error = "Unexpected Redis ping response"
-        except Exception as exc:
-            redis_error = str(exc)
+        except Exception:
+            pass
         finally:
             await redis_client.aclose()
 
         overall_ok = db_ok and redis_ok and not shutdown_state.is_shutting_down
-        response_payload = {
+        response_payload: dict[str, object] = {
             "status": "ok" if overall_ok else "unavailable",
             "checks": {
                 "database": {"status": "ok" if db_ok else "down"},
                 "redis": {"status": "ok" if redis_ok else "down"},
             },
             "shutdown": shutdown_state.is_shutting_down,
-            "resource_limits": {
-                "max_memory_mb": MAX_MEMORY_MB,
-                "max_cpu_percent": MAX_CPU_PERCENT,
-            },
         }
-        if db_error:
-            response_payload["checks"]["database"]["error"] = db_error
-        if redis_error:
-            response_payload["checks"]["redis"]["error"] = redis_error
 
         if not overall_ok:
             raise HTTPException(
@@ -362,6 +344,10 @@ async def health() -> dict[str, object]:
 
 @app.get("/artifacts/{artifact_path:path}", deprecated=True)
 async def serve_artifact(artifact_path: str):
+    environment = os.getenv("ENVIRONMENT", "development").lower()
+    if environment in ("production", "staging"):
+        raise HTTPException(status_code=404, detail="Not found")
+
     path_components = artifact_path.split("/")
     if not artifact_path or any(component in {"", ".", ".."} for component in path_components):
         raise HTTPException(status_code=400, detail="Invalid artifact path")
@@ -387,6 +373,10 @@ async def serve_artifact(artifact_path: str):
 
 @app.get("/api/artifacts/files/{path:path}")
 async def serve_local_artifact_file(path: str) -> Response:
+    environment = os.getenv("ENVIRONMENT", "development").lower()
+    if environment in ("production", "staging"):
+        raise HTTPException(status_code=404, detail="Not found")
+
     path_components = path.split("/")
     if (
         not path

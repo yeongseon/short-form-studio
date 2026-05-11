@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import Request
 from fastapi.routing import APIRoute
-from shorts_api.auth import require_current_user
+from shorts_api.auth import CurrentUser, require_current_user, require_run_access
 from shorts_api.main import app
 
 
@@ -31,6 +31,9 @@ class StubRunService:
     def __init__(self) -> None:
         self.storage = StubRunStorage()
 
+    async def get_run(self, run_id: int) -> dict[str, int] | None:
+        return await self.storage.get_run(run_id)
+
 
 class StubProject:
     def __init__(self) -> None:
@@ -47,6 +50,9 @@ class StubProjectService:
 def _iter_api_routes() -> list[APIRoute]:
     return [route for route in app.routes if isinstance(route, APIRoute)]
 
+async def _stub_check_access(workspace_id: int, user_id: int) -> bool:
+    return workspace_id == 1 and user_id == 101
+
 
 def _patch_route_services(
     monkeypatch: pytest.MonkeyPatch, artifact_service: StubArtifactDownloadService
@@ -57,6 +63,16 @@ def _patch_route_services(
 
     monkeypatch.setitem(app.dependency_overrides, require_current_user, stub_require_current_user)
 
+    async def stub_require_run_access(run_id: int) -> tuple[CurrentUser, object]:
+        run = await StubRunService().get_run(run_id)
+        if run is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Run not found")
+        return CurrentUser(user_id=101, workspace_id=1), SimpleNamespace(**run)
+
+    monkeypatch.setitem(app.dependency_overrides, require_run_access, stub_require_run_access)
+
     for route in _iter_api_routes():
         if route.name == "download_artifact":
             monkeypatch.setitem(
@@ -64,6 +80,11 @@ def _patch_route_services(
             )
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", StubRunService())
             monkeypatch.setitem(route.endpoint.__globals__, "project_service", StubProjectService())
+            monkeypatch.setitem(
+                route.endpoint.__globals__,
+                "workspace_service",
+                SimpleNamespace(check_access=_stub_check_access),
+            )
 
 
 @pytest.mark.asyncio
@@ -130,4 +151,4 @@ async def test_download_artifact_nonexistent_returns_404(client, monkeypatch: py
 @pytest.mark.asyncio
 async def test_old_artifact_endpoint_returns_404_for_missing_file(client):
     response = await client.get("/artifacts/1/100/audio.wav")
-    assert response.status_code == 410
+    assert response.status_code == 404

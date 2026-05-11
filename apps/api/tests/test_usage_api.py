@@ -1,5 +1,7 @@
 # pyright: reportMissingImports=false
 
+from types import SimpleNamespace
+
 import pytest
 from fastapi.routing import APIRoute
 from shorts_api.main import app
@@ -48,31 +50,32 @@ class StubUsageService:
         return [type("Event", (), {"model_dump": lambda self, mode="json": row})()]
 
 
+def _stub_authenticated_context(_request) -> tuple[int, int]:
+    return 10, 5
+
+
+async def _allow_check_access(workspace_id: int, user_id: int) -> bool:
+    return True
+
+
+async def _deny_check_access(workspace_id: int, user_id: int) -> bool:
+    return False
+
+
 @pytest.fixture
 def stub_usage_service(monkeypatch: pytest.MonkeyPatch) -> StubUsageService:
     stub = StubUsageService()
+    fake_ws = SimpleNamespace(check_access=_allow_check_access)
     for route in app.routes:
         if isinstance(route, APIRoute) and route.name in {"get_workspace_usage", "get_run_usage"}:
             monkeypatch.setitem(route.endpoint.__globals__, "usage_service", stub)
-            monkeypatch.setitem(
-                route.endpoint.__globals__, "_is_workspace_member", _allow_membership
-            )
+            monkeypatch.setitem(route.endpoint.__globals__, "workspace_service", fake_ws)
             monkeypatch.setitem(
                 route.endpoint.__globals__,
                 "_get_authenticated_context",
                 _stub_authenticated_context,
             )
     return stub
-
-
-async def _allow_membership(workspace_id: int, user_id: int) -> bool:
-    _ = workspace_id
-    _ = user_id
-    return True
-
-
-def _stub_authenticated_context(_request) -> tuple[int, int]:
-    return 10, 5
 
 
 @pytest.mark.asyncio
@@ -99,15 +102,12 @@ async def test_get_run_usage_returns_events(client, stub_usage_service: StubUsag
 
 
 @pytest.mark.asyncio
-async def test_workspace_usage_for_non_member_returns_403(client, monkeypatch: pytest.MonkeyPatch):
-    async def deny_membership(workspace_id: int, user_id: int) -> bool:
-        _ = workspace_id
-        _ = user_id
-        return False
+async def test_workspace_usage_for_non_member_returns_404(client, monkeypatch: pytest.MonkeyPatch):
+    fake_ws = SimpleNamespace(check_access=_deny_check_access)
 
     for route in app.routes:
         if isinstance(route, APIRoute) and route.name in {"get_workspace_usage", "get_run_usage"}:
-            monkeypatch.setitem(route.endpoint.__globals__, "_is_workspace_member", deny_membership)
+            monkeypatch.setitem(route.endpoint.__globals__, "workspace_service", fake_ws)
             monkeypatch.setitem(
                 route.endpoint.__globals__,
                 "_get_authenticated_context",
@@ -116,5 +116,5 @@ async def test_workspace_usage_for_non_member_returns_403(client, monkeypatch: p
 
     response = await client.get("/api/creator/usage/workspace/5")
 
-    assert response.status_code == 403
-    assert response.json()["detail"] == "Not a member of this workspace"
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Not found"
