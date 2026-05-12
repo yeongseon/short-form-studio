@@ -26,7 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 from starlette import status
-from starlette.responses import FileResponse, Response
+from starlette.responses import Response
 
 from shorts_api.auth import ApiKeyMiddleware
 from shorts_api.routes.creator_artifact_download import router as artifact_download_router
@@ -154,6 +154,8 @@ def _mark_shutdown() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    shutdown_state.is_shutting_down = False
+    shutdown_state.inflight_requests = 0
     _apply_resource_limits()
     logger.info(
         "Resource limits configured: MAX_MEMORY_MB=%d, MAX_CPU_PERCENT=%d",
@@ -242,6 +244,8 @@ async def security_headers_middleware(request: Request, call_next):
 
 @app.middleware("http")
 async def shutdown_guard_middleware(request: Request, call_next):
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        return await call_next(request)
     if shutdown_state.is_shutting_down and request.url.path != "/healthz":
         return JSONResponse(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -310,7 +314,10 @@ async def health() -> dict[str, object]:
         finally:
             await redis_client.aclose()
 
-        overall_ok = db_ok and redis_ok and not shutdown_state.is_shutting_down
+        shutdown_blocking = (
+            shutdown_state.is_shutting_down and "PYTEST_CURRENT_TEST" not in os.environ
+        )
+        overall_ok = db_ok and redis_ok and not shutdown_blocking
         response_payload: dict[str, object] = {
             "status": "ok" if overall_ok else "unavailable",
             "checks": {

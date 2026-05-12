@@ -5,8 +5,9 @@ from __future__ import annotations
 import contextvars
 import hashlib
 import logging
+import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from creator_domain.models.pipeline_run import PipelineRun
@@ -72,7 +73,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
 
     def __init__(self, app, *, api_key: str | None = None) -> None:
         super().__init__(app)
-        self._api_key = (api_key or "").strip()
+        self._api_key = os.getenv("API_KEY") if api_key is None else api_key
 
     async def _get_pool(self):
         try:
@@ -108,10 +109,6 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         request.state.user = CurrentUser()
-
-        # Skip auth when no key is configured (local dev)
-        if not self._api_key:
-            return await call_next(request)
 
         if request.method == "OPTIONS" and "origin" in request.headers:
             return await call_next(request)
