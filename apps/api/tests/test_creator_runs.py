@@ -1,6 +1,5 @@
 # pyright: reportMissingImports=false
 
-import json
 from collections.abc import Iterator, Sequence
 from datetime import datetime, timezone
 from typing import Literal, cast
@@ -34,7 +33,6 @@ class StubPipelineRun(BaseModel):
     style_preset: str | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
-    active_task_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -81,7 +79,6 @@ class StubRunService:
             style_preset=style_preset,
             started_at=None,
             finished_at=None,
-            active_task_id=None,
             created_at=now,
             updated_at=now,
         )
@@ -143,8 +140,6 @@ class StubRunStorage:
     def __init__(self, run_svc: "StubRunService") -> None:
         self._run_svc = run_svc
         self.conditional_update_calls: list[dict[str, object]] = []
-        self.append_task_calls: list[dict[str, object]] = []
-        self.remove_task_calls: list[dict[str, object]] = []
 
     async def conditional_update_run(
         self,
@@ -169,42 +164,6 @@ class StubRunStorage:
         updated = run.model_copy(update=updates)
         self._run_svc.runs[run_id] = updated
         return True, updated.model_dump(mode="json")
-
-    async def append_active_task_id(self, run_id: int, task_id: str) -> dict[str, object]:
-        self.append_task_calls.append({"run_id": run_id, "task_id": task_id})
-        run = self._run_svc.runs.get(run_id)
-        if run is None:
-            raise ValueError(f"Run {run_id} not found")
-        current_raw = getattr(run, "active_task_id", None)
-        if current_raw:
-            try:
-                current = json.loads(current_raw)
-            except (TypeError, ValueError):
-                current = [current_raw]
-        else:
-            current = []
-        current.append(task_id)
-        updated = run.model_copy(update={"active_task_id": json.dumps(current)})
-        self._run_svc.runs[run_id] = updated
-        return updated.model_dump(mode="json")
-
-    async def remove_active_task_id(self, run_id: int, task_id: str) -> dict[str, object]:
-        self.remove_task_calls.append({"run_id": run_id, "task_id": task_id})
-        run = self._run_svc.runs.get(run_id)
-        if run is None:
-            raise ValueError(f"Run {run_id} not found")
-        current_raw = getattr(run, "active_task_id", None)
-        if current_raw:
-            try:
-                current = json.loads(current_raw)
-            except (TypeError, ValueError):
-                current = [current_raw]
-        else:
-            current = []
-        current = [tid for tid in current if tid != task_id]
-        updated = run.model_copy(update={"active_task_id": json.dumps(current)})
-        self._run_svc.runs[run_id] = updated
-        return updated.model_dump(mode="json")
 
 
 class StubStageReviewService:
@@ -919,7 +878,6 @@ async def test_generate_script_from_idea_ready(client, stub_generate_services):
             "instructions": "Focus on pasta",
         }
     ]
-    assert run_svc.storage.append_task_calls == [{"run_id": 10, "task_id": "test-task-id-123"}]
 
 
 @pytest.mark.asyncio
@@ -1231,7 +1189,6 @@ async def test_generate_visual_plan_from_visual_plan_setup(
             "style_preset": "cinematic",
         }
     ]
-    assert run_svc.storage.append_task_calls == [{"run_id": 30, "task_id": "test-vp-task-id-456"}]
 
 
 @pytest.mark.asyncio
@@ -1477,7 +1434,6 @@ async def test_generate_visual_assets_from_visual_plan_review(
             "image_params": None,
         }
     ]
-    assert run_svc.storage.append_task_calls == [{"run_id": 60, "task_id": "test-img-task-id-789"}]
 
 
 @pytest.mark.asyncio

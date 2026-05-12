@@ -1,8 +1,6 @@
 """Shared helpers and task dispatch for creator run routes."""
 
-import json
 import logging
-import asyncio
 from collections.abc import Callable, Mapping
 from importlib import import_module
 from typing import Any, cast
@@ -236,57 +234,22 @@ def dispatch_paragraph_subtitles(
     return str(result.id)
 
 
-def _revoke_active_tasks(active_task_id: str | None) -> None:
-    """Revoke all Celery tasks stored in active_task_id (JSON list or legacy single ID)."""
-    if not active_task_id:
-        return
+async def _revoke_active_tasks_for_run(run_id: int) -> None:
     try:
         celery_app = __import__("celery_app").celery_app
         tracking_service = import_module(
             "creator_service.task_tracking_service"
         ).task_tracking_service
-
-        # Parse as JSON list; fall back to single ID for backwards compat
-        try:
-            task_ids = json.loads(active_task_id)
-            if isinstance(task_ids, str):
-                task_ids = [task_ids]
-        except (ValueError, TypeError):
-            task_ids = [active_task_id]
-        for tid in task_ids:
-            if tid:
-                celery_app.control.revoke(tid, terminate=True)
-                try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(tracking_service.mark_revoked(str(tid)))
-                except RuntimeError:
-                    asyncio.run(tracking_service.mark_revoked(str(tid)))
+        celery_ids = await tracking_service.revoke_active_tasks(run_id)
+        for tid in celery_ids:
+            celery_app.control.revoke(tid, terminate=True)
     except Exception:
-        logger.warning("Failed to revoke active tasks (task_id=%s)", active_task_id, exc_info=True)
+        logger.warning("Failed to revoke active tasks for run %d", run_id, exc_info=True)
 
 
-def _has_active_tasks(active_task_id: str | None) -> bool:
-    """Return True when active_task_id stores at least one non-empty task id."""
-    if not active_task_id:
-        return False
-    try:
-        parsed = json.loads(active_task_id)
-    except (ValueError, TypeError):
-        return bool(str(active_task_id).strip())
-    if isinstance(parsed, list):
-        return any(str(task_id).strip() for task_id in parsed)
-    if isinstance(parsed, str):
-        return bool(parsed.strip())
-    return False
-
-
-async def _append_task_id(run_id: int, task_id: str, *, run_service: Any | None = None) -> None:
-    """Atomically append a task id via the configured run storage backend."""
-    if run_service is None:
-        run_service = import_module("creator_service.run_service").run_service
-
-    run_service_obj = cast(Any, run_service)
-    await run_service_obj.storage.append_active_task_id(run_id, task_id)
+async def _has_active_tasks_for_run(run_id: int) -> bool:
+    tracking_service = import_module("creator_service.task_tracking_service").task_tracking_service
+    return await tracking_service.has_active_tasks(run_id)
 
 
 async def cas_dispatch_with_rollback(
@@ -363,7 +326,6 @@ async def cas_dispatch_with_rollback(
         raise HTTPException(status_code=503, detail=enqueue_error_detail) from None
 
     try:
-        await _append_task_id(run_id, task_id, run_service=run_service_obj)
         task_type = _DISPATCH_TASK_TYPES.get(getattr(dispatcher, "__name__", ""), "unknown")
         if task_type != "unknown":
             tracking_service = import_module(
@@ -371,13 +333,17 @@ async def cas_dispatch_with_rollback(
             ).task_tracking_service
             await tracking_service.record_task_queued(run_id, task_type, task_id)
     except Exception:
-        # Metadata recording failed after task was dispatched — revoke and rollback.
-        _revoke_active_tasks(json.dumps([task_id]))
-        # Best-effort remove the task ID that may have been appended
         try:
-            await run_service_obj.storage.remove_active_task_id(run_id, task_id)
+            __import__("celery_app").celery_app.control.revoke(task_id, terminate=True)
         except Exception:
-            logger.warning("Failed to remove active_task_id %s for run %d during rollback", task_id, run_id)
+            logger.warning("Failed to revoke task %s during rollback", task_id, exc_info=True)
+        try:
+            tracking_service = import_module(
+                "creator_service.task_tracking_service"
+            ).task_tracking_service
+            await tracking_service.mark_revoked(task_id)
+        except Exception:
+            logger.warning("Failed to mark task %s revoked during rollback", task_id, exc_info=True)
         if workspace_id_for_reservation is not None and quota_operation_type is not None:
             from creator_service.usage_service import cancel_workspace_quota_reservation
 
@@ -398,4 +364,4 @@ async def cas_dispatch_with_rollback(
     }
 
 
-_EXPORTED_RUN_HELPERS = (_revoke_active_tasks, _append_task_id)
+_EXPORTED_RUN_HELPERS = (_revoke_active_tasks_for_run, _has_active_tasks_for_run)

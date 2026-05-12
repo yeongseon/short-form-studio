@@ -192,7 +192,6 @@ class RunInfo(BaseModel):
     project_id: int
     current_stage: str | None = None
     status: str | None = None
-    active_task_id: str | None = None
     updated_at: Any | None = None
 
 

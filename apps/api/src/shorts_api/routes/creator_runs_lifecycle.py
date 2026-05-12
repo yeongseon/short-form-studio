@@ -1,4 +1,5 @@
 """Run lifecycle and model defaults routes."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -14,21 +15,21 @@ import shutil
 
 from shorts_api.routes.creator_runs_core import UpdateModelDefaultsRequest
 from shorts_api.routes.creator_runs_utils import (
-    _append_task_id,
-    _revoke_active_tasks,
+    _revoke_active_tasks_for_run,
     validate_model_defaults,
 )
 from shorts_api.auth import CurrentUser, require_run_access
 
 router = APIRouter(tags=["runs"])
-_APPEND_TASK_ID_HELPER = _append_task_id
 
 
 @router.post("/runs/{run_id}/stop")
-async def stop_run(run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)) -> dict[str, object]:
+async def stop_run(
+    run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
+) -> dict[str, object]:
     _, run = access
 
-    _revoke_active_tasks(run.active_task_id)
+    await _revoke_active_tasks_for_run(run.id)
 
     try:
         updated = await run_service.stop_run(run_id)
@@ -42,7 +43,9 @@ async def stop_run(run_id: int, access: tuple[CurrentUser, PipelineRun] = Depend
 
 
 @router.post("/runs/{run_id}/resume")
-async def resume_run(run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)) -> dict[str, object]:
+async def resume_run(
+    run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
+) -> dict[str, object]:
     try:
         updated = await run_service.resume_run(run_id)
     except ValueError as exc:
@@ -55,7 +58,9 @@ async def resume_run(run_id: int, access: tuple[CurrentUser, PipelineRun] = Depe
 
 
 @router.post("/runs/{run_id}/go-back")
-async def go_back(run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)) -> dict[str, object]:
+async def go_back(
+    run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
+) -> dict[str, object]:
     try:
         run = await run_service.go_back(run_id)
         return run.model_dump(mode="json")
@@ -69,7 +74,11 @@ async def go_back(run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends
 
 
 @router.patch("/runs/{run_id}/model-defaults")
-async def update_model_defaults(run_id: int, request: UpdateModelDefaultsRequest, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)) -> dict[str, object]:
+async def update_model_defaults(
+    run_id: int,
+    request: UpdateModelDefaultsRequest,
+    access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
+) -> dict[str, object]:
     updates = {k: v for k, v in request.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(status_code=400, detail="No model defaults to update")
@@ -82,10 +91,12 @@ async def update_model_defaults(run_id: int, request: UpdateModelDefaultsRequest
 
 
 @router.delete("/runs/{run_id}")
-async def delete_run(run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)) -> dict[str, object]:
+async def delete_run(
+    run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
+) -> dict[str, object]:
     _, run = access
 
-    _revoke_active_tasks(run.active_task_id)
+    await _revoke_active_tasks_for_run(run.id)
 
     deleted = await run_service.delete_run(run_id)
     if not deleted:

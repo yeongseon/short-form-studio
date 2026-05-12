@@ -21,7 +21,6 @@ class PipelineRun(BaseModel):
     style_preset: str | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
-    active_task_id: str | None = None
     created_at: datetime
     updated_at: datetime
 

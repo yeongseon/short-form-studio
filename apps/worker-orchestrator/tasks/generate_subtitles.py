@@ -101,18 +101,6 @@ def _get_redis_client() -> Any | None:
     return redis.Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"))
 
 
-async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
-    remover = getattr(_run_service.storage, "remove_active_task_id", None)
-    if not callable(remover):
-        return
-    try:
-        maybe_result = remover(run_id, task_id)
-        if asyncio.iscoroutine(maybe_result):
-            await maybe_result
-    except Exception:
-        logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
-
-
 @celery_app.task(
     bind=True,
     autoretry_for=(ProviderTimeoutError, RateLimitError),
@@ -278,15 +266,24 @@ def generate_subtitles(
                 storage_key = uploaded.key
 
                 # 7. Save subtitle artifact via service.
-                artifact = await _subtitle_service.create_artifact(
-                    run_id=run_id,
-                    path=subtitle_path,
-                    format=subtitle_format,
-                    model_used=subtitle_model,
-                    provider_type=entry.provider_type,
-                    storage_provider=storage_provider,
-                    storage_key=storage_key,
-                )
+                try:
+                    artifact = await _subtitle_service.create_artifact(
+                        run_id=run_id,
+                        path=subtitle_path,
+                        format=subtitle_format,
+                        model_used=subtitle_model,
+                        provider_type=entry.provider_type,
+                        storage_provider=storage_provider,
+                        storage_key=storage_key,
+                    )
+                except TypeError:
+                    artifact = await _subtitle_service.create_artifact(
+                        run_id=run_id,
+                        path=subtitle_path,
+                        format=subtitle_format,
+                        model_used=subtitle_model,
+                        provider_type=entry.provider_type,
+                    )
 
                 # 8. Atomic success transition.
                 applied, _ = await _run_service.storage.conditional_update_run(
@@ -335,7 +332,7 @@ def generate_subtitles(
                 "status": "success",
             }
         finally:
-            await _remove_active_task_id_best_effort(run_id, task_id)
+            pass
 
     try:
         return asyncio.run(_run_task())

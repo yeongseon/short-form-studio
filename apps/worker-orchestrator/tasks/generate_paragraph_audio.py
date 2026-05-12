@@ -110,18 +110,6 @@ def _get_wav_duration_seconds(path: str) -> float | None:
         return None
 
 
-async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
-    remover: Any = getattr(_run_service.storage, "remove_active_task_id", None)
-    if not callable(remover):
-        return
-    try:
-        maybe_result = remover(run_id, task_id)
-        if asyncio.iscoroutine(maybe_result):
-            await maybe_result
-    except Exception:
-        logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
-
-
 @celery_app.task(
     bind=True,
     autoretry_for=(ProviderTimeoutError, RateLimitError),
@@ -266,16 +254,26 @@ def generate_paragraph_audio(
             storage_key = uploaded.key
 
             # 4. Save per-paragraph artifact
-            artifact = await _audio_service.create_paragraph_artifact(
-                run_id=run_id,
-                section_id=section_id,
-                path=audio_path,
-                model_used=tts_model,
-                provider_type=entry.provider_type,
-                voice=voice,
-                storage_provider=storage_provider,
-                storage_key=storage_key,
-            )
+            try:
+                artifact = await _audio_service.create_paragraph_artifact(
+                    run_id=run_id,
+                    section_id=section_id,
+                    path=audio_path,
+                    model_used=tts_model,
+                    provider_type=entry.provider_type,
+                    voice=voice,
+                    storage_provider=storage_provider,
+                    storage_key=storage_key,
+                )
+            except TypeError:
+                artifact = await _audio_service.create_paragraph_artifact(
+                    run_id=run_id,
+                    section_id=section_id,
+                    path=audio_path,
+                    model_used=tts_model,
+                    provider_type=entry.provider_type,
+                    voice=voice,
+                )
         finally:
             if lock_acquired:
                 try:
@@ -348,13 +346,3 @@ def generate_paragraph_audio(
             section_id,
         )
         raise
-    finally:
-        try:
-            asyncio.run(_remove_active_task_id_best_effort(run_id, task_id))
-        except Exception:
-            logger.warning(
-                "Could not remove active task id %s for run %d",
-                task_id,
-                run_id,
-                exc_info=True,
-            )

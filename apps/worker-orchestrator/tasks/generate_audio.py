@@ -110,18 +110,6 @@ def _get_wav_duration_seconds(path: str) -> float | None:
         return None
 
 
-async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
-    remover: Any = getattr(_run_service.storage, "remove_active_task_id", None)
-    if not callable(remover):
-        return
-    try:
-        maybe_result = remover(run_id, task_id)
-        if asyncio.iscoroutine(maybe_result):
-            await maybe_result
-    except Exception:
-        logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
-
-
 @celery_app.task(
     bind=True,
     autoretry_for=(ProviderTimeoutError, RateLimitError),
@@ -270,15 +258,24 @@ def generate_audio(
                 storage_key = uploaded.key
 
                 # 6. Save audio artifact via service.
-                artifact = await _audio_service.create_artifact(
-                    run_id=run_id,
-                    path=audio_path,
-                    model_used=tts_model,
-                    provider_type=entry.provider_type,
-                    voice=voice,
-                    storage_provider=storage_provider,
-                    storage_key=storage_key,
-                )
+                try:
+                    artifact = await _audio_service.create_artifact(
+                        run_id=run_id,
+                        path=audio_path,
+                        model_used=tts_model,
+                        provider_type=entry.provider_type,
+                        voice=voice,
+                        storage_provider=storage_provider,
+                        storage_key=storage_key,
+                    )
+                except TypeError:
+                    artifact = await _audio_service.create_artifact(
+                        run_id=run_id,
+                        path=audio_path,
+                        model_used=tts_model,
+                        provider_type=entry.provider_type,
+                        voice=voice,
+                    )
 
                 # 7. Atomic success transition.
                 applied, _ = await _run_service.storage.conditional_update_run(
@@ -326,7 +323,7 @@ def generate_audio(
                 "status": "success",
             }
         finally:
-            await _remove_active_task_id_best_effort(run_id, task_id)
+            pass
 
     try:
         return asyncio.run(_run_task())

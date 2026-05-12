@@ -16,7 +16,6 @@ _UPDATABLE_COLUMNS = {
     "style_preset",
     "started_at",
     "finished_at",
-    "active_task_id",
 }
 
 
@@ -122,50 +121,6 @@ class PostgresRunStorage:
             "WHERE id = $1 RETURNING *",
             run_id,
             updates_json,
-        )
-        if row is None:
-            raise ValueError(f"Run {run_id} not found")
-        return row
-
-    async def append_active_task_id(self, run_id: int, task_id: str) -> dict[str, Any]:
-        row = await fetch_one(
-            "UPDATE creator_runs "
-            "SET active_task_id = ("
-            "  COALESCE("
-            "    CASE WHEN active_task_id IS NOT NULL "
-            "         AND left(active_task_id, 1) = '[' "
-            "    THEN active_task_id::jsonb "
-            "    ELSE '[]'::jsonb "
-            "    END, '[]'::jsonb"
-            "  ) || to_jsonb($2::text)"
-            ")::text "
-            "WHERE id = $1 RETURNING *",
-            run_id,
-            task_id,
-        )
-        if row is None:
-            raise ValueError(f"Run {run_id} not found")
-        return row
-
-    async def remove_active_task_id(self, run_id: int, task_id: str) -> dict[str, Any]:
-        row = await fetch_one(
-            "UPDATE creator_runs "
-            "SET active_task_id = COALESCE(("
-            "  SELECT jsonb_agg(value) "
-            "  FROM jsonb_array_elements_text("
-            "    CASE WHEN active_task_id IS NOT NULL "
-            "              AND left(active_task_id, 1) = '[' "
-            "         THEN active_task_id::jsonb "
-            "         WHEN active_task_id IS NULL "
-            "         THEN '[]'::jsonb "
-            "         ELSE jsonb_build_array(active_task_id) "
-            "    END"
-            "  ) AS value "
-            "  WHERE value <> $2"
-            "), '[]'::jsonb)::text "
-            "WHERE id = $1 RETURNING *",
-            run_id,
-            task_id,
         )
         if row is None:
             raise ValueError(f"Run {run_id} not found")

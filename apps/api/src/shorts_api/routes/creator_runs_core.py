@@ -1,4 +1,5 @@
 """Core run CRUD, approvals, and script trigger routes."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Literal
@@ -15,9 +16,8 @@ if TYPE_CHECKING:
     from creator_domain.models.project import Project
 
 
-
 from shorts_api.routes.creator_runs_utils import (
-    _has_active_tasks,
+    _has_active_tasks_for_run,
     cas_dispatch_with_rollback,
     dispatch_generate_script,
     validate_model_defaults,
@@ -36,11 +36,20 @@ class CreateRunRequest(BaseModel):
 
 class RestartRunRequest(BaseModel):
     stage: Literal[
-        "IDEA_READY", "SCRIPT_GENERATING", "SCRIPT_REVIEW",
-        "VISUAL_PLAN_SETUP", "VISUAL_PLAN_GENERATING", "VISUAL_PLAN_REVIEW",
-        "VISUAL_ASSET_GENERATING", "VISUAL_ASSET_REVIEW",
-        "AUDIO_GENERATING", "SUBTITLE_GENERATING",
-        "RENDER_GENERATING", "FINAL_REVIEW", "PUBLISHED", "FAILED",
+        "IDEA_READY",
+        "SCRIPT_GENERATING",
+        "SCRIPT_REVIEW",
+        "VISUAL_PLAN_SETUP",
+        "VISUAL_PLAN_GENERATING",
+        "VISUAL_PLAN_REVIEW",
+        "VISUAL_ASSET_GENERATING",
+        "VISUAL_ASSET_REVIEW",
+        "AUDIO_GENERATING",
+        "SUBTITLE_GENERATING",
+        "RENDER_GENERATING",
+        "FINAL_REVIEW",
+        "PUBLISHED",
+        "FAILED",
     ]
 
 
@@ -92,7 +101,11 @@ class UpdateModelDefaultsRequest(BaseModel):
 
 
 @router.post("/projects/{project_id}/runs", status_code=201)
-async def create_run(project_id: int, request: CreateRunRequest, access: tuple[CurrentUser, Project] = Depends(require_project_access)) -> dict[str, object]:
+async def create_run(
+    project_id: int,
+    request: CreateRunRequest,
+    access: tuple[CurrentUser, Project] = Depends(require_project_access),
+) -> dict[str, object]:
     user, project = access
 
     validate_model_defaults(request.model_defaults)
@@ -108,7 +121,9 @@ async def create_run(project_id: int, request: CreateRunRequest, access: tuple[C
 
 
 @router.get("/projects/{project_id}/runs")
-async def list_runs_for_project(project_id: int, access: tuple[CurrentUser, Project] = Depends(require_project_access)) -> dict[str, object]:
+async def list_runs_for_project(
+    project_id: int, access: tuple[CurrentUser, Project] = Depends(require_project_access)
+) -> dict[str, object]:
     runs = await run_service.list_runs_by_project(project_id)
     return {
         "runs": [r.model_dump(mode="json") for r in runs],
@@ -117,13 +132,19 @@ async def list_runs_for_project(project_id: int, access: tuple[CurrentUser, Proj
 
 
 @router.get("/runs/{run_id}")
-async def get_run_detail(run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)) -> dict[str, object]:
+async def get_run_detail(
+    run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
+) -> dict[str, object]:
     _, run = access
     return run.model_dump(mode="json")
 
 
 @router.post("/runs/{run_id}/restart")
-async def restart_run(run_id: int, request: RestartRunRequest, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)) -> dict[str, object]:
+async def restart_run(
+    run_id: int,
+    request: RestartRunRequest,
+    access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
+) -> dict[str, object]:
     try:
         run = await run_service.restart_run(run_id=run_id, from_stage=request.stage)
     except ValueError as exc:
@@ -136,7 +157,11 @@ async def restart_run(run_id: int, request: RestartRunRequest, access: tuple[Cur
 
 
 @router.post("/runs/{run_id}/approve-script")
-async def approve_script(run_id: int, request: ApproveScriptRequest, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)) -> dict[str, object]:
+async def approve_script(
+    run_id: int,
+    request: ApproveScriptRequest,
+    access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
+) -> dict[str, object]:
     try:
         updated_run = await stage_review_service.approve_and_advance(
             run_service=run_service,
@@ -158,7 +183,11 @@ async def approve_script(run_id: int, request: ApproveScriptRequest, access: tup
 
 
 @router.post("/runs/{run_id}/approve-visual-plan")
-async def approve_visual_plan(run_id: int, request: ApproveVisualPlanRequest, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)) -> dict[str, object]:
+async def approve_visual_plan(
+    run_id: int,
+    request: ApproveVisualPlanRequest,
+    access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
+) -> dict[str, object]:
     try:
         updated_run = await stage_review_service.approve_and_advance(
             run_service=run_service,
@@ -181,7 +210,9 @@ async def approve_visual_plan(run_id: int, request: ApproveVisualPlanRequest, ac
 
 @router.post("/runs/{run_id}/approve-visual-assets")
 async def approve_visual_assets(
-    run_id: int, request: ApproveVisualAssetsRequest, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
+    run_id: int,
+    request: ApproveVisualAssetsRequest,
+    access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
     try:
         updated_run = await stage_review_service.approve_and_advance(
@@ -204,9 +235,13 @@ async def approve_visual_assets(
 
 
 @router.post("/runs/{run_id}/generate-script", status_code=202)
-async def generate_script_trigger(run_id: int, request: GenerateScriptRequest, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)) -> dict[str, object]:
+async def generate_script_trigger(
+    run_id: int,
+    request: GenerateScriptRequest,
+    access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
+) -> dict[str, object]:
     _, run = access
-    if run.current_stage == "SCRIPT_GENERATING" and _has_active_tasks(run.active_task_id):
+    if run.current_stage == "SCRIPT_GENERATING" and await _has_active_tasks_for_run(run.id):
         raise HTTPException(status_code=409, detail="Script generation already in progress")
 
     allowed_stages = frozenset(stage.value for stage in TRIGGER_POLICY["generate_script"])

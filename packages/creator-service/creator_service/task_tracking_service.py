@@ -21,6 +21,8 @@ class TaskTrackingStorageBackend(Protocol):
 
     async def list_stuck_tasks(self, threshold_seconds: int) -> list[dict[str, Any]]: ...
 
+    async def get_active_celery_ids(self, run_id: int) -> list[str]: ...
+
 
 class InMemoryTaskTrackingStorage:
     def __init__(self) -> None:
@@ -105,6 +107,15 @@ class InMemoryTaskTrackingStorage:
             key=lambda row: row.get("started_at") or datetime.min.replace(tzinfo=timezone.utc)
         )
         return stuck
+
+    async def get_active_celery_ids(self, run_id: int) -> list[str]:
+        return [
+            row["celery_task_id"]
+            for row in self._rows.values()
+            if row.get("run_id") == run_id
+            and row.get("status") in ("queued", "pending", "running")
+            and row.get("celery_task_id")
+        ]
 
 
 class TaskTrackingService:
@@ -237,6 +248,19 @@ class TaskTrackingService:
     async def find_stuck_tasks(self, threshold_seconds: int = 600) -> list[RunTask]:
         rows = await self.storage.list_stuck_tasks(threshold_seconds)
         return [RunTask.from_row(row) for row in rows]
+
+    async def get_active_celery_ids(self, run_id: int) -> list[str]:
+        return await self.storage.get_active_celery_ids(run_id)
+
+    async def has_active_tasks(self, run_id: int) -> bool:
+        ids = await self.get_active_celery_ids(run_id)
+        return len(ids) > 0
+
+    async def revoke_active_tasks(self, run_id: int) -> list[str]:
+        ids = await self.get_active_celery_ids(run_id)
+        for celery_id in ids:
+            await self.mark_revoked(celery_id)
+        return ids
 
 
 def _create_storage() -> TaskTrackingStorageBackend:

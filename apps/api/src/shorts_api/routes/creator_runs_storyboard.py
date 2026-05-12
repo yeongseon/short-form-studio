@@ -1,4 +1,5 @@
 """Storyboard assembly and paragraph operation routes."""
+
 from __future__ import annotations
 
 import logging
@@ -19,8 +20,7 @@ if TYPE_CHECKING:
 
 
 from shorts_api.routes.creator_runs_utils import (
-    _append_task_id,
-    _has_active_tasks,
+    _has_active_tasks_for_run,
     dispatch_paragraph_audio,
     dispatch_paragraph_subtitles,
     validate_model_key,
@@ -63,7 +63,9 @@ class BulkParagraphSubtitlesRequest(BaseModel):
 
 
 @router.get("/runs/{run_id}/storyboard")
-async def get_storyboard(run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)) -> dict[str, object]:
+async def get_storyboard(
+    run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
+) -> dict[str, object]:
     _, run = access
 
     draft = await script_service.get_active_draft(run_id)
@@ -103,7 +105,7 @@ async def get_storyboard(run_id: int, access: tuple[CurrentUser, PipelineRun] = 
     # there are still active Celery tasks tracked on the run.  When tasks
     # are active inside a storyboard-allowed stage we infer per-section
     # generating status from the missing asset type.
-    has_active = _has_active_tasks(run.active_task_id)
+    has_active = await _has_active_tasks_for_run(run.id)
     in_storyboard_stage = run.current_stage in STORYBOARD_ALLOWED_STAGES
 
     paragraphs: list[dict[str, object]] = []
@@ -202,7 +204,10 @@ async def get_storyboard(run_id: int, access: tuple[CurrentUser, PipelineRun] = 
     status_code=202,
 )
 async def generate_paragraph_audio_endpoint(
-    run_id: int, section_id: str, request: ParagraphAudioRequest | None = None, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
+    run_id: int,
+    section_id: str,
+    request: ParagraphAudioRequest | None = None,
+    access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
     effective = request or ParagraphAudioRequest()
     _, run = access
@@ -238,7 +243,6 @@ async def generate_paragraph_audio_endpoint(
             tts_model=effective.tts_model,
             voice=effective.voice,
         )
-        await _append_task_id(run_id, task_id, run_service=run_service)
         await task_tracking_service.record_task_queued(run_id, "generate_paragraph_audio", task_id)
     except Exception:
         raise HTTPException(
@@ -257,7 +261,10 @@ async def generate_paragraph_audio_endpoint(
     status_code=202,
 )
 async def generate_paragraph_subtitles_endpoint(
-    run_id: int, section_id: str, request: ParagraphSubtitlesRequest | None = None, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
+    run_id: int,
+    section_id: str,
+    request: ParagraphSubtitlesRequest | None = None,
+    access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
     effective = request or ParagraphSubtitlesRequest()
     _, run = access
@@ -287,7 +294,6 @@ async def generate_paragraph_subtitles_endpoint(
             subtitle_model=effective.subtitle_model,
             subtitle_format=effective.subtitle_format,
         )
-        await _append_task_id(run_id, task_id, run_service=run_service)
         await task_tracking_service.record_task_queued(
             run_id, "generate_paragraph_subtitles", task_id
         )
@@ -305,7 +311,9 @@ async def generate_paragraph_subtitles_endpoint(
 
 @router.post("/runs/{run_id}/storyboard/generate-all-audio", status_code=202)
 async def generate_all_paragraph_audio(
-    run_id: int, request: BulkParagraphAudioRequest | None = None, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
+    run_id: int,
+    request: BulkParagraphAudioRequest | None = None,
+    access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
     effective = request or BulkParagraphAudioRequest()
     _, run = access
@@ -343,7 +351,6 @@ async def generate_all_paragraph_audio(
                 tts_model=effective.tts_model,
                 voice=effective.voice,
             )
-            await _append_task_id(run_id, tid, run_service=run_service)
             await task_tracking_service.record_task_queued(run_id, "generate_paragraph_audio", tid)
             task_ids.append({"section_id": section.section_id, "task_id": tid})
         except Exception:
@@ -364,7 +371,9 @@ async def generate_all_paragraph_audio(
 
 @router.post("/runs/{run_id}/storyboard/generate-all-subtitles", status_code=202)
 async def generate_all_paragraph_subtitles(
-    run_id: int, request: BulkParagraphSubtitlesRequest | None = None, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
+    run_id: int,
+    request: BulkParagraphSubtitlesRequest | None = None,
+    access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
     effective = request or BulkParagraphSubtitlesRequest()
     _, run = access
@@ -410,7 +419,6 @@ async def generate_all_paragraph_subtitles(
                 subtitle_model=effective.subtitle_model,
                 subtitle_format=effective.subtitle_format,
             )
-            await _append_task_id(run_id, tid, run_service=run_service)
             await task_tracking_service.record_task_queued(
                 run_id, "generate_paragraph_subtitles", tid
             )

@@ -69,6 +69,20 @@ def test_unstick_run_returns_ok_with_warnings_when_revoke_fails(monkeypatch) -> 
         return _FakePool(_FakeConnection())
 
     monkeypatch.setattr(admin_service_module, "get_pool", _get_pool)
+    tracking_module = import_module("creator_service.task_tracking_service")
+
+    async def _get_active_celery_ids(_run_id: int) -> list[str]:
+        return ["task-ok", "task-fail"]
+
+    async def _mark_revoked(_task_id: str):
+        return None
+
+    monkeypatch.setattr(
+        tracking_module.task_tracking_service,
+        "get_active_celery_ids",
+        _get_active_celery_ids,
+    )
+    monkeypatch.setattr(tracking_module.task_tracking_service, "mark_revoked", _mark_revoked)
     service = admin_service_module.AdminService(task_broker=_FakeTaskBroker({"task-fail"}))
 
     result = asyncio.run(service.unstick_run("42"))

@@ -1,4 +1,5 @@
 """Visual plan and visual asset generation trigger routes."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Annotated
@@ -12,10 +13,9 @@ if TYPE_CHECKING:
     from creator_domain.models.pipeline_run import PipelineRun
 
 
-
 from shorts_api.routes.creator_runs_core import GenerateVisualPlanRequest
 from shorts_api.routes.creator_runs_utils import (
-    _has_active_tasks,
+    _has_active_tasks_for_run,
     cas_dispatch_with_rollback,
     dispatch_generate_scene_image,
     dispatch_generate_visual_plan,
@@ -65,10 +65,12 @@ class GenerateVisualAssetsRequest(BaseModel):
 
 @router.post("/runs/{run_id}/generate-visual-plan", status_code=202)
 async def generate_visual_plan_trigger(
-    run_id: int, request: GenerateVisualPlanRequest, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
+    run_id: int,
+    request: GenerateVisualPlanRequest,
+    access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
     _, run = access
-    if run.current_stage == "VISUAL_PLAN_GENERATING" and _has_active_tasks(run.active_task_id):
+    if run.current_stage == "VISUAL_PLAN_GENERATING" and await _has_active_tasks_for_run(run.id):
         raise HTTPException(status_code=409, detail="Visual plan generation already in progress")
 
     allowed_stages = frozenset(stage.value for stage in TRIGGER_POLICY["generate_visual_plan"])
@@ -100,10 +102,12 @@ async def generate_visual_plan_trigger(
 
 @router.post("/runs/{run_id}/generate-visual-assets", status_code=202)
 async def generate_visual_assets_trigger(
-    run_id: int, request: GenerateVisualAssetsRequest, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
+    run_id: int,
+    request: GenerateVisualAssetsRequest,
+    access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
     _, run = access
-    if run.current_stage == "VISUAL_ASSET_GENERATING" and _has_active_tasks(run.active_task_id):
+    if run.current_stage == "VISUAL_ASSET_GENERATING" and await _has_active_tasks_for_run(run.id):
         raise HTTPException(status_code=409, detail="Visual asset generation already in progress")
 
     allowed_stages = frozenset(stage.value for stage in TRIGGER_POLICY["generate_visual_assets"])
