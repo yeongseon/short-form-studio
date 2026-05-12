@@ -67,6 +67,9 @@ class TaskRunnerConfig:
     safe_stages: frozenset[str]
     success_stage: str | None = None
     safe_failure_stages: frozenset[str] | None = None  # defaults to safe_stages
+    skip_stage_guard: bool = False
+    raise_on_stage_guard: bool = True
+    no_fail_transition_exceptions: tuple[type[Exception], ...] = (ValueError,)
 
 
 @dataclass
@@ -122,33 +125,37 @@ async def _run_task_inner(
 
         # 2. Stage guard
         run = await _run_service.storage.get_run(run_id)
-        if run is None:
+        if run is None and not config.skip_stage_guard:
             raise StageGuardError(f"Run {run_id} not found")
 
-        try:
-            current = RunStage(run["current_stage"])
-        except ValueError as exc:
-            raise StageGuardError(
-                f"Run {run_id} has invalid stage {run['current_stage']!r}"
-            ) from exc
+        if run is not None and not config.skip_stage_guard:
+            try:
+                current = RunStage(run["current_stage"])
+            except ValueError as exc:
+                raise StageGuardError(
+                    f"Run {run_id} has invalid stage {run['current_stage']!r}"
+                ) from exc
 
-        if current not in config.allowed_stages:
-            raise StageGuardError(
-                f"Run {run_id} is in stage {current.value}, "
-                f"expected one of {', '.join(s.value for s in config.allowed_stages)}"
-            )
-        if run.get("status") == "cancelled":
-            raise StageGuardError(f"Run {run_id} is cancelled")
+            if current not in config.allowed_stages:
+                raise StageGuardError(
+                    f"Run {run_id} is in stage {current.value}, "
+                    f"expected one of {', '.join(s.value for s in config.allowed_stages)}"
+                )
+            if run.get("status") == "cancelled":
+                raise StageGuardError(f"Run {run_id} is cancelled")
 
         # 3. Resolve workspace/project context
-        workspace_id = await resolve_workspace_id_from_run(run_id)
-        project_id = run.get("project_id")
+        workspace_id: int | None = None
+        project_id: int | None = None
+        if run is not None:
+            workspace_id = await resolve_workspace_id_from_run(run_id)
+            project_id = run.get("project_id")
 
         # 4. Execute task-specific logic
         ctx = TaskContext(
             run_id=run_id,
             task_id=task_id,
-            run=run,
+            run=run or {},
             workspace_id=workspace_id,
             project_id=project_id,
             start_time=start_time,
@@ -261,6 +268,8 @@ def run_task(
             asyncio.run(_task_tracking_service.mark_rejected(task_id, "stage_guard"))
         except Exception:
             logger.warning("Failed to record task rejection", exc_info=True)
+        if config.raise_on_stage_guard:
+            raise
         raise Ignore()
     except SoftTimeLimitExceeded:
         logger.error("Task %s timed out for run %s", config.task_name, run_id)
@@ -276,6 +285,8 @@ def run_task(
             logger.exception("Failed to mark run %d as FAILED after timeout", run_id)
         raise
     except Exception as exc:
+        if isinstance(exc, config.no_fail_transition_exceptions):
+            raise
         if (
             isinstance(exc, (ProviderTimeoutError, RateLimitError))
             and celery_self.request.retries < celery_self.max_retries
