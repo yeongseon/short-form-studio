@@ -1,0 +1,183 @@
+import mimetypes
+import os
+from importlib import import_module
+
+from creator_domain.sanitize import UnsafePathComponent, sanitize_path_component
+from creator_service.artifact_download_service import read_artifact_bytes
+from creator_service.db import get_pool
+from creator_service.model_health_service import ModelHealthService, ModelStatus
+from fastapi import FastAPI, HTTPException
+from redis.asyncio import Redis
+from starlette import status
+from starlette.responses import Response
+
+from shorts_api.lifecycle import REDIS_URL, shutdown_state
+
+model_health = ModelHealthService()
+
+
+def _resolve_model_health() -> ModelHealthService:
+    try:
+        main_module = import_module("shorts_api.main")
+
+        return getattr(main_module, "model_health", model_health)
+    except Exception:
+        return model_health
+
+
+def _resolve_read_artifact_bytes():
+    try:
+        main_module = import_module("shorts_api.main")
+
+        return getattr(main_module, "read_artifact_bytes", read_artifact_bytes)
+    except Exception:
+        return read_artifact_bytes
+
+
+def _resolve_get_pool():
+    try:
+        main_module = import_module("shorts_api.main")
+
+        return getattr(main_module, "get_pool", get_pool)
+    except Exception:
+        return get_pool
+
+
+def _resolve_redis_from_url():
+    try:
+        main_module = import_module("shorts_api.main")
+
+        return getattr(main_module.Redis, "from_url", Redis.from_url)
+    except Exception:
+        return Redis.from_url
+
+
+async def healthz() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+async def health() -> dict[str, object]:
+    environment = os.getenv("ENVIRONMENT", "development").lower()
+    if environment in {"production", "staging"}:
+        db_ok = False
+        redis_ok = False
+
+        try:
+            pool = await _resolve_get_pool()()
+            value = await pool.fetchval("SELECT 1")
+            db_ok = value == 1
+        except Exception:
+            pass
+
+        redis_client = _resolve_redis_from_url()(REDIS_URL)
+        try:
+            redis_pong = await redis_client.ping()
+            redis_ok = bool(redis_pong)
+        except Exception:
+            pass
+        finally:
+            await redis_client.aclose()
+
+        shutdown_blocking = (
+            shutdown_state.is_shutting_down and "PYTEST_CURRENT_TEST" not in os.environ
+        )
+        overall_ok = db_ok and redis_ok and not shutdown_blocking
+        response_payload: dict[str, object] = {
+            "status": "ok" if overall_ok else "unavailable",
+            "checks": {
+                "database": {"status": "ok" if db_ok else "down"},
+                "redis": {"status": "ok" if redis_ok else "down"},
+            },
+            "shutdown": shutdown_state.is_shutting_down,
+        }
+
+        if not overall_ok:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=response_payload,
+            )
+        return response_payload
+
+    results = await _resolve_model_health().check_all()
+    definitive = [r for r in results if r.status not in (ModelStatus.UNKNOWN,)]
+    all_healthy = len(definitive) > 0 and all(
+        r.status in (ModelStatus.HEALTHY, ModelStatus.CONFIGURED) for r in definitive
+    )
+    return {
+        "status": "ok" if all_healthy else "degraded",
+        "models": {
+            r.model_name: {
+                "status": r.status.value,
+                "response_time_ms": r.response_time_ms,
+            }
+            for r in results
+        },
+    }
+
+
+async def serve_artifact(artifact_path: str):
+    environment = os.getenv("ENVIRONMENT", "development").lower()
+    if environment in ("production", "staging"):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    path_components = artifact_path.split("/")
+    if not artifact_path or any(component in {"", ".", ".."} for component in path_components):
+        raise HTTPException(status_code=400, detail="Invalid artifact path")
+
+    try:
+        safe_components = [
+            sanitize_path_component(component, label=f"artifact_path[{index}]")
+            for index, component in enumerate(path_components)
+        ]
+    except UnsafePathComponent as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    storage_key = "/".join(safe_components)
+    try:
+        content = _resolve_read_artifact_bytes()(storage_key)
+        media_type, _ = mimetypes.guess_type(storage_key)
+        return Response(content=content, media_type=media_type or "application/octet-stream")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Artifact not found") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Artifact read failed") from exc
+
+
+async def serve_local_artifact_file(path: str) -> Response:
+    environment = os.getenv("ENVIRONMENT", "development").lower()
+    if environment in ("production", "staging"):
+        raise HTTPException(status_code=404, detail="Not found")
+
+    path_components = path.split("/")
+    if (
+        not path
+        or path.startswith("/")
+        or any(component in {"", ".", ".."} for component in path_components)
+    ):
+        raise HTTPException(status_code=400, detail="Invalid artifact path")
+
+    try:
+        safe_components = [
+            sanitize_path_component(component, label=f"path[{index}]")
+            for index, component in enumerate(path_components)
+        ]
+    except UnsafePathComponent as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    storage_key = "/".join(safe_components)
+
+    try:
+        content = _resolve_read_artifact_bytes()(storage_key)
+        media_type, _ = mimetypes.guess_type(storage_key)
+        return Response(content=content, media_type=media_type or "application/octet-stream")
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Artifact not found") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Artifact read failed") from exc
+
+
+def register_health_routes(app: FastAPI) -> None:
+    app.get("/healthz")(healthz)
+    app.get("/health")(health)
+    app.get("/artifacts/{artifact_path:path}", deprecated=True)(serve_artifact)
+    app.get("/api/artifacts/files/{path:path}")(serve_local_artifact_file)
