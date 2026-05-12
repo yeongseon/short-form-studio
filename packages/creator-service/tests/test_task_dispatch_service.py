@@ -4,7 +4,10 @@ from types import ModuleType, SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from creator_service.task_dispatch_service import TaskDispatchService
+from creator_service.task_dispatch_service import (
+    SynchronousTaskExecutionError,
+    TaskDispatchService,
+)
 
 
 class _FakeRunStorage:
@@ -131,6 +134,34 @@ def test_cas_dispatch_with_rollback_enqueue_failure_rolls_back_stage() -> None:
         "current_stage": "SCRIPT_REVIEW",
         "restart_from": None,
     }
+
+
+def test_cas_dispatch_with_rollback_sync_execution_failure_does_not_rollback() -> None:
+    service = TaskDispatchService()
+    run_service = _FakeRunService()
+
+    def failing_dispatcher(**_: object) -> str:
+        raise SynchronousTaskExecutionError("task failed")
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            service.cas_dispatch_with_rollback(
+                run_id=99,
+                expected_stages=frozenset({"SCRIPT_REVIEW"}),
+                target_stage="SCRIPT_GENERATING",
+                dispatcher=failing_dispatcher,
+                dispatcher_args={"run_id": 99},
+                run_service=run_service,
+                rollback_stage="SCRIPT_REVIEW",
+                rollback_restart_from=None,
+                enqueue_error_detail="Failed to enqueue script generation task",
+            )
+        )
+
+    assert exc.value.status_code == 500
+    assert exc.value.detail == "Task execution failed"
+    assert len(run_service.storage.calls) == 1
+    assert run_service.storage.calls[0][1] == {"current_stage": "SCRIPT_GENERATING"}
 
 
 def test_cas_dispatch_with_rollback_record_failure_revokes_and_rolls_back(
