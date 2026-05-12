@@ -12,9 +12,6 @@ router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 async def list_workspaces(
     user: CurrentUser = Depends(require_current_user),
 ) -> dict[str, list[dict[str, int | str]]]:
-    if user.user_id is None:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
     user_id = user.user_id
     pool = await get_pool()
     async with pool.acquire() as connection:

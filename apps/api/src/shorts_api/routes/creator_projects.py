@@ -31,8 +31,6 @@ async def create_project(
     user: CurrentUser = Depends(require_current_user),
 ) -> dict[str, object]:
     user_workspace_id = user.workspace_id
-    if user_workspace_id is None:
-        raise HTTPException(status_code=401, detail="Workspace context required")
     create_kwargs = {
         "title": request.title,
         "source_type": request.source_type,
@@ -66,9 +64,7 @@ async def update_project(
     project_workspace_id = getattr(project, "workspace_id", None)
     if project_workspace_id is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    if user.user_id is None or not await workspace_service.check_access(
-        project_workspace_id, user.user_id
-    ):
+    if not await workspace_service.check_access(project_workspace_id, user.user_id):
         raise HTTPException(status_code=404, detail="Project not found")
 
     project = await project_service.update_project(project_id, title=request.title)
@@ -88,9 +84,7 @@ async def get_project_detail(
     project_workspace_id = getattr(project, "workspace_id", None)
     if project_workspace_id is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    if user.user_id is None or not await workspace_service.check_access(
-        project_workspace_id, user.user_id
-    ):
+    if not await workspace_service.check_access(project_workspace_id, user.user_id):
         raise HTTPException(status_code=404, detail="Project not found")
 
     return project.model_dump(mode="json")
@@ -103,8 +97,6 @@ async def list_projects(
     user: CurrentUser = Depends(require_current_user),
 ) -> dict[str, object]:
     user_workspace_id = user.workspace_id
-    if user_workspace_id is None:
-        raise HTTPException(status_code=401, detail="Workspace context required")
 
     list_projects_fn = getattr(project_service, "list_projects")
     count_projects_fn = getattr(project_service, "count_projects")
@@ -148,9 +140,7 @@ async def delete_project(
         project_workspace_id = getattr(project, "workspace_id", None)
         if project_workspace_id is None:
             raise HTTPException(status_code=404, detail="Project not found")
-        if user.user_id is None or not await workspace_service.check_access(
-            project_workspace_id, user.user_id
-        ):
+        if not await workspace_service.check_access(project_workspace_id, user.user_id):
             raise HTTPException(status_code=404, detail="Project not found")
 
     run_ids = await _cleanup_project_resources(project_id)
