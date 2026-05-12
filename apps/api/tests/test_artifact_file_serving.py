@@ -48,6 +48,7 @@ async def test_legacy_artifact_route_reads_from_storage_backend(client, monkeypa
     assert response.status_code == 200
     assert response.content == payload
     assert response.headers["content-type"].startswith("image/png")
+    assert "deprecated" in response.headers["warning"].lower()
 
 
 @pytest.mark.asyncio

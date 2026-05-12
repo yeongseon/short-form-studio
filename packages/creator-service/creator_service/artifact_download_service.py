@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import logging
+import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Protocol
 
 from creator_service.artifact_storage_integration import get_artifact_download_path
 from creator_service.object_storage import get_storage_backend
 
-from .db import fetch_one
+from .db import execute, fetch_all, fetch_one
+
+logger = logging.getLogger(__name__)
 
 
 class ArtifactDownloadStorageBackend(Protocol):
@@ -50,6 +55,40 @@ class ArtifactDownloadService:
 
     async def get_artifact_by_id(self, artifact_id: int) -> dict[str, Any] | None:
         return await self.storage.get_artifact_by_id(artifact_id)
+
+    async def delete_artifacts_for_run(self, run_id: int) -> None:
+        artifacts = await fetch_all(
+            "SELECT storage_key, storage_provider FROM creator_artifacts WHERE run_id = $1",
+            run_id,
+        )
+        backend = get_storage_backend()
+
+        for artifact in artifacts:
+            key = artifact.get("storage_key")
+            if not isinstance(key, str) or not key:
+                continue
+            try:
+                backend.delete(key)
+            except Exception:
+                logger.exception("Failed deleting artifact key '%s' for run_id=%s", key, run_id)
+
+        await execute("DELETE FROM creator_artifacts WHERE run_id = $1", run_id)
+
+        if os.getenv("STORAGE_BACKEND", "local") != "local":
+            return
+
+        artifact_root = Path(os.getenv("ARTIFACT_ROOT", "data/artifacts"))
+        run_dir = artifact_root / str(run_id)
+        if run_dir.is_dir():
+            try:
+                for path in sorted(run_dir.rglob("*"), reverse=True):
+                    if path.is_file() or path.is_symlink():
+                        path.unlink(missing_ok=True)
+                    elif path.is_dir():
+                        path.rmdir()
+                run_dir.rmdir()
+            except Exception:
+                logger.exception("Failed deleting local run directory '%s'", run_dir)
 
 
 def _create_storage() -> ArtifactDownloadStorageBackend:
