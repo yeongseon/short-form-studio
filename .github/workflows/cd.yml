@@ -1,0 +1,106 @@
+name: CD
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  # Wait for CI to pass before deploying
+  wait-for-ci:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for CI workflow
+        uses: lewagon/wait-on-check-action@v1.3.4
+        with:
+          ref: ${{ github.ref }}
+          check-name: 'lint'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 10
+      - name: Wait for test job
+        uses: lewagon/wait-on-check-action@v1.3.4
+        with:
+          ref: ${{ github.ref }}
+          check-name: 'test'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 10
+      - name: Wait for docker job
+        uses: lewagon/wait-on-check-action@v1.3.4
+        with:
+          ref: ${{ github.ref }}
+          check-name: 'docker'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 10
+
+  # Run database migrations against production
+  migrate:
+    runs-on: ubuntu-latest
+    needs: wait-for-ci
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      
+      - name: Install dependencies
+        run: |
+          python3 -m pip install -c constraints.txt -r apps/api/requirements.txt
+          pip install -c constraints.txt -e packages/creator-domain
+          pip install -c constraints.txt -e packages/creator-provider
+          pip install -c constraints.txt -e packages/creator-service
+      
+      - name: Run migrations
+        working-directory: apps/api
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          # Override alembic.ini with production DATABASE_URL
+          alembic upgrade head
+      
+      - name: Verify migration success
+        working-directory: apps/api
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          # Check current revision
+          alembic current
+          # Verify we're at the latest head
+          alembic heads
+
+  # Deploy application after migrations succeed
+  deploy:
+    runs-on: ubuntu-latest
+    needs: migrate
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Deploy API
+        run: |
+          # TODO: Add actual deployment commands here
+          # Examples:
+          # - kubectl apply -f k8s/
+          # - docker push and restart containers
+          # - ssh to server and pull latest images
+          # - trigger cloud deployment (AWS ECS, GCP Cloud Run, etc.)
+          echo "Deployment step placeholder - configure based on your infrastructure"
+          echo "See docs/DEPLOYMENT.md for guidance"
+      
+      - name: Deploy Worker
+        run: |
+          # TODO: Add worker deployment commands
+          echo "Worker deployment placeholder"
+      
+      - name: Deploy Frontend
+        run: |
+          # TODO: Add frontend deployment commands
+          echo "Frontend deployment placeholder"
+      
+      - name: Verify deployment
+        run: |
+          # TODO: Add health checks
+          # Examples:
+          # - curl https://api.example.com/healthz
+          # - kubectl rollout status deployment/api
+          echo "Health check placeholder"
