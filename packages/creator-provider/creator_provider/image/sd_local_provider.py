@@ -8,22 +8,13 @@ from typing import Any
 import httpx
 
 from creator_provider.base import ImageProvider, ImageResult
+from creator_provider.versioned_assets import get_prompt, get_schema
 
 
 class SDLocalProvider(ImageProvider):
-    # Quality keywords prepended to all prompts to improve SD 1.5 output.
-    _QUALITY_PREFIX = (
-        "masterpiece, best quality, highly detailed, "
-        "sharp focus, professional, 8k uhd"
-    )
-
-    # Only these keys from caller-provided params are forwarded to the
-    # AUTOMATIC1111 /sdapi/v1/txt2img endpoint.  This allowlist prevents
-    # injection of dangerous keys like `prompt`, `alwayson_scripts`,
-    # `script_args`, or `override_settings`.
-    _ALLOWED_API_KEYS = frozenset({
-        "steps", "cfg_scale", "sampler_name", "negative_prompt", "seed",
-    })
+    _SD_LOCAL_SCHEMA = get_schema("sd_local_image_request")
+    _QUALITY_PREFIX = get_prompt("sd_local_quality_prefix").strip()
+    _ALLOWED_API_KEYS = frozenset(_SD_LOCAL_SCHEMA["allowed_api_keys"])
 
     def __init__(self, endpoint: str, model_key: str):
         self.endpoint = endpoint.rstrip("/")
@@ -31,23 +22,21 @@ class SDLocalProvider(ImageProvider):
 
     async def generate(self, prompt: str, params: dict[str, Any] | None = None) -> ImageResult:
         merged_params: dict[str, Any] = dict(params or {})
-        width = int(merged_params.get("width", 512))
-        height = int(merged_params.get("height", 768))
+        width = int(merged_params.get("width", self._SD_LOCAL_SCHEMA["default_width"]))
+        height = int(merged_params.get("height", self._SD_LOCAL_SCHEMA["default_height"]))
 
         # Auto-prepend quality keywords unless the caller explicitly
         # passed skip_quality_prefix=True.
         skip_prefix = merged_params.pop("skip_quality_prefix", False)
-        effective_prompt = (
-            prompt if skip_prefix else f"{self._QUALITY_PREFIX}, {prompt}"
-        )
+        effective_prompt = prompt if skip_prefix else f"{self._QUALITY_PREFIX}, {prompt}"
 
         payload: dict[str, Any] = {
             "prompt": effective_prompt,
             "width": width,
             "height": height,
-            "steps": 25,
-            "cfg_scale": 7,
-            "sampler_name": "DPM++ 2M Karras",
+            "steps": self._SD_LOCAL_SCHEMA["default_steps"],
+            "cfg_scale": self._SD_LOCAL_SCHEMA["default_cfg_scale"],
+            "sampler_name": self._SD_LOCAL_SCHEMA["default_sampler_name"],
         }
 
         # Merge caller-provided params — only allowlisted keys are forwarded

@@ -6,6 +6,7 @@ import httpx
 
 from creator_provider.api_keys import resolve_api_key
 from creator_provider.base import LLMProvider
+from creator_provider.versioned_assets import get_tool_definition
 
 
 class AnthropicProvider(LLMProvider):
@@ -22,11 +23,17 @@ class AnthropicProvider(LLMProvider):
     async def generate(self, prompt: str, params: dict[str, Any] | None = None) -> str:
         max_tokens = (params or {}).get("max_tokens", 2048)
         timeout = (params or {}).get("timeout", 120.0)
+        message_template = get_tool_definition("llm_chat_message")["message_template"]
 
         payload = {
             "model": self.model_key,
             "max_tokens": max_tokens,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [
+                {
+                    "role": message_template["role"],
+                    "content": message_template["content"].format(prompt=prompt),
+                }
+            ],
         }
 
         url = f"{self.endpoint}/v1/messages"
@@ -47,4 +54,6 @@ class AnthropicProvider(LLMProvider):
         content_blocks = data.get("content", [])
         if not content_blocks:
             raise RuntimeError("Anthropic API returned no content blocks")
-        return "".join(block.get("text", "") for block in content_blocks if block.get("type") == "text")
+        return "".join(
+            block.get("text", "") for block in content_blocks if block.get("type") == "text"
+        )
