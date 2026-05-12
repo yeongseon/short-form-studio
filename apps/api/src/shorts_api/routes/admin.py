@@ -1,5 +1,10 @@
 """Admin API endpoints for operational control and observability.
 
+Auth boundary:
+- ``/api/admin/*`` routes authenticate with ``X-Admin-Key``.
+- ``/api/creator/*`` routes authenticate with ``X-API-Key`` or ``Authorization: Bearer``.
+- These are separate auth domains and credentials are not interchangeable.
+
 This module exposes backend-only admin endpoints under ``/api/admin``.
 It does not implement any admin dashboard UI; frontend dashboard work is
 handled separately from this API surface.
@@ -11,9 +16,11 @@ import hmac
 import hashlib
 import logging
 import os
+import sys
 import time
 from collections import defaultdict
 from importlib import import_module
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -21,7 +28,14 @@ from pydantic import BaseModel, Field
 from redis import Redis
 from redis.exceptions import RedisError
 
-admin_service = import_module("creator_service.admin_service").admin_service
+try:
+    admin_service = import_module("creator_service.admin_service").admin_service
+except ModuleNotFoundError:
+    repo_root = Path(__file__).resolve().parents[5]
+    creator_service_pkg = repo_root / "packages" / "creator-service"
+    if str(creator_service_pkg) not in sys.path:
+        sys.path.append(str(creator_service_pkg))
+    admin_service = import_module("creator_service.admin_service").admin_service
 logger = logging.getLogger(__name__)
 audit_logger = logging.getLogger("admin.audit")
 
@@ -73,18 +87,8 @@ class RedisRateLimiter:
         self.window_seconds = window_seconds
         self._fallback = DestructiveOpRateLimiter(max_ops_per_minute=max_ops)
         self._redis: Redis | None = None
+        self._redis_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379/0")
         self._redis_retry_after: float = 0.0
-        target_url = redis_url or os.getenv("REDIS_URL", "redis://redis:6379/0")
-
-        try:
-            client = Redis.from_url(target_url, decode_responses=True)
-            client.ping()
-            self._redis = client
-        except Exception as exc:
-            logger.warning(
-                "Redis unavailable for rate limiting; falling back to in-memory limiter: %s",
-                exc,
-            )
 
     @staticmethod
     def _key_hash(admin_key: str) -> str:
@@ -97,8 +101,7 @@ class RedisRateLimiter:
     def is_allowed(self, endpoint: str, admin_key: str) -> bool:
         if self._redis is None and time.time() >= self._redis_retry_after:
             try:
-                target_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
-                client = Redis.from_url(target_url, decode_responses=True)
+                client = Redis.from_url(self._redis_url, decode_responses=True)
                 client.ping()
                 self._redis = client
                 logger.info("Redis rate limiter reconnected successfully")
@@ -134,6 +137,9 @@ async def require_admin(x_admin_key: str | None = Header(default=None)) -> str:
         raise HTTPException(status_code=401, detail="Admin access denied")
 
     expected = os.environ.get("ADMIN_API_KEY", "")
+    if not expected or len(expected) < 16:
+        logger.error("ADMIN_API_KEY is not set or too short (min 16 chars)")
+        raise HTTPException(status_code=503, detail="Admin API not configured")
     if not expected or not hmac.compare_digest(x_admin_key, expected):
         raise HTTPException(status_code=403, detail="Admin access denied")
     return x_admin_key
@@ -239,10 +245,13 @@ async def admin_storage_stats() -> dict[str, Any]:
 
 @router.post("/runs/{run_id}/unstick", response_model=UnstickRunResponse)
 async def admin_unstick_run(
-    run_id: str, _: None = Depends(require_confirmation_and_rate_limit)
+    run_id: str,
+    admin_key: str = Depends(require_admin),
+    _: None = Depends(require_confirmation_and_rate_limit),
 ) -> dict[str, Any]:
+    key_fingerprint = hashlib.sha256(admin_key.encode()).hexdigest()[:8]
     logger.warning("Admin mutation requested: unstick run_id=%s", run_id)
-    audit_logger.warning("ADMIN_ACTION: unstick_run | run_id=%s", run_id)
+    audit_logger.warning("ADMIN_ACTION: unstick_run | run_id=%s | key=%s", run_id, key_fingerprint)
     return await admin_service.unstick_run(run_id)
 
 
@@ -250,19 +259,24 @@ async def admin_unstick_run(
 async def admin_clear_cache(
     key_pattern: str | None = Query(default=None),
     dry_run: bool = Query(default=False),
+    admin_key: str = Depends(require_admin),
     _: None = Depends(require_confirmation_and_rate_limit),
 ) -> dict[str, Any]:
+    key_fingerprint = hashlib.sha256(admin_key.encode()).hexdigest()[:8]
     logger.warning(
         "Admin mutation requested: clear cache key_pattern=%s dry_run=%s",
         key_pattern,
         dry_run,
     )
     if key_pattern is None:
-        audit_logger.warning("ADMIN_ACTION: cache_clear | dry_run=%s", dry_run)
+        audit_logger.warning(
+            "ADMIN_ACTION: cache_clear | dry_run=%s | key=%s", dry_run, key_fingerprint
+        )
     else:
         audit_logger.warning(
-            "ADMIN_ACTION: cache_clear | key_pattern=%s | dry_run=%s",
+            "ADMIN_ACTION: cache_clear | key_pattern=%s | dry_run=%s | key=%s",
             key_pattern,
             dry_run,
+            key_fingerprint,
         )
     return await admin_service.clear_cache(key_pattern=key_pattern, dry_run=dry_run)
