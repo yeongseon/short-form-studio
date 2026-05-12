@@ -6,6 +6,11 @@ from typing import TYPE_CHECKING, Annotated
 
 from creator_domain.models import TRIGGER_POLICY
 from creator_service.run_service import run_service
+from creator_service.task_dispatch_service import (
+    cas_dispatch_with_rollback,
+    dispatch_generate_scene_image,
+    dispatch_generate_visual_plan,
+)
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -16,9 +21,6 @@ if TYPE_CHECKING:
 from shorts_api.routes.creator_runs_core import GenerateVisualPlanRequest
 from shorts_api.routes.creator_runs_utils import (
     _has_active_tasks_for_run,
-    cas_dispatch_with_rollback,
-    dispatch_generate_scene_image,
-    dispatch_generate_visual_plan,
     validate_model_key,
 )
 from shorts_api.auth import CurrentUser, require_run_access

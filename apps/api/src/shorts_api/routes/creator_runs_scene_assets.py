@@ -10,6 +10,13 @@ from creator_service.project_service import project_service
 from creator_service.render_service import render_service
 from creator_service.run_service import run_service
 from creator_service.subtitle_service import subtitle_service
+from creator_service.task_dispatch_service import (
+    cas_dispatch_with_rollback,
+    dispatch_generate_audio,
+    dispatch_generate_scene_image,
+    dispatch_generate_subtitles,
+    dispatch_render_video,
+)
 from creator_service.task_tracking_service import task_tracking_service
 from creator_service.visual_asset_service import visual_asset_service
 from fastapi import APIRouter, Depends, HTTPException
@@ -26,11 +33,6 @@ from shorts_api.routes.creator_runs_core import (
 )
 from shorts_api.routes.creator_runs_utils import (
     _has_active_tasks_for_run,
-    cas_dispatch_with_rollback,
-    dispatch_generate_audio,
-    dispatch_generate_scene_image,
-    dispatch_generate_subtitles,
-    dispatch_render_video,
     validate_model_key,
     validate_render_profile,
 )

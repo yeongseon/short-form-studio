@@ -144,13 +144,12 @@ def test_api_to_celery_trace_context_propagates_via_task_headers(monkeypatch):
 
     fake_tasks_module = types.SimpleNamespace(generate_script=_FakeTask())
     monkeypatch.setattr(
-        creator_runs_utils,
-        "import_module",
-        lambda name: creator_service_telemetry if name == "creator_service.telemetry" else None,
-    )
-    monkeypatch.setattr(
-        "importlib.import_module",
-        lambda name: fake_tasks_module if name == "tasks.generate_script" else None,
+        "creator_service.task_dispatch_service.import_module",
+        lambda name: creator_service_telemetry
+        if name == "creator_service.telemetry"
+        else fake_tasks_module
+        if name == "tasks.generate_script"
+        else None,
     )
 
     incoming_trace_id = "0af7651916cd43dd8448eb211c80319c"
