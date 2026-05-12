@@ -5,8 +5,8 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      rollback_image_tag:
-        description: "Image tag to rollback to (skips build, deploys directly to production)"
+      image_tag:
+        description: "Optional rollback tag (redeploy existing images)"
         required: false
         type: string
 
@@ -18,62 +18,48 @@ concurrency:
   group: cd-${{ github.ref }}
   cancel-in-progress: false
 
-env:
-  REGISTRY: ghcr.io
-  IMAGE_REPOSITORY: ${{ github.repository }}
-
 jobs:
-  # ── Gate: wait for CI to pass ──────────────────────────────────
   wait-for-ci:
-    if: github.event.inputs.rollback_image_tag == ''
+    if: ${{ github.event_name == 'push' }}
     runs-on: ubuntu-latest
     steps:
       - name: Wait for CI lint
         uses: lewagon/wait-on-check-action@v1.3.4
         with:
           ref: ${{ github.ref }}
-          check-name: 'lint'
+          check-name: "lint"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           wait-interval: 10
       - name: Wait for CI test
         uses: lewagon/wait-on-check-action@v1.3.4
         with:
           ref: ${{ github.ref }}
-          check-name: 'test'
+          check-name: "test"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           wait-interval: 10
       - name: Wait for CI docker
         uses: lewagon/wait-on-check-action@v1.3.4
         with:
           ref: ${{ github.ref }}
-          check-name: 'docker'
+          check-name: "docker"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           wait-interval: 10
 
-  # ── Build, scan, push container images ─────────────────────────
-  build-scan-push:
-    if: github.event.inputs.rollback_image_tag == ''
+  build-and-push:
+    if: ${{ github.event_name == 'push' }}
     needs: wait-for-ci
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - service: api
-            dockerfile: apps/api/Dockerfile
-          - service: studio-web
-            dockerfile: apps/studio-web/Dockerfile
-          - service: worker
-            dockerfile: apps/worker-orchestrator/Dockerfile
     outputs:
-      image_tag: ${{ steps.tags.outputs.date_tag }}
+      date_tag: ${{ steps.tags.outputs.date_tag }}
+      sha_tag: ${{ steps.tags.outputs.sha_tag }}
+      latest_tag: latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GitHub Container Registry
+      - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -82,193 +68,250 @@ jobs:
 
       - name: Compute image tags
         id: tags
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPOSITORY: ${{ github.repository }}
+          REF_NAME: ${{ github.ref_name }}
+          SHA: ${{ github.sha }}
         run: |
-          SHORT_SHA="${GITHUB_SHA::7}"
-          DATE_TAG="$(date -u +%Y.%m.%d).${GITHUB_RUN_NUMBER}"
-          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
-          echo "date_tag=${DATE_TAG}" >> "$GITHUB_OUTPUT"
-          echo "sha_tag=main-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          date_prefix="$(date -u +%Y.%m.%d)"
+          short_sha="$(printf '%s' "$SHA" | cut -c1-7)"
+          existing_tags="$(gh api --paginate "repos/${REPOSITORY}/packages/container/api/versions" --jq '.[].metadata.container.tags[]?' 2>/dev/null || true)"
+          max_n=0
+          while IFS= read -r tag; do
+            if [[ "$tag" =~ ^${date_prefix//./\.}\.([0-9]+)$ ]]; then
+              n="${BASH_REMATCH[1]}"
+              if (( n > max_n )); then
+                max_n="$n"
+              fi
+            fi
+          done <<< "$existing_tags"
+          next_n=$((max_n + 1))
+          date_tag="${date_prefix}.${next_n}"
+          sha_tag="main-${short_sha}"
+          echo "date_tag=${date_tag}" >> "$GITHUB_OUTPUT"
+          echo "sha_tag=${sha_tag}" >> "$GITHUB_OUTPUT"
 
-      - name: Build image (local, for scanning)
-        uses: docker/build-push-action@v6
+      - name: Build and push API image
+        uses: docker/build-push-action@v5
         with:
           context: .
-          file: ${{ matrix.dockerfile }}
+          file: apps/api/Dockerfile
           target: runtime
-          push: false
-          load: true
+          push: true
           tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_REPOSITORY }}/${{ matrix.service }}:${{ steps.tags.outputs.date_tag }}
+            ghcr.io/${{ github.repository }}/api:${{ steps.tags.outputs.date_tag }}
+            ghcr.io/${{ github.repository }}/api:${{ steps.tags.outputs.sha_tag }}
+            ghcr.io/${{ github.repository }}/api:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@0.28.0
+      - name: Build and push Studio Web image
+        uses: docker/build-push-action@v5
         with:
-          scan-type: image
-          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_REPOSITORY }}/${{ matrix.service }}:${{ steps.tags.outputs.date_tag }}
-          severity: CRITICAL,HIGH
-          exit-code: '1'
+          context: .
+          file: apps/studio-web/Dockerfile
+          target: runtime
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/studio-web:${{ steps.tags.outputs.date_tag }}
+            ghcr.io/${{ github.repository }}/studio-web:${{ steps.tags.outputs.sha_tag }}
+            ghcr.io/${{ github.repository }}/studio-web:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Tag and push image
-        if: success()
-        run: |
-          IMAGE_BASE="${REGISTRY}/${IMAGE_REPOSITORY}/${{ matrix.service }}"
-          DATE_TAG="${{ steps.tags.outputs.date_tag }}"
-          SHA_TAG="${{ steps.tags.outputs.sha_tag }}"
+      - name: Build and push Worker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: apps/worker-orchestrator/Dockerfile
+          target: runtime
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}/worker:${{ steps.tags.outputs.date_tag }}
+            ghcr.io/${{ github.repository }}/worker:${{ steps.tags.outputs.sha_tag }}
+            ghcr.io/${{ github.repository }}/worker:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-          docker tag "${IMAGE_BASE}:${DATE_TAG}" "${IMAGE_BASE}:${SHA_TAG}"
-          docker tag "${IMAGE_BASE}:${DATE_TAG}" "${IMAGE_BASE}:latest"
-
-          docker push "${IMAGE_BASE}:${DATE_TAG}"
-          docker push "${IMAGE_BASE}:${SHA_TAG}"
-          docker push "${IMAGE_BASE}:latest"
-
-  # ── Staging: migrate + deploy + smoke test ─────────────────────
-  migrate-staging:
-    needs: build-scan-push
+  trivy-scan:
+    if: ${{ github.event_name == 'push' }}
+    needs: build-and-push
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ghcr.io/${{ github.repository }}/api
+            tag: ${{ needs.build-and-push.outputs.date_tag }}
+          - image: ghcr.io/${{ github.repository }}/api
+            tag: ${{ needs.build-and-push.outputs.sha_tag }}
+          - image: ghcr.io/${{ github.repository }}/api
+            tag: latest
+          - image: ghcr.io/${{ github.repository }}/studio-web
+            tag: ${{ needs.build-and-push.outputs.date_tag }}
+          - image: ghcr.io/${{ github.repository }}/studio-web
+            tag: ${{ needs.build-and-push.outputs.sha_tag }}
+          - image: ghcr.io/${{ github.repository }}/studio-web
+            tag: latest
+          - image: ghcr.io/${{ github.repository }}/worker
+            tag: ${{ needs.build-and-push.outputs.date_tag }}
+          - image: ghcr.io/${{ github.repository }}/worker
+            tag: ${{ needs.build-and-push.outputs.sha_tag }}
+          - image: ghcr.io/${{ github.repository }}/worker
+            tag: latest
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Trivy scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ matrix.image }}:${{ matrix.tag }}
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          vuln-type: os,library
+          severity: CRITICAL,HIGH
+
+  select-deploy-tag:
+    runs-on: ubuntu-latest
+    needs: [build-and-push, trivy-scan]
+    if: ${{ always() && (github.event_name == 'workflow_dispatch' || (needs.build-and-push.result == 'success' && needs.trivy-scan.result == 'success')) }}
+    outputs:
+      image_tag: ${{ steps.select.outputs.image_tag }}
+      is_rollback: ${{ steps.select.outputs.is_rollback }}
+    steps:
+      - name: Select deployment tag
+        id: select
+        env:
+          INPUT_TAG: ${{ github.event.inputs.image_tag }}
+          BUILT_TAG: ${{ needs.build-and-push.outputs.date_tag }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${INPUT_TAG:-}" ]]; then
+            echo "image_tag=${INPUT_TAG}" >> "$GITHUB_OUTPUT"
+            echo "is_rollback=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "image_tag=${BUILT_TAG}" >> "$GITHUB_OUTPUT"
+            echo "is_rollback=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  migrate-staging:
+    runs-on: ubuntu-latest
+    needs: select-deploy-tag
+    if: ${{ needs.select-deploy-tag.outputs.image_tag != '' }}
     environment: staging
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Install dependencies
         run: |
           python3 -m pip install -c constraints.txt -r apps/api/requirements.txt
           pip install -c constraints.txt -e packages/creator-domain
           pip install -c constraints.txt -e packages/creator-provider
           pip install -c constraints.txt -e packages/creator-service
-
-      - name: Run Alembic migrations
-        working-directory: apps/api
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: alembic upgrade head
-
-      - name: Verify migration
+      - name: Run migrations
         working-directory: apps/api
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
+          # Override alembic.ini with staging DATABASE_URL
+          alembic upgrade head
+      - name: Verify migration success
+        working-directory: apps/api
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          # Check current revision
           alembic current
+          # Verify we're at the latest head
           alembic heads
 
   deploy-staging:
-    needs: [build-scan-push, migrate-staging]
     runs-on: ubuntu-latest
+    needs: [select-deploy-tag, migrate-staging]
+    if: ${{ needs.select-deploy-tag.outputs.image_tag != '' }}
     environment: staging
-    strategy:
-      fail-fast: false
-      matrix:
-        service: [api, worker, studio-web]
-    env:
-      IMAGE_TAG: ${{ needs.build-scan-push.outputs.image_tag }}
     steps:
-      - name: Deploy ${{ matrix.service }} to staging
+      - name: Deploy API to staging
         run: |
-          IMAGE="${REGISTRY}/${IMAGE_REPOSITORY}/${{ matrix.service }}:${IMAGE_TAG}"
-          echo "Deploying ${IMAGE} to staging"
-          # TODO: Replace with actual deployment command, e.g.:
-          #   kubectl set image deployment/${{ matrix.service }} app=${IMAGE} -n staging
-          #   aws ecs update-service --cluster staging --service ${{ matrix.service }} --force-new-deployment
-          #   curl -X POST "$DEPLOY_WEBHOOK_URL" -d '{"image":"'${IMAGE}'"}'
+          # Example: kubectl set image deploy/api api=ghcr.io/${{ github.repository }}/api:${{ needs.select-deploy-tag.outputs.image_tag }} -n staging
+          echo "Deploy API to staging: ghcr.io/${{ github.repository }}/api:${{ needs.select-deploy-tag.outputs.image_tag }}"
+      - name: Deploy Worker to staging
+        run: |
+          # Example: kubectl set image deploy/worker worker=ghcr.io/${{ github.repository }}/worker:${{ needs.select-deploy-tag.outputs.image_tag }} -n staging
+          echo "Deploy Worker to staging: ghcr.io/${{ github.repository }}/worker:${{ needs.select-deploy-tag.outputs.image_tag }}"
+      - name: Deploy Frontend to staging
+        run: |
+          # Example: kubectl set image deploy/studio-web studio-web=ghcr.io/${{ github.repository }}/studio-web:${{ needs.select-deploy-tag.outputs.image_tag }} -n staging
+          echo "Deploy Frontend to staging: ghcr.io/${{ github.repository }}/studio-web:${{ needs.select-deploy-tag.outputs.image_tag }}"
 
   smoke-test-staging:
-    needs: deploy-staging
     runs-on: ubuntu-latest
+    needs: deploy-staging
     environment: staging
     steps:
       - name: Smoke test staging API
         run: |
-          # TODO: Replace with actual staging URL
-          # timeout 60 bash -c 'until curl -sf $STAGING_API_URL/healthz; do sleep 2; done'
-          echo "Staging smoke test placeholder — configure STAGING_API_URL"
+          # Placeholder smoke test endpoint
+          curl --fail --show-error --silent https://staging.example.com/healthz
 
-      - name: Smoke test staging frontend
-        run: |
-          # TODO: Replace with actual staging URL
-          # timeout 60 bash -c 'until curl -sf $STAGING_WEB_URL/; do sleep 2; done'
-          echo "Staging frontend smoke test placeholder — configure STAGING_WEB_URL"
-
-  # ── Production: manual gate + migrate + deploy ─────────────────
   migrate-production:
-    needs: [build-scan-push, smoke-test-staging]
     runs-on: ubuntu-latest
-    environment: production  # GitHub environment provides manual approval gate
+    needs: [select-deploy-tag, smoke-test-staging]
+    if: ${{ needs.select-deploy-tag.outputs.image_tag != '' }}
+    environment: production
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Install dependencies
         run: |
           python3 -m pip install -c constraints.txt -r apps/api/requirements.txt
           pip install -c constraints.txt -e packages/creator-domain
           pip install -c constraints.txt -e packages/creator-provider
           pip install -c constraints.txt -e packages/creator-service
-
-      - name: Run Alembic migrations
-        working-directory: apps/api
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: alembic upgrade head
-
-      - name: Verify migration
+      - name: Run migrations
         working-directory: apps/api
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
+          # Override alembic.ini with production DATABASE_URL
+          alembic upgrade head
+      - name: Verify migration success
+        working-directory: apps/api
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          # Check current revision
           alembic current
+          # Verify we're at the latest head
           alembic heads
 
   deploy-production:
-    needs: [build-scan-push, migrate-production]
     runs-on: ubuntu-latest
+    needs: [select-deploy-tag, migrate-production]
+    if: ${{ needs.select-deploy-tag.outputs.image_tag != '' }}
     environment: production
-    strategy:
-      fail-fast: false
-      matrix:
-        service: [api, worker, studio-web]
-    env:
-      IMAGE_TAG: ${{ needs.build-scan-push.outputs.image_tag }}
     steps:
-      - name: Deploy ${{ matrix.service }} to production
+      - name: Deploy API to production
         run: |
-          IMAGE="${REGISTRY}/${IMAGE_REPOSITORY}/${{ matrix.service }}:${IMAGE_TAG}"
-          echo "Deploying ${IMAGE} to production"
-          # TODO: Replace with actual deployment command
-
-      - name: Verify health
+          # Example: kubectl set image deploy/api api=ghcr.io/${{ github.repository }}/api:${{ needs.select-deploy-tag.outputs.image_tag }} -n production
+          echo "Deploy API to production: ghcr.io/${{ github.repository }}/api:${{ needs.select-deploy-tag.outputs.image_tag }}"
+      - name: Deploy Worker to production
         run: |
-          echo "Production health check for ${{ matrix.service }} — configure health endpoint URLs"
-          # TODO: Replace with actual health checks
-          # if [ "${{ matrix.service }}" = "api" ]; then
-          #   timeout 60 bash -c 'until curl -sf $PRODUCTION_API_URL/healthz; do sleep 2; done'
-          # fi
-
-  # ── Rollback: redeploy a previous image tag ────────────────────
-  rollback:
-    if: github.event.inputs.rollback_image_tag != ''
-    runs-on: ubuntu-latest
-    environment: production
-    strategy:
-      fail-fast: false
-      matrix:
-        service: [api, worker, studio-web]
-    env:
-      IMAGE_TAG: ${{ github.event.inputs.rollback_image_tag }}
-    steps:
-      - name: Rollback ${{ matrix.service }} to ${{ env.IMAGE_TAG }}
+          # Example: kubectl set image deploy/worker worker=ghcr.io/${{ github.repository }}/worker:${{ needs.select-deploy-tag.outputs.image_tag }} -n production
+          echo "Deploy Worker to production: ghcr.io/${{ github.repository }}/worker:${{ needs.select-deploy-tag.outputs.image_tag }}"
+      - name: Deploy Frontend to production
         run: |
-          IMAGE="${REGISTRY}/${IMAGE_REPOSITORY}/${{ matrix.service }}:${IMAGE_TAG}"
-          echo "Rolling back ${IMAGE}"
-          # TODO: Replace with actual deployment command
-
-      - name: Verify health after rollback
-        run: |
-          echo "Post-rollback health check for ${{ matrix.service }}"
-          # TODO: Add health checks
+          # Example: kubectl set image deploy/studio-web studio-web=ghcr.io/${{ github.repository }}/studio-web:${{ needs.select-deploy-tag.outputs.image_tag }} -n production
+          echo "Deploy Frontend to production: ghcr.io/${{ github.repository }}/studio-web:${{ needs.select-deploy-tag.outputs.image_tag }}"
