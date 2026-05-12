@@ -8,9 +8,12 @@ import httpx
 
 from creator_provider.api_keys import resolve_api_key
 from creator_provider.base import ImageProvider, ImageResult
+from creator_provider.versioned_assets import get_schema
 
 
 class StabilityProvider(ImageProvider):
+    _ASPECT_RATIO_MAP = get_schema("stability_aspect_ratio_map")
+
     def __init__(self, endpoint: str, model_key: str):
         self.endpoint = endpoint.rstrip("/")
         self.model_key = model_key
@@ -66,11 +69,7 @@ class StabilityProvider(ImageProvider):
 
     @staticmethod
     def _parse_aspect_ratio(ratio: str) -> tuple[int, int]:
-        ratio_map = {
-            "9:16": (576, 1024),
-            "16:9": (1024, 576),
-            "1:1": (1024, 1024),
-            "3:2": (1024, 683),
-            "2:3": (683, 1024),
-        }
-        return ratio_map.get(ratio, (1024, 1024))
+        dims = StabilityProvider._ASPECT_RATIO_MAP.get(ratio)
+        if not isinstance(dims, list) or len(dims) != 2:
+            return (1024, 1024)
+        return (int(dims[0]), int(dims[1]))

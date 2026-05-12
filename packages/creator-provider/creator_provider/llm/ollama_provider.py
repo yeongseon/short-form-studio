@@ -5,6 +5,7 @@ from typing import Any
 import httpx
 
 from creator_provider.base import LLMProvider
+from creator_provider.versioned_assets import get_tool_definition
 
 
 class OllamaProvider(LLMProvider):
@@ -18,9 +19,15 @@ class OllamaProvider(LLMProvider):
     async def generate(self, prompt: str, params: dict[str, Any] | None = None) -> str:
         # Use the /api/chat endpoint with think=false to disable Qwen3's
         # extended thinking mode, which is far too slow on consumer GPUs.
+        message_template = get_tool_definition("llm_chat_message")["message_template"]
         payload: dict[str, Any] = {
             "model": self.model_name,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [
+                {
+                    "role": message_template["role"],
+                    "content": message_template["content"].format(prompt=prompt),
+                }
+            ],
             "stream": False,
             "think": False,
             "options": {"num_predict": 2048},

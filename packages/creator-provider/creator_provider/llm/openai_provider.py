@@ -6,6 +6,7 @@ import httpx
 
 from creator_provider.api_keys import resolve_api_key
 from creator_provider.base import LLMProvider
+from creator_provider.versioned_assets import get_tool_definition
 
 
 class OpenAIProvider(LLMProvider):
@@ -21,9 +22,15 @@ class OpenAIProvider(LLMProvider):
         max_tokens = (params or {}).get("max_tokens", 2048)
         timeout = (params or {}).get("timeout", 120.0)
 
+        message_template = get_tool_definition("llm_chat_message")["message_template"]
         payload = {
             "model": self.model_key,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [
+                {
+                    "role": message_template["role"],
+                    "content": message_template["content"].format(prompt=prompt),
+                }
+            ],
             "max_tokens": max_tokens,
         }
 
