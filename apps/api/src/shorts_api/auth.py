@@ -1,11 +1,13 @@
 """API-key identity middleware and auth helpers."""
+
 from __future__ import annotations
 
 import contextvars
 import hashlib
 import logging
+import os
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from creator_domain.models.pipeline_run import PipelineRun
@@ -63,11 +65,15 @@ async def _resolve_user_id_from_api_key(api_key: str, db_session) -> str | None:
     return row[0] if row else None
 
 
+_ADMIN_PATH_PREFIX = "/api/admin"
+
+
 class ApiKeyMiddleware(BaseHTTPMiddleware):
     """Starlette middleware that resolves user context from API keys."""
 
     def __init__(self, app, *, api_key: str | None = None) -> None:
         super().__init__(app)
+        self._api_key = os.getenv("API_KEY") if api_key is None else api_key
 
     async def _get_pool(self):
         try:
@@ -115,6 +121,13 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         if request.url.path == "/openapi.json" and request.app.openapi_url is None:
             return await call_next(request)
 
+        if request.url.path.startswith(_ADMIN_PATH_PREFIX):
+            return await call_next(request)
+
+        # Docs paths go through normal auth when API_KEY is set
+        # (they were removed from _PUBLIC_PATHS so they're not auto-allowed)
+
+        # Check header only (never accept keys via query params to avoid log leakage)
         provided = request.headers.get("X-API-Key")
         if not provided:
             auth_header = request.headers.get("Authorization", "")
@@ -244,7 +257,6 @@ async def get_api_key(request: Request) -> str:
     return api_key
 
 
-
 async def require_run_access(
     run_id: int,
     user: CurrentUser = Depends(require_current_user),
@@ -297,4 +309,3 @@ async def require_project_access(
         raise HTTPException(status_code=404, detail="Project not found")
 
     return user, project
-
