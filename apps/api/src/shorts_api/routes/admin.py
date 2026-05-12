@@ -275,6 +275,7 @@ async def admin_clear_cache(
     admin_key: str = Depends(require_admin),
     _: None = Depends(require_confirmation_and_rate_limit),
 ) -> dict[str, Any]:
+    safe_pattern = key_pattern.replace("\n", "").replace("\r", "")[:200] if key_pattern else None
     key_fingerprint = (
         hashlib.sha256(admin_key.encode()).hexdigest()[:8]
         if isinstance(admin_key, str)
@@ -282,7 +283,7 @@ async def admin_clear_cache(
     )
     logger.warning(
         "Admin mutation requested: clear cache key_pattern=%s dry_run=%s",
-        key_pattern,
+        safe_pattern,
         dry_run,
     )
     if key_pattern is None:
@@ -292,7 +293,7 @@ async def admin_clear_cache(
     else:
         audit_logger.warning(
             "ADMIN_ACTION: cache_clear | key_pattern=%s | dry_run=%s | key=%s",
-            key_pattern,
+            safe_pattern,
             dry_run,
             key_fingerprint,
         )

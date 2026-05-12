@@ -299,9 +299,16 @@ class AdminService:
                         "error": "Run changed concurrently; retry unstick",
                     }
 
+                revoke_warnings: list[str] = []
                 if active_task_id:
                     for task_id in self._parse_active_task_ids(active_task_id):
-                        await self._task_broker.revoke_task(task_id)
+                        try:
+                            await self._task_broker.revoke_task(task_id)
+                        except Exception as exc:
+                            logger.warning(
+                                "Failed to revoke task %s for run %s: %s", task_id, run_id, exc
+                            )
+                            revoke_warnings.append(f"Failed to revoke task {task_id}: {exc}")
 
                 logger.warning(
                     "Admin mutation executed: unstick run_id=%s from=%s to=%s age_seconds=%.1f",
@@ -317,9 +324,15 @@ class AdminService:
                     "previous_stage": current_stage,
                     "current_stage": updated["current_stage"],
                     "status": updated["status"],
+                    "warnings": revoke_warnings or None,
                 }
-        except Exception as exc:
-            return {"ok": False, "run_id": run_id, "error": str(exc)}
+        except Exception:
+            logger.exception("Unstick run failed for run_id=%s", run_id)
+            return {
+                "ok": False,
+                "run_id": run_id,
+                "error": "Internal error during unstick operation",
+            }
 
     async def clear_cache(
         self, key_pattern: str | None = None, dry_run: bool = False
@@ -367,14 +380,17 @@ class AdminService:
                 "dry_run": dry_run,
                 "matched_keys": matched_keys,
             }
-        except Exception as exc:
+        except Exception:
+            logger.exception(
+                "Clear cache failed for pattern=%s dry_run=%s", resolved_pattern, dry_run
+            )
             return {
                 "ok": False,
                 "deleted_keys": deleted,
                 "key_pattern": resolved_pattern,
                 "dry_run": dry_run,
                 "matched_keys": matched_keys,
-                "error": str(exc),
+                "error": "Internal error during cache operation",
             }
         finally:
             if client is not None:
