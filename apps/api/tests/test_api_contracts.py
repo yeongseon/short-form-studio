@@ -20,7 +20,6 @@ class StubRun(BaseModel):
     project_id: int
     current_stage: str
     status: str = "running"
-    active_task_id: str | None = None
     model_defaults: dict[str, str] | None = None
     created_at: datetime
     updated_at: datetime
@@ -120,9 +119,6 @@ def contract_services(
         task_counter["value"] += 1
         return f"subtitle-task-{task_counter['value']}"
 
-    async def append_task_id(run_id: int, task_id: str, run_service: object) -> None:
-        _ = (run_id, task_id, run_service)
-
     def validate_model_key(model_key: str) -> None:
         _ = model_key
 
@@ -154,7 +150,6 @@ def contract_services(
             monkeypatch.setitem(
                 route.endpoint.__globals__, "dispatch_paragraph_subtitles", dispatch_subtitles
             )
-            monkeypatch.setitem(route.endpoint.__globals__, "_append_task_id", append_task_id)
             monkeypatch.setitem(
                 route.endpoint.__globals__, "validate_model_key", validate_model_key
             )

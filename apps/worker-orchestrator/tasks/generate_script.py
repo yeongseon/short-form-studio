@@ -108,18 +108,6 @@ def _get_redis_client() -> Any | None:
     return redis.Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"))
 
 
-async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
-    remover: Any = getattr(_run_service.storage, "remove_active_task_id", None)
-    if not callable(remover):
-        return
-    try:
-        maybe_result = remover(run_id, task_id)
-        if asyncio.iscoroutine(maybe_result):
-            await maybe_result
-    except Exception:
-        logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
-
-
 @celery_app.task(
     bind=True,
     autoretry_for=(ProviderTimeoutError, RateLimitError),
@@ -283,7 +271,7 @@ def generate_script(
                 "error": None,
             }
         finally:
-            await _remove_active_task_id_best_effort(run_id, task_id)
+            pass
 
     try:
         return asyncio.run(_run_task())

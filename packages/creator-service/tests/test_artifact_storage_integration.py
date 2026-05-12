@@ -14,13 +14,16 @@ class _MockBackend:
     def upload(
         self,
         key: str,
-        data: bytes,
+        data: object,
         content_type: str = "application/octet-stream",
     ) -> StorageResult:
-        self.calls.append((key, data, content_type))
+        reader = getattr(data, "read", None)
+        payload = reader() if callable(reader) else data
+        assert isinstance(payload, (bytes, bytearray))
+        self.calls.append((key, bytes(payload), content_type))
         return StorageResult(
             key=key,
-            size_bytes=len(data),
+            size_bytes=len(payload),
             content_type=content_type,
             checksum="mock-checksum",
             storage_provider="mock",
@@ -52,7 +55,11 @@ def test_store_artifact_file_uploads_relative_key(tmp_path, monkeypatch):
 
     assert result is not None
     assert result.key == "42/render/output.mp4"
-    assert backend.calls == [("42/render/output.mp4", b"video-bytes", "video/mp4")]
+    uploaded = backend.calls[0]
+    uploaded_payload = uploaded[1]
+    assert uploaded[0] == "42/render/output.mp4"
+    assert uploaded_payload == b"video-bytes"
+    assert uploaded[2] == "video/mp4"
 
 
 def test_store_artifact_file_raises_on_upload_failure(tmp_path, monkeypatch):

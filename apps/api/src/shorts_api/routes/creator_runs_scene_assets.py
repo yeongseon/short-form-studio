@@ -1,4 +1,5 @@
 """Scene image, asset listing, media generation, and preview routes."""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -18,15 +19,13 @@ if TYPE_CHECKING:
     from creator_domain.models.pipeline_run import PipelineRun
 
 
-
 from shorts_api.routes.creator_runs_core import (
     GenerateAudioRequest,
     GenerateSubtitlesRequest,
     RenderRequest,
 )
 from shorts_api.routes.creator_runs_utils import (
-    _append_task_id,
-    _has_active_tasks,
+    _has_active_tasks_for_run,
     cas_dispatch_with_rollback,
     dispatch_generate_audio,
     dispatch_generate_scene_image,
@@ -76,7 +75,10 @@ class GenerateSceneImageRequest(BaseModel):
     status_code=202,
 )
 async def generate_scene_image_endpoint(
-    run_id: int, scene_id: str, request: GenerateSceneImageRequest | None = None, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
+    run_id: int,
+    scene_id: str,
+    request: GenerateSceneImageRequest | None = None,
+    access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
     effective_request = request or GenerateSceneImageRequest()
     _, run = access
@@ -113,7 +115,6 @@ async def generate_scene_image_endpoint(
             detail="Failed to enqueue image generation task",
         ) from None
 
-    await _append_task_id(run_id, task_id, run_service=run_service)
     await task_tracking_service.record_task_queued(run_id, "generate_scene_image", task_id)
     return {
         "task_id": task_id,
@@ -128,7 +129,10 @@ async def generate_scene_image_endpoint(
     status_code=202,
 )
 async def regenerate_scene_image_endpoint(
-    run_id: int, scene_id: str, request: RegenerateSceneImageRequest, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
+    run_id: int,
+    scene_id: str,
+    request: RegenerateSceneImageRequest,
+    access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
     _, run = access
 
@@ -160,7 +164,6 @@ async def regenerate_scene_image_endpoint(
             detail="Failed to enqueue image generation task",
         ) from None
 
-    await _append_task_id(run_id, task_id, run_service=run_service)
     await task_tracking_service.record_task_queued(run_id, "generate_scene_image", task_id)
     return {
         "task_id": task_id,
@@ -171,7 +174,9 @@ async def regenerate_scene_image_endpoint(
 
 
 @router.get("/runs/{run_id}/visual-assets")
-async def list_visual_assets_by_run(run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)) -> dict[str, object]:
+async def list_visual_assets_by_run(
+    run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
+) -> dict[str, object]:
     _, run = access
 
     grouped = await visual_asset_service.list_by_run(run_id)
@@ -187,7 +192,11 @@ async def list_visual_assets_by_run(run_id: int, access: tuple[CurrentUser, Pipe
 
 
 @router.get("/runs/{run_id}/visual-assets/{scene_id}")
-async def list_visual_assets_by_scene(run_id: int, scene_id: str, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)) -> dict[str, object]:
+async def list_visual_assets_by_scene(
+    run_id: int,
+    scene_id: str,
+    access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
+) -> dict[str, object]:
     _, run = access
 
     assets = await visual_asset_service.list_by_scene(run_id, scene_id)
@@ -200,7 +209,12 @@ async def list_visual_assets_by_scene(run_id: int, scene_id: str, access: tuple[
 
 
 @router.post("/runs/{run_id}/visual-assets/{scene_id}/select/{asset_id}")
-async def select_active_asset(run_id: int, scene_id: str, asset_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)) -> dict[str, object]:
+async def select_active_asset(
+    run_id: int,
+    scene_id: str,
+    asset_id: int,
+    access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
+) -> dict[str, object]:
     _, run = access
 
     allowed_stages = frozenset({"VISUAL_ASSET_REVIEW", "VISUAL_ASSET_GENERATING"})
@@ -223,9 +237,13 @@ async def select_active_asset(run_id: int, scene_id: str, asset_id: int, access:
 
 
 @router.post("/runs/{run_id}/generate-audio", status_code=202)
-async def generate_audio_trigger(run_id: int, request: GenerateAudioRequest, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)) -> dict[str, object]:
+async def generate_audio_trigger(
+    run_id: int,
+    request: GenerateAudioRequest,
+    access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
+) -> dict[str, object]:
     _, run = access
-    if run.current_stage == "AUDIO_GENERATING" and _has_active_tasks(run.active_task_id):
+    if run.current_stage == "AUDIO_GENERATING" and await _has_active_tasks_for_run(run.id):
         raise HTTPException(status_code=409, detail="Audio generation already in progress")
 
     allowed_stages = frozenset(stage.value for stage in TRIGGER_POLICY["generate_audio"])
@@ -257,10 +275,12 @@ async def generate_audio_trigger(run_id: int, request: GenerateAudioRequest, acc
 
 @router.post("/runs/{run_id}/generate-subtitles", status_code=202)
 async def generate_subtitles_trigger(
-    run_id: int, request: GenerateSubtitlesRequest, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
+    run_id: int,
+    request: GenerateSubtitlesRequest,
+    access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
     _, run = access
-    if run.current_stage == "SUBTITLE_GENERATING" and _has_active_tasks(run.active_task_id):
+    if run.current_stage == "SUBTITLE_GENERATING" and await _has_active_tasks_for_run(run.id):
         raise HTTPException(status_code=409, detail="Subtitle generation already in progress")
 
     allowed_stages = frozenset({"AUDIO_GENERATING", "SUBTITLE_GENERATING"})
@@ -291,9 +311,13 @@ async def generate_subtitles_trigger(
 
 
 @router.post("/runs/{run_id}/render", status_code=202)
-async def render_trigger(run_id: int, request: RenderRequest, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)) -> dict[str, object]:
+async def render_trigger(
+    run_id: int,
+    request: RenderRequest,
+    access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
+) -> dict[str, object]:
     _, run = access
-    if run.current_stage == "RENDER_GENERATING" and _has_active_tasks(run.active_task_id):
+    if run.current_stage == "RENDER_GENERATING" and await _has_active_tasks_for_run(run.id):
         raise HTTPException(status_code=409, detail="Render already in progress")
 
     allowed_stages = frozenset({"SUBTITLE_GENERATING", "RENDER_GENERATING"})
@@ -323,7 +347,9 @@ async def render_trigger(run_id: int, request: RenderRequest, access: tuple[Curr
 
 
 @router.get("/runs/{run_id}/preview")
-async def get_preview(run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)) -> dict[str, object]:
+async def get_preview(
+    run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
+) -> dict[str, object]:
     _, run = access
 
     video = await render_service.get_latest(run_id)

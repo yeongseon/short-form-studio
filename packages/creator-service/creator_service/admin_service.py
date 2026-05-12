@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import inspect
-import json
 import logging
 import os
 import time
@@ -74,19 +73,6 @@ class AdminService:
         )
         return {str(row["artifact_type"]) for row in rows if row.get("artifact_type")}
 
-    def _parse_active_task_ids(self, active_task_id: str | None) -> list[str]:
-        if not active_task_id:
-            return []
-        try:
-            parsed = json.loads(active_task_id)
-            if isinstance(parsed, str):
-                return [parsed] if parsed else []
-            if isinstance(parsed, list):
-                return [str(task_id) for task_id in parsed if str(task_id)]
-        except (ValueError, TypeError):
-            pass
-        return [active_task_id]
-
     async def get_system_health(self) -> dict[str, Any]:
         uptime_seconds = int(time.time() - self._started_at)
         health: dict[str, Any] = {
@@ -126,7 +112,7 @@ class AdminService:
             async with pool.acquire() as connection:
                 rows = await connection.fetch(
                     """
-                    SELECT id, project_id, current_stage, status, active_task_id, updated_at
+                    SELECT id, project_id, current_stage, status, updated_at
                     FROM creator_runs
                     WHERE current_stage = ANY($1::text[])
                       AND updated_at < $2
@@ -147,7 +133,7 @@ class AdminService:
             async with pool.acquire() as connection:
                 rows = await connection.fetch(
                     """
-                    SELECT id, project_id, current_stage, status, active_task_id, updated_at
+                    SELECT id, project_id, current_stage, status, updated_at
                     FROM creator_runs
                     WHERE status = 'failed'
                       AND updated_at >= $1
@@ -208,7 +194,7 @@ class AdminService:
             pool = await get_pool()
             async with pool.acquire() as connection:
                 row = await connection.fetchrow(
-                    "SELECT id, current_stage, status, active_task_id, updated_at FROM creator_runs WHERE id = $1",
+                    "SELECT id, current_stage, status, updated_at FROM creator_runs WHERE id = $1",
                     run_id_int,
                 )
                 if row is None:
@@ -273,13 +259,11 @@ class AdminService:
                             ),
                         }
 
-                active_task_id = row["active_task_id"]
                 updated = await connection.fetchrow(
                     """
                     UPDATE creator_runs
                     SET current_stage = $2,
-                        status = 'pending',
-                        active_task_id = NULL
+                        status = 'pending'
                     WHERE id = $1
                       AND current_stage = $3
                       AND status = $4
@@ -300,15 +284,18 @@ class AdminService:
                     }
 
                 revoke_warnings: list[str] = []
-                if active_task_id:
-                    for task_id in self._parse_active_task_ids(active_task_id):
-                        try:
-                            await self._task_broker.revoke_task(task_id)
-                        except Exception as exc:
-                            logger.warning(
-                                "Failed to revoke task %s for run %s: %s", task_id, run_id, exc
-                            )
-                            revoke_warnings.append(f"Failed to revoke task {task_id}: {exc}")
+                from creator_service.task_tracking_service import task_tracking_service
+
+                active_celery_ids = await task_tracking_service.get_active_celery_ids(run_id_int)
+                for task_id in active_celery_ids:
+                    try:
+                        await self._task_broker.revoke_task(task_id)
+                        await task_tracking_service.mark_revoked(task_id)
+                    except Exception as exc:
+                        logger.warning(
+                            "Failed to revoke task %s for run %s: %s", task_id, run_id, exc
+                        )
+                        revoke_warnings.append(f"Failed to revoke task {task_id}: {exc}")
 
                 logger.warning(
                     "Admin mutation executed: unstick run_id=%s from=%s to=%s age_seconds=%.1f",

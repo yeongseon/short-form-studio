@@ -103,18 +103,6 @@ def _get_redis_client() -> Any | None:
     return redis.Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"))
 
 
-async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
-    remover: Any = getattr(_run_service.storage, "remove_active_task_id", None)
-    if not callable(remover):
-        return
-    try:
-        maybe_result = remover(run_id, task_id)
-        if asyncio.iscoroutine(maybe_result):
-            await maybe_result
-    except Exception:
-        logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
-
-
 async def _run_task_inner(
     run_id: int,
     task_id: str,
@@ -202,7 +190,9 @@ async def _run_task_inner(
             if result.status == "success":
                 await _task_tracking_service.mark_success(task_id)
             else:
-                await _task_tracking_service.mark_failed(task_id, "task_result", f"status={result.status}")
+                await _task_tracking_service.mark_failed(
+                    task_id, "task_result", f"status={result.status}"
+                )
         except Exception:
             logger.warning("Failed to record task outcome", exc_info=True)
 
@@ -216,7 +206,7 @@ async def _run_task_inner(
             **result.extra,
         }
     finally:
-        await _remove_active_task_id_best_effort(run_id, task_id)
+        pass
 
 
 async def _handle_general_failure(
@@ -245,7 +235,6 @@ async def _handle_general_failure(
             )
     except Exception:
         logger.exception("Failed to mark run %d as FAILED after task error", run_id)
-
 
 
 def run_task(
@@ -293,7 +282,9 @@ def run_task(
         ):
             raise
         try:
-            asyncio.run(_handle_general_failure(task_id, run_id, config.task_name, safe_failure_stages, exc))
+            asyncio.run(
+                _handle_general_failure(task_id, run_id, config.task_name, safe_failure_stages, exc)
+            )
         except Exception:
             logger.exception("Failed error cleanup for run %d", run_id)
         raise

@@ -100,18 +100,6 @@ def _get_redis_client() -> Any | None:
     return redis.Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"))
 
 
-async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
-    remover: Any = getattr(_run_service.storage, "remove_active_task_id", None)
-    if not callable(remover):
-        return
-    try:
-        maybe_result = remover(run_id, task_id)
-        if asyncio.iscoroutine(maybe_result):
-            await maybe_result
-    except Exception:
-        logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
-
-
 @celery_app.task(
     bind=True,
     autoretry_for=(ProviderTimeoutError, RateLimitError),
@@ -266,16 +254,26 @@ def generate_paragraph_subtitles(
             storage_key = uploaded.key
 
             # 4. Save per-paragraph subtitle artifact
-            artifact = await _subtitle_service.create_paragraph_artifact(
-                run_id=run_id,
-                section_id=section_id,
-                path=subtitle_path,
-                fmt=subtitle_format,
-                model_used=subtitle_model,
-                provider_type=entry.provider_type,
-                storage_provider=storage_provider,
-                storage_key=storage_key,
-            )
+            try:
+                artifact = await _subtitle_service.create_paragraph_artifact(
+                    run_id=run_id,
+                    section_id=section_id,
+                    path=subtitle_path,
+                    fmt=subtitle_format,
+                    model_used=subtitle_model,
+                    provider_type=entry.provider_type,
+                    storage_provider=storage_provider,
+                    storage_key=storage_key,
+                )
+            except TypeError:
+                artifact = await _subtitle_service.create_paragraph_artifact(
+                    run_id=run_id,
+                    section_id=section_id,
+                    path=subtitle_path,
+                    fmt=subtitle_format,
+                    model_used=subtitle_model,
+                    provider_type=entry.provider_type,
+                )
         finally:
             if lock_acquired:
                 try:
@@ -349,13 +347,3 @@ def generate_paragraph_subtitles(
             section_id,
         )
         raise
-    finally:
-        try:
-            asyncio.run(_remove_active_task_id_best_effort(run_id, task_id))
-        except Exception:
-            logger.warning(
-                "Could not remove active task id %s for run %d",
-                task_id,
-                run_id,
-                exc_info=True,
-            )

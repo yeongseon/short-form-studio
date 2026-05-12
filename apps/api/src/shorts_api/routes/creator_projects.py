@@ -67,7 +67,9 @@ async def update_project(
     project_workspace_id = getattr(project, "workspace_id", None)
     if project_workspace_id is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    if user.user_id is None or not await workspace_service.check_access(project_workspace_id, user.user_id):
+    if user.user_id is None or not await workspace_service.check_access(
+        project_workspace_id, user.user_id
+    ):
         raise HTTPException(status_code=404, detail="Project not found")
 
     project = await project_service.update_project(project_id, title=request.title)
@@ -87,7 +89,9 @@ async def get_project_detail(
     project_workspace_id = getattr(project, "workspace_id", None)
     if project_workspace_id is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    if user.user_id is None or not await workspace_service.check_access(project_workspace_id, user.user_id):
+    if user.user_id is None or not await workspace_service.check_access(
+        project_workspace_id, user.user_id
+    ):
         raise HTTPException(status_code=404, detail="Project not found")
 
     return project.model_dump(mode="json")
@@ -120,8 +124,7 @@ async def list_projects(
 async def _cleanup_project_resources(project_id: int) -> list[int]:
     runs = await run_service.list_runs_by_project(project_id)
     for r in runs:
-        if r.active_task_id:
-            creator_runs_utils._revoke_active_tasks(r.active_task_id)
+        await creator_runs_utils._revoke_active_tasks_for_run(r.id)
     return [r.id for r in runs]
 
 
@@ -149,7 +152,9 @@ async def delete_project(
         project_workspace_id = getattr(project, "workspace_id", None)
         if project_workspace_id is None:
             raise HTTPException(status_code=404, detail="Project not found")
-        if user.user_id is None or not await workspace_service.check_access(project_workspace_id, user.user_id):
+        if user.user_id is None or not await workspace_service.check_access(
+            project_workspace_id, user.user_id
+        ):
             raise HTTPException(status_code=404, detail="Project not found")
 
     run_ids = await _cleanup_project_resources(project_id)

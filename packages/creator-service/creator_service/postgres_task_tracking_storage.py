@@ -108,3 +108,11 @@ class PostgresTaskTrackingStorage:
             """,
             threshold_seconds,
         )
+
+    async def get_active_celery_ids(self, run_id: int) -> list[str]:
+        rows = await fetch_all(
+            "SELECT celery_task_id FROM creator_run_tasks "
+            "WHERE run_id = $1 AND status IN ('queued', 'pending', 'running')",
+            run_id,
+        )
+        return [row["celery_task_id"] for row in rows]

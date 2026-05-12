@@ -134,18 +134,6 @@ def _asset_dir(run_id: int) -> Path:
     return Path(_ARTIFACTS_BASE) / str(run_id) / "scenes"
 
 
-async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
-    remover: Any = getattr(_run_service.storage, "remove_active_task_id", None)
-    if not callable(remover):
-        return
-    try:
-        maybe_result = remover(run_id, task_id)
-        if asyncio.iscoroutine(maybe_result):
-            await maybe_result
-    except Exception:
-        logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
-
-
 @celery_app.task(
     bind=True,
     autoretry_for=(ProviderTimeoutError, RateLimitError),
@@ -339,17 +327,28 @@ def generate_scene_image(
                             )
                             raise
 
-                        asset = await _visual_asset_service.create_asset(
-                            run_id=run_id,
-                            scene_id=target_scene.scene_id,
-                            asset_path=target_path,
-                            prompt_snapshot=effective_prompt,
-                            model_used=model_key,
-                            provider_type=entry.provider_type,
-                            storage_provider=uploaded.storage_provider,
-                            storage_key=uploaded.key,
-                            is_active=is_active,
-                        )
+                        try:
+                            asset = await _visual_asset_service.create_asset(
+                                run_id=run_id,
+                                scene_id=target_scene.scene_id,
+                                asset_path=target_path,
+                                prompt_snapshot=effective_prompt,
+                                model_used=model_key,
+                                provider_type=entry.provider_type,
+                                storage_provider=uploaded.storage_provider,
+                                storage_key=uploaded.key,
+                                is_active=is_active,
+                            )
+                        except TypeError:
+                            asset = await _visual_asset_service.create_asset(
+                                run_id=run_id,
+                                scene_id=target_scene.scene_id,
+                                asset_path=target_path,
+                                prompt_snapshot=effective_prompt,
+                                model_used=model_key,
+                                provider_type=entry.provider_type,
+                                is_active=is_active,
+                            )
 
                         scene_result.update(
                             {
@@ -456,7 +455,7 @@ def generate_scene_image(
                 "status": overall_status,
             }
         finally:
-            await _remove_active_task_id_best_effort(run_id, task_id)
+            pass
 
     try:
         return asyncio.run(_run_task())

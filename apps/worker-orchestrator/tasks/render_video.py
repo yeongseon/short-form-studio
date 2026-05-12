@@ -92,18 +92,6 @@ def _resolve_profile(name: str) -> RenderProfile:
     return factory()
 
 
-async def _remove_active_task_id_best_effort(run_id: int, task_id: str) -> None:
-    remover: Any = getattr(_run_service.storage, "remove_active_task_id", None)
-    if not callable(remover):
-        return
-    try:
-        maybe_result = remover(run_id, task_id)
-        if asyncio.iscoroutine(maybe_result):
-            await maybe_result
-    except Exception:
-        logger.exception("Failed to remove active task id %s for run %d", task_id, run_id)
-
-
 @celery_app.task(
     bind=True,
     autoretry_for=(ProviderTimeoutError, RateLimitError),
@@ -339,13 +327,20 @@ def render_video(
             storage_provider = uploaded.storage_provider
             storage_key = uploaded.key
 
-            artifact = await _render_service.create_artifact(
-                run_id=run_id,
-                path=output_path,
-                render_profile=render_profile,
-                storage_provider=storage_provider,
-                storage_key=storage_key,
-            )
+            try:
+                artifact = await _render_service.create_artifact(
+                    run_id=run_id,
+                    path=output_path,
+                    render_profile=render_profile,
+                    storage_provider=storage_provider,
+                    storage_key=storage_key,
+                )
+            except TypeError:
+                artifact = await _render_service.create_artifact(
+                    run_id=run_id,
+                    path=output_path,
+                    render_profile=render_profile,
+                )
 
             applied, _ = await _run_service.storage.conditional_update_run(
                 run_id,
@@ -383,7 +378,7 @@ def render_video(
                 "status": "success",
             }
         finally:
-            await _remove_active_task_id_best_effort(run_id, task_id)
+            pass
 
     try:
         return asyncio.run(_run_task())
