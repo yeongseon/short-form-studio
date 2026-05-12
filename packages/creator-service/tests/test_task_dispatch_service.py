@@ -27,6 +27,82 @@ class _FakeRunService:
         self.storage = _FakeRunStorage()
 
 
+def test_dispatch_generate_script_uses_sync_runner_when_redis_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = TaskDispatchService()
+    monkeypatch.delenv("REDIS_URL", raising=False)
+
+    run_calls: list[tuple[object, tuple[object, ...], dict[str, object]]] = []
+
+    class _FakeTask:
+        def run(self, *args: object, **kwargs: object) -> dict[str, object]:
+            run_calls.append((self, args, kwargs))
+            return {"ok": True}
+
+    def fake_import_module(name: str) -> object:
+        if name == "tasks.generate_script":
+            return SimpleNamespace(generate_script=_FakeTask())
+        raise AssertionError(f"unexpected import: {name}")
+
+    monkeypatch.setattr("creator_service.task_dispatch_service.import_module", fake_import_module)
+
+    task_id = service.dispatch_generate_script(
+        run_id=123,
+        idea_brief="idea",
+        model_key="qwen3-4b",
+        instructions="extra",
+    )
+
+    assert task_id.startswith("sync-generate_script-123-")
+    assert len(run_calls) == 1
+    _, args, kwargs = run_calls[0]
+    assert kwargs == {}
+    assert len(args) == 5
+    sync_self = args[0]
+    assert getattr(getattr(sync_self, "request"), "id") == task_id
+    assert args[1:] == (123, "idea", "qwen3-4b", "extra")
+
+
+def test_dispatch_generate_script_uses_celery_when_redis_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = TaskDispatchService()
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+
+    apply_async_calls: list[tuple[list[object], dict[str, object], dict[str, str]]] = []
+
+    class _FakeTask:
+        def apply_async(
+            self,
+            *,
+            args: list[object],
+            kwargs: dict[str, object],
+            headers: dict[str, str],
+        ) -> object:
+            apply_async_calls.append((args, kwargs, headers))
+            return SimpleNamespace(id="celery-789")
+
+    def fake_import_module(name: str) -> object:
+        if name == "tasks.generate_script":
+            return SimpleNamespace(generate_script=_FakeTask())
+        if name == "creator_service.telemetry":
+            return SimpleNamespace(get_trace_headers=lambda: {"traceparent": "abc"})
+        raise AssertionError(f"unexpected import: {name}")
+
+    monkeypatch.setattr("creator_service.task_dispatch_service.import_module", fake_import_module)
+
+    task_id = service.dispatch_generate_script(
+        run_id=11,
+        idea_brief="idea",
+        model_key="qwen3-4b",
+        instructions=None,
+    )
+
+    assert task_id == "celery-789"
+    assert apply_async_calls == [([11, "idea", "qwen3-4b", None], {}, {"traceparent": "abc"})]
+
+
 def test_cas_dispatch_with_rollback_enqueue_failure_rolls_back_stage() -> None:
     service = TaskDispatchService()
     run_service = _FakeRunService()

@@ -269,6 +269,15 @@ python3 -m pytest apps/api/tests/ -x -v
 cd apps/studio-web && npm test
 ```
 
+## Lightweight Mode
+
+You can run the pipeline without Celery/Redis for local development.
+
+- If `REDIS_URL` is set, dispatch uses Celery (default behavior).
+- If `REDIS_URL` is unset, dispatch runs worker task functions synchronously in the API process.
+
+See [`docs/LIGHTWEIGHT.md`](docs/LIGHTWEIGHT.md) for setup and tradeoffs.
+
 ## Service Ports
 
 | Service | Port | Protocol |
@@ -287,6 +296,7 @@ cd apps/studio-web && npm test
 
 - [Usage Guide](docs/USAGE.md) -- Detailed feature walkthrough
 - [Deployment Guide](docs/CUTOVER.md) -- Production deployment checklist
+- [Lightweight Mode](docs/LIGHTWEIGHT.md) -- Run without Celery/Redis
 
 ## License
 
