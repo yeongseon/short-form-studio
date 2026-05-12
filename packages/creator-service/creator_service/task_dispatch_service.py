@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import os
 from collections.abc import Callable, Mapping
@@ -23,6 +24,10 @@ _DISPATCH_TASK_TYPES = {
     "dispatch_paragraph_audio": "generate_paragraph_audio",
     "dispatch_paragraph_subtitles": "generate_paragraph_subtitles",
 }
+
+
+class SynchronousTaskExecutionError(Exception):
+    pass
 
 
 class TaskDispatchService:
@@ -73,13 +78,17 @@ class TaskDispatchService:
         task_id = f"sync-{task_attr}-{run_id}-{uuid4().hex[:12]}"
         sync_self = SimpleNamespace(request=SimpleNamespace(id=task_id, retries=0), max_retries=0)
         try:
-            task.run(sync_self, *(args or []), **(kwargs or {}))
-        except Exception:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(task.run, sync_self, *(args or []), **(kwargs or {}))
+                future.result()
+        except Exception as exc:
             logger.exception(
                 "Synchronous task dispatch failed for %s (run_id=%s)", task_attr, run_id
             )
             self._mark_run_failed(run_id)
-            raise
+            raise SynchronousTaskExecutionError(
+                f"Synchronous task execution failed for {task_attr}"
+            ) from exc
         return task_id
 
     def dispatch_generate_script(
@@ -250,6 +259,15 @@ class TaskDispatchService:
 
         try:
             task_id = dispatcher(**dict(dispatcher_args))
+        except SynchronousTaskExecutionError:
+            if workspace_id_for_reservation is not None and quota_operation_type is not None:
+                from creator_service.usage_service import cancel_workspace_quota_reservation
+
+                await cancel_workspace_quota_reservation(
+                    workspace_id_for_reservation,
+                    quota_operation_type,
+                )
+            raise HTTPException(status_code=500, detail="Task execution failed") from None
         except Exception:
             if workspace_id_for_reservation is not None and quota_operation_type is not None:
                 from creator_service.usage_service import cancel_workspace_quota_reservation
