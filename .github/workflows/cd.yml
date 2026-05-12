@@ -4,27 +4,45 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      rollback_image_tag:
+        description: "Image tag to rollback to (skips build, deploys directly to production)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: cd-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_REPOSITORY: ${{ github.repository }}
 
 jobs:
-  # Wait for CI to pass before deploying
+  # ── Gate: wait for CI to pass ──────────────────────────────────
   wait-for-ci:
+    if: github.event.inputs.rollback_image_tag == ''
     runs-on: ubuntu-latest
     steps:
-      - name: Wait for CI workflow
+      - name: Wait for CI lint
         uses: lewagon/wait-on-check-action@v1.3.4
         with:
           ref: ${{ github.ref }}
           check-name: 'lint'
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           wait-interval: 10
-      - name: Wait for test job
+      - name: Wait for CI test
         uses: lewagon/wait-on-check-action@v1.3.4
         with:
           ref: ${{ github.ref }}
           check-name: 'test'
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           wait-interval: 10
-      - name: Wait for docker job
+      - name: Wait for CI docker
         uses: lewagon/wait-on-check-action@v1.3.4
         with:
           ref: ${{ github.ref }}
@@ -32,75 +50,225 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           wait-interval: 10
 
-  # Run database migrations against production
-  migrate:
-    runs-on: ubuntu-latest
+  # ── Build, scan, push container images ─────────────────────────
+  build-scan-push:
+    if: github.event.inputs.rollback_image_tag == ''
     needs: wait-for-ci
-    environment: production
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: api
+            dockerfile: apps/api/Dockerfile
+          - service: studio-web
+            dockerfile: apps/studio-web/Dockerfile
+          - service: worker
+            dockerfile: apps/worker-orchestrator/Dockerfile
+    outputs:
+      image_tag: ${{ steps.tags.outputs.date_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: tags
+        run: |
+          SHORT_SHA="${GITHUB_SHA::7}"
+          DATE_TAG="$(date -u +%Y.%m.%d).${GITHUB_RUN_NUMBER}"
+          echo "short_sha=${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "date_tag=${DATE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "sha_tag=main-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Build image (local, for scanning)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          target: runtime
+          push: false
+          load: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_REPOSITORY }}/${{ matrix.service }}:${{ steps.tags.outputs.date_tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_REPOSITORY }}/${{ matrix.service }}:${{ steps.tags.outputs.date_tag }}
+          severity: CRITICAL,HIGH
+          exit-code: '1'
+
+      - name: Tag and push image
+        if: success()
+        run: |
+          IMAGE_BASE="${REGISTRY}/${IMAGE_REPOSITORY}/${{ matrix.service }}"
+          DATE_TAG="${{ steps.tags.outputs.date_tag }}"
+          SHA_TAG="${{ steps.tags.outputs.sha_tag }}"
+
+          docker tag "${IMAGE_BASE}:${DATE_TAG}" "${IMAGE_BASE}:${SHA_TAG}"
+          docker tag "${IMAGE_BASE}:${DATE_TAG}" "${IMAGE_BASE}:latest"
+
+          docker push "${IMAGE_BASE}:${DATE_TAG}"
+          docker push "${IMAGE_BASE}:${SHA_TAG}"
+          docker push "${IMAGE_BASE}:latest"
+
+  # ── Staging: migrate + deploy + smoke test ─────────────────────
+  migrate-staging:
+    needs: build-scan-push
+    runs-on: ubuntu-latest
+    environment: staging
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      
+
       - name: Install dependencies
         run: |
           python3 -m pip install -c constraints.txt -r apps/api/requirements.txt
           pip install -c constraints.txt -e packages/creator-domain
           pip install -c constraints.txt -e packages/creator-provider
           pip install -c constraints.txt -e packages/creator-service
-      
-      - name: Run migrations
+
+      - name: Run Alembic migrations
+        working-directory: apps/api
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: alembic upgrade head
+
+      - name: Verify migration
         working-directory: apps/api
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
-          # Override alembic.ini with production DATABASE_URL
-          alembic upgrade head
-      
-      - name: Verify migration success
-        working-directory: apps/api
-        env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: |
-          # Check current revision
           alembic current
-          # Verify we're at the latest head
           alembic heads
 
-  # Deploy application after migrations succeed
-  deploy:
+  deploy-staging:
+    needs: [build-scan-push, migrate-staging]
     runs-on: ubuntu-latest
-    needs: migrate
-    environment: production
+    environment: staging
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [api, worker, studio-web]
+    env:
+      IMAGE_TAG: ${{ needs.build-scan-push.outputs.image_tag }}
+    steps:
+      - name: Deploy ${{ matrix.service }} to staging
+        run: |
+          IMAGE="${REGISTRY}/${IMAGE_REPOSITORY}/${{ matrix.service }}:${IMAGE_TAG}"
+          echo "Deploying ${IMAGE} to staging"
+          # TODO: Replace with actual deployment command, e.g.:
+          #   kubectl set image deployment/${{ matrix.service }} app=${IMAGE} -n staging
+          #   aws ecs update-service --cluster staging --service ${{ matrix.service }} --force-new-deployment
+          #   curl -X POST "$DEPLOY_WEBHOOK_URL" -d '{"image":"'${IMAGE}'"}'
+
+  smoke-test-staging:
+    needs: deploy-staging
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Smoke test staging API
+        run: |
+          # TODO: Replace with actual staging URL
+          # timeout 60 bash -c 'until curl -sf $STAGING_API_URL/healthz; do sleep 2; done'
+          echo "Staging smoke test placeholder — configure STAGING_API_URL"
+
+      - name: Smoke test staging frontend
+        run: |
+          # TODO: Replace with actual staging URL
+          # timeout 60 bash -c 'until curl -sf $STAGING_WEB_URL/; do sleep 2; done'
+          echo "Staging frontend smoke test placeholder — configure STAGING_WEB_URL"
+
+  # ── Production: manual gate + migrate + deploy ─────────────────
+  migrate-production:
+    needs: [build-scan-push, smoke-test-staging]
+    runs-on: ubuntu-latest
+    environment: production  # GitHub environment provides manual approval gate
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Deploy API
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
         run: |
-          # TODO: Add actual deployment commands here
-          # Examples:
-          # - kubectl apply -f k8s/
-          # - docker push and restart containers
-          # - ssh to server and pull latest images
-          # - trigger cloud deployment (AWS ECS, GCP Cloud Run, etc.)
-          echo "Deployment step placeholder - configure based on your infrastructure"
-          echo "See docs/DEPLOYMENT.md for guidance"
-      
-      - name: Deploy Worker
+          python3 -m pip install -c constraints.txt -r apps/api/requirements.txt
+          pip install -c constraints.txt -e packages/creator-domain
+          pip install -c constraints.txt -e packages/creator-provider
+          pip install -c constraints.txt -e packages/creator-service
+
+      - name: Run Alembic migrations
+        working-directory: apps/api
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: alembic upgrade head
+
+      - name: Verify migration
+        working-directory: apps/api
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: |
-          # TODO: Add worker deployment commands
-          echo "Worker deployment placeholder"
-      
-      - name: Deploy Frontend
+          alembic current
+          alembic heads
+
+  deploy-production:
+    needs: [build-scan-push, migrate-production]
+    runs-on: ubuntu-latest
+    environment: production
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [api, worker, studio-web]
+    env:
+      IMAGE_TAG: ${{ needs.build-scan-push.outputs.image_tag }}
+    steps:
+      - name: Deploy ${{ matrix.service }} to production
         run: |
-          # TODO: Add frontend deployment commands
-          echo "Frontend deployment placeholder"
-      
-      - name: Verify deployment
+          IMAGE="${REGISTRY}/${IMAGE_REPOSITORY}/${{ matrix.service }}:${IMAGE_TAG}"
+          echo "Deploying ${IMAGE} to production"
+          # TODO: Replace with actual deployment command
+
+      - name: Verify health
         run: |
+          echo "Production health check for ${{ matrix.service }} — configure health endpoint URLs"
+          # TODO: Replace with actual health checks
+          # if [ "${{ matrix.service }}" = "api" ]; then
+          #   timeout 60 bash -c 'until curl -sf $PRODUCTION_API_URL/healthz; do sleep 2; done'
+          # fi
+
+  # ── Rollback: redeploy a previous image tag ────────────────────
+  rollback:
+    if: github.event.inputs.rollback_image_tag != ''
+    runs-on: ubuntu-latest
+    environment: production
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [api, worker, studio-web]
+    env:
+      IMAGE_TAG: ${{ github.event.inputs.rollback_image_tag }}
+    steps:
+      - name: Rollback ${{ matrix.service }} to ${{ env.IMAGE_TAG }}
+        run: |
+          IMAGE="${REGISTRY}/${IMAGE_REPOSITORY}/${{ matrix.service }}:${IMAGE_TAG}"
+          echo "Rolling back ${IMAGE}"
+          # TODO: Replace with actual deployment command
+
+      - name: Verify health after rollback
+        run: |
+          echo "Post-rollback health check for ${{ matrix.service }}"
           # TODO: Add health checks
-          # Examples:
-          # - curl https://api.example.com/healthz
-          # - kubectl rollout status deployment/api
-          echo "Health check placeholder"
