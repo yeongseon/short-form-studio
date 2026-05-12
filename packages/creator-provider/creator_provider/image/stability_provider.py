@@ -8,6 +8,8 @@ import httpx
 
 from creator_provider.api_keys import resolve_api_key
 from creator_provider.base import ImageProvider, ImageResult
+from creator_provider.versioned_assets import get_schema, get_loaded_asset_versions
+from creator_provider.base import ImageProvider, ImageResult
 from creator_provider.versioned_assets import get_schema
 
 
@@ -65,7 +67,9 @@ class StabilityProvider(ImageProvider):
             width=width,
             height=height,
             model_key=self.model_key,
+            metadata={"asset_versions": get_loaded_asset_versions()},
         )
+
 
     @staticmethod
     def _parse_aspect_ratio(ratio: str) -> tuple[int, int]:

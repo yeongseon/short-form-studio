@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from creator_provider.base import ImageProvider, ImageResult
+from creator_provider.versioned_assets import get_prompt, get_schema, get_loaded_asset_versions
 from creator_provider.versioned_assets import get_prompt, get_schema
 
 
@@ -73,4 +74,6 @@ class SDLocalProvider(ImageProvider):
             width=width,
             height=height,
             model_key=self.model_key,
+            metadata={"asset_versions": get_loaded_asset_versions()},
         )
+

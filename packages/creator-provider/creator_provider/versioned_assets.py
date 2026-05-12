@@ -8,13 +8,26 @@ from typing import Any
 
 _ASSETS_ROOT = Path(__file__).resolve().parent
 
+# Thread-safe registry of loaded assets per "session"
+_loaded_assets: dict[str, str] = {}
+
 
 def _read_text_asset(asset_group: str, version: str, name: str, suffix: str) -> str:
     path = _ASSETS_ROOT / asset_group / version / f"{name}{suffix}"
     if not path.exists():
         raise FileNotFoundError(f"Asset not found: {path}")
+    _loaded_assets[f"{asset_group}/{name}"] = version  # track
     return path.read_text(encoding="utf-8")
 
+
+def get_loaded_asset_versions() -> dict[str, str]:
+    """Return a snapshot of all loaded asset name→version mappings."""
+    return dict(_loaded_assets)
+
+
+def clear_loaded_asset_versions() -> None:
+    """Reset tracking (useful for tests)."""
+    _loaded_assets.clear()
 
 @lru_cache(maxsize=None)
 def get_prompt(name: str, version: str = "v1") -> str:
