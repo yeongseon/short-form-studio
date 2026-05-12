@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 from collections.abc import Callable, Mapping
 from importlib import import_module
+from types import SimpleNamespace
 from typing import Any, cast
+from uuid import uuid4
 
 from fastapi import HTTPException
 
@@ -26,54 +30,106 @@ class TaskDispatchService:
         telemetry = import_module("creator_service.telemetry")
         return telemetry.get_trace_headers()
 
+    def _use_celery_dispatch(self) -> bool:
+        return bool(os.environ.get("REDIS_URL"))
+
+    def _mark_run_failed(self, run_id: int) -> None:
+        async def _update_failed() -> None:
+            try:
+                run_service = import_module("creator_service.run_service").run_service
+                await run_service.storage.update_run(
+                    run_id,
+                    {"current_stage": "FAILED", "status": "failed"},
+                )
+            except Exception:
+                logger.warning("Failed to mark run %s as FAILED", run_id, exc_info=True)
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            asyncio.run(_update_failed())
+            return
+        loop.create_task(_update_failed())
+
+    def _dispatch_task(
+        self,
+        *,
+        module_name: str,
+        task_attr: str,
+        run_id: int,
+        args: list[Any] | None = None,
+        kwargs: dict[str, Any] | None = None,
+    ) -> str:
+        tasks = import_module(module_name)
+        task = getattr(tasks, task_attr)
+        if self._use_celery_dispatch() or not hasattr(task, "run"):
+            result = task.apply_async(
+                args=args or [],
+                kwargs=kwargs or {},
+                headers=self._get_trace_headers(),
+            )
+            return str(result.id)
+
+        task_id = f"sync-{task_attr}-{run_id}-{uuid4().hex[:12]}"
+        sync_self = SimpleNamespace(request=SimpleNamespace(id=task_id, retries=0), max_retries=0)
+        try:
+            task.run(sync_self, *(args or []), **(kwargs or {}))
+        except Exception:
+            logger.exception(
+                "Synchronous task dispatch failed for %s (run_id=%s)", task_attr, run_id
+            )
+            self._mark_run_failed(run_id)
+            raise
+        return task_id
+
     def dispatch_generate_script(
         self, run_id: int, idea_brief: str, model_key: str, instructions: str | None
     ) -> str:
-        tasks = import_module("tasks.generate_script")
-        result = tasks.generate_script.apply_async(
+        return self._dispatch_task(
+            module_name="tasks.generate_script",
+            task_attr="generate_script",
+            run_id=run_id,
             args=[run_id, idea_brief, model_key, instructions],
-            headers=self._get_trace_headers(),
         )
-        return str(result.id)
 
     def dispatch_generate_visual_plan(
         self, run_id: int, model_key: str, style_preset: str | None
     ) -> str:
-        tasks = import_module("tasks.generate_visual_plan")
-        result = tasks.generate_visual_plan.apply_async(
+        return self._dispatch_task(
+            module_name="tasks.generate_visual_plan",
+            task_attr="generate_visual_plan",
+            run_id=run_id,
             args=[run_id, model_key, style_preset],
-            headers=self._get_trace_headers(),
         )
-        return str(result.id)
 
     def dispatch_generate_audio(self, run_id: int, tts_model: str, voice: str) -> str:
-        tasks = import_module("tasks.generate_audio")
-        result = tasks.generate_audio.apply_async(
+        return self._dispatch_task(
+            module_name="tasks.generate_audio",
+            task_attr="generate_audio",
+            run_id=run_id,
             args=[run_id],
             kwargs={"tts_model": tts_model, "voice": voice},
-            headers=self._get_trace_headers(),
         )
-        return str(result.id)
 
     def dispatch_generate_subtitles(
         self, run_id: int, subtitle_model: str, subtitle_format: str
     ) -> str:
-        tasks = import_module("tasks.generate_subtitles")
-        result = tasks.generate_subtitles.apply_async(
+        return self._dispatch_task(
+            module_name="tasks.generate_subtitles",
+            task_attr="generate_subtitles",
+            run_id=run_id,
             args=[run_id],
             kwargs={"subtitle_model": subtitle_model, "subtitle_format": subtitle_format},
-            headers=self._get_trace_headers(),
         )
-        return str(result.id)
 
     def dispatch_render_video(self, run_id: int, render_profile: str) -> str:
-        tasks = import_module("tasks.render_video")
-        result = tasks.render_video.apply_async(
+        return self._dispatch_task(
+            module_name="tasks.render_video",
+            task_attr="render_video",
+            run_id=run_id,
             args=[run_id],
             kwargs={"render_profile": render_profile},
-            headers=self._get_trace_headers(),
         )
-        return str(result.id)
 
     def dispatch_generate_scene_image(
         self,
@@ -84,8 +140,10 @@ class TaskDispatchService:
         is_active: bool,
         image_params: dict[str, Any] | None = None,
     ) -> str:
-        tasks = import_module("tasks.generate_scene_image")
-        result = tasks.generate_scene_image.apply_async(
+        return self._dispatch_task(
+            module_name="tasks.generate_scene_image",
+            task_attr="generate_scene_image",
+            run_id=run_id,
             args=[run_id],
             kwargs={
                 "scene_id": scene_id,
@@ -94,15 +152,15 @@ class TaskDispatchService:
                 "is_active": is_active,
                 "image_params": image_params,
             },
-            headers=self._get_trace_headers(),
         )
-        return str(result.id)
 
     def dispatch_paragraph_audio(
         self, run_id: int, section_id: str, section_text: str, tts_model: str, voice: str
     ) -> str:
-        tasks = import_module("tasks.generate_paragraph_audio")
-        result = tasks.generate_paragraph_audio.apply_async(
+        return self._dispatch_task(
+            module_name="tasks.generate_paragraph_audio",
+            task_attr="generate_paragraph_audio",
+            run_id=run_id,
             args=[run_id],
             kwargs={
                 "section_id": section_id,
@@ -110,9 +168,7 @@ class TaskDispatchService:
                 "tts_model": tts_model,
                 "voice": voice,
             },
-            headers=self._get_trace_headers(),
         )
-        return str(result.id)
 
     def dispatch_paragraph_subtitles(
         self,
@@ -122,8 +178,10 @@ class TaskDispatchService:
         subtitle_model: str,
         subtitle_format: str,
     ) -> str:
-        tasks = import_module("tasks.generate_paragraph_subtitles")
-        result = tasks.generate_paragraph_subtitles.apply_async(
+        return self._dispatch_task(
+            module_name="tasks.generate_paragraph_subtitles",
+            task_attr="generate_paragraph_subtitles",
+            run_id=run_id,
             args=[run_id],
             kwargs={
                 "section_id": section_id,
@@ -131,9 +189,7 @@ class TaskDispatchService:
                 "subtitle_model": subtitle_model,
                 "subtitle_format": subtitle_format,
             },
-            headers=self._get_trace_headers(),
         )
-        return str(result.id)
 
     async def cas_dispatch_with_rollback(
         self,
