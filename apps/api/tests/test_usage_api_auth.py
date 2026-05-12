@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi.routing import APIRoute
 
-from shorts_api.auth import get_api_key
+from shorts_api.auth import require_api_key_header
 from shorts_api.main import app
 
 
@@ -18,4 +18,4 @@ def test_usage_routes_require_api_key_dependency() -> None:
 
     for route in usage_routes.values():
         dependency_calls = [dependency.call for dependency in route.dependant.dependencies]
-        assert get_api_key in dependency_calls
+        assert require_api_key_header in dependency_calls

@@ -15,8 +15,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["runs"])
 
 
-
-
 @router.get("/runs/{run_id}/artifacts/{artifact_id}/download")
 async def download_artifact(
     run_id: int,
@@ -40,7 +38,7 @@ async def download_artifact(
 
     if project_workspace_id is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    if user.user_id is None or not await workspace_service.check_access(project_workspace_id, user.user_id):
+    if not await workspace_service.check_access(project_workspace_id, user.user_id):
         raise HTTPException(status_code=404, detail="Run not found")
 
     artifact = await artifact_download_service.get_artifact_by_id(artifact_id)

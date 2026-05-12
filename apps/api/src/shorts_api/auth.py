@@ -29,10 +29,10 @@ _current_user_ctx: contextvars.ContextVar["CurrentUser | None"] = contextvars.Co
 )
 
 
-@dataclass
+@dataclass(frozen=True)
 class CurrentUser:
-    user_id: int | None = None
-    workspace_id: int | None = None
+    user_id: int
+    workspace_id: int
     workspace_name: str | None = None
 
 
@@ -108,7 +108,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         return workspace_ids
 
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        request.state.user = CurrentUser()
+        request.state.user = None
 
         if request.method == "OPTIONS" and "origin" in request.headers:
             return await call_next(request)
@@ -176,11 +176,11 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
 
 async def get_current_user(request: Request) -> CurrentUser:
     user = getattr(request.state, "user", None)
-    if isinstance(user, CurrentUser) and user.user_id is not None:
+    if isinstance(user, CurrentUser):
         return user
 
     context_user = _current_user_ctx.get()
-    if isinstance(context_user, CurrentUser) and context_user.user_id is not None:
+    if isinstance(context_user, CurrentUser):
         return context_user
 
     api_key = (
@@ -224,7 +224,7 @@ async def require_current_user(request: Request) -> CurrentUser:
     return await get_current_user(request)
 
 
-async def get_authenticated_workspace_id(request: Request) -> int | None:
+async def get_authenticated_workspace_id(request: Request) -> int:
     user = await get_current_user(request)
     return user.workspace_id
 
@@ -233,9 +233,6 @@ async def require_workspace_access(
     workspace_id: int,
     user: CurrentUser = Depends(get_current_user),
 ) -> CurrentUser:
-    if user.user_id is None:
-        raise HTTPException(status_code=401, detail="Invalid user context")
-
     has_access = await workspace_service.check_access(workspace_id, user.user_id)
     if not has_access:
         raise HTTPException(status_code=404, detail="Not found")
@@ -243,7 +240,7 @@ async def require_workspace_access(
     return user
 
 
-async def get_api_key(request: Request) -> str:
+async def require_api_key_header(request: Request) -> str:
     """Dependency that extracts and validates the API key from the request.
 
     Returns the raw API key string. Raises 401 if missing/invalid.
@@ -269,9 +266,6 @@ async def require_run_access(
     from creator_service.project_service import project_service
     from creator_service.run_service import run_service
 
-    if user.user_id is None:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
     run = await run_service.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -296,9 +290,6 @@ async def require_project_access(
     Raises 404 if project not found or workspace mismatch (prevents IDOR).
     """
     from creator_service.project_service import project_service
-
-    if user.user_id is None:
-        raise HTTPException(status_code=401, detail="Authentication required")
 
     project = await project_service.get_project(project_id)
     if project is None or project.workspace_id is None:

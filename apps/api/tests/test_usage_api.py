@@ -1,9 +1,11 @@
 # pyright: reportMissingImports=false
 
 from types import SimpleNamespace
+from typing import Generator
 
 import pytest
 from fastapi.routing import APIRoute
+from shorts_api.auth import CurrentUser, require_run_access
 from shorts_api.main import app
 
 
@@ -50,10 +52,6 @@ class StubUsageService:
         return [type("Event", (), {"model_dump": lambda self, mode="json": row})()]
 
 
-def _stub_authenticated_context(_request) -> tuple[int, int]:
-    return 10, 5
-
-
 async def _allow_check_access(workspace_id: int, user_id: int) -> bool:
     return True
 
@@ -63,19 +61,20 @@ async def _deny_check_access(workspace_id: int, user_id: int) -> bool:
 
 
 @pytest.fixture
-def stub_usage_service(monkeypatch: pytest.MonkeyPatch) -> StubUsageService:
+def stub_usage_service(monkeypatch: pytest.MonkeyPatch) -> Generator[StubUsageService, None, None]:
     stub = StubUsageService()
     fake_ws = SimpleNamespace(check_access=_allow_check_access)
+
+    async def _require_run_access(run_id: int):
+        return CurrentUser(user_id=10, workspace_id=5), SimpleNamespace(id=run_id)
+
+    app.dependency_overrides[require_run_access] = _require_run_access
     for route in app.routes:
         if isinstance(route, APIRoute) and route.name in {"get_workspace_usage", "get_run_usage"}:
             monkeypatch.setitem(route.endpoint.__globals__, "usage_service", stub)
             monkeypatch.setitem(route.endpoint.__globals__, "workspace_service", fake_ws)
-            monkeypatch.setitem(
-                route.endpoint.__globals__,
-                "_get_authenticated_context",
-                _stub_authenticated_context,
-            )
-    return stub
+    yield stub
+    app.dependency_overrides.pop(require_run_access, None)
 
 
 @pytest.mark.asyncio
@@ -108,11 +107,6 @@ async def test_workspace_usage_for_non_member_returns_404(client, monkeypatch: p
     for route in app.routes:
         if isinstance(route, APIRoute) and route.name in {"get_workspace_usage", "get_run_usage"}:
             monkeypatch.setitem(route.endpoint.__globals__, "workspace_service", fake_ws)
-            monkeypatch.setitem(
-                route.endpoint.__globals__,
-                "_get_authenticated_context",
-                _stub_authenticated_context,
-            )
 
     response = await client.get("/api/creator/usage/workspace/5")
 
