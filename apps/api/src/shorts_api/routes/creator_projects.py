@@ -1,10 +1,9 @@
 """Routes for creator project management."""
 
 import logging
-import os
-import shutil
 from typing import Any, Awaitable, Callable, Literal, cast
 
+from creator_service.artifact_download_service import artifact_download_service
 from creator_service.project_service import project_service
 from creator_service.run_service import run_service
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -128,12 +127,9 @@ async def _cleanup_project_resources(project_id: int) -> list[int]:
     return [r.id for r in runs]
 
 
-def _remove_run_artifacts(run_ids: list[int]) -> None:
-    artifact_root = os.getenv("ARTIFACT_ROOT", "data/artifacts")
+async def _remove_run_artifacts(run_ids: list[int]) -> None:
     for rid in run_ids:
-        run_dir = os.path.join(artifact_root, str(rid))
-        if os.path.isdir(run_dir):
-            shutil.rmtree(run_dir, ignore_errors=True)
+        await artifact_download_service.delete_artifacts_for_run(rid)
 
 
 @router.delete("/{project_id}")
@@ -162,5 +158,5 @@ async def delete_project(
     if not deleted:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    _remove_run_artifacts(run_ids)
+    await _remove_run_artifacts(run_ids)
     return {"deleted": True, "project_id": project_id}

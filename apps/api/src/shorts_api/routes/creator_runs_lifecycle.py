@@ -4,14 +4,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from creator_service.artifact_download_service import artifact_download_service
 from creator_service.run_service import run_service
 from fastapi import APIRouter, Depends, HTTPException
 
 if TYPE_CHECKING:
     from creator_domain.models.pipeline_run import PipelineRun
-
-import os
-import shutil
 
 from shorts_api.routes.creator_runs_core import UpdateModelDefaultsRequest
 from shorts_api.routes.creator_runs_utils import (
@@ -102,9 +100,6 @@ async def delete_run(
     if not deleted:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    _artifact_root = os.getenv("ARTIFACT_ROOT", "data/artifacts")
-    run_dir = os.path.join(_artifact_root, str(run_id))
-    if os.path.isdir(run_dir):
-        shutil.rmtree(run_dir, ignore_errors=True)
+    await artifact_download_service.delete_artifacts_for_run(run_id)
 
     return {"deleted": True, "run_id": run_id}

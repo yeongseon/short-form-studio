@@ -136,7 +136,11 @@ async def serve_artifact(artifact_path: str):
     try:
         content = _resolve_read_artifact_bytes()(storage_key)
         media_type, _ = mimetypes.guess_type(storage_key)
-        return Response(content=content, media_type=media_type or "application/octet-stream")
+        return Response(
+            content=content,
+            media_type=media_type or "application/octet-stream",
+            headers={"Warning": '299 - "Deprecated endpoint: use artifact-id download API"'},
+        )
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="Artifact not found") from exc
     except Exception as exc:

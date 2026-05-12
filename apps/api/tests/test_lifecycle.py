@@ -1,12 +1,10 @@
 # pyright: reportMissingImports=false
 
-import os
 from collections.abc import Iterator, Sequence
 from datetime import datetime, timezone
 from typing import Literal
 
 import pytest
-import shorts_api.routes.creator_runs_lifecycle as creator_runs_lifecycle
 import shorts_api.routes.creator_runs_utils as creator_runs_utils
 from fastapi.routing import APIRoute
 from pydantic import BaseModel
@@ -133,6 +131,14 @@ class StubRevokeTasks:
         self.calls.append(run_id)
 
 
+class StubArtifactLifecycleService:
+    def __init__(self) -> None:
+        self.delete_artifacts_for_run_calls: list[int] = []
+
+    async def delete_artifacts_for_run(self, run_id: int) -> None:
+        self.delete_artifacts_for_run_calls.append(run_id)
+
+
 def _iter_api_routes(routes: Sequence[object]) -> list[APIRoute]:
     return [route for route in routes if isinstance(route, APIRoute)]
 
@@ -140,13 +146,16 @@ def _iter_api_routes(routes: Sequence[object]) -> list[APIRoute]:
 @pytest.fixture
 def stub_lifecycle_services(
     monkeypatch: pytest.MonkeyPatch,
-) -> Iterator[tuple[StubRunService, StubProjectService, StubRevokeTasks]]:
+) -> Iterator[
+    tuple[StubRunService, StubProjectService, StubRevokeTasks, StubArtifactLifecycleService]
+]:
     from shorts_api.auth import CurrentUser, require_run_access
     from shorts_api.main import app
 
     run_svc = StubRunService()
     project_svc = StubProjectService()
     revoke_tasks = StubRevokeTasks()
+    artifact_lifecycle_svc = StubArtifactLifecycleService()
 
     for route in _iter_api_routes(runs_router.routes):
         if route.name in {
@@ -160,11 +169,17 @@ def stub_lifecycle_services(
             monkeypatch.setitem(
                 route.endpoint.__globals__, "_revoke_active_tasks_for_run", revoke_tasks
             )
+            monkeypatch.setitem(
+                route.endpoint.__globals__, "artifact_download_service", artifact_lifecycle_svc
+            )
 
     for route in _iter_api_routes(projects_router.routes):
         if route.name == "delete_project":
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(route.endpoint.__globals__, "project_service", project_svc)
+            monkeypatch.setitem(
+                route.endpoint.__globals__, "artifact_download_service", artifact_lifecycle_svc
+            )
 
     monkeypatch.setattr(creator_runs_utils, "_revoke_active_tasks_for_run", revoke_tasks)
 
@@ -178,7 +193,7 @@ def stub_lifecycle_services(
 
     app.dependency_overrides[require_run_access] = _require_run_access
 
-    yield run_svc, project_svc, revoke_tasks
+    yield run_svc, project_svc, revoke_tasks, artifact_lifecycle_svc
 
     app.dependency_overrides.pop(require_run_access, None)
 
@@ -216,7 +231,7 @@ def _make_project(project_id: int) -> StubProject:
 
 @pytest.mark.asyncio
 async def test_stop_run_success(client, stub_lifecycle_services):
-    run_svc, _, revoke_tasks = stub_lifecycle_services
+    run_svc, _, revoke_tasks, _ = stub_lifecycle_services
     run_svc.runs[10] = _make_run(10)
 
     response = await client.post("/api/creator/runs/10/stop")
@@ -229,7 +244,7 @@ async def test_stop_run_success(client, stub_lifecycle_services):
 
 @pytest.mark.asyncio
 async def test_stop_run_not_found(client, stub_lifecycle_services):
-    run_svc, _, revoke_tasks = stub_lifecycle_services
+    run_svc, _, revoke_tasks, _ = stub_lifecycle_services
 
     response = await client.post("/api/creator/runs/404/stop")
 
@@ -241,7 +256,7 @@ async def test_stop_run_not_found(client, stub_lifecycle_services):
 
 @pytest.mark.asyncio
 async def test_resume_run_success(client, stub_lifecycle_services):
-    run_svc, _, _ = stub_lifecycle_services
+    run_svc, _, _, _ = stub_lifecycle_services
     run_svc.runs[11] = _make_run(11, status="cancelled", stage="SCRIPT_REVIEW")
 
     response = await client.post("/api/creator/runs/11/resume")
@@ -253,7 +268,7 @@ async def test_resume_run_success(client, stub_lifecycle_services):
 
 @pytest.mark.asyncio
 async def test_resume_run_not_found(client, stub_lifecycle_services):
-    run_svc, _, _ = stub_lifecycle_services
+    run_svc, _, _, _ = stub_lifecycle_services
     run_svc.resume_errors[999] = ValueError("Run 999 not found")
 
     response = await client.post("/api/creator/runs/999/resume")
@@ -264,7 +279,7 @@ async def test_resume_run_not_found(client, stub_lifecycle_services):
 
 @pytest.mark.asyncio
 async def test_resume_run_wrong_state(client, stub_lifecycle_services):
-    run_svc, _, _ = stub_lifecycle_services
+    run_svc, _, _, _ = stub_lifecycle_services
     run_svc.runs[12] = _make_run(12)
     run_svc.resume_errors[12] = ValueError(
         "Run 12 has status 'running', can only resume cancelled or failed runs"
@@ -278,7 +293,7 @@ async def test_resume_run_wrong_state(client, stub_lifecycle_services):
 
 @pytest.mark.asyncio
 async def test_go_back_success(client, stub_lifecycle_services):
-    run_svc, _, _ = stub_lifecycle_services
+    run_svc, _, _, _ = stub_lifecycle_services
     run_svc.runs[13] = _make_run(13, stage="SCRIPT_REVIEW")
 
     response = await client.post("/api/creator/runs/13/go-back")
@@ -290,7 +305,7 @@ async def test_go_back_success(client, stub_lifecycle_services):
 
 @pytest.mark.asyncio
 async def test_go_back_not_found(client, stub_lifecycle_services):
-    run_svc, _, _ = stub_lifecycle_services
+    run_svc, _, _, _ = stub_lifecycle_services
     run_svc.go_back_errors[888] = ValueError("Run 888 not found")
 
     response = await client.post("/api/creator/runs/888/go-back")
@@ -301,7 +316,7 @@ async def test_go_back_not_found(client, stub_lifecycle_services):
 
 @pytest.mark.asyncio
 async def test_go_back_invalid_state_returns_400(client, stub_lifecycle_services):
-    run_svc, _, _ = stub_lifecycle_services
+    run_svc, _, _, _ = stub_lifecycle_services
     run_svc.runs[14] = _make_run(14)
     run_svc.go_back_errors[14] = ValueError("Cannot go back from stage 'IDEA_READY'")
 
@@ -313,7 +328,7 @@ async def test_go_back_invalid_state_returns_400(client, stub_lifecycle_services
 
 @pytest.mark.asyncio
 async def test_go_back_stage_conflict_returns_409(client, stub_lifecycle_services):
-    run_svc, _, _ = stub_lifecycle_services
+    run_svc, _, _, _ = stub_lifecycle_services
     run_svc.runs[15] = _make_run(15)
     run_svc.go_back_errors[15] = RuntimeError(
         "Stage conflict: expected 'SCRIPT_REVIEW' but run is at 'VISUAL_PLAN_SETUP'"
@@ -327,7 +342,7 @@ async def test_go_back_stage_conflict_returns_409(client, stub_lifecycle_service
 
 @pytest.mark.asyncio
 async def test_update_model_defaults_success(client, stub_lifecycle_services):
-    run_svc, _, _ = stub_lifecycle_services
+    run_svc, _, _, _ = stub_lifecycle_services
     run_svc.runs[16] = _make_run(16, model_defaults={"script_model": "qwen3-4b"})
 
     response = await client.patch(
@@ -347,7 +362,7 @@ async def test_update_model_defaults_success(client, stub_lifecycle_services):
 
 @pytest.mark.asyncio
 async def test_update_model_defaults_not_found(client, stub_lifecycle_services):
-    run_svc, _, _ = stub_lifecycle_services
+    run_svc, _, _, _ = stub_lifecycle_services
     run_svc.update_model_defaults_errors[404] = ValueError("Run 404 not found")
 
     response = await client.patch(
@@ -361,7 +376,7 @@ async def test_update_model_defaults_not_found(client, stub_lifecycle_services):
 
 @pytest.mark.asyncio
 async def test_update_model_defaults_empty_body_returns_400(client, stub_lifecycle_services):
-    run_svc, _, _ = stub_lifecycle_services
+    run_svc, _, _, _ = stub_lifecycle_services
 
     run_svc.runs[16] = _make_run(16)
 
@@ -376,74 +391,38 @@ async def test_update_model_defaults_empty_body_returns_400(client, stub_lifecyc
 
 
 @pytest.mark.asyncio
-async def test_delete_run_success_with_artifact_cleanup(
-    client, stub_lifecycle_services, monkeypatch: pytest.MonkeyPatch
-):
-    run_svc, _, revoke_tasks = stub_lifecycle_services
+async def test_delete_run_success_with_artifact_cleanup(client, stub_lifecycle_services):
+    run_svc, _, revoke_tasks, artifact_lifecycle_svc = stub_lifecycle_services
     run_svc.runs[17] = _make_run(17)
-
-    artifact_root = "/tmp/lifecycle-artifacts"
-    monkeypatch.setenv("ARTIFACT_ROOT", artifact_root)
-
-    removed_paths: list[str] = []
-
-    def fake_isdir(path: str) -> bool:
-        return path == os.path.join(artifact_root, "17")
-
-    def fake_rmtree(path: str, ignore_errors: bool = False) -> None:
-        assert ignore_errors is True
-        removed_paths.append(path)
-
-    monkeypatch.setattr(creator_runs_lifecycle.os.path, "isdir", fake_isdir)
-    monkeypatch.setattr(creator_runs_lifecycle.shutil, "rmtree", fake_rmtree)
 
     response = await client.delete("/api/creator/runs/17")
 
     assert response.status_code == 200
     assert response.json() == {"deleted": True, "run_id": 17}
     assert revoke_tasks.calls == [17]
-    assert removed_paths == [os.path.join(artifact_root, "17")]
+    assert artifact_lifecycle_svc.delete_artifacts_for_run_calls == [17]
     assert run_svc.delete_run_calls == [17]
 
 
 @pytest.mark.asyncio
 async def test_delete_run_not_found_when_missing_before_delete(client, stub_lifecycle_services):
-    run_svc, _, revoke_tasks = stub_lifecycle_services
+    run_svc, _, revoke_tasks, artifact_lifecycle_svc = stub_lifecycle_services
 
     response = await client.delete("/api/creator/runs/700")
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Run not found"}
     assert run_svc.delete_run_calls == []
+    assert artifact_lifecycle_svc.delete_artifacts_for_run_calls == []
     assert revoke_tasks.calls == []
 
 
 @pytest.mark.asyncio
-async def test_delete_project_success_cascades_run_cleanup(
-    client, stub_lifecycle_services, monkeypatch: pytest.MonkeyPatch
-):
-    run_svc, project_svc, revoke_tasks = stub_lifecycle_services
+async def test_delete_project_success_cascades_run_cleanup(client, stub_lifecycle_services):
+    run_svc, project_svc, revoke_tasks, artifact_lifecycle_svc = stub_lifecycle_services
     project_svc.projects[31] = _make_project(31)
     run_svc.runs[41] = _make_run(41, project_id=31)
     run_svc.runs[42] = _make_run(42, project_id=31)
-
-    artifact_root = "/tmp/project-artifacts"
-    monkeypatch.setenv("ARTIFACT_ROOT", artifact_root)
-
-    removed_paths: list[str] = []
-
-    def fake_isdir(path: str) -> bool:
-        return path in {
-            os.path.join(artifact_root, "41"),
-            os.path.join(artifact_root, "42"),
-        }
-
-    def fake_rmtree(path: str, ignore_errors: bool = False) -> None:
-        assert ignore_errors is True
-        removed_paths.append(path)
-
-    monkeypatch.setattr(os.path, "isdir", fake_isdir)
-    monkeypatch.setattr("shutil.rmtree", fake_rmtree)
 
     response = await client.delete("/api/creator/projects/31")
 
@@ -452,17 +431,12 @@ async def test_delete_project_success_cascades_run_cleanup(
     assert run_svc.list_runs_by_project_calls == [31]
     assert project_svc.delete_project_calls == [31]
     assert revoke_tasks.calls == [42, 41]
-    assert sorted(removed_paths) == sorted(
-        [
-            os.path.join(artifact_root, "41"),
-            os.path.join(artifact_root, "42"),
-        ]
-    )
+    assert artifact_lifecycle_svc.delete_artifacts_for_run_calls == [42, 41]
 
 
 @pytest.mark.asyncio
 async def test_delete_project_not_found(client, stub_lifecycle_services):
-    run_svc, project_svc, revoke_tasks = stub_lifecycle_services
+    run_svc, project_svc, revoke_tasks, artifact_lifecycle_svc = stub_lifecycle_services
 
     response = await client.delete("/api/creator/projects/404")
 
@@ -470,4 +444,5 @@ async def test_delete_project_not_found(client, stub_lifecycle_services):
     assert response.json() == {"detail": "Project not found"}
     assert run_svc.list_runs_by_project_calls == [404]
     assert project_svc.delete_project_calls == [404]
+    assert artifact_lifecycle_svc.delete_artifacts_for_run_calls == []
     assert revoke_tasks.calls == []
