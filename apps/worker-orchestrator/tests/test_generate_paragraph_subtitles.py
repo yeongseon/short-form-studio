@@ -33,6 +33,11 @@ class FakeSubtitleArtifact:
     path: str
 
 
+@dataclass
+class FakeAudioArtifact:
+    path: str
+
+
 class FakeSubtitleService:
     def __init__(self, artifact_id: int = 1) -> None:
         self.artifact_id = artifact_id
@@ -57,6 +62,16 @@ class FakeSubtitleService:
         }
         self.calls.append(call_data)
         return FakeSubtitleArtifact(id=self.artifact_id, path=path)
+
+
+class FakeAudioService:
+    def __init__(self, artifact: FakeAudioArtifact | None = None) -> None:
+        self.artifact = artifact
+        self.calls: list[tuple[int, str]] = []
+
+    async def get_paragraph_audio(self, run_id: int, section_id: str) -> FakeAudioArtifact | None:
+        self.calls.append((run_id, section_id))
+        return self.artifact
 
 
 class FakeRegistry:
@@ -97,13 +112,17 @@ def test_generate_paragraph_subtitles_success(monkeypatch: pytest.MonkeyPatch) -
     _patch_registry(monkeypatch, FakeRegistry(entry=entry, provider=provider))
 
     subtitle_service = FakeSubtitleService(artifact_id=33)
+    audio_service = FakeAudioService(
+        artifact=FakeAudioArtifact(path="data/artifacts/101/audio/hook-1.wav")
+    )
     monkeypatch.setattr(module, "_subtitle_service", subtitle_service)
+    monkeypatch.setattr(module, "_audio_service", audio_service)
+    monkeypatch.setattr(module, "validate_artifact_path", lambda path, _root: path)
     monkeypatch.setattr(module.os.path, "exists", lambda _: True)
 
     result = _invoke_task(
         run_id=101,
         section_id="hook-1",
-        audio_path="data/artifacts/101/audio/hook-1.wav",
         subtitle_model="whisper-small",
         subtitle_format="srt",
     )
@@ -148,11 +167,12 @@ def test_generate_paragraph_subtitles_audio_not_found(monkeypatch: pytest.Monkey
     )
 
     subtitle_service = FakeSubtitleService()
+    audio_service = FakeAudioService(artifact=None)
     monkeypatch.setattr(module, "_subtitle_service", subtitle_service)
-    monkeypatch.setattr(module.os.path, "exists", lambda _: False)
+    monkeypatch.setattr(module, "_audio_service", audio_service)
 
     with pytest.raises(RuntimeError, match="Audio file not found"):
-        _invoke_task(run_id=102, section_id="hook-2", audio_path="missing.wav")
+        _invoke_task(run_id=102, section_id="hook-2")
 
     assert provider.calls == []
     assert subtitle_service.calls == []
@@ -174,10 +194,13 @@ def test_generate_paragraph_subtitles_with_gpu_lock(monkeypatch: pytest.MonkeyPa
     )
 
     subtitle_service = FakeSubtitleService(artifact_id=61)
+    audio_service = FakeAudioService(artifact=FakeAudioArtifact(path="audio.wav"))
     monkeypatch.setattr(module, "_subtitle_service", subtitle_service)
+    monkeypatch.setattr(module, "_audio_service", audio_service)
+    monkeypatch.setattr(module, "validate_artifact_path", lambda path, _root: path)
     monkeypatch.setattr(module.os.path, "exists", lambda _: True)
 
-    result = _invoke_task(run_id=103, section_id="hook-3", audio_path="audio.wav")
+    result = _invoke_task(run_id=103, section_id="hook-3")
 
     assert result["status"] == "success"
     assert result["gpu_lock_acquired_at"] is not None
@@ -192,13 +215,35 @@ def test_generate_paragraph_subtitles_provider_failure(monkeypatch: pytest.Monke
     _patch_registry(monkeypatch, FakeRegistry(entry=entry, provider=provider))
 
     subtitle_service = FakeSubtitleService()
+    audio_service = FakeAudioService(artifact=FakeAudioArtifact(path="audio.wav"))
     monkeypatch.setattr(module, "_subtitle_service", subtitle_service)
+    monkeypatch.setattr(module, "_audio_service", audio_service)
+    monkeypatch.setattr(module, "validate_artifact_path", lambda path, _root: path)
     monkeypatch.setattr(module.os.path, "exists", lambda _: True)
 
     with pytest.raises(
         module.ProviderError,
         match="Provider failed paragraph subtitle generation",
     ):
-        _invoke_task(run_id=104, section_id="hook-4", audio_path="audio.wav")
+        _invoke_task(run_id=104, section_id="hook-4")
+
+    assert subtitle_service.calls == []
+
+
+def test_generate_paragraph_subtitles_rejects_audio_path_outside_artifact_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakeProvider()
+    _patch_registry(
+        monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider)
+    )
+
+    subtitle_service = FakeSubtitleService()
+    audio_service = FakeAudioService(artifact=FakeAudioArtifact(path="/etc/passwd"))
+    monkeypatch.setattr(module, "_subtitle_service", subtitle_service)
+    monkeypatch.setattr(module, "_audio_service", audio_service)
+
+    with pytest.raises(ValueError, match="outside artifact root"):
+        _invoke_task(run_id=105, section_id="hook-5")
 
     assert subtitle_service.calls == []

@@ -164,7 +164,7 @@ class TaskDispatchService:
         )
 
     def dispatch_paragraph_audio(
-        self, run_id: int, section_id: str, section_text: str, tts_model: str, voice: str
+        self, run_id: int, section_id: str, tts_model: str, voice: str
     ) -> str:
         return self._dispatch_task(
             module_name="tasks.generate_paragraph_audio",
@@ -173,7 +173,6 @@ class TaskDispatchService:
             args=[run_id],
             kwargs={
                 "section_id": section_id,
-                "section_text": section_text,
                 "tts_model": tts_model,
                 "voice": voice,
             },
@@ -183,7 +182,6 @@ class TaskDispatchService:
         self,
         run_id: int,
         section_id: str,
-        audio_path: str,
         subtitle_model: str,
         subtitle_format: str,
     ) -> str:
@@ -194,7 +192,6 @@ class TaskDispatchService:
             args=[run_id],
             kwargs={
                 "section_id": section_id,
-                "audio_path": audio_path,
                 "subtitle_model": subtitle_model,
                 "subtitle_format": subtitle_format,
             },
@@ -372,13 +369,10 @@ def dispatch_generate_scene_image(
     )
 
 
-def dispatch_paragraph_audio(
-    run_id: int, section_id: str, section_text: str, tts_model: str, voice: str
-) -> str:
+def dispatch_paragraph_audio(run_id: int, section_id: str, tts_model: str, voice: str) -> str:
     return task_dispatch_service.dispatch_paragraph_audio(
         run_id,
         section_id,
-        section_text,
         tts_model,
         voice,
     )
@@ -387,14 +381,12 @@ def dispatch_paragraph_audio(
 def dispatch_paragraph_subtitles(
     run_id: int,
     section_id: str,
-    audio_path: str,
     subtitle_model: str,
     subtitle_format: str,
 ) -> str:
     return task_dispatch_service.dispatch_paragraph_subtitles(
         run_id,
         section_id,
-        audio_path,
         subtitle_model,
         subtitle_format,
     )
