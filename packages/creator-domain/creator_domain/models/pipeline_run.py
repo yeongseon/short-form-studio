@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel
 
@@ -17,19 +17,20 @@ class PipelineRun(BaseModel):
     review_stage: str | None = None
     restart_from: str | None = None
     model_defaults: ModelSelection | None = None
-    metadata: dict | None = None
+    metadata: dict[str, object] | None = None
     style_preset: str | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    version: int = 0
 
     @classmethod
-    def from_dict(cls, data: dict) -> PipelineRun:
+    def from_dict(cls, data: dict[str, object]) -> PipelineRun:
         return cls.model_validate(data)
 
     @classmethod
-    def from_row(cls, row: dict) -> PipelineRun:
+    def from_row(cls, row: dict[str, object]) -> PipelineRun:
         """Construct from a DB row dict, mapping column names to domain fields.
 
         Handles:
@@ -39,10 +40,10 @@ class PipelineRun(BaseModel):
         mapped = dict(row)
         raw_defaults = mapped.pop("model_defaults_json", None)
         if raw_defaults is not None:
-            mapped["model_defaults"] = json.loads(raw_defaults)
+            mapped["model_defaults"] = cast(dict[str, object], json.loads(cast(str, raw_defaults)))
         raw_meta = mapped.pop("metadata_json", None)
         if raw_meta is not None:
-            mapped["metadata"] = json.loads(raw_meta)
+            mapped["metadata"] = cast(dict[str, object], json.loads(cast(str, raw_meta)))
         return cls.model_validate(mapped)
 
     def to_json(self) -> str:

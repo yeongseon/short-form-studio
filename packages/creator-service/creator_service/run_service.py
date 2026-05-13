@@ -19,11 +19,18 @@ class RunStorageBackend(Protocol):
         """Persist a run row and return stored row."""
         ...
 
-    async def get_run(self, run_id: int) -> dict[str, Any] | None:
+    async def get_run(self, run_id: int, workspace_id: int | None = None) -> dict[str, Any] | None:
         """Fetch run row by id."""
         ...
 
-    async def update_run(self, run_id: int, updates: dict[str, Any]) -> dict[str, Any]:
+    async def update_run(
+        self,
+        run_id: int,
+        updates: dict[str, Any],
+        *,
+        workspace_id: int | None = None,
+        expected_version: int | None = None,
+    ) -> dict[str, Any] | None:
         """Update and return run row by id."""
         ...
 
@@ -61,6 +68,10 @@ class RunStorageBackend(Protocol):
         ...
 
 
+class ConflictError(Exception):
+    pass
+
+
 class InMemoryRunStorage:
     def __init__(self) -> None:
         self._rows: dict[int, dict[str, Any]] = {}
@@ -72,22 +83,40 @@ class InMemoryRunStorage:
             "id": self._next_id,
             "created_at": now,
             "updated_at": now,
+            "version": int(row.get("version") or 0),
             **row,
         }
         self._rows[self._next_id] = saved
         self._next_id += 1
         return dict(saved)
 
-    async def get_run(self, run_id: int) -> dict[str, Any] | None:
+    async def get_run(self, run_id: int, workspace_id: int | None = None) -> dict[str, Any] | None:
         row = self._rows.get(run_id)
-        return dict(row) if row is not None else None
+        if row is None:
+            return None
+        if workspace_id is not None and row.get("workspace_id") != workspace_id:
+            return None
+        return dict(row)
 
-    async def update_run(self, run_id: int, updates: dict[str, Any]) -> dict[str, Any]:
+    async def update_run(
+        self,
+        run_id: int,
+        updates: dict[str, Any],
+        *,
+        workspace_id: int | None = None,
+        expected_version: int | None = None,
+    ) -> dict[str, Any] | None:
         row = self._rows.get(run_id)
         if row is None:
             raise ValueError(f"Run {run_id} not found")
+        if workspace_id is not None and row.get("workspace_id") != workspace_id:
+            raise ValueError(f"Run {run_id} not found")
+        current_version = int(row.get("version") or 0)
+        if expected_version is not None and current_version != expected_version:
+            return None
 
         row.update(updates)
+        row["version"] = current_version + 1
         row["updated_at"] = datetime.now(timezone.utc)
         self._rows[run_id] = row
         return dict(row)
@@ -228,7 +257,10 @@ class RunService:
                 "restart_from": target_stage.value,
                 "current_stage": target_stage.value,
             },
+            expected_version=int(getattr(run, "version", 0) or 0),
         )
+        if row is None:
+            raise ConflictError(f"Run {run_id} has stale version")
         return PipelineRun.from_row(row)
 
     async def advance_stage(self, run_id: int, target_stage: str) -> PipelineRun:
@@ -261,7 +293,10 @@ class RunService:
         row = await self.storage.update_run(
             run_id,
             {"current_stage": target.value},
+            expected_version=int(getattr(run, "version", 0) or 0),
         )
+        if row is None:
+            raise ConflictError(f"Run {run_id} has stale version")
         return PipelineRun.from_row(row)
 
     async def list_runs_by_project(self, project_id: int) -> list[PipelineRun]:
@@ -304,7 +339,10 @@ class RunService:
                 "status": "cancelled",
                 "current_stage": rollback_stage.value,
             },
+            expected_version=int(getattr(run, "version", 0) or 0),
         )
+        if row is None:
+            raise ConflictError(f"Run {run_id} has stale version")
         return PipelineRun.from_row(row)
 
     async def resume_run(self, run_id: int) -> PipelineRun:
@@ -325,7 +363,10 @@ class RunService:
         row = await self.storage.update_run(
             run_id,
             {"status": "running"},
+            expected_version=int(getattr(run, "version", 0) or 0),
         )
+        if row is None:
+            raise ConflictError(f"Run {run_id} has stale version")
         return PipelineRun.from_row(row)
 
     async def go_back(self, run_id: int) -> PipelineRun:
