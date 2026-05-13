@@ -170,9 +170,10 @@ def _record_failed_task_to_dlq(
         _write_dlq_fallback(payload, redis_error)
 
 
-def _should_record_to_dlq(kwargs: dict[str, Any]) -> bool:
-    retries = kwargs.get("_retries")
-    max_retries = kwargs.get("_max_retries")
+def _should_record_to_dlq(sender: Any) -> bool:
+    request = getattr(sender, "request", None)
+    retries = getattr(request, "retries", None)
+    max_retries = getattr(sender, "max_retries", None)
     if isinstance(retries, int) and isinstance(max_retries, int):
         return retries >= max_retries
     return True
@@ -189,7 +190,7 @@ def handle_task_failure(
 ) -> None:
     if exception is None:
         return
-    if not _should_record_to_dlq(kwargs or {}):
+    if not _should_record_to_dlq(sender):
         return
 
     task_name = getattr(sender, "name", "unknown_task")

@@ -272,11 +272,21 @@ def run_task(
     - Retryable errors → re-raise for Celery retry
     - Other errors → mark_failed + FAILED transition, re-raise
     """
-    task_id = str(getattr(getattr(celery_self, "request", None), "id", None) or f"run-{run_id}")
+    request = getattr(celery_self, "request", None)
+    message = {
+        "run_id": run_id,
+        "task_name": config.task_name,
+        "args": list(getattr(request, "args", ()) or ()),
+        "kwargs": dict(getattr(request, "kwargs", {}) or {}),
+    }
+    validated_message = validate_task_message(message)
+    validated_run_id = validated_message["run_id"]
+
+    task_id = str(getattr(request, "id", None) or f"run-{validated_run_id}")
     safe_failure_stages = config.safe_failure_stages or config.safe_stages
 
     try:
-        return asyncio.run(_run_task_inner(run_id, task_id, config, execute))
+        return asyncio.run(_run_task_inner(validated_run_id, task_id, config, execute))
     except StageGuardError:
         try:
             asyncio.run(_task_tracking_service.mark_rejected(task_id, "stage_guard"))
@@ -286,17 +296,17 @@ def run_task(
             raise
         raise Ignore()
     except SoftTimeLimitExceeded:
-        logger.error("Task %s timed out for run %s", config.task_name, run_id)
+        logger.error("Task %s timed out for run %s", config.task_name, validated_run_id)
         try:
             asyncio.run(
                 _run_service.storage.conditional_update_run(
-                    run_id,
+                    validated_run_id,
                     {"current_stage": RunStage.FAILED.value, "status": "failed"},
                     expected_stages=safe_failure_stages,
                 )
             )
         except Exception:
-            logger.exception("Failed to mark run %d as FAILED after timeout", run_id)
+            logger.exception("Failed to mark run %d as FAILED after timeout", validated_run_id)
         raise
     except Exception as exc:
         if isinstance(exc, config.no_fail_transition_exceptions):
@@ -308,10 +318,16 @@ def run_task(
             raise
         try:
             asyncio.run(
-                _handle_general_failure(task_id, run_id, config.task_name, safe_failure_stages, exc)
+                _handle_general_failure(
+                    task_id,
+                    validated_run_id,
+                    config.task_name,
+                    safe_failure_stages,
+                    exc,
+                )
             )
         except Exception:
-            logger.exception("Failed error cleanup for run %d", run_id)
+            logger.exception("Failed error cleanup for run %d", validated_run_id)
         raise
 
 
