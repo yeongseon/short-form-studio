@@ -3,7 +3,7 @@
 import logging
 from typing import Any, Awaitable, Callable, Literal, cast
 
-from creator_domain.entities import PipelineRun, Project
+from creator_domain.models.project import Project
 from creator_service.artifact_download_service import artifact_download_service
 from creator_service.project_service import project_service
 from creator_service.run_service import run_service
