@@ -64,6 +64,23 @@ class FakeAudioService:
         return FakeAudioArtifact(id=self.artifact_id, path=path)
 
 
+class FakeRunStorage:
+    def __init__(self, run_row: dict[str, Any] | None) -> None:
+        self.run_row = run_row
+
+    async def get_run(self, run_id: int) -> dict[str, Any] | None:
+        if self.run_row is None:
+            return None
+        row = dict(self.run_row)
+        row["id"] = run_id
+        return row
+
+
+class FakeRunService:
+    def __init__(self, run_row: dict[str, Any] | None) -> None:
+        self.storage = FakeRunStorage(run_row)
+
+
 class FakeRegistry:
     def __init__(self, entry: FakeEntry, provider: FakeProvider) -> None:
         self.entry = entry
@@ -102,12 +119,24 @@ def test_generate_paragraph_audio_success(monkeypatch: pytest.MonkeyPatch) -> No
     _patch_registry(monkeypatch, FakeRegistry(entry=entry, provider=provider))
 
     audio_service = FakeAudioService(artifact_id=33)
+    monkeypatch.setattr(
+        module,
+        "_run_service",
+        FakeRunService(
+            {
+                "script_data": {
+                    "sections": [
+                        {"section_id": "hook-1", "text": "Hello paragraph"},
+                    ]
+                }
+            }
+        ),
+    )
     monkeypatch.setattr(module, "_audio_service", audio_service)
 
     result = _invoke_task(
         run_id=101,
         section_id="hook-1",
-        section_text="Hello paragraph",
         tts_model="qwen3-tts",
         voice="en_US-lessac-medium",
     )
@@ -162,9 +191,22 @@ def test_generate_paragraph_audio_with_gpu_lock(monkeypatch: pytest.MonkeyPatch)
     )
 
     audio_service = FakeAudioService(artifact_id=61)
+    monkeypatch.setattr(
+        module,
+        "_run_service",
+        FakeRunService(
+            {
+                "script_data": {
+                    "sections": [
+                        {"section_id": "hook-2", "text": "Lock paragraph"},
+                    ]
+                }
+            }
+        ),
+    )
     monkeypatch.setattr(module, "_audio_service", audio_service)
 
-    result = _invoke_task(run_id=105, section_id="hook-2", section_text="Lock paragraph")
+    result = _invoke_task(run_id=105, section_id="hook-2")
 
     assert result["status"] == "success"
     assert result["gpu_lock_acquired_at"] is not None
@@ -189,10 +231,23 @@ def test_generate_paragraph_audio_provider_failure(monkeypatch: pytest.MonkeyPat
     )
 
     audio_service = FakeAudioService()
+    monkeypatch.setattr(
+        module,
+        "_run_service",
+        FakeRunService(
+            {
+                "script_data": {
+                    "sections": [
+                        {"section_id": "hook-3", "text": "Failure paragraph"},
+                    ]
+                }
+            }
+        ),
+    )
     monkeypatch.setattr(module, "_audio_service", audio_service)
 
     with pytest.raises(module.ProviderError, match="Provider failed paragraph audio generation"):
-        _invoke_task(run_id=106, section_id="hook-3", section_text="Failure paragraph")
+        _invoke_task(run_id=106, section_id="hook-3")
 
     assert lock_calls == ["para-106-hook-3"]
     assert release_calls == ["para-106-hook-3"]
@@ -205,10 +260,23 @@ def test_generate_paragraph_audio_sanitizes_section_id(monkeypatch: pytest.Monke
     _patch_registry(monkeypatch, FakeRegistry(entry=entry, provider=provider))
 
     audio_service = FakeAudioService(artifact_id=78)
+    monkeypatch.setattr(
+        module,
+        "_run_service",
+        FakeRunService(
+            {
+                "script_data": {
+                    "sections": [
+                        {"section_id": "hook:1", "text": "Sanitize me"},
+                    ]
+                }
+            }
+        ),
+    )
     monkeypatch.setattr(module, "_audio_service", audio_service)
     monkeypatch.setattr(module, "sanitize_path_component", lambda value, label: f"san-{value}")
 
-    result = _invoke_task(run_id=107, section_id="hook:1", section_text="Sanitize me")
+    result = _invoke_task(run_id=107, section_id="hook:1")
 
     assert result["status"] == "success"
     assert result["audio_path"] == "data/artifacts/107/audio/san-hook:1.wav"
@@ -216,3 +284,17 @@ def test_generate_paragraph_audio_sanitizes_section_id(monkeypatch: pytest.Monke
     assert params is not None
     assert params["output_path"] == "data/artifacts/107/audio/san-hook:1.wav"
     assert audio_service.calls[0]["path"] == "data/artifacts/107/audio/san-hook:1.wav"
+
+
+def test_generate_paragraph_audio_section_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = FakeProvider()
+    entry = FakeEntry(requires_gpu=False)
+    _patch_registry(monkeypatch, FakeRegistry(entry=entry, provider=provider))
+
+    monkeypatch.setattr(module, "_run_service", FakeRunService({"script_data": {"sections": []}}))
+    monkeypatch.setattr(module, "_audio_service", FakeAudioService())
+
+    with pytest.raises(ValueError, match="Section 'missing' not found"):
+        _invoke_task(run_id=108, section_id="missing")
+
+    assert provider.calls == []

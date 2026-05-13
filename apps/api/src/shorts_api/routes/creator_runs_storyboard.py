@@ -6,7 +6,6 @@ import logging
 from typing import TYPE_CHECKING, Any, Literal
 
 from creator_service.audio_service import audio_service
-from creator_service.run_service import run_service
 from creator_service.script_service import script_service
 from creator_service.subtitle_service import subtitle_service
 from creator_service.task_tracking_service import task_tracking_service
@@ -239,7 +238,6 @@ async def generate_paragraph_audio_endpoint(
         task_id = dispatch_paragraph_audio(
             run_id=run_id,
             section_id=section_id,
-            section_text=section_text,
             tts_model=effective.tts_model,
             voice=effective.voice,
         )
@@ -290,7 +288,6 @@ async def generate_paragraph_subtitles_endpoint(
         task_id = dispatch_paragraph_subtitles(
             run_id=run_id,
             section_id=section_id,
-            audio_path=audio.path,
             subtitle_model=effective.subtitle_model,
             subtitle_format=effective.subtitle_format,
         )
@@ -347,7 +344,6 @@ async def generate_all_paragraph_audio(
             tid = dispatch_paragraph_audio(
                 run_id=run_id,
                 section_id=section.section_id,
-                section_text=section.text,
                 tts_model=effective.tts_model,
                 voice=effective.voice,
             )
@@ -415,7 +411,6 @@ async def generate_all_paragraph_subtitles(
             tid = dispatch_paragraph_subtitles(
                 run_id=run_id,
                 section_id=audio.section_id,
-                audio_path=audio.path,
                 subtitle_model=effective.subtitle_model,
                 subtitle_format=effective.subtitle_format,
             )

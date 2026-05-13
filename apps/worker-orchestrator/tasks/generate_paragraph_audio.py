@@ -67,7 +67,6 @@ def generate_paragraph_audio(
     self,
     run_id: int,
     section_id: str,
-    section_text: str,
     tts_model: str = "qwen3-tts",
     voice: str = "default",
 ) -> dict[str, object]:
@@ -83,6 +82,24 @@ def generate_paragraph_audio(
     )
 
     async def execute(ctx: TaskContext) -> TaskResult:
+        run = await _run_service.storage.get_run(run_id)
+        if run is None:
+            raise ValueError(f"Run {run_id} not found")
+        script_data = run.get("script_data") or {}
+        sections = script_data.get("sections") if isinstance(script_data, dict) else []
+        section_text: str | None = None
+        if isinstance(sections, list):
+            for section in sections:
+                if not isinstance(section, dict):
+                    continue
+                if section.get("section_id") == section_id:
+                    raw_text = section.get("text")
+                    if isinstance(raw_text, str):
+                        section_text = raw_text
+                    break
+        if section_text is None:
+            raise ValueError(f"Section '{section_id}' not found for run {run_id}")
+
         registry = ProviderRegistry.create_default()
         entry = registry.resolve(tts_model)
         provider = registry.get_provider(tts_model)

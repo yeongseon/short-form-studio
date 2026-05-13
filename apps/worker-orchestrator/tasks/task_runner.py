@@ -106,6 +106,14 @@ def _get_redis_client() -> Any | None:
     return redis.Redis.from_url(os.getenv("REDIS_URL", "redis://redis:6379/0"))
 
 
+def validate_artifact_path(path: str, artifact_root: str) -> str:
+    resolved = os.path.realpath(path)
+    root = os.path.realpath(artifact_root)
+    if not resolved.startswith(root + os.sep) and resolved != root:
+        raise ValueError(f"Path {path!r} is outside artifact root")
+    return resolved
+
+
 async def _run_task_inner(
     run_id: int,
     task_id: str,

@@ -21,13 +21,21 @@ from creator_domain.sanitize import sanitize_path_component
 from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
+from creator_service.audio_service import audio_service as _audio_service
 from creator_service.cost_config import COST_PARAGRAPH_SUBTITLE
 from creator_service.run_service import run_service as _run_service
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
 from creator_service.telemetry import trace_task
 from creator_service.usage_service import record_provider_call
 from tasks import task_runner as _task_runner
-from tasks.task_runner import GpuLockContext, TaskContext, TaskResult, TaskRunnerConfig, run_task
+from tasks.task_runner import (
+    GpuLockContext,
+    TaskContext,
+    TaskResult,
+    TaskRunnerConfig,
+    run_task,
+    validate_artifact_path,
+)
 
 logger = logging.getLogger(__name__)
 _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
@@ -55,7 +63,6 @@ def generate_paragraph_subtitles(
     self,
     run_id: int,
     section_id: str,
-    audio_path: str,
     subtitle_model: str = "whisper-small",
     subtitle_format: str = "srt",
 ) -> dict[str, object]:
@@ -75,6 +82,10 @@ def generate_paragraph_subtitles(
             raise ValueError(
                 f"Invalid subtitle_format: {subtitle_format!r}. Must be 'srt' or 'vtt'."
             )
+        audio_artifact = await _audio_service.get_paragraph_audio(run_id, section_id)
+        if audio_artifact is None:
+            raise RuntimeError(f"Audio file not found for run {run_id} section {section_id}")
+        audio_path = validate_artifact_path(audio_artifact.path, _ARTIFACT_ROOT)
         if not os.path.exists(audio_path):
             raise RuntimeError(f"Audio file not found: {audio_path}")
 
