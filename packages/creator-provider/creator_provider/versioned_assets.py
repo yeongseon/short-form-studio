@@ -8,7 +8,7 @@ from typing import Any
 
 _ASSETS_ROOT = Path(__file__).resolve().parent
 
-# Thread-safe registry of loaded assets per "session"
+# Module-level registry of loaded assets (not thread-safe; single-process async use only)
 _loaded_assets: dict[str, str] = {}
 
 
