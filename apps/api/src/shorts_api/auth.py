@@ -6,7 +6,7 @@ import contextvars
 import hashlib
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
     from creator_domain.models.pipeline_run import PipelineRun
@@ -33,6 +33,16 @@ class CurrentUser:
     user_id: int
     workspace_id: int
     workspace_name: str | None = None
+
+
+class RunAccessContext(NamedTuple):
+    user: CurrentUser
+    run: PipelineRun
+
+
+class ProjectAccessContext(NamedTuple):
+    user: CurrentUser
+    project: Project
 
 
 class _FetchOneResult:
@@ -239,9 +249,9 @@ async def require_workspace_access(
 
 
 async def require_api_key_header(request: Request) -> str:
-    """Dependency that extracts and validates the API key from the request.
+    """Dependency that extracts the API key from the request header.
 
-    Returns the raw API key string. Raises 401 if missing/invalid.
+    Returns the raw API key string. Raises 401 if missing.
     """
     api_key = (
         request.headers.get("X-API-Key")
@@ -255,7 +265,7 @@ async def require_api_key_header(request: Request) -> str:
 async def require_run_access(
     run_id: int,
     user: CurrentUser = Depends(require_current_user),
-) -> tuple[CurrentUser, PipelineRun]:
+) -> RunAccessContext:
     """Verify the current user owns the workspace that contains the run.
 
     Returns (user, run) so route handlers can skip re-fetching.
@@ -275,13 +285,13 @@ async def require_run_access(
     has_access = await workspace_service.check_access(project.workspace_id, user.user_id)
     if not has_access:
         raise HTTPException(status_code=404, detail="Run not found")
-    return user, run
+    return RunAccessContext(user, run)
 
 
 async def require_project_access(
     project_id: int,
     user: CurrentUser = Depends(require_current_user),
-) -> tuple[CurrentUser, Project]:
+) -> ProjectAccessContext:
     """Verify the current user owns the workspace that contains the project.
 
     Returns (user, project) so route handlers can skip re-fetching.
@@ -296,5 +306,4 @@ async def require_project_access(
     has_access = await workspace_service.check_access(project.workspace_id, user.user_id)
     if not has_access:
         raise HTTPException(status_code=404, detail="Project not found")
-
-    return user, project
+    return ProjectAccessContext(user, project)

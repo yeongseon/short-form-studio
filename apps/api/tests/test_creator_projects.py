@@ -135,6 +135,9 @@ def _iter_api_routes(routes: Sequence[object]) -> list[APIRoute]:
 
 @pytest.fixture
 def stub_project_service(monkeypatch: pytest.MonkeyPatch) -> StubProjectService:
+    from shorts_api.auth import CurrentUser, require_project_access
+    from shorts_api.main import app
+    
     service = StubProjectService()
 
     async def _stub_check_access(workspace_id: int, user_id: int) -> bool:
@@ -147,7 +150,16 @@ def stub_project_service(monkeypatch: pytest.MonkeyPatch) -> StubProjectService:
             monkeypatch.setitem(route.endpoint.__globals__, "project_service", service)
             monkeypatch.setitem(route.endpoint.__globals__, "workspace_service", fake_ws)
 
-    return service
+    async def _require_project_access(project_id: int) -> tuple[CurrentUser, StubProject]:
+        project = await service.get_project(project_id)
+        if project is None:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="Project not found")
+        return CurrentUser(user_id=1, workspace_id=1), project
+
+    app.dependency_overrides[require_project_access] = _require_project_access
+    yield service
+    app.dependency_overrides.pop(require_project_access, None)
 
 @pytest.mark.asyncio
 async def test_create_project_idea(client, stub_project_service: StubProjectService):

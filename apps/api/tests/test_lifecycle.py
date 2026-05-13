@@ -149,7 +149,7 @@ def stub_lifecycle_services(
 ) -> Iterator[
     tuple[StubRunService, StubProjectService, StubRevokeTasks, StubArtifactLifecycleService]
 ]:
-    from shorts_api.auth import CurrentUser, require_run_access
+    from shorts_api.auth import CurrentUser, require_run_access, require_project_access
     from shorts_api.main import app
 
     run_svc = StubRunService()
@@ -193,9 +193,19 @@ def stub_lifecycle_services(
 
     app.dependency_overrides[require_run_access] = _require_run_access
 
+    async def _require_project_access(project_id: int) -> tuple[CurrentUser, StubProject]:
+        project = project_svc.projects.get(project_id)
+        if project is None:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="Project not found")
+        return CurrentUser(user_id=1, workspace_id=1), project
+
+    app.dependency_overrides[require_project_access] = _require_project_access
+
     yield run_svc, project_svc, revoke_tasks, artifact_lifecycle_svc
 
     app.dependency_overrides.pop(require_run_access, None)
+    app.dependency_overrides.pop(require_project_access, None)
 
 
 def _make_run(
@@ -442,7 +452,7 @@ async def test_delete_project_not_found(client, stub_lifecycle_services):
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Project not found"}
-    assert run_svc.list_runs_by_project_calls == [404]
-    assert project_svc.delete_project_calls == [404]
+    assert run_svc.list_runs_by_project_calls == []
+    assert project_svc.delete_project_calls == []
     assert artifact_lifecycle_svc.delete_artifacts_for_run_calls == []
     assert revoke_tasks.calls == []
