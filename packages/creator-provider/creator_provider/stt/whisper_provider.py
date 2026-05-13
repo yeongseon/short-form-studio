@@ -6,6 +6,7 @@ from typing import Any
 import httpx
 
 from creator_provider.base import STTProvider, SubtitleResult
+from creator_provider.exceptions import map_httpx_error
 
 
 class WhisperSTTProvider(STTProvider):
@@ -41,7 +42,9 @@ class WhisperSTTProvider(STTProvider):
                     response = await client.post(url, files=files, data=form_fields)
                     response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"Failed to connect to Whisper STT provider at {url}: {exc}") from exc
+            raise map_httpx_error(
+                exc, f"Failed to connect to Whisper STT provider at {url}"
+            ) from exc
 
         body = response.json()
         segments = body.get("segments", [])
@@ -92,7 +95,6 @@ def _segments_to_srt(segments: list[dict[str, Any]]) -> str:
         lines.append(text)
         lines.append("")
     return "\n".join(lines)
-
 
 
 def _format_vtt_timestamp(seconds: float) -> str:
