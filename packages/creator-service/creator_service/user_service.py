@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import re
 import secrets
 from typing import Any, Protocol
@@ -29,6 +30,10 @@ class InMemoryUserStorage:
         self._next_id = 1
 
     async def create_user(self, payload: dict[str, Any]) -> dict[str, Any]:
+        auth_subject = str(payload.get("auth_subject", "")).strip()
+        if not auth_subject:
+            raise ValueError("auth_subject must not be empty")
+
         now = datetime.now(timezone.utc)
         row = {
             "id": self._next_id,
@@ -36,7 +41,7 @@ class InMemoryUserStorage:
             "name": payload.get("name"),
             "workspace_id": payload.get("workspace_id"),
             "auth_provider": payload.get("auth_provider", "api_key"),
-            "auth_subject": payload.get("auth_subject", ""),
+            "auth_subject": auth_subject,
             "created_at": now,
             "updated_at": now,
         }
@@ -78,7 +83,13 @@ class UserService:
         auth_provider: str = "api_key",
         auth_subject: str = "",
     ) -> User:
-        existing = await self.storage.get_user_by_auth(auth_provider, auth_subject)
+        resolved_auth_subject = auth_subject.strip()
+        if not resolved_auth_subject and auth_provider == "api_key":
+            resolved_auth_subject = hashlib.sha256(email.encode()).hexdigest()[:16]
+        if not resolved_auth_subject:
+            raise ValueError("auth_subject must not be empty")
+
+        existing = await self.storage.get_user_by_auth(auth_provider, resolved_auth_subject)
         if existing is not None:
             user = User.model_validate(existing)
             return await self._attach_workspace(user)
@@ -88,7 +99,7 @@ class UserService:
                 "email": email,
                 "name": name,
                 "auth_provider": auth_provider,
-                "auth_subject": auth_subject,
+                "auth_subject": resolved_auth_subject,
             }
         )
         user = User.model_validate(row)

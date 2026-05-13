@@ -9,6 +9,7 @@ import httpx
 
 from creator_provider.api_keys import resolve_api_key
 from creator_provider.base import ImageProvider, ImageResult
+from creator_provider.exceptions import ProviderError
 
 # Map common width x height to Imagen API aspectRatio values.
 _ASPECT_RATIOS: dict[tuple[int, int], str] = {
@@ -52,10 +53,7 @@ class ImagenProvider(ImageProvider):
         aspect_ratio = merged.get("aspect_ratio", _resolve_aspect_ratio(width, height))
         timeout = float(merged.get("timeout", 120.0))
 
-        url = (
-            f"{self.endpoint}/v1beta/models/{self.model_key}"
-            f":generateImages?key={self.api_key}"
-        )
+        url = f"{self.endpoint}/v1beta/models/{self.model_key}:generateImages"
         payload = {
             "prompt": prompt,
             "config": {
@@ -63,14 +61,19 @@ class ImagenProvider(ImageProvider):
                 "aspectRatio": aspect_ratio,
             },
         }
-        headers = {"Content-Type": "application/json"}
+        if self.api_key is None:
+            raise ProviderError("Imagen API key is not configured")
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": self.api_key,
+        }
 
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(url, json=payload, headers=headers)
                 response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"Imagen API request failed: {exc}") from exc
+            raise ProviderError("Imagen API request failed") from exc
 
         data = response.json()
         images = data.get("generatedImages", [])
