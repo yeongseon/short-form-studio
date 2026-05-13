@@ -58,23 +58,43 @@ class ArtifactDownloadService:
 
     async def delete_artifacts_for_run(self, run_id: int) -> None:
         artifacts = await fetch_all(
-            "SELECT storage_key, storage_provider FROM creator_artifacts WHERE run_id = $1",
+            "SELECT id, storage_key, storage_provider FROM creator_artifacts WHERE run_id = $1",
             run_id,
         )
         backend = get_storage_backend()
 
+        deleted_ids: list[int] = []
+        failed_count = 0
+
         for artifact in artifacts:
             key = artifact.get("storage_key")
+            artifact_id = artifact.get("id")
             if not isinstance(key, str) or not key:
+                if isinstance(artifact_id, int):
+                    deleted_ids.append(artifact_id)
                 continue
             try:
                 backend.delete(key)
+                if isinstance(artifact_id, int):
+                    deleted_ids.append(artifact_id)
             except Exception:
+                failed_count += 1
                 logger.exception("Failed deleting artifact key '%s' for run_id=%s", key, run_id)
 
-        await execute("DELETE FROM creator_artifacts WHERE run_id = $1", run_id)
+        if deleted_ids:
+            await execute(
+                "DELETE FROM creator_artifacts WHERE id = ANY($1::int[])",
+                deleted_ids,
+            )
 
-        if os.getenv("STORAGE_BACKEND", "local") != "local":
+        if failed_count:
+            logger.warning(
+                "%d artifact(s) for run_id=%s could not be deleted from storage; DB rows retained for retry",
+                failed_count,
+                run_id,
+            )
+
+        if failed_count or os.getenv("STORAGE_BACKEND", "local") != "local":
             return
 
         artifact_root = Path(os.getenv("ARTIFACT_ROOT", "data/artifacts"))
