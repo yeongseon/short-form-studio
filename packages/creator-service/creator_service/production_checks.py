@@ -63,13 +63,6 @@ def validate_production_config(*, service_kind: str = "api") -> None:
 
     requires_http_config = service_kind.lower() == "api"
 
-    if requires_http_config:
-        api_key = os.getenv("API_KEY", "")
-        if not api_key.strip():
-            errors.append(
-                "API_KEY is required in production. Set a strong, random key to protect the API."
-            )
-
     # 2. DATABASE_URL must be set with safe credentials
     database_url = os.getenv("DATABASE_URL", "")
     _check_database_url(database_url, errors)

@@ -223,3 +223,81 @@ def test_cas_dispatch_with_rollback_record_failure_revokes_and_rolls_back(
         "current_stage": "AUDIO_GENERATING",
         "restart_from": "AUDIO_GENERATING",
     }
+
+
+def test_cas_dispatch_with_rollback_sync_dispatch_skips_record_task_queued(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = TaskDispatchService()
+    run_service = _FakeRunService()
+    queued_calls: list[tuple[int, str, str]] = []
+
+    def dispatch_generate_script(**_: object) -> str:
+        return "sync-generate_script-7-abc123"
+
+    class _TrackingService:
+        async def record_task_queued(self, run_id: int, task_type: str, task_id: str) -> None:
+            queued_calls.append((run_id, task_type, task_id))
+
+    def fake_import_module(name: str) -> object:
+        if name == "creator_service.task_tracking_service":
+            return SimpleNamespace(task_tracking_service=_TrackingService())
+        raise AssertionError(f"unexpected import: {name}")
+
+    monkeypatch.setattr("creator_service.task_dispatch_service.import_module", fake_import_module)
+
+    result = asyncio.run(
+        service.cas_dispatch_with_rollback(
+            run_id=7,
+            expected_stages=frozenset({"SCRIPT_REVIEW"}),
+            target_stage="SCRIPT_GENERATING",
+            dispatcher=dispatch_generate_script,
+            dispatcher_args={"run_id": 7},
+            run_service=run_service,
+            rollback_stage="SCRIPT_REVIEW",
+            rollback_restart_from=None,
+            enqueue_error_detail="Failed to enqueue script generation task",
+        )
+    )
+
+    assert result["task_id"] == "sync-generate_script-7-abc123"
+    assert queued_calls == []
+
+
+def test_cas_dispatch_with_rollback_celery_dispatch_records_task_queued(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = TaskDispatchService()
+    run_service = _FakeRunService()
+    queued_calls: list[tuple[int, str, str]] = []
+
+    def dispatch_generate_script(**_: object) -> str:
+        return "celery-123"
+
+    class _TrackingService:
+        async def record_task_queued(self, run_id: int, task_type: str, task_id: str) -> None:
+            queued_calls.append((run_id, task_type, task_id))
+
+    def fake_import_module(name: str) -> object:
+        if name == "creator_service.task_tracking_service":
+            return SimpleNamespace(task_tracking_service=_TrackingService())
+        raise AssertionError(f"unexpected import: {name}")
+
+    monkeypatch.setattr("creator_service.task_dispatch_service.import_module", fake_import_module)
+
+    result = asyncio.run(
+        service.cas_dispatch_with_rollback(
+            run_id=7,
+            expected_stages=frozenset({"SCRIPT_REVIEW"}),
+            target_stage="SCRIPT_GENERATING",
+            dispatcher=dispatch_generate_script,
+            dispatcher_args={"run_id": 7},
+            run_service=run_service,
+            rollback_stage="SCRIPT_REVIEW",
+            rollback_restart_from=None,
+            enqueue_error_detail="Failed to enqueue script generation task",
+        )
+    )
+
+    assert result["task_id"] == "celery-123"
+    assert queued_calls == [(7, "generate_script", "celery-123")]

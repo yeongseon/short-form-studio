@@ -285,7 +285,8 @@ class TaskDispatchService:
 
         try:
             task_type = _DISPATCH_TASK_TYPES.get(getattr(dispatcher, "__name__", ""), "unknown")
-            if task_type != "unknown":
+            is_sync = isinstance(task_id, str) and task_id.startswith("sync-")
+            if task_type != "unknown" and not is_sync:
                 tracking_service = import_module(
                     "creator_service.task_tracking_service"
                 ).task_tracking_service
