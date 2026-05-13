@@ -6,7 +6,9 @@ from creator_provider.gpu_lock import (
     GPU_LOCK_KEY,
     RELEASE_LOCK_SCRIPT,
     acquire_gpu_lock,
+    acquire_gpu_lock_async,
     gpu_lock_context,
+    renew_gpu_lock,
     release_gpu_lock,
 )
 
@@ -58,7 +60,11 @@ class GpuLockTests(unittest.TestCase):
         redis_client = Mock()
         redis_client.set.return_value = False
 
-        with patch("creator_provider.gpu_lock.time.monotonic", side_effect=[0.0, 0.5, 1.1]), patch("creator_provider.gpu_lock.time.sleep"), self.assertRaises(TimeoutError):
+        with (
+            patch("creator_provider.gpu_lock.time.monotonic", side_effect=[0.0, 0.5, 1.1]),
+            patch("creator_provider.gpu_lock.time.sleep"),
+            self.assertRaises(TimeoutError),
+        ):
             acquire_gpu_lock(redis_client, "task-timeout", retry_interval=0.01, max_wait=1.0)
 
     def test_double_release_safety(self) -> None:
@@ -84,6 +90,46 @@ class GpuLockTests(unittest.TestCase):
 
         redis_client.set.assert_called_once()
         redis_client.eval.assert_called_once_with(RELEASE_LOCK_SCRIPT, 1, GPU_LOCK_KEY, "task-ctx:")
+
+    def test_renew_updates_ttl_for_current_holder(self) -> None:
+        redis_client = Mock()
+        redis_client.get.return_value = "task-renew:1700000000"
+        redis_client.expire.return_value = True
+
+        renewed = renew_gpu_lock(redis_client, "task-renew", timeout=120)
+
+        self.assertTrue(renewed)
+        redis_client.expire.assert_called_once_with(GPU_LOCK_KEY, 120)
+
+    def test_renew_fails_for_non_holder(self) -> None:
+        redis_client = Mock()
+        redis_client.get.return_value = "other-task:1700000000"
+
+        renewed = renew_gpu_lock(redis_client, "task-renew", timeout=120)
+
+        self.assertFalse(renewed)
+        redis_client.expire.assert_not_called()
+
+    def test_async_acquire_yields_control_while_waiting(self) -> None:
+        redis_client = Mock()
+        redis_client.set.side_effect = [False, False, True]
+        ticks: list[int] = []
+
+        async def ticker() -> None:
+            for i in range(5):
+                ticks.append(i)
+                await asyncio.sleep(0)
+
+        async def run_test() -> None:
+            await asyncio.gather(
+                acquire_gpu_lock_async(
+                    redis_client, "task-async", retry_interval=0.001, max_wait=1.0
+                ),
+                ticker(),
+            )
+
+        asyncio.run(run_test())
+        self.assertGreaterEqual(len(ticks), 3)
 
 
 if __name__ == "__main__":
