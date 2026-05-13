@@ -67,7 +67,10 @@ class TestDalleProvider:
             from creator_provider.image.dalle_provider import DalleProvider
 
             provider = DalleProvider(endpoint="https://api.openai.com", model_key="dall-e-3")
-            with mock.patch("httpx.AsyncClient.post", return_value=mock_response), pytest.raises(RuntimeError, match="DALL-E API request failed"):
+            with (
+                mock.patch("httpx.AsyncClient.post", return_value=mock_response),
+                pytest.raises(RuntimeError, match="DALL-E API request failed"),
+            ):
                 await provider.generate("test prompt")
 
     @pytest.mark.asyncio
@@ -80,7 +83,10 @@ class TestDalleProvider:
             from creator_provider.image.dalle_provider import DalleProvider
 
             provider = DalleProvider(endpoint="https://api.openai.com", model_key="dall-e-3")
-            with mock.patch("httpx.AsyncClient.post", return_value=mock_response), pytest.raises(RuntimeError, match="no images"):
+            with (
+                mock.patch("httpx.AsyncClient.post", return_value=mock_response),
+                pytest.raises(RuntimeError, match="no images"),
+            ):
                 await provider.generate("test prompt")
 
 
@@ -154,7 +160,10 @@ class TestStabilityProvider:
                 endpoint="https://api.stability.ai",
                 model_key="sd3-medium",
             )
-            with mock.patch("httpx.AsyncClient.post", return_value=mock_response), pytest.raises(RuntimeError, match="Stability AI API request failed"):
+            with (
+                mock.patch("httpx.AsyncClient.post", return_value=mock_response),
+                pytest.raises(RuntimeError, match="Stability AI API request failed"),
+            ):
                 await provider.generate("test prompt")
 
     @pytest.mark.asyncio
@@ -170,7 +179,10 @@ class TestStabilityProvider:
                 endpoint="https://api.stability.ai",
                 model_key="sd3-medium",
             )
-            with mock.patch("httpx.AsyncClient.post", return_value=mock_response), pytest.raises(RuntimeError, match="empty response"):
+            with (
+                mock.patch("httpx.AsyncClient.post", return_value=mock_response),
+                pytest.raises(RuntimeError, match="empty response"),
+            ):
                 await provider.generate("test prompt")
 
 
@@ -243,14 +255,53 @@ class TestImagenProvider:
         mock_response.raise_for_status.side_effect = status_error
 
         with mock.patch.dict(os.environ, {"GOOGLE_API_KEY": "gk-test"}):
+            from creator_provider.exceptions import ProviderError
             from creator_provider.image.imagen_provider import ImagenProvider
 
             provider = ImagenProvider(
                 endpoint="https://generativelanguage.googleapis.com",
                 model_key="imagen-3",
             )
-            with mock.patch("httpx.AsyncClient.post", return_value=mock_response), pytest.raises(RuntimeError, match="Imagen API request failed"):
+            with (
+                mock.patch("httpx.AsyncClient.post", return_value=mock_response),
+                pytest.raises(ProviderError, match="Imagen API request failed"),
+            ):
                 await provider.generate("test prompt")
+
+    @pytest.mark.asyncio
+    async def test_generate_api_error_does_not_leak_api_key_and_uses_header_auth(self):
+        api_key = "gk-sensitive-key"
+        request = httpx.Request(
+            "POST",
+            "https://generativelanguage.googleapis.com/v1beta/models/imagen-3:generateImages",
+        )
+        response = httpx.Response(401, request=request)
+        status_error = httpx.HTTPStatusError("Unauthorized", request=request, response=response)
+
+        mock_response = mock.MagicMock()
+        mock_response.raise_for_status.side_effect = status_error
+
+        with mock.patch.dict(os.environ, {"GOOGLE_API_KEY": api_key}):
+            from creator_provider.exceptions import ProviderError
+            from creator_provider.image.imagen_provider import ImagenProvider
+
+            provider = ImagenProvider(
+                endpoint="https://generativelanguage.googleapis.com",
+                model_key="imagen-3",
+            )
+            with (
+                mock.patch("httpx.AsyncClient.post", return_value=mock_response) as mock_post,
+                pytest.raises(ProviderError, match="Imagen API request failed") as exc_info,
+            ):
+                await provider.generate("test prompt")
+
+        called_url = mock_post.call_args.args[0]
+        called_headers = mock_post.call_args.kwargs["headers"]
+
+        assert "?key=" not in called_url
+        assert api_key not in called_url
+        assert called_headers["x-goog-api-key"] == api_key
+        assert api_key not in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_generate_empty_response_raises(self):
@@ -265,5 +316,8 @@ class TestImagenProvider:
                 endpoint="https://generativelanguage.googleapis.com",
                 model_key="imagen-3",
             )
-            with mock.patch("httpx.AsyncClient.post", return_value=mock_response), pytest.raises(RuntimeError, match="no images"):
+            with (
+                mock.patch("httpx.AsyncClient.post", return_value=mock_response),
+                pytest.raises(RuntimeError, match="no images"),
+            ):
                 await provider.generate("test prompt")
