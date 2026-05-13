@@ -16,7 +16,6 @@ def _prod_env(**overrides: str) -> dict[str, str]:
     """Return a minimal valid production environment, with optional overrides."""
     base = {
         "ENVIRONMENT": "production",
-        "API_KEY": "super-secret-key-12345",
         "DATABASE_URL": "postgresql://user:strong-random-password@db:5432/mydb",
         "CORS_ORIGINS": "https://studio.example.com",
         "REDIS_URL": "redis://redis:6379/0",
@@ -46,11 +45,8 @@ class TestStagingMode:
         with patch.dict(os.environ, env, clear=True):
             validate_production_config()
 
-    def test_staging_rejects_missing_api_key(self) -> None:
-        with (
-            patch.dict(os.environ, _prod_env(ENVIRONMENT="staging", API_KEY=""), clear=True),
-            pytest.raises(ProductionConfigError, match="API_KEY"),
-        ):
+    def test_staging_allows_missing_api_key(self) -> None:
+        with patch.dict(os.environ, _prod_env(ENVIRONMENT="staging"), clear=True):
             validate_production_config()
 
     def test_staging_rejects_weak_database_password(self) -> None:
@@ -75,11 +71,8 @@ class TestProductionMode:
         with patch.dict(os.environ, _prod_env(), clear=True):
             validate_production_config()
 
-    def test_missing_api_key(self) -> None:
-        with (
-            patch.dict(os.environ, _prod_env(API_KEY=""), clear=True),
-            pytest.raises(ProductionConfigError, match="API_KEY"),
-        ):
+    def test_valid_config_passes_without_api_key(self) -> None:
+        with patch.dict(os.environ, _prod_env(), clear=True):
             validate_production_config()
 
     def test_database_url_with_default_password(self) -> None:
@@ -144,14 +137,13 @@ class TestProductionMode:
         with (
             patch.dict(
                 os.environ,
-                _prod_env(API_KEY="", DATABASE_URL=""),
+                _prod_env(DATABASE_URL=""),
                 clear=True,
             ),
             pytest.raises(ProductionConfigError) as exc_info,
         ):
             validate_production_config()
         msg = str(exc_info.value)
-        assert "API_KEY" in msg
         assert "DATABASE_URL" in msg
 
     def test_relative_artifact_root_warns(self) -> None:

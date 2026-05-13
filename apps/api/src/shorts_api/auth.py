@@ -5,7 +5,6 @@ from __future__ import annotations
 import contextvars
 import hashlib
 import logging
-import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -73,7 +72,6 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
 
     def __init__(self, app, *, api_key: str | None = None) -> None:
         super().__init__(app)
-        self._api_key = os.getenv("API_KEY") if api_key is None else api_key
 
     async def _get_pool(self):
         try:
