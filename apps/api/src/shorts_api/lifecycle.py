@@ -43,6 +43,7 @@ def _parse_int_env(name: str, default: int) -> int:
 MAX_MEMORY_MB = _parse_int_env("MAX_MEMORY_MB", 1024)
 MAX_CPU_PERCENT = _parse_int_env("MAX_CPU_PERCENT", 80)
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+ENABLE_PROCESS_RESOURCE_GUARD = os.getenv("ENABLE_PROCESS_RESOURCE_GUARD", "false").lower() in {"1", "true", "yes", "on"}
 
 
 def _apply_resource_limits() -> None:
@@ -106,16 +107,23 @@ def _mark_shutdown() -> None:
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     shutdown_state.is_shutting_down = False
     shutdown_state.inflight_requests = 0
-    _apply_resource_limits()
-    logger.info(
-        "Resource limits configured: MAX_MEMORY_MB=%d, MAX_CPU_PERCENT=%d",
-        MAX_MEMORY_MB,
-        MAX_CPU_PERCENT,
-    )
-    cpu_monitor_task = asyncio.create_task(_monitor_cpu_limit())
+    if ENABLE_PROCESS_RESOURCE_GUARD:
+        _apply_resource_limits()
+        logger.info(
+            "Resource limits configured: MAX_MEMORY_MB=%d, MAX_CPU_PERCENT=%d",
+            MAX_MEMORY_MB,
+            MAX_CPU_PERCENT,
+        )
+        cpu_monitor_task = asyncio.create_task(_monitor_cpu_limit())
+    else:
+        logger.info(
+            "Process resource guard disabled (set ENABLE_PROCESS_RESOURCE_GUARD=true to enable)"
+        )
+        cpu_monitor_task = None
     yield
     _mark_shutdown()
-    cpu_monitor_task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await cpu_monitor_task
+    if cpu_monitor_task is not None:
+        cpu_monitor_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await cpu_monitor_task
     await close_pool()
