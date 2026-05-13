@@ -3,13 +3,14 @@
 import logging
 from typing import Any, Awaitable, Callable, Literal, cast
 
+from creator_domain.entities import PipelineRun, Project
 from creator_service.artifact_download_service import artifact_download_service
 from creator_service.project_service import project_service
 from creator_service.run_service import run_service
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from shorts_api.auth import CurrentUser, require_current_user, workspace_service
+from shorts_api.auth import CurrentUser, require_current_user, require_project_access, workspace_service
 from shorts_api.routes import creator_runs_utils
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -56,37 +57,21 @@ class UpdateProjectRequest(BaseModel):
 async def update_project(
     project_id: int,
     request: UpdateProjectRequest,
-    user: CurrentUser = Depends(require_current_user),
+    access: tuple[CurrentUser, Project] = Depends(require_project_access),
 ) -> dict[str, object]:
-    project = await project_service.get_project(project_id)
-    if project is None:
+    user, project = access
+    updated_project = await project_service.update_project(project_id, title=request.title)
+    if updated_project is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    project_workspace_id = getattr(project, "workspace_id", None)
-    if project_workspace_id is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-    if not await workspace_service.check_access(project_workspace_id, user.user_id):
-        raise HTTPException(status_code=404, detail="Project not found")
-
-    project = await project_service.update_project(project_id, title=request.title)
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-    return project.model_dump(mode="json")
+    return updated_project.model_dump(mode="json")
 
 
 @router.get("/{project_id}")
 async def get_project_detail(
     project_id: int,
-    user: CurrentUser = Depends(require_current_user),
+    access: tuple[CurrentUser, Project] = Depends(require_project_access),
 ) -> dict[str, object]:
-    project = await project_service.get_project(project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-    project_workspace_id = getattr(project, "workspace_id", None)
-    if project_workspace_id is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-    if not await workspace_service.check_access(project_workspace_id, user.user_id):
-        raise HTTPException(status_code=404, detail="Project not found")
-
+    user, project = access
     return project.model_dump(mode="json")
 
 
@@ -127,23 +112,10 @@ async def _remove_run_artifacts(run_ids: list[int]) -> None:
 @router.delete("/{project_id}")
 async def delete_project(
     project_id: int,
-    user: CurrentUser = Depends(require_current_user),
+    access: tuple[CurrentUser, Project] = Depends(require_project_access),
 ) -> dict[str, object]:
-    get_project = cast(
-        Callable[[int], Awaitable[Any]] | None,
-        getattr(project_service, "get_project", None),
-    )
-    if get_project is not None:
-        project = await get_project(project_id)
-        if project is None:
-            raise HTTPException(status_code=404, detail="Project not found")
-        project_workspace_id = getattr(project, "workspace_id", None)
-        if project_workspace_id is None:
-            raise HTTPException(status_code=404, detail="Project not found")
-        if not await workspace_service.check_access(project_workspace_id, user.user_id):
-            raise HTTPException(status_code=404, detail="Project not found")
-
-    run_ids = await _cleanup_project_resources(project_id)
+    user, project = access
+    run_ids = await _cleanup_project_resources(project.id)
     deleted = await project_service.delete_project(project_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Project not found")

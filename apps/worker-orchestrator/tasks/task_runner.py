@@ -212,8 +212,6 @@ async def _run_task_inner(
             "status": result.status,
             **result.extra,
         }
-    finally:
-        pass
 
 
 async def _handle_general_failure(

@@ -31,6 +31,12 @@ uvicorn shorts_api.main:app --reload
 
 ## Notes
 
+## Production Warning
+
+Lightweight mode is **not suitable for production use**. It runs tasks synchronously
+in the API process, which blocks request handling and provides no task isolation,
+retry logic, or horizontal scaling. Always use Celery + Redis in production.
+
 - Tasks execute during the request lifecycle, so requests can take longer.
 - Celery task IDs are replaced with synthetic `sync-...` IDs in lightweight mode.
 - No worker process is required for dispatch execution in this mode.
