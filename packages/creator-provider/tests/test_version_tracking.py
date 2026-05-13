@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Generator
+
 import pytest
 
 from creator_provider.versioned_assets import (
@@ -14,7 +17,7 @@ from creator_provider.versioned_assets import (
 
 
 @pytest.fixture(autouse=True)
-def reset_tracking() -> None:
+def reset_tracking() -> Generator[None, None, None]:
     """Reset version tracking before and after each test."""
     clear_loaded_asset_versions()
     # Clear lru_cache to avoid cached results from previous tests
@@ -123,3 +126,28 @@ def test_get_loaded_asset_versions_returns_snapshot() -> None:
     # The new snapshot should have two assets
     assert len(snapshot2) == 2
     assert "fake/asset" not in snapshot2
+
+
+def test_loaded_versions_isolated_per_async_context() -> None:
+    async def worker_prompt() -> dict[str, str]:
+        clear_loaded_asset_versions()
+        get_prompt.cache_clear()
+        get_prompt("sd_local_quality_prefix")
+        await asyncio.sleep(0)
+        return get_loaded_asset_versions()
+
+    async def worker_schema() -> dict[str, str]:
+        clear_loaded_asset_versions()
+        get_schema.cache_clear()
+        get_schema("sd_local_image_request")
+        await asyncio.sleep(0)
+        return get_loaded_asset_versions()
+
+    async def run_workers() -> tuple[dict[str, str], dict[str, str]]:
+        return await asyncio.gather(worker_prompt(), worker_schema())
+
+    prompt_versions, schema_versions = asyncio.run(run_workers())
+    assert "prompts/sd_local_quality_prefix" in prompt_versions
+    assert "schemas/sd_local_image_request" not in prompt_versions
+    assert "schemas/sd_local_image_request" in schema_versions
+    assert "prompts/sd_local_quality_prefix" not in schema_versions
