@@ -247,6 +247,13 @@ class TaskDispatchService:
             expected_stages=expected_stages,
         )
         if not ok:
+            if workspace_id_for_reservation is not None and quota_operation_type is not None:
+                from creator_service.usage_service import cancel_workspace_quota_reservation
+
+                await cancel_workspace_quota_reservation(
+                    workspace_id_for_reservation,
+                    quota_operation_type,
+                )
             if row is None:
                 raise HTTPException(status_code=404, detail="Run not found")
             raise HTTPException(

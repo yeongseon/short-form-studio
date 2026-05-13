@@ -301,3 +301,79 @@ def test_cas_dispatch_with_rollback_celery_dispatch_records_task_queued(
 
     assert result["task_id"] == "celery-123"
     assert queued_calls == [(7, "generate_script", "celery-123")]
+
+
+def test_cas_dispatch_with_rollback_releases_quota_on_stage_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = TaskDispatchService()
+    cancel_calls: list[tuple[int, str]] = []
+
+    class _ConflictRunStorage:
+        async def conditional_update_run(
+            self,
+            _run_id: int,
+            _updates: dict[str, object],
+            *,
+            expected_stages: frozenset[str],
+        ) -> tuple[bool, dict[str, object] | None]:
+            _ = expected_stages
+            return False, {"current_stage": "SCRIPT_GENERATING"}
+
+    class _ConflictRunService:
+        def __init__(self) -> None:
+            self.storage = _ConflictRunStorage()
+
+        async def get_run(self, _run_id: int) -> object:
+            return SimpleNamespace(project_id=55)
+
+    class _ProjectService:
+        async def get_project(self, _project_id: int) -> object:
+            return SimpleNamespace(workspace_id=999)
+
+    async def _check_workspace_quota(
+        _workspace_id: int, operation_type: str = "llm"
+    ) -> tuple[bool, str]:
+        _ = operation_type
+        return True, "ok"
+
+    async def _cancel_workspace_quota_reservation(workspace_id: int, operation_type: str) -> None:
+        cancel_calls.append((workspace_id, operation_type))
+
+    def _fake_dispatcher(**_: object) -> str:
+        return "celery-never-called"
+
+    import sys
+    import types
+
+    project_service_module = types.ModuleType("creator_service.project_service")
+    setattr(project_service_module, "project_service", _ProjectService())
+    usage_service_module = types.ModuleType("creator_service.usage_service")
+    setattr(usage_service_module, "check_workspace_quota", _check_workspace_quota)
+    setattr(
+        usage_service_module,
+        "cancel_workspace_quota_reservation",
+        _cancel_workspace_quota_reservation,
+    )
+
+    monkeypatch.setitem(sys.modules, "creator_service.project_service", project_service_module)
+    monkeypatch.setitem(sys.modules, "creator_service.usage_service", usage_service_module)
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            service.cas_dispatch_with_rollback(
+                run_id=123,
+                expected_stages=frozenset({"SCRIPT_REVIEW"}),
+                target_stage="SCRIPT_GENERATING",
+                dispatcher=_fake_dispatcher,
+                dispatcher_args={"run_id": 123},
+                run_service=_ConflictRunService(),
+                rollback_stage="SCRIPT_REVIEW",
+                rollback_restart_from=None,
+                enqueue_error_detail="enqueue failed",
+                quota_operation_type="llm",
+            )
+        )
+
+    assert exc.value.status_code == 409
+    assert cancel_calls == [(999, "llm")]
