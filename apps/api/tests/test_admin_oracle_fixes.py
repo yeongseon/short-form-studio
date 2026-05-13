@@ -2,6 +2,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from importlib import import_module
+from unittest.mock import MagicMock
 
 
 admin_routes = import_module("shorts_api.routes.admin")
@@ -105,11 +106,16 @@ def test_admin_clear_cache_logs_sanitized_pattern_without_newlines(caplog) -> No
     malicious_pattern = "cache:test:*\nFORGED_LOG\rLINE"
     caplog.set_level(logging.WARNING)
 
+    # Create a fake request object
+    fake_request = MagicMock()
+    fake_request.headers = {}
+    fake_request.client.host = "127.0.0.1"
+
     original = admin_routes.admin_service.clear_cache
     admin_routes.admin_service.clear_cache = _fake_clear_cache
     try:
         result = asyncio.run(
-            admin_routes.admin_clear_cache(key_pattern=malicious_pattern, dry_run=True)
+            admin_routes.admin_clear_cache(request=fake_request, key_pattern=malicious_pattern, dry_run=True)
         )
     finally:
         admin_routes.admin_service.clear_cache = original
