@@ -253,10 +253,6 @@ async def require_api_key_header(request: Request) -> str:
 
     Returns the raw API key string. Raises 401 if missing.
     """
-    """Dependency that extracts and validates the API key from the request.
-
-    Returns the raw API key string. Raises 401 if missing/invalid.
-    """
     api_key = (
         request.headers.get("X-API-Key")
         or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
@@ -311,4 +307,3 @@ async def require_project_access(
     if not has_access:
         raise HTTPException(status_code=404, detail="Project not found")
     return ProjectAccessContext(user, project)
-    return user, project
