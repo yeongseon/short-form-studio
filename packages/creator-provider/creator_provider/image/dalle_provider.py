@@ -9,10 +9,10 @@ import httpx
 
 from creator_provider.api_keys import resolve_api_key
 from creator_provider.base import ImageProvider, ImageResult
+from creator_provider.exceptions import ProviderError, map_httpx_error
 
 
 class DalleProvider(ImageProvider):
-
     def __init__(self, endpoint: str, model_key: str):
         self.endpoint = endpoint.rstrip("/")
         self.model_key = model_key
@@ -44,16 +44,16 @@ class DalleProvider(ImageProvider):
                 response = await client.post(url, json=payload, headers=headers)
                 response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"DALL-E API request failed: {exc}") from exc
+            raise map_httpx_error(exc, "DALL-E API request failed") from exc
 
         data = response.json()
         images = data.get("data", [])
         if not images:
-            raise RuntimeError("DALL-E API returned no images")
+            raise ProviderError("DALL-E API returned no images")
 
         image_b64 = images[0].get("b64_json", "")
         if not image_b64:
-            raise RuntimeError("DALL-E API returned empty image data")
+            raise ProviderError("DALL-E API returned empty image data")
 
         image_bytes = base64.b64decode(image_b64)
 
