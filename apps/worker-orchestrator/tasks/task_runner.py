@@ -115,103 +115,102 @@ async def _run_task_inner(
     """Inner async execution with full lifecycle management."""
     start_time = datetime.now(timezone.utc)
 
+    # 1. Task tracking: start
     try:
-        # 1. Task tracking: start
+        await _task_tracking_service.record_task_start(run_id, config.task_name, task_id)
+        await _task_tracking_service.mark_running(task_id)
+    except Exception:
+        logger.warning("Failed to record task start", exc_info=True)
+
+    # 2. Stage guard
+    run = await _run_service.storage.get_run(run_id)
+    if run is None and not config.skip_stage_guard:
+        raise StageGuardError(f"Run {run_id} not found")
+
+    if run is not None and not config.skip_stage_guard:
         try:
-            await _task_tracking_service.record_task_start(run_id, config.task_name, task_id)
-            await _task_tracking_service.mark_running(task_id)
-        except Exception:
-            logger.warning("Failed to record task start", exc_info=True)
+            current = RunStage(run["current_stage"])
+        except ValueError as exc:
+            raise StageGuardError(
+                f"Run {run_id} has invalid stage {run['current_stage']!r}"
+            ) from exc
 
-        # 2. Stage guard
-        run = await _run_service.storage.get_run(run_id)
-        if run is None and not config.skip_stage_guard:
-            raise StageGuardError(f"Run {run_id} not found")
+        if current not in config.allowed_stages:
+            raise StageGuardError(
+                f"Run {run_id} is in stage {current.value}, "
+                f"expected one of {', '.join(s.value for s in config.allowed_stages)}"
+            )
+        if run.get("status") == "cancelled":
+            raise StageGuardError(f"Run {run_id} is cancelled")
 
-        if run is not None and not config.skip_stage_guard:
-            try:
-                current = RunStage(run["current_stage"])
-            except ValueError as exc:
-                raise StageGuardError(
-                    f"Run {run_id} has invalid stage {run['current_stage']!r}"
-                ) from exc
+    # 3. Resolve workspace/project context
+    workspace_id: int | None = None
+    project_id: int | None = None
+    if run is not None:
+        workspace_id = await resolve_workspace_id_from_run(run_id)
+        project_id = run.get("project_id")
 
-            if current not in config.allowed_stages:
-                raise StageGuardError(
-                    f"Run {run_id} is in stage {current.value}, "
-                    f"expected one of {', '.join(s.value for s in config.allowed_stages)}"
-                )
-            if run.get("status") == "cancelled":
-                raise StageGuardError(f"Run {run_id} is cancelled")
+    # 4. Execute task-specific logic
+    ctx = TaskContext(
+        run_id=run_id,
+        task_id=task_id,
+        run=run or {},
+        workspace_id=workspace_id,
+        project_id=project_id,
+        start_time=start_time,
+    )
 
-        # 3. Resolve workspace/project context
-        workspace_id: int | None = None
-        project_id: int | None = None
-        if run is not None:
-            workspace_id = await resolve_workspace_id_from_run(run_id)
-            project_id = run.get("project_id")
+    result = await execute(ctx)
 
-        # 4. Execute task-specific logic
-        ctx = TaskContext(
-            run_id=run_id,
-            task_id=task_id,
-            run=run or {},
-            workspace_id=workspace_id,
-            project_id=project_id,
-            start_time=start_time,
-        )
-
-        result = await execute(ctx)
-
-        # 5. Stage transition based on result status
-        if config.success_stage is not None:
-            safe_failure_stages = config.safe_failure_stages or config.safe_stages
-            if result.status == "success":
-                applied, _ = await _run_service.storage.conditional_update_run(
+    # 5. Stage transition based on result status
+    if config.success_stage is not None:
+        safe_failure_stages = config.safe_failure_stages or config.safe_stages
+        if result.status == "success":
+            applied, _ = await _run_service.storage.conditional_update_run(
+                run_id,
+                {"current_stage": config.success_stage, "status": "running"},
+                expected_stages=config.safe_stages,
+            )
+            if not applied:
+                logger.info(
+                    "Run %d stage changed during %s -- skipping success transition",
                     run_id,
-                    {"current_stage": config.success_stage, "status": "running"},
-                    expected_stages=config.safe_stages,
+                    config.task_name,
                 )
-                if not applied:
-                    logger.info(
-                        "Run %d stage changed during %s -- skipping success transition",
-                        run_id,
-                        config.task_name,
-                    )
-            else:
-                applied, _ = await _run_service.storage.conditional_update_run(
+        else:
+            applied, _ = await _run_service.storage.conditional_update_run(
+                run_id,
+                {"current_stage": RunStage.FAILED.value, "status": "failed"},
+                expected_stages=safe_failure_stages,
+            )
+            if not applied:
+                logger.info(
+                    "Run %d stage changed during %s -- skipping FAILED transition",
                     run_id,
-                    {"current_stage": RunStage.FAILED.value, "status": "failed"},
-                    expected_stages=safe_failure_stages,
+                    config.task_name,
                 )
-                if not applied:
-                    logger.info(
-                        "Run %d stage changed during %s -- skipping FAILED transition",
-                        run_id,
-                        config.task_name,
-                    )
 
-        # 6. Mark success/failure based on result status
-        end_time = datetime.now(timezone.utc)
-        try:
-            if result.status == "success":
-                await _task_tracking_service.mark_success(task_id)
-            else:
-                await _task_tracking_service.mark_failed(
-                    task_id, "task_result", f"status={result.status}"
-                )
-        except Exception:
-            logger.warning("Failed to record task outcome", exc_info=True)
+    # 6. Mark success/failure based on result status
+    end_time = datetime.now(timezone.utc)
+    try:
+        if result.status == "success":
+            await _task_tracking_service.mark_success(task_id)
+        else:
+            await _task_tracking_service.mark_failed(
+                task_id, "task_result", f"status={result.status}"
+            )
+    except Exception:
+        logger.warning("Failed to record task outcome", exc_info=True)
 
-        return {
-            "task_id": task_id,
-            "run_id": run_id,
-            "start_time": start_time.isoformat(),
-            "end_time": end_time.isoformat(),
-            "duration_seconds": (end_time - start_time).total_seconds(),
-            "status": result.status,
-            **result.extra,
-        }
+    return {
+        "task_id": task_id,
+        "run_id": run_id,
+        "start_time": start_time.isoformat(),
+        "end_time": end_time.isoformat(),
+        "duration_seconds": (end_time - start_time).total_seconds(),
+        "status": result.status,
+        **result.extra,
+    }
 
 
 async def _handle_general_failure(

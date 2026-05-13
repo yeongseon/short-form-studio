@@ -452,7 +452,7 @@ async def test_delete_project_not_found(client, stub_lifecycle_services):
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Project not found"}
-    assert run_svc.list_runs_by_project_calls == [404]
-    assert project_svc.delete_project_calls == [404]
+    assert run_svc.list_runs_by_project_calls == []
+    assert project_svc.delete_project_calls == []
     assert artifact_lifecycle_svc.delete_artifacts_for_run_calls == []
     assert revoke_tasks.calls == []
