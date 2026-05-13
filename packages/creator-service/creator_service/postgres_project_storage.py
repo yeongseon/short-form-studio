@@ -35,8 +35,16 @@ class PostgresProjectStorage:
             raise ValueError("Failed to insert project")
         return row
 
-    async def fetch_project(self, project_id: int) -> dict[str, Any] | None:
-        return await fetch_one("SELECT * FROM creator_projects WHERE id = $1", project_id)
+    async def fetch_project(
+        self, project_id: int, workspace_id: int | None = None
+    ) -> dict[str, Any] | None:
+        if workspace_id is None:
+            return await fetch_one("SELECT * FROM creator_projects WHERE id = $1", project_id)
+        return await fetch_one(
+            "SELECT * FROM creator_projects WHERE id = $1 AND workspace_id = $2",
+            project_id,
+            workspace_id,
+        )
 
     async def list_projects(
         self, limit: int, offset: int, workspace_id: int | None = None
@@ -110,7 +118,11 @@ class PostgresProjectStorage:
     )
 
     async def update_project(
-        self, project_id: int, updates: dict[str, Any]
+        self,
+        project_id: int,
+        updates: dict[str, Any],
+        *,
+        workspace_id: int | None = None,
     ) -> dict[str, Any] | None:
         """Update project fields. Returns updated row or None if not found.
 
@@ -119,7 +131,7 @@ class PostgresProjectStorage:
         """
         safe_updates = {k: v for k, v in updates.items() if k in self._ALLOWED_COLUMNS}
         if not safe_updates:
-            return await self.fetch_project(project_id)
+            return await self.fetch_project(project_id, workspace_id=workspace_id)
         set_clauses = []
         params: list[Any] = []
         idx = 1
@@ -128,10 +140,15 @@ class PostgresProjectStorage:
             params.append(value)
             idx += 1
         params.append(project_id)
+        where_clause = f"id = ${idx}"
+        if workspace_id is not None:
+            idx += 1
+            params.append(workspace_id)
+            where_clause += f" AND workspace_id = ${idx}"
         query = f"""
             UPDATE creator_projects
             SET {", ".join(set_clauses)}, updated_at = NOW()
-            WHERE id = ${idx}
+            WHERE {where_clause}
             RETURNING *
         """
         return await fetch_one(query, *params)

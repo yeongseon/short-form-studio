@@ -55,12 +55,25 @@ class PostgresRunStorage:
             raise ValueError("Failed to create run")
         return saved
 
-    async def get_run(self, run_id: int) -> dict[str, Any] | None:
-        return await fetch_one("SELECT * FROM creator_runs WHERE id = $1", run_id)
+    async def get_run(self, run_id: int, workspace_id: int | None = None) -> dict[str, Any] | None:
+        if workspace_id is None:
+            return await fetch_one("SELECT * FROM creator_runs WHERE id = $1", run_id)
+        return await fetch_one(
+            "SELECT * FROM creator_runs WHERE id = $1 AND workspace_id = $2",
+            run_id,
+            workspace_id,
+        )
 
-    async def update_run(self, run_id: int, updates: dict[str, Any]) -> dict[str, Any]:
+    async def update_run(
+        self,
+        run_id: int,
+        updates: dict[str, Any],
+        *,
+        workspace_id: int | None = None,
+        expected_version: int | None = None,
+    ) -> dict[str, Any] | None:
         if not updates:
-            current = await self.get_run(run_id)
+            current = await self.get_run(run_id, workspace_id=workspace_id)
             if current is None:
                 raise ValueError(f"Run {run_id} not found")
             return current
@@ -72,10 +85,21 @@ class PostgresRunStorage:
 
         keys = list(updates.keys())
         assignments = ", ".join(f"{key} = ${idx}" for idx, key in enumerate(keys, start=2))
-        values = [run_id, *[updates[key] for key in keys]]
-        query = f"UPDATE creator_runs SET {assignments} WHERE id = $1 RETURNING *"
+        values: list[Any] = [run_id, *[updates[key] for key in keys]]
+        where_clauses = ["id = $1"]
+        next_index = len(values) + 1
+        if workspace_id is not None:
+            where_clauses.append(f"workspace_id = ${next_index}")
+            values.append(workspace_id)
+            next_index += 1
+        if expected_version is not None:
+            where_clauses.append(f"version = ${next_index}")
+            values.append(expected_version)
+        query = (
+            f"UPDATE creator_runs SET {assignments} WHERE {' AND '.join(where_clauses)} RETURNING *"
+        )
         updated = await fetch_one(query, *values)
-        if updated is None:
+        if updated is None and expected_version is None:
             raise ValueError(f"Run {run_id} not found")
         return updated
 
