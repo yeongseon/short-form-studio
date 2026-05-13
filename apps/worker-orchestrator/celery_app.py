@@ -115,6 +115,7 @@ def setup_worker_process_telemetry(**kwargs: object) -> None:
     independently. The idempotency guard in init_telemetry() ensures that
     multiple calls within the same process are no-ops.
     """
+    _ = kwargs
     telemetry_module = import_module("telemetry")
     telemetry_module.init_telemetry(service_name="worker")
 
@@ -169,6 +170,14 @@ def _record_failed_task_to_dlq(
         _write_dlq_fallback(payload, redis_error)
 
 
+def _should_record_to_dlq(kwargs: dict[str, Any]) -> bool:
+    retries = kwargs.get("_retries")
+    max_retries = kwargs.get("_max_retries")
+    if isinstance(retries, int) and isinstance(max_retries, int):
+        return retries >= max_retries
+    return True
+
+
 @task_failure.connect
 def handle_task_failure(
     sender: Any = None,
@@ -179,6 +188,8 @@ def handle_task_failure(
     **_: Any,
 ) -> None:
     if exception is None:
+        return
+    if not _should_record_to_dlq(kwargs or {}):
         return
 
     task_name = getattr(sender, "name", "unknown_task")

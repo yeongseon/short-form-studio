@@ -64,3 +64,37 @@ def test_task_failure_signal_handles_redis_connection_error_gracefully(monkeypat
 
     logger = get_logger.return_value
     logger.error.assert_called()
+
+
+def test_task_failure_signal_skips_dlq_for_retriable_attempt(monkeypatch):
+    mock_client = MagicMock()
+    monkeypatch.setattr(celery_app, "redis", MagicMock())
+    celery_app.redis.Redis.from_url.return_value = mock_client
+
+    sender = _Sender("tasks.generate_script")
+    task_failure.send(
+        sender=sender,
+        task_id="task-retry-1",
+        exception=RuntimeError("retryable"),
+        args=("topic",),
+        kwargs={"_retries": 0, "_max_retries": 3},
+    )
+
+    mock_client.lpush.assert_not_called()
+
+
+def test_task_failure_signal_records_dlq_after_retries_exhausted(monkeypatch):
+    mock_client = MagicMock()
+    monkeypatch.setattr(celery_app, "redis", MagicMock())
+    celery_app.redis.Redis.from_url.return_value = mock_client
+
+    sender = _Sender("tasks.generate_script")
+    task_failure.send(
+        sender=sender,
+        task_id="task-retry-exhausted",
+        exception=RuntimeError("terminal"),
+        args=("topic",),
+        kwargs={"_retries": 3, "_max_retries": 3},
+    )
+
+    mock_client.lpush.assert_called_once()

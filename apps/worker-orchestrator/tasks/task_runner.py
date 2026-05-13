@@ -157,6 +157,15 @@ async def _run_task_inner(
     if run is not None:
         workspace_id = await resolve_workspace_id_from_run(run_id)
         project_id = run.get("project_id")
+    logger.info(
+        "Task context resolved",
+        extra={
+            "task_name": config.task_name,
+            "run_id": run_id,
+            "workspace_id": workspace_id,
+            "project_id": project_id,
+        },
+    )
 
     # 4. Execute task-specific logic
     ctx = TaskContext(
@@ -339,3 +348,19 @@ class GpuLockContext:
             logger.exception("Failed to release GPU lock for %s", lock_id or self.task_id)
         finally:
             self.acquired = False
+
+
+def validate_task_message(message: dict[str, Any]) -> dict[str, Any]:
+    if "run_id" not in message:
+        raise ValueError("missing required field: run_id")
+    run_id = message["run_id"]
+    if not isinstance(run_id, int):
+        raise ValueError("run_id must be int")
+
+    if "task_name" in message and not isinstance(message["task_name"], str):
+        raise ValueError("task_name must be str")
+    if "args" in message and not isinstance(message["args"], list):
+        raise ValueError("args must be list")
+    if "kwargs" in message and not isinstance(message["kwargs"], dict):
+        raise ValueError("kwargs must be dict")
+    return message
