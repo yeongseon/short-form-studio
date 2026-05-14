@@ -10,14 +10,13 @@ class Project(BaseModel):
 
     id: int = Field(ge=1)
     workspace_id: int | None = None
-    title: str | None = Field(default=None, max_length=200)
+    title: str | None = Field(default=None, max_length=255)
     source_type: Literal["idea", "markdown", "pasted_json", "url"] = "idea"
     idea_brief: str | None = None
     markdown_source: str | None = None
     url_source: str | None = None
     json_script: str | None = None
     status: Literal["draft", "active", "completed", "archived"] = "draft"
-    workspace_id: int | None = None
     created_at: datetime
     updated_at: datetime
 

@@ -54,15 +54,14 @@ class SubtitleArtifact(BaseModel):
         if meta is not None:
             meta_dict = cast(dict[str, object], meta)
             _ = mapped.setdefault("format", meta_dict.get("format"))
-        # Discard DB-only columns not in this domain model
         # Map scene_id to section_id for per-paragraph support
         if "scene_id" in mapped and "section_id" not in mapped:
             mapped["section_id"] = mapped.pop("scene_id")
         else:
-            mapped.pop("scene_id", None)
-        for key in ("artifact_type", "file_size_bytes", "mime_type", "updated_at"):
-            _ = mapped.pop(key, None)
-        return cls.model_validate(mapped)
+            _ = mapped.pop("scene_id", None)
+        known = set(cls.model_fields)
+        filtered = {key: value for key, value in mapped.items() if key in known}
+        return cls.model_validate(filtered)
 
     def to_json(self) -> str:
         return self.model_dump_json()

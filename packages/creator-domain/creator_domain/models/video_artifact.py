@@ -52,10 +52,9 @@ class VideoArtifact(BaseModel):
         if meta is not None:
             meta_dict = cast(dict[str, object], meta)
             _ = mapped.setdefault("render_profile", meta_dict.get("render_profile"))
-        # Discard DB-only columns not in this domain model
-        for key in ("artifact_type", "scene_id", "file_size_bytes", "mime_type", "updated_at"):
-            _ = mapped.pop(key, None)
-        return cls.model_validate(mapped)
+        known = set(cls.model_fields)
+        filtered = {key: value for key, value in mapped.items() if key in known}
+        return cls.model_validate(filtered)
 
     def to_json(self) -> str:
         return self.model_dump_json()

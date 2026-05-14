@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class VisualAsset(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", protected_namespaces=())
 
     id: int = Field(ge=1)
     run_id: int = Field(ge=1)
@@ -36,7 +36,9 @@ class VisualAsset(BaseModel):
         mapped = dict(row)
         if "provider" in mapped and "provider_type" not in mapped:
             mapped["provider_type"] = mapped.pop("provider")
-        return cls.model_validate(mapped)
+        known = set(cls.model_fields)
+        filtered = {key: value for key, value in mapped.items() if key in known}
+        return cls.model_validate(filtered)
 
     def to_json(self) -> str:
         return self.model_dump_json()

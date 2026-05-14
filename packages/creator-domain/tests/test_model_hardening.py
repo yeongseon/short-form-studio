@@ -100,7 +100,7 @@ def test_pipeline_run_rejects_invalid_stage_strings() -> None:
                 "created_at": _ts(),
                 "metadata_json": "{bad json",
             },
-            "section_id",
+            "format",
         ),
         (
             VideoArtifact.from_row,
@@ -119,7 +119,149 @@ def test_from_row_handles_malformed_json_gracefully(
     factory: Callable[[dict[str, Any]], Any], row: dict[str, Any], none_field: str
 ) -> None:
     model = factory(row)
-    assert getattr(model, none_field) is None
+    # For fields with non-None defaults (e.g. SubtitleArtifact.format="srt"),
+    # verify malformed JSON doesn't crash and field keeps its default.
+    value = getattr(model, none_field)
+    assert value is None or value == type(model).model_fields[none_field].default
+
+
+def test_run_task_from_row_drops_unknown_db_columns() -> None:
+    task = RunTask.from_row(
+        {
+            "id": 1,
+            "run_id": 1,
+            "task_type": "render",
+            "celery_task_id": "task-1",
+            "status": "running",
+            "attempt": 2,
+            "created_at": _ts(),
+            "extra_col": "ignored",
+            "another": 123,
+        }
+    )
+
+    assert task.id == 1
+    assert task.status == "running"
+
+
+def test_visual_asset_from_row_remaps_provider_and_drops_unknown_db_columns() -> None:
+    asset = VisualAsset.from_row(
+        {
+            "id": 1,
+            "run_id": 1,
+            "scene_id": "scene-1",
+            "asset_path": "asset.png",
+            "provider": "openai",
+            "created_at": _ts(),
+            "extra_col": "ignored",
+            "another": 123,
+        }
+    )
+
+    assert asset.provider_type == "openai"
+
+
+def test_workspace_quota_from_row_drops_unknown_db_columns() -> None:
+    quota = WorkspaceQuota.from_row(
+        {
+            "id": 1,
+            "workspace_id": 1,
+            "created_at": _ts(),
+            "updated_at": _ts(),
+            "extra_col": "ignored",
+            "another": 123,
+        }
+    )
+
+    assert quota.workspace_id == 1
+
+
+def test_pipeline_run_from_row_drops_unknown_db_columns_and_maps_json_fields() -> None:
+    run = PipelineRun.from_row(
+        {
+            "id": 1,
+            "project_id": 1,
+            "model_defaults_json": '{"script_model":"gpt-4o-mini"}',
+            "metadata_json": '{"foo":"bar"}',
+            "created_at": _ts(),
+            "updated_at": _ts(),
+            "extra_col": "ignored",
+            "another": 123,
+        }
+    )
+
+    assert run.model_defaults is not None
+    assert run.model_defaults.script_model == "gpt-4o-mini"
+    assert run.metadata == {"foo": "bar"}
+
+
+@pytest.mark.parametrize(
+    ("factory", "file_name", "expected_path", "expected_field", "expected_value"),
+    [
+        (AudioArtifact.from_row, "audio.wav", "audio.wav", "voice", "alloy"),
+        (SubtitleArtifact.from_row, "sub.srt", "sub.srt", "format", "vtt"),
+        (VideoArtifact.from_row, "video.mp4", "video.mp4", "render_profile", "1080p"),
+    ],
+)
+def test_artifact_from_row_drops_unknown_db_columns_and_keeps_remapping(
+    factory: Callable[[dict[str, Any]], Any],
+    file_name: str,
+    expected_path: str,
+    expected_field: str,
+    expected_value: str,
+) -> None:
+    artifact = factory(
+        {
+            "id": 1,
+            "run_id": 1,
+            "file_path": file_name,
+            "scene_id": "sec-1",
+            "metadata_json": {
+                "voice": "alloy",
+                "format": "vtt",
+                "render_profile": "1080p",
+            },
+            "created_at": _ts(),
+            "artifact_type": "audio",
+            "file_size_bytes": 99,
+            "mime_type": "audio/wav",
+            "updated_at": _ts(),
+            "workspace_id": 1,
+            "project_id": 1,
+            "storage_backend": "local",
+            "storage_key": "a/b/c",
+            "content_type": "audio/wav",
+            "size_bytes": 99,
+            "storage_provider": "local",
+            "checksum": "abc",
+            "expires_at": _ts(),
+            "extra_col": "ignored",
+            "another": 123,
+        }
+    )
+
+    assert artifact.path == expected_path
+    assert getattr(artifact, expected_field) == expected_value
+
+
+def test_usage_event_from_row_drops_unknown_db_columns() -> None:
+    event = UsageEvent.from_row(
+        {
+            "id": 1,
+            "workspace_id": 1,
+            "project_id": 1,
+            "run_id": 1,
+            "provider": "openai",
+            "model_key": "gpt-4o-mini",
+            "operation_type": "llm",
+            "created_at": _ts(),
+            "cost_config_version": "v1",
+            "extra_col": "ignored",
+            "another": 123,
+        }
+    )
+
+    assert event.provider == "openai"
 
 
 @pytest.mark.parametrize(

@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 class AudioArtifact(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", protected_namespaces=())
 
     id: int = Field(ge=1)
     run_id: int = Field(ge=1)
@@ -57,15 +57,14 @@ class AudioArtifact(BaseModel):
             _ = mapped.setdefault("model_used", meta_dict.get("model_used"))
             _ = mapped.setdefault("provider_type", meta_dict.get("provider_type"))
             _ = mapped.setdefault("voice", meta_dict.get("voice"))
-        # Discard DB-only columns not in this domain model
         # Map scene_id to section_id for per-paragraph support
         if "scene_id" in mapped and "section_id" not in mapped:
             mapped["section_id"] = mapped.pop("scene_id")
         else:
-            mapped.pop("scene_id", None)
-        for key in ("artifact_type", "file_size_bytes", "mime_type", "updated_at"):
-            _ = mapped.pop(key, None)
-        return cls.model_validate(mapped)
+            _ = mapped.pop("scene_id", None)
+        known = set(cls.model_fields)
+        filtered = {key: value for key, value in mapped.items() if key in known}
+        return cls.model_validate(filtered)
 
     def to_json(self) -> str:
         return self.model_dump_json()

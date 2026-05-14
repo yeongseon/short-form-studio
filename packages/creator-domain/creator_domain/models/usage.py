@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class UsageEvent(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", protected_namespaces=())
 
     id: int = Field(ge=1)
     workspace_id: int | None = None
@@ -27,7 +27,9 @@ class UsageEvent(BaseModel):
     def from_row(cls, row: dict[str, object]) -> UsageEvent:
         mapped = dict(row)
         _ = mapped.pop("cost_config_version", None)
-        return cls.model_validate(mapped)
+        known = set(cls.model_fields)
+        filtered = {key: value for key, value in mapped.items() if key in known}
+        return cls.model_validate(filtered)
 
 
 class WorkspaceQuota(BaseModel):
@@ -44,7 +46,9 @@ class WorkspaceQuota(BaseModel):
 
     @classmethod
     def from_row(cls, row: dict[str, object]) -> WorkspaceQuota:
-        return cls.model_validate(row)
+        known = set(cls.model_fields)
+        mapped = {key: value for key, value in row.items() if key in known}
+        return cls.model_validate(mapped)
 
 
 class UsageSummary(BaseModel):

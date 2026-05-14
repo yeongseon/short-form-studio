@@ -12,8 +12,8 @@ class RunTask(BaseModel):
 
     id: int = Field(ge=1)
     run_id: int = Field(ge=1)
-    task_type: str = Field(max_length=64)
-    celery_task_id: str = Field(max_length=256)
+    task_type: str = Field(max_length=100)
+    celery_task_id: str = Field(max_length=255)
     status: Literal["queued", "pending", "running", "success", "failed", "revoked", "rejected"] = (
         "queued"
     )
@@ -26,4 +26,6 @@ class RunTask(BaseModel):
 
     @classmethod
     def from_row(cls, row: dict[str, object]) -> RunTask:
-        return cls.model_validate(row)
+        known = set(cls.model_fields)
+        mapped = {key: value for key, value in row.items() if key in known}
+        return cls.model_validate(mapped)

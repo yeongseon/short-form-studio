@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class PipelineRun(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", protected_namespaces=())
 
     id: int = Field(ge=1)
     project_id: int = Field(ge=1)
@@ -67,7 +67,9 @@ class PipelineRun(BaseModel):
                     "Malformed JSON in metadata_json column for row id=%s", mapped.get("id")
                 )
                 mapped["metadata"] = None
-        return cls.model_validate(mapped)
+        known = set(cls.model_fields)
+        filtered = {key: value for key, value in mapped.items() if key in known}
+        return cls.model_validate(filtered)
 
     def to_json(self) -> str:
         return self.model_dump_json()
