@@ -46,11 +46,14 @@ class FakeAudioService:
     async def create_paragraph_artifact(
         self,
         run_id: int,
-        section_id: str,
+        section_id: int,
         path: str,
-        model_used: str,
-        provider_type: str,
-        voice: str,
+        *,
+        model_used: str | None = None,
+        provider_type: str | None = None,
+        voice: str | None = None,
+        storage_provider: str | None = None,
+        storage_key: str | None = None,
     ) -> FakeAudioArtifact:
         call_data = {
             "run_id": run_id,
@@ -59,6 +62,8 @@ class FakeAudioService:
             "model_used": model_used,
             "provider_type": provider_type,
             "voice": voice,
+            "storage_provider": storage_provider,
+            "storage_key": storage_key,
         }
         self.calls.append(call_data)
         return FakeAudioArtifact(id=self.artifact_id, path=path)
@@ -186,16 +191,16 @@ def test_generate_paragraph_audio_success(monkeypatch: pytest.MonkeyPatch) -> No
             },
         )
     ]
-    assert audio_service.calls == [
-        {
-            "run_id": 101,
-            "section_id": "hook-1",
-            "path": "data/artifacts/101/audio/hook-1.wav",
-            "model_used": "qwen3-tts",
-            "provider_type": "qwen_tts",
-            "voice": "en_US-lessac-medium",
-        }
-    ]
+    assert len(audio_service.calls) == 1
+    call = audio_service.calls[0]
+    assert call["run_id"] == 101
+    assert call["section_id"] == "hook-1"
+    assert call["path"] == "data/artifacts/101/audio/hook-1.wav"
+    assert call["model_used"] == "qwen3-tts"
+    assert call["provider_type"] == "qwen_tts"
+    assert call["voice"] == "en_US-lessac-medium"
+    assert call["storage_provider"] == "local"
+    assert "storage_key" in call
     assert script_service.calls == [101]
 
 

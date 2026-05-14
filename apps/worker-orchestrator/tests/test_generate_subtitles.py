@@ -111,6 +111,8 @@ class FakeSubtitleService:
         format: str = "srt",
         model_used: str | None = None,
         provider_type: str | None = None,
+        storage_provider: str | None = None,
+        storage_key: str | None = None,
     ) -> FakeSubtitleArtifact:
         call_data = {
             "run_id": run_id,
@@ -118,6 +120,8 @@ class FakeSubtitleService:
             "format": format,
             "model_used": model_used,
             "provider_type": provider_type,
+            "storage_provider": storage_provider,
+            "storage_key": storage_key,
         }
         self.calls.append(call_data)
         return FakeSubtitleArtifact(id=self.artifact_id, path=path)
@@ -219,15 +223,15 @@ def test_generate_subtitles_success(monkeypatch: pytest.MonkeyPatch) -> None:
             },
         )
     ]
-    assert subtitle_service.calls == [
-        {
-            "run_id": 101,
-            "path": "data/artifacts/101/subtitles/subtitles.srt",
-            "format": "srt",
-            "model_used": "whisper-large",
-            "provider_type": "faster-whisper",
-        }
-    ]
+    assert len(subtitle_service.calls) == 1
+    call = subtitle_service.calls[0]
+    assert call["run_id"] == 101
+    assert call["path"] == "data/artifacts/101/subtitles/subtitles.srt"
+    assert call["format"] == "srt"
+    assert call["model_used"] == "whisper-large"
+    assert call["provider_type"] == "faster-whisper"
+    assert call["storage_provider"] == "local"
+    assert "storage_key" in call
     assert storage.calls == [(101, {"current_stage": "RENDER_GENERATING", "status": "running"})]
     assert storage.cas_calls[0][2] == frozenset({"AUDIO_GENERATING", "SUBTITLE_GENERATING"})
 

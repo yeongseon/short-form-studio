@@ -160,13 +160,15 @@ class FakeVisualAssetService:
     async def create_asset(
         self,
         run_id: int,
-        scene_id: str,
+        scene_id: int,
         asset_path: str,
         *,
         prompt_snapshot: str | None = None,
         model_used: str | None = None,
         provider_type: str | None = None,
-        is_active: bool = True,
+        storage_provider: str | None = None,
+        storage_key: str | None = None,
+        is_active: bool | None = None,
     ) -> FakeVisualAsset:
         call_data = {
             "run_id": run_id,
@@ -175,6 +177,8 @@ class FakeVisualAssetService:
             "prompt_snapshot": prompt_snapshot,
             "model_used": model_used,
             "provider_type": provider_type,
+            "storage_provider": storage_provider,
+            "storage_key": storage_key,
             "is_active": is_active,
         }
         self.calls.append(call_data)
@@ -285,6 +289,8 @@ def test_happy_path_single_scene_with_gpu_lock(monkeypatch: pytest.MonkeyPatch) 
     assert va_service.calls[0]["scene_id"] == "scene-sec-0"
     assert va_service.calls[0]["prompt_snapshot"] == "A hook shot"
     assert storage.calls == [(101, {"current_stage": "VISUAL_ASSET_REVIEW", "status": "running"})]
+    assert va_service.calls[0]["storage_provider"] == "local"
+    assert va_service.calls[0]["storage_key"] is not None
 
 
 def test_happy_path_all_scenes(monkeypatch: pytest.MonkeyPatch) -> None:

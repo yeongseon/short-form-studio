@@ -147,24 +147,15 @@ def generate_audio(
         from creator_service.artifact_storage_integration import store_artifact_file
 
         uploaded = store_artifact_file(run_id, audio_path, "audio/wav")
-        try:
-            artifact = await _audio_service.create_artifact(
-                run_id=run_id,
-                path=audio_path,
-                model_used=tts_model,
-                provider_type=entry.provider_type,
-                voice=voice,
-                storage_provider=uploaded.storage_provider,
-                storage_key=uploaded.key,
-            )
-        except TypeError:
-            artifact = await _audio_service.create_artifact(
-                run_id=run_id,
-                path=audio_path,
-                model_used=tts_model,
-                provider_type=entry.provider_type,
-                voice=voice,
-            )
+        artifact = await _audio_service.create_artifact(
+            run_id=run_id,
+            path=audio_path,
+            model_used=tts_model,
+            provider_type=entry.provider_type,
+            voice=voice,
+            storage_provider=uploaded.storage_provider,
+            storage_key=uploaded.key,
+        )
 
         return TaskResult(
             status="success",

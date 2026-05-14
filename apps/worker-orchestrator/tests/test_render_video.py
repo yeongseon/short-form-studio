@@ -181,12 +181,16 @@ class FakeRenderService:
         path: str,
         *,
         render_profile: str | None = None,
+        storage_provider: str | None = None,
+        storage_key: str | None = None,
     ) -> FakeVideoArtifact:
         self.create_calls.append(
             {
                 "run_id": run_id,
                 "path": path,
                 "render_profile": render_profile,
+                "storage_provider": storage_provider,
+                "storage_key": storage_key,
             }
         )
         return self.artifact
@@ -324,13 +328,13 @@ def test_render_video_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result["subtitle_path"] == "data/artifacts/201/subtitles/subtitles.srt"
 
     assert fake_render_service.manifest_calls[0]["render_profile_name"] == "high_quality"
-    assert fake_render_service.create_calls == [
-        {
-            "run_id": 201,
-            "path": "data/artifacts/201/render/output.mp4",
-            "render_profile": "high_quality",
-        }
-    ]
+    assert len(fake_render_service.create_calls) == 1
+    call = fake_render_service.create_calls[0]
+    assert call["run_id"] == 201
+    assert call["path"] == "data/artifacts/201/render/output.mp4"
+    assert call["render_profile"] == "high_quality"
+    assert call["storage_provider"] == "local"
+    assert "storage_key" in call
 
     render_input, output = fake_ffmpeg.calls[0]
     assert output == Path("data/artifacts/201/render/output.mp4")
