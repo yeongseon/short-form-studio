@@ -2,6 +2,7 @@ import json
 from unittest.mock import MagicMock, patch
 
 from celery.signals import task_failure
+from tasks import generate_audio as generate_audio_module
 
 import celery_app
 
@@ -78,7 +79,41 @@ def test_task_failure_signal_skips_dlq_for_retriable_attempt(monkeypatch):
     task_failure.send(
         sender=sender,
         task_id="task-retry-1",
-        exception=RuntimeError("retryable"),
+        exception=generate_audio_module.ProviderTimeoutError("retryable"),
+        args=("topic",),
+        kwargs={"language": "en"},
+    )
+
+    mock_client.lpush.assert_not_called()
+
+
+def test_task_failure_signal_records_nonretryable_on_first_attempt(monkeypatch):
+    mock_client = MagicMock()
+    monkeypatch.setattr(celery_app, "redis", MagicMock())
+    celery_app.redis.Redis.from_url.return_value = mock_client
+
+    sender = _Sender("tasks.generate_script", retries=0, max_retries=3)
+    task_failure.send(
+        sender=sender,
+        task_id="task-nonretryable-first-attempt",
+        exception=RuntimeError("not retryable"),
+        args=("topic",),
+        kwargs={"language": "en"},
+    )
+
+    mock_client.lpush.assert_called_once()
+
+
+def test_task_failure_signal_skips_dlq_for_rate_limit_with_retries(monkeypatch):
+    mock_client = MagicMock()
+    monkeypatch.setattr(celery_app, "redis", MagicMock())
+    celery_app.redis.Redis.from_url.return_value = mock_client
+
+    sender = _Sender("tasks.generate_script", retries=1, max_retries=3)
+    task_failure.send(
+        sender=sender,
+        task_id="task-rate-limit-retry-2",
+        exception=generate_audio_module.RateLimitError("retryable"),
         args=("topic",),
         kwargs={"language": "en"},
     )

@@ -170,7 +170,12 @@ def _record_failed_task_to_dlq(
         _write_dlq_fallback(payload, redis_error)
 
 
-def _should_record_to_dlq(sender: Any) -> bool:
+def _should_record_to_dlq(sender: Any, exception: BaseException | None = None) -> bool:
+    from creator_provider.exceptions import ProviderTimeoutError, RateLimitError
+
+    if not isinstance(exception, (ProviderTimeoutError, RateLimitError)):
+        return True
+
     request = getattr(sender, "request", None)
     retries = getattr(request, "retries", None)
     max_retries = getattr(sender, "max_retries", None)
@@ -190,7 +195,7 @@ def handle_task_failure(
 ) -> None:
     if exception is None:
         return
-    if not _should_record_to_dlq(sender):
+    if not _should_record_to_dlq(sender, exception):
         return
 
     task_name = getattr(sender, "name", "unknown_task")

@@ -15,6 +15,11 @@ from creator_provider.exceptions import ProviderTimeoutError, RateLimitError
 from tasks import (
     generate_audio as generate_audio_module,
     generate_paragraph_audio as generate_paragraph_audio_module,
+    generate_script as generate_script_module,
+    generate_visual_plan as generate_visual_plan_module,
+    generate_scene_image as generate_scene_image_module,
+    generate_subtitles as generate_subtitles_module,
+    generate_paragraph_subtitles as generate_paragraph_subtitles_module,
 )
 
 
@@ -148,8 +153,9 @@ class _FakeScriptService:
 
 
 class _FakeScriptDraft:
-    def __init__(self, markdown_content: str = "") -> None:
+    def __init__(self, markdown_content: str = "", structured_script: Any = None) -> None:
         self.markdown_content = markdown_content
+        self.structured_script = structured_script
 
 
 def test_generate_audio_preserves_provider_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -265,3 +271,254 @@ def test_generate_paragraph_audio_preserves_rate_limit(monkeypatch: pytest.Monke
 
     with pytest.raises(RateLimitError, match="rate limited"):
         run_callable(run_id=1, section_id="s1", section_text="Test")
+
+
+# ============================================================================
+# Tests for generate_script
+# ============================================================================
+
+
+def test_generate_script_preserves_provider_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = _FakeProvider(error=ProviderTimeoutError("timeout"))
+    _patch_registry(monkeypatch, generate_script_module, _FakeRegistry(_FakeEntry(), provider))
+
+    storage = _make_storage(run_id=1, stage="SCRIPT_GENERATING")
+    monkeypatch.setattr(generate_script_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr(generate_script_module, "_script_service", _FakeScriptService())
+
+    task = generate_script_module.generate_script
+    run_callable = getattr(task, "run", task)
+
+    with pytest.raises(ProviderTimeoutError, match="timeout"):
+        run_callable(run_id=1, idea_brief="Test idea")
+
+
+def test_generate_script_preserves_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = _FakeProvider(error=RateLimitError("rate limited"))
+    _patch_registry(monkeypatch, generate_script_module, _FakeRegistry(_FakeEntry(), provider))
+
+    storage = _make_storage(run_id=1, stage="SCRIPT_GENERATING")
+    monkeypatch.setattr(generate_script_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr(generate_script_module, "_script_service", _FakeScriptService())
+
+    task = generate_script_module.generate_script
+    run_callable = getattr(task, "run", task)
+
+    with pytest.raises(RateLimitError, match="rate limited"):
+        run_callable(run_id=1, idea_brief="Test idea")
+
+
+# ============================================================================
+# Tests for generate_visual_plan
+# ============================================================================
+
+
+class _FakeVisualPlanService:
+    async def save_plan(self, **kwargs: Any) -> None:
+        pass
+
+    async def get_active_plan(self, _run_id: int) -> Any:
+        return None
+
+
+def test_generate_visual_plan_preserves_provider_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = _FakeProvider(error=ProviderTimeoutError("timeout"))
+    _patch_registry(monkeypatch, generate_visual_plan_module, _FakeRegistry(_FakeEntry(), provider))
+
+    draft = _FakeScriptDraft(markdown_content="Test script content")
+    storage = _make_storage(run_id=1, stage="VISUAL_PLAN_GENERATING")
+    monkeypatch.setattr(generate_visual_plan_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr(generate_visual_plan_module, "_script_service", _FakeScriptService(draft=draft))
+    monkeypatch.setattr(generate_visual_plan_module, "_visual_plan_service", _FakeVisualPlanService())
+
+    task = generate_visual_plan_module.generate_visual_plan
+    run_callable = getattr(task, "run", task)
+
+    with pytest.raises(ProviderTimeoutError, match="timeout"):
+        run_callable(run_id=1)
+
+
+def test_generate_visual_plan_preserves_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = _FakeProvider(error=RateLimitError("rate limited"))
+    _patch_registry(monkeypatch, generate_visual_plan_module, _FakeRegistry(_FakeEntry(), provider))
+
+    draft = _FakeScriptDraft(markdown_content="Test script content")
+    storage = _make_storage(run_id=1, stage="VISUAL_PLAN_GENERATING")
+    monkeypatch.setattr(generate_visual_plan_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr(generate_visual_plan_module, "_script_service", _FakeScriptService(draft=draft))
+    monkeypatch.setattr(generate_visual_plan_module, "_visual_plan_service", _FakeVisualPlanService())
+
+    task = generate_visual_plan_module.generate_visual_plan
+    run_callable = getattr(task, "run", task)
+
+    with pytest.raises(RateLimitError, match="rate limited"):
+        run_callable(run_id=1)
+
+
+# ============================================================================
+# Tests for generate_scene_image
+# ============================================================================
+
+
+class _FakeScene:
+    def __init__(self, scene_id: str = "scene-1", prompt: str = "test prompt") -> None:
+        self.scene_id = scene_id
+        self.prompt = prompt
+
+
+class _FakeVisualPlan:
+    def __init__(self) -> None:
+        self.scenes = [_FakeScene()]
+
+
+class _FakeVisualPlanServiceWithPlan:
+    def __init__(self, plan: Any = None) -> None:
+        self._plan = plan or _FakeVisualPlan()
+
+    async def get_active_plan(self, _run_id: int) -> Any:
+        return self._plan
+
+    async def save_plan(self, **kwargs: Any) -> None:
+        pass
+
+
+def test_generate_scene_image_catches_provider_timeout_per_scene(monkeypatch: pytest.MonkeyPatch) -> None:
+    """generate_scene_image catches exceptions per-scene rather than re-raising.
+    When a single scene fails with ProviderTimeoutError, it's recorded as a failed scene.
+    """
+    provider = _FakeProvider(error=ProviderTimeoutError("timeout"))
+    _patch_registry(monkeypatch, generate_scene_image_module, _FakeRegistry(_FakeEntry(), provider))
+
+    storage = _make_storage(run_id=1, stage="VISUAL_ASSET_GENERATING")
+    monkeypatch.setattr(generate_scene_image_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr(generate_scene_image_module, "_visual_plan_service", _FakeVisualPlanServiceWithPlan())
+
+    task = generate_scene_image_module.generate_scene_image
+    run_callable = getattr(task, "run", task)
+
+    # scene_image catches per-scene exceptions; the task completes with 'failed' status
+    result = run_callable(run_id=1, scene_id="scene-1")
+    assert result["status"] == "failed"
+    assert result["failed"] == 1
+
+
+def test_generate_scene_image_catches_rate_limit_per_scene(monkeypatch: pytest.MonkeyPatch) -> None:
+    """generate_scene_image catches RateLimitError per-scene rather than re-raising."""
+    provider = _FakeProvider(error=RateLimitError("rate limited"))
+    _patch_registry(monkeypatch, generate_scene_image_module, _FakeRegistry(_FakeEntry(), provider))
+
+    storage = _make_storage(run_id=1, stage="VISUAL_ASSET_GENERATING")
+    monkeypatch.setattr(generate_scene_image_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr(generate_scene_image_module, "_visual_plan_service", _FakeVisualPlanServiceWithPlan())
+
+    task = generate_scene_image_module.generate_scene_image
+    run_callable = getattr(task, "run", task)
+
+    result = run_callable(run_id=1, scene_id="scene-1")
+    assert result["status"] == "failed"
+    assert result["failed"] == 1
+
+
+# ============================================================================
+# Tests for generate_subtitles
+# ============================================================================
+
+
+class _FakeAudioArtifact:
+    def __init__(self, path: str = "/tmp/test_audio.wav") -> None:
+        self.path = path
+
+
+class _FakeAudioServiceForSubtitles:
+    def __init__(self, artifact: Any = None) -> None:
+        self._artifact = artifact or _FakeAudioArtifact()
+
+    async def get_latest(self, _run_id: int) -> Any:
+        return self._artifact
+
+
+def test_generate_subtitles_preserves_provider_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = _FakeProvider(error=ProviderTimeoutError("timeout"))
+    _patch_registry(monkeypatch, generate_subtitles_module, _FakeRegistry(_FakeEntry(), provider))
+
+    draft = _FakeScriptDraft(markdown_content="Test script")
+    storage = _make_storage(run_id=1, stage="SUBTITLE_GENERATING")
+    monkeypatch.setattr(generate_subtitles_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr(generate_subtitles_module, "_script_service", _FakeScriptService(draft=draft))
+    monkeypatch.setattr(generate_subtitles_module, "_audio_service", _FakeAudioServiceForSubtitles())
+
+    task = generate_subtitles_module.generate_subtitles
+    run_callable = getattr(task, "run", task)
+
+    with pytest.raises(ProviderTimeoutError, match="timeout"):
+        run_callable(run_id=1)
+
+
+def test_generate_subtitles_preserves_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = _FakeProvider(error=RateLimitError("rate limited"))
+    _patch_registry(monkeypatch, generate_subtitles_module, _FakeRegistry(_FakeEntry(), provider))
+
+    draft = _FakeScriptDraft(markdown_content="Test script")
+    storage = _make_storage(run_id=1, stage="SUBTITLE_GENERATING")
+    monkeypatch.setattr(generate_subtitles_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr(generate_subtitles_module, "_script_service", _FakeScriptService(draft=draft))
+    monkeypatch.setattr(generate_subtitles_module, "_audio_service", _FakeAudioServiceForSubtitles())
+
+    task = generate_subtitles_module.generate_subtitles
+    run_callable = getattr(task, "run", task)
+
+    with pytest.raises(RateLimitError, match="rate limited"):
+        run_callable(run_id=1)
+
+
+# ============================================================================
+# Tests for generate_paragraph_subtitles
+# ============================================================================
+
+
+class _FakeSubtitleService:
+    async def create_paragraph_artifact(self, **kwargs: Any) -> Any:
+        return SimpleNamespace(id=1, path="/tmp/test.srt")
+
+    async def create_artifact(self, **kwargs: Any) -> Any:
+        return SimpleNamespace(id=1, path="/tmp/test.srt")
+
+
+def test_generate_paragraph_subtitles_preserves_provider_timeout(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    provider = _FakeProvider(error=ProviderTimeoutError("timeout"))
+    _patch_registry(monkeypatch, generate_paragraph_subtitles_module, _FakeRegistry(_FakeEntry(), provider))
+
+    audio_file = tmp_path / "test_audio.wav"
+    audio_file.write_bytes(b"fake audio")
+
+    storage = _make_storage(run_id=1, stage="SUBTITLE_GENERATING")
+    monkeypatch.setattr(generate_paragraph_subtitles_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr(generate_paragraph_subtitles_module, "_subtitle_service", _FakeSubtitleService())
+
+    task = generate_paragraph_subtitles_module.generate_paragraph_subtitles
+    run_callable = getattr(task, "run", task)
+
+    with pytest.raises(ProviderTimeoutError, match="timeout"):
+        run_callable(run_id=1, section_id="s1", audio_path=str(audio_file))
+
+
+def test_generate_paragraph_subtitles_preserves_rate_limit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    provider = _FakeProvider(error=RateLimitError("rate limited"))
+    _patch_registry(monkeypatch, generate_paragraph_subtitles_module, _FakeRegistry(_FakeEntry(), provider))
+
+    audio_file = tmp_path / "test_audio.wav"
+    audio_file.write_bytes(b"fake audio")
+
+    storage = _make_storage(run_id=1, stage="SUBTITLE_GENERATING")
+    monkeypatch.setattr(generate_paragraph_subtitles_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr(generate_paragraph_subtitles_module, "_subtitle_service", _FakeSubtitleService())
+
+    task = generate_paragraph_subtitles_module.generate_paragraph_subtitles
+    run_callable = getattr(task, "run", task)
+
+    with pytest.raises(RateLimitError, match="rate limited"):
+        run_callable(run_id=1, section_id="s1", audio_path=str(audio_file))
