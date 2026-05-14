@@ -101,9 +101,30 @@ async def gpu_lock_context(
 
     Yields the opaque lock token so callers can renew the lease for
     long-running operations via ``renew_gpu_lock``.
+
+    Starts a background renewal task that extends the lease at half the timeout
+    interval to prevent expiry during long-running GPU operations.
     """
     token = await asyncio.to_thread(acquire_gpu_lock, redis_client, task_id, timeout)
+    renewal_interval = max(timeout // 2, 1)
+
+    async def _auto_renew() -> None:
+        while True:
+            await asyncio.sleep(renewal_interval)
+            try:
+                ok = await asyncio.to_thread(renew_gpu_lock, redis_client, token, timeout)
+                if not ok:
+                    break
+            except Exception:
+                break
+
+    renewal_task = asyncio.create_task(_auto_renew())
     try:
         yield token
     finally:
+        renewal_task.cancel()
+        try:
+            await renewal_task
+        except asyncio.CancelledError:
+            pass
         release_gpu_lock(redis_client, token)

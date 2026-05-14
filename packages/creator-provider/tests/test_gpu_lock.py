@@ -147,6 +147,30 @@ class GpuLockTests(unittest.TestCase):
             ex=30,
         )
 
+    def test_context_manager_auto_renews_lease(self) -> None:
+        """Verify that gpu_lock_context starts an auto-renewal task."""
+        redis_client = Mock()
+        redis_client.set.return_value = True
+        redis_client.eval.return_value = 1  # renew + release both succeed
+
+        renew_calls: list[tuple] = []
+        original_renew = renew_gpu_lock
+
+        def tracking_renew(*args, **kwargs):
+            renew_calls.append(args)
+            return True
+
+        async def _run() -> None:
+            with patch('creator_provider.gpu_lock.renew_gpu_lock', side_effect=tracking_renew):
+                # timeout=2, so renewal_interval = 1 second
+                async with gpu_lock_context(redis_client, "task-renew", timeout=2) as token:
+                    # Wait long enough for at least one renewal
+                    await asyncio.sleep(1.5)
+
+        asyncio.run(_run())
+        # At least one renewal should have been attempted
+        self.assertGreaterEqual(len(renew_calls), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
