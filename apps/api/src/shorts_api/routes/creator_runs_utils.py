@@ -112,8 +112,20 @@ async def _revoke_active_tasks_for_run(run_id: int) -> None:
             "creator_service.task_tracking_service"
         ).task_tracking_service
         celery_ids = await tracking_service.revoke_active_tasks(run_id)
+        revoked_ids: list[str] = []
         for tid in celery_ids:
-            celery_app.control.revoke(tid, terminate=True)
+            try:
+                celery_app.control.revoke(tid, terminate=True)
+                revoked_ids.append(tid)
+            except Exception:
+                logger.warning(
+                    "Failed to revoke celery task %s for run %d",
+                    tid,
+                    run_id,
+                    exc_info=True,
+                )
+        if revoked_ids:
+            await tracking_service.mark_tasks_revoked(revoked_ids)
     except Exception:
         logger.warning("Failed to revoke active tasks for run %d", run_id, exc_info=True)
 
