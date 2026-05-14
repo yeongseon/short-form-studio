@@ -111,6 +111,7 @@ class PostgresRunStorage:
         updates: dict[str, Any],
         expected_stages: frozenset[str],
         workspace_id: int | None = None,
+        rejected_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, Any] | None]:
         if not updates:
             current = await self.get_run(run_id, workspace_id=workspace_id)
@@ -130,6 +131,9 @@ class PostgresRunStorage:
         assignments = f"{assignments}, version = version + 1"
         values = [run_id, list(expected_stages), *[updates[key] for key in keys]]
         where_clauses = ["id = $1", "current_stage = ANY($2::text[])"]
+        if rejected_statuses is not None:
+            where_clauses.append(f"status != ALL(${len(values) + 1}::text[])")
+            values.append(list(rejected_statuses))
         if workspace_id is not None:
             where_clauses.append(f"workspace_id = ${len(values) + 1}")
             values.append(workspace_id)

@@ -214,6 +214,31 @@ class TaskDispatchService:
         workspace_id: int | None = None,
     ) -> dict[str, object]:
         run_service_obj = cast(Any, run_service)
+
+        # Reject dispatch for cancelled runs to prevent race between
+        # stop_run() and concurrent trigger requests.
+        # Fail-closed: if we cannot verify status, block dispatch.
+        try:
+            if workspace_id is not None:
+                try:
+                    _pre_run = await run_service_obj.get_run(run_id, workspace_id=workspace_id)
+                except TypeError:
+                    _pre_run = await run_service_obj.get_run(run_id)
+            else:
+                _pre_run = await run_service_obj.get_run(run_id)
+        except Exception:
+            raise HTTPException(
+                status_code=503,
+                detail="Unable to verify run status; dispatch blocked",
+            ) from None
+        if _pre_run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        if getattr(_pre_run, "status", None) == "cancelled":
+            raise HTTPException(
+                status_code=409,
+                detail="Run is cancelled; cannot dispatch new tasks",
+            )
+
         workspace_id_for_reservation: int | None = None
         if quota_operation_type is not None:
             from creator_service.project_service import project_service
@@ -256,12 +281,21 @@ class TaskDispatchService:
         if rollback_stage == restart_stage:
             updates["restart_from"] = target_stage
 
-        ok, row = await run_service_obj.storage.conditional_update_run(
-            run_id,
-            updates,
-            expected_stages=expected_stages,
-            workspace_id=workspace_id,
-        )
+        try:
+            ok, row = await run_service_obj.storage.conditional_update_run(
+                run_id,
+                updates,
+                expected_stages=expected_stages,
+                workspace_id=workspace_id,
+                rejected_statuses=frozenset({"cancelled"}),
+            )
+        except TypeError:
+            ok, row = await run_service_obj.storage.conditional_update_run(
+                run_id,
+                updates,
+                expected_stages=expected_stages,
+                workspace_id=workspace_id,
+            )
         if not ok:
             if workspace_id_for_reservation is not None and quota_operation_type is not None:
                 from creator_service.usage_service import cancel_workspace_quota_reservation
@@ -340,6 +374,46 @@ class TaskDispatchService:
                 workspace_id=workspace_id,
             )
             raise HTTPException(status_code=503, detail=enqueue_error_detail) from None
+
+        try:
+            if workspace_id is not None:
+                try:
+                    _post_run = await run_service_obj.get_run(run_id, workspace_id=workspace_id)
+                except TypeError:
+                    _post_run = await run_service_obj.get_run(run_id)
+            else:
+                _post_run = await run_service_obj.get_run(run_id)
+        except Exception:
+            _post_run = None
+
+        if _post_run is None or getattr(_post_run, "status", None) == "cancelled":
+            try:
+                __import__("celery_app").celery_app.control.revoke(task_id, terminate=True)
+            except Exception:
+                logger.warning(
+                    "Failed to revoke task %s after concurrent cancel", task_id, exc_info=True
+                )
+            try:
+                tracking_service = import_module(
+                    "creator_service.task_tracking_service"
+                ).task_tracking_service
+                await tracking_service.mark_tasks_revoked([task_id])
+            except Exception:
+                logger.warning("Failed to mark task %s revoked", task_id, exc_info=True)
+            await run_service_obj.storage.conditional_update_run(
+                run_id,
+                {"current_stage": rollback_stage, "restart_from": rollback_restart_from},
+                expected_stages=frozenset({target_stage}),
+                workspace_id=workspace_id,
+            )
+            if workspace_id_for_reservation is not None and quota_operation_type is not None:
+                from creator_service.usage_service import cancel_workspace_quota_reservation
+
+                await cancel_workspace_quota_reservation(
+                    workspace_id_for_reservation,
+                    quota_operation_type,
+                )
+            raise HTTPException(status_code=409, detail="Run was cancelled during dispatch")
         return {
             "task_id": task_id,
             "run_id": run_id,

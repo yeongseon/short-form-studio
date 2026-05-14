@@ -12,7 +12,9 @@ from creator_service.task_dispatch_service import (
 
 class _FakeRunStorage:
     def __init__(self) -> None:
-        self.calls: list[tuple[int, dict[str, object], frozenset[str], int | None]] = []
+        self.calls: list[
+            tuple[int, dict[str, object], frozenset[str], int | None, frozenset[str] | None]
+        ] = []
 
     async def conditional_update_run(
         self,
@@ -21,14 +23,18 @@ class _FakeRunStorage:
         *,
         expected_stages: frozenset[str],
         workspace_id: int | None = None,
+        rejected_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
-        self.calls.append((run_id, updates, expected_stages, workspace_id))
+        self.calls.append((run_id, updates, expected_stages, workspace_id, rejected_statuses))
         return True, {"current_stage": "SCRIPT_REVIEW"}
 
 
 class _FakeRunService:
     def __init__(self) -> None:
         self.storage = _FakeRunStorage()
+
+    async def get_run(self, _run_id: int, **_kw: object) -> object:
+        return SimpleNamespace(status="running", project_id=1)
 
 
 def test_dispatch_generate_script_uses_sync_runner_when_redis_missing(
@@ -318,9 +324,11 @@ def test_cas_dispatch_with_rollback_releases_quota_on_stage_conflict(
             *,
             expected_stages: frozenset[str],
             workspace_id: int | None = None,
+            rejected_statuses: frozenset[str] | None = None,
         ) -> tuple[bool, dict[str, object] | None]:
             _ = expected_stages
             _ = workspace_id
+            _ = rejected_statuses
             return False, {"current_stage": "SCRIPT_GENERATING"}
 
     class _ConflictRunService:
@@ -380,3 +388,350 @@ def test_cas_dispatch_with_rollback_releases_quota_on_stage_conflict(
 
     assert exc.value.status_code == 409
     assert cancel_calls == [(999, "llm")]
+
+
+def test_cas_dispatch_with_rollback_rejects_cancelled_run() -> None:
+    """cas_dispatch_with_rollback must refuse to dispatch for cancelled runs."""
+    service = TaskDispatchService()
+
+    class _CancelledRunStorage:
+        async def conditional_update_run(
+            self,
+            _run_id: int,
+            _updates: dict[str, object],
+            *,
+            expected_stages: frozenset[str],
+            workspace_id: int | None = None,
+            rejected_statuses: frozenset[str] | None = None,
+        ) -> tuple[bool, dict[str, object] | None]:
+            _ = expected_stages
+            _ = workspace_id
+            _ = rejected_statuses
+            raise AssertionError("Should not reach CAS update for cancelled run")
+
+    class _CancelledRunService:
+        def __init__(self) -> None:
+            self.storage = _CancelledRunStorage()
+
+        async def get_run(self, _run_id: int, **_kw: object) -> object:
+            return SimpleNamespace(status="cancelled", project_id=1)
+
+    def _dispatcher(**_: object) -> str:
+        raise AssertionError("Should not dispatch for cancelled run")
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            service.cas_dispatch_with_rollback(
+                run_id=42,
+                expected_stages=frozenset({"IDEA_READY", "SCRIPT_REVIEW"}),
+                target_stage="SCRIPT_GENERATING",
+                dispatcher=_dispatcher,
+                dispatcher_args={"run_id": 42},
+                run_service=_CancelledRunService(),
+                rollback_stage="SCRIPT_REVIEW",
+                rollback_restart_from=None,
+                enqueue_error_detail="Failed to enqueue",
+            )
+        )
+
+    assert exc.value.status_code == 409
+    assert "cancelled" in exc.value.detail.lower()
+
+
+def test_cas_dispatch_rejects_concurrent_cancellation_atomically() -> None:
+    service = TaskDispatchService()
+
+    class _ConcurrentCancelStorage:
+        async def conditional_update_run(
+            self,
+            _run_id: int,
+            _updates: dict[str, object],
+            *,
+            expected_stages: frozenset[str],
+            workspace_id: int | None = None,
+            rejected_statuses: frozenset[str] | None = None,
+        ) -> tuple[bool, dict[str, object] | None]:
+            _ = expected_stages
+            _ = workspace_id
+            _ = rejected_statuses
+            return False, {"current_stage": "SCRIPT_GENERATING", "status": "cancelled"}
+
+    class _ConcurrentCancelRunService:
+        def __init__(self) -> None:
+            self.storage = _ConcurrentCancelStorage()
+
+        async def get_run(self, _run_id: int, **_kw: object) -> object:
+            return SimpleNamespace(status="running", project_id=1)
+
+    def _dispatcher(**_: object) -> str:
+        raise AssertionError("Should not dispatch when CAS rejects cancelled run")
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            service.cas_dispatch_with_rollback(
+                run_id=42,
+                expected_stages=frozenset({"SCRIPT_REVIEW"}),
+                target_stage="SCRIPT_GENERATING",
+                dispatcher=_dispatcher,
+                dispatcher_args={"run_id": 42},
+                run_service=_ConcurrentCancelRunService(),
+                rollback_stage="SCRIPT_REVIEW",
+                rollback_restart_from=None,
+                enqueue_error_detail="Failed to enqueue",
+            )
+        )
+
+    assert exc.value.status_code == 409
+
+
+def test_cas_dispatch_with_rollback_allows_non_cancelled_run() -> None:
+    """cas_dispatch_with_rollback proceeds normally for non-cancelled runs."""
+    service = TaskDispatchService()
+    run_service = _FakeRunService()
+
+    # Patch get_run onto _FakeRunService so the cancelled-check can fetch status
+    async def _get_run(_run_id: int, **_kw: object) -> object:
+        return SimpleNamespace(status="running", project_id=1)
+
+    run_service.get_run = _get_run  # type: ignore[attr-defined]
+
+    def _dispatcher(**_: object) -> str:
+        return "sync-test-1-abc"
+
+    result = asyncio.run(
+        service.cas_dispatch_with_rollback(
+            run_id=7,
+            expected_stages=frozenset({"SCRIPT_REVIEW"}),
+            target_stage="SCRIPT_GENERATING",
+            dispatcher=_dispatcher,
+            dispatcher_args={"run_id": 7},
+            run_service=run_service,
+            rollback_stage="SCRIPT_REVIEW",
+            rollback_restart_from=None,
+            enqueue_error_detail="Failed to enqueue",
+        )
+    )
+
+    assert result["task_id"] == "sync-test-1-abc"
+
+
+def test_cas_dispatch_post_dispatch_revoke_on_concurrent_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = TaskDispatchService()
+    revoked: list[tuple[str, bool]] = []
+
+    class _Storage:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        async def conditional_update_run(
+            self,
+            run_id: int,
+            updates: dict[str, object],
+            *,
+            expected_stages: frozenset[str],
+            workspace_id: int | None = None,
+            rejected_statuses: frozenset[str] | None = None,
+        ) -> tuple[bool, dict[str, object] | None]:
+            self.calls.append(
+                {
+                    "run_id": run_id,
+                    "updates": updates,
+                    "expected_stages": expected_stages,
+                    "workspace_id": workspace_id,
+                    "rejected_statuses": rejected_statuses,
+                }
+            )
+            return True, {"current_stage": "SCRIPT_GENERATING"}
+
+    class _RunService:
+        def __init__(self) -> None:
+            self.storage = _Storage()
+            self._calls = 0
+
+        async def get_run(self, _run_id: int, **_kw: object) -> object:
+            self._calls += 1
+            if self._calls == 1:
+                return SimpleNamespace(status="running", project_id=1)
+            return SimpleNamespace(status="cancelled", project_id=1)
+
+    class _TrackingService:
+        async def record_task_queued(self, _run_id: int, _task_type: str, _task_id: str) -> None:
+            return None
+
+        async def mark_tasks_revoked(self, _task_ids: list[str]) -> None:
+            return None
+
+    celery_app_module = ModuleType("celery_app")
+    setattr(
+        celery_app_module,
+        "celery_app",
+        SimpleNamespace(
+            control=SimpleNamespace(
+                revoke=lambda task_id, terminate: revoked.append((task_id, terminate))
+            )
+        ),
+    )
+    monkeypatch.setitem(__import__("sys").modules, "celery_app", celery_app_module)
+
+    def fake_import_module(name: str) -> object:
+        if name == "creator_service.task_tracking_service":
+            return SimpleNamespace(task_tracking_service=_TrackingService())
+        raise AssertionError(f"unexpected import: {name}")
+
+    monkeypatch.setattr("creator_service.task_dispatch_service.import_module", fake_import_module)
+
+    run_service = _RunService()
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            service.cas_dispatch_with_rollback(
+                run_id=42,
+                expected_stages=frozenset({"SCRIPT_REVIEW"}),
+                target_stage="SCRIPT_GENERATING",
+                dispatcher=lambda **_: "celery-999",
+                dispatcher_args={"run_id": 42},
+                run_service=run_service,
+                rollback_stage="SCRIPT_REVIEW",
+                rollback_restart_from=None,
+                enqueue_error_detail="Failed to enqueue",
+            )
+        )
+
+    assert exc.value.status_code == 409
+    assert revoked == [("celery-999", True)]
+    assert run_service.storage.calls[1]["updates"] == {
+        "current_stage": "SCRIPT_REVIEW",
+        "restart_from": None,
+    }
+
+
+def test_cas_dispatch_with_rollback_returns_503_when_get_run_raises() -> None:
+    """Fail-closed: if get_run raises, dispatch must be blocked with 503."""
+    service = TaskDispatchService()
+
+    class _ErrorRunStorage:
+        async def conditional_update_run(self, *_a: object, **_kw: object) -> object:
+            raise AssertionError("Should not reach CAS update")
+
+    class _ErrorRunService:
+        def __init__(self) -> None:
+            self.storage = _ErrorRunStorage()
+
+        async def get_run(self, _run_id: int, **_kw: object) -> object:
+            raise RuntimeError("DB connection lost")
+
+    def _dispatcher(**_: object) -> str:
+        raise AssertionError("Should not dispatch")
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            service.cas_dispatch_with_rollback(
+                run_id=42,
+                expected_stages=frozenset({"SCRIPT_REVIEW"}),
+                target_stage="SCRIPT_GENERATING",
+                dispatcher=_dispatcher,
+                dispatcher_args={"run_id": 42},
+                run_service=_ErrorRunService(),
+                rollback_stage="SCRIPT_REVIEW",
+                rollback_restart_from=None,
+                enqueue_error_detail="Failed to enqueue",
+            )
+        )
+
+    assert exc.value.status_code == 503
+    assert "verify run status" in exc.value.detail.lower()
+
+
+def test_cas_dispatch_with_rollback_returns_404_when_get_run_returns_none() -> None:
+    """If get_run returns None, dispatch must be blocked with 404."""
+    service = TaskDispatchService()
+
+    class _NoneRunStorage:
+        async def conditional_update_run(self, *_a: object, **_kw: object) -> object:
+            raise AssertionError("Should not reach CAS update")
+
+    class _NoneRunService:
+        def __init__(self) -> None:
+            self.storage = _NoneRunStorage()
+
+        async def get_run(self, _run_id: int, **_kw: object) -> object:
+            return None
+
+    def _dispatcher(**_: object) -> str:
+        raise AssertionError("Should not dispatch")
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            service.cas_dispatch_with_rollback(
+                run_id=999,
+                expected_stages=frozenset({"SCRIPT_REVIEW"}),
+                target_stage="SCRIPT_GENERATING",
+                dispatcher=_dispatcher,
+                dispatcher_args={"run_id": 999},
+                run_service=_NoneRunService(),
+                rollback_stage="SCRIPT_REVIEW",
+                rollback_restart_from=None,
+                enqueue_error_detail="Failed to enqueue",
+            )
+        )
+
+    assert exc.value.status_code == 404
+    assert "not found" in exc.value.detail.lower()
+
+
+def test_cas_dispatch_with_rollback_passes_workspace_id_to_preflight() -> None:
+    """Preflight get_run must forward workspace_id to match run_service contract."""
+    service = TaskDispatchService()
+    received_kwargs: list[dict[str, object]] = []
+
+    class _StrictRunStorage:
+        async def conditional_update_run(
+            self,
+            _run_id: int,
+            _updates: dict[str, object],
+            *,
+            expected_stages: frozenset[str],
+            workspace_id: int | None = None,
+            rejected_statuses: frozenset[str] | None = None,
+        ) -> tuple[bool, dict[str, object] | None]:
+            _ = expected_stages
+            _ = workspace_id
+            _ = rejected_statuses
+            return True, {"current_stage": "SCRIPT_GENERATING", "id": 42}
+
+    class _StrictRunService:
+        def __init__(self) -> None:
+            self.storage = _StrictRunStorage()
+
+        async def get_run(self, run_id: int, *, workspace_id: int | None = None) -> object:
+            received_kwargs.append({"run_id": run_id, "workspace_id": workspace_id})
+            return SimpleNamespace(status="running", project_id=1)
+
+    dispatched = False
+
+    def _dispatcher(**_: object) -> str:
+        nonlocal dispatched
+        dispatched = True
+        return "sync-test-42"
+
+    asyncio.run(
+        service.cas_dispatch_with_rollback(
+            run_id=42,
+            expected_stages=frozenset({"IDEA_READY", "SCRIPT_REVIEW"}),
+            target_stage="SCRIPT_GENERATING",
+            dispatcher=_dispatcher,
+            dispatcher_args={"run_id": 42},
+            run_service=_StrictRunService(),
+            rollback_stage="SCRIPT_REVIEW",
+            rollback_restart_from=None,
+            enqueue_error_detail="Failed to enqueue",
+            workspace_id=7,
+        )
+    )
+
+    assert dispatched
+    # The preflight call MUST have received workspace_id=7
+    assert len(received_kwargs) >= 1
+    assert received_kwargs[0]["workspace_id"] == 7

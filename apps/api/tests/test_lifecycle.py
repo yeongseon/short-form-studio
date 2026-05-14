@@ -53,6 +53,26 @@ class StubRunService:
         self.stop_errors: dict[int, Exception] = {}
         self.go_back_errors: dict[int, Exception] = {}
         self.update_model_defaults_errors: dict[int, Exception] = {}
+        self.storage = self._StorageStub(self)
+
+    class _StorageStub:
+        def __init__(self, parent: 'StubRunService') -> None:
+            self._parent = parent
+            self.update_run_calls: list[tuple[int, dict]] = []
+
+        async def update_run(
+            self, run_id: int, updates: dict, workspace_id: int | None = None, expected_version: int | None = None
+        ) -> dict | None:
+            self.update_run_calls.append((run_id, updates))
+            run = self._parent.runs.get(run_id)
+            if run is None:
+                return None
+            if workspace_id is not None and run.workspace_id != workspace_id:
+                return None
+            for k, v in updates.items():
+                if hasattr(run, k):
+                    object.__setattr__(run, k, v)
+            return {'id': run_id, **updates}
 
     async def get_run(self, run_id: int) -> StubPipelineRun | None:
         self.get_run_calls.append(run_id)
@@ -154,6 +174,27 @@ class StubRevokeTasks:
         self.calls.append(run_id)
 
 
+class StubCollectCeleryIds:
+    """Stub for _collect_active_celery_ids — returns empty list by default."""
+
+    def __init__(self) -> None:
+        self.calls: list[int] = []
+
+    async def __call__(self, run_id: int) -> list[str]:
+        self.calls.append(run_id)
+        return []
+
+
+class StubRevokeCeleryIds:
+    """Stub for _revoke_celery_ids — tracks calls."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[list[str], int]] = []
+
+    async def __call__(self, celery_ids: list[str], run_id: int) -> None:
+        self.calls.append((celery_ids, run_id))
+
+
 class StubArtifactLifecycleService:
     def __init__(self) -> None:
         self.delete_artifacts_for_run_calls: list[int] = []
@@ -191,6 +232,12 @@ def stub_lifecycle_services(
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(
                 route.endpoint.__globals__, "_revoke_active_tasks_for_run", revoke_tasks
+            )
+            monkeypatch.setitem(
+                route.endpoint.__globals__, "_collect_active_celery_ids", StubCollectCeleryIds()
+            )
+            monkeypatch.setitem(
+                route.endpoint.__globals__, "_revoke_celery_ids", StubRevokeCeleryIds()
             )
             monkeypatch.setitem(
                 route.endpoint.__globals__, "artifact_download_service", artifact_lifecycle_svc
@@ -460,8 +507,9 @@ async def test_delete_run_success_with_artifact_cleanup(client, stub_lifecycle_s
     response = await client.delete("/api/creator/runs/17")
 
     assert response.status_code == 200
-    assert response.json() == {"deleted": True, "run_id": 17}
-    assert revoke_tasks.calls == [17]
+    assert response.json() == {"deleted": True, "run_id": 17, "revoke_reliable": True}
+    # delete_run now uses _collect_active_celery_ids + _revoke_celery_ids (not _revoke_active_tasks_for_run)
+    assert revoke_tasks.calls == []
     assert artifact_lifecycle_svc.delete_artifacts_for_run_calls == [17]
     assert run_svc.delete_run_calls == [17]
     assert run_svc.delete_run_workspace_ids == [1]
@@ -503,7 +551,7 @@ async def test_delete_run_returns_404_for_workspace_mismatch(client, stub_lifecy
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Run not found"}
-    assert revoke_tasks.calls == [132]
+    assert revoke_tasks.calls == []
     assert artifact_lifecycle_svc.delete_artifacts_for_run_calls == []
 
 

@@ -41,6 +41,7 @@ class RunStorageBackend(Protocol):
         updates: dict[str, Any],
         expected_stages: frozenset[str],
         workspace_id: int | None = None,
+        rejected_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, Any] | None]:
         """Atomically update run only if current_stage is in expected_stages.
 
@@ -134,6 +135,7 @@ class InMemoryRunStorage:
         updates: dict[str, Any],
         expected_stages: frozenset[str],
         workspace_id: int | None = None,
+        rejected_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, Any] | None]:
         row = self._rows.get(run_id)
         if row is None:
@@ -141,6 +143,8 @@ class InMemoryRunStorage:
         if workspace_id is not None and row.get("workspace_id") != workspace_id:
             return False, None
         if row.get("current_stage") not in expected_stages:
+            return False, dict(row)
+        if rejected_statuses and row.get("status") in rejected_statuses:
             return False, dict(row)
         row.update(updates)
         row["version"] = int(row.get("version") or 0) + 1

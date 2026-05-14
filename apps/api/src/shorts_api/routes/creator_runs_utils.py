@@ -106,28 +106,9 @@ def validate_model_defaults(model_defaults: Mapping[str, str] | None) -> None:
 
 
 async def _revoke_active_tasks_for_run(run_id: int) -> None:
-    try:
-        celery_app = __import__("celery_app").celery_app
-        tracking_service = import_module(
-            "creator_service.task_tracking_service"
-        ).task_tracking_service
-        celery_ids = await tracking_service.revoke_active_tasks(run_id)
-        revoked_ids: list[str] = []
-        for tid in celery_ids:
-            try:
-                celery_app.control.revoke(tid, terminate=True)
-                revoked_ids.append(tid)
-            except Exception:
-                logger.warning(
-                    "Failed to revoke celery task %s for run %d",
-                    tid,
-                    run_id,
-                    exc_info=True,
-                )
-        if revoked_ids:
-            await tracking_service.mark_tasks_revoked(revoked_ids)
-    except Exception:
-        logger.warning("Failed to revoke active tasks for run %d", run_id, exc_info=True)
+    """Collect and revoke active tasks for a run (use when run still exists)."""
+    celery_ids, _ = await _collect_active_celery_ids(run_id)
+    await _revoke_celery_ids(celery_ids, run_id)
 
 
 async def _has_active_tasks_for_run(run_id: int) -> bool:
@@ -148,3 +129,48 @@ def validate_path_id(value: str, name: str = "id") -> str:
             detail=f"Invalid {name}: must be 1-128 alphanumeric chars, hyphens, or underscores",
         )
     return value
+
+
+async def _collect_active_celery_ids(run_id: int) -> tuple[list[str], bool]:
+    """Capture active Celery task IDs for a run before deletion.
+
+    Must be called BEFORE deleting the run, since CASCADE will remove
+    task tracking rows.
+    """
+    try:
+        tracking_service = import_module(
+            "creator_service.task_tracking_service"
+        ).task_tracking_service
+        ids = await tracking_service.get_active_celery_ids(run_id)
+        return ids, True
+    except Exception:
+        logger.warning("Failed to collect active task IDs for run %d", run_id, exc_info=True)
+        return [], False
+
+
+async def _revoke_celery_ids(celery_ids: list[str], run_id: int) -> bool:
+    """Revoke pre-captured Celery task IDs and mark them revoked."""
+    if not celery_ids:
+        return True
+    try:
+        celery_app = __import__("celery_app").celery_app
+        tracking_service = import_module(
+            "creator_service.task_tracking_service"
+        ).task_tracking_service
+        revoked: list[str] = []
+        all_ok = True
+        for tid in celery_ids:
+            try:
+                celery_app.control.revoke(tid, terminate=True)
+                revoked.append(tid)
+            except Exception:
+                all_ok = False
+                logger.warning(
+                    "Failed to revoke celery task %s for run %d", tid, run_id, exc_info=True
+                )
+        if revoked:
+            await tracking_service.mark_tasks_revoked(revoked)
+        return all_ok
+    except Exception:
+        logger.warning("Failed to revoke captured tasks for run %d", run_id, exc_info=True)
+        return False
