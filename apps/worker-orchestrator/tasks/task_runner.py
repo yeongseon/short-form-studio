@@ -326,6 +326,8 @@ def run_task(
         except Exception:
             logger.exception("Failed to mark run %d as FAILED after timeout", validated_run_id)
         raise
+    except Ignore:
+        raise
     except Exception as exc:
         if isinstance(exc, config.no_fail_transition_exceptions):
             raise

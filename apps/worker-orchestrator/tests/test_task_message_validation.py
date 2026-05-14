@@ -124,3 +124,37 @@ def test_run_task_rejects_falsy_empty_string_args(monkeypatch: pytest.MonkeyPatc
     )
     with pytest.raises(ValueError, match="args is str"):
         run_task(stub, 1, config, lambda ctx: None)
+
+
+def test_run_task_rejects_during_shutdown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """During graceful shutdown, tasks should be rejected via Ignore without failure handling."""
+    import celery_app as celery_module
+    from celery.exceptions import Ignore
+
+    celery_module._SHUTDOWN_REQUESTED = True
+
+    failure_called = {"count": 0}
+
+    original_asyncio_run = task_runner.asyncio.run
+
+    def _tracking_asyncio_run(coro):
+        # _run_task_inner should raise Ignore immediately
+        return original_asyncio_run(coro)
+
+    monkeypatch.setattr("tasks.task_runner.asyncio.run", _tracking_asyncio_run)
+    monkeypatch.setattr(
+        "tasks.task_runner._handle_general_failure",
+        lambda *a, **kw: failure_called.update(count=failure_called["count"] + 1),
+    )
+
+    config = TaskRunnerConfig(
+        task_name="generate_script",
+        allowed_stages=frozenset({task_runner.RunStage.IDEA_READY}),
+        safe_stages=frozenset({task_runner.RunStage.IDEA_READY.value}),
+    )
+
+    with pytest.raises(Ignore):
+        run_task(_CelerySelfStub(), 1, config, lambda ctx: None)
+
+    assert failure_called["count"] == 0, "_handle_general_failure must not be called during shutdown"
+    celery_module._SHUTDOWN_REQUESTED = False
