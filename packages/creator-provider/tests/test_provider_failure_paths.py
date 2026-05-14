@@ -10,6 +10,8 @@ Covers:
 
 from __future__ import annotations
 
+import base64
+from importlib import import_module
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -146,6 +148,27 @@ class TestSDLocalFailurePaths:
         with pytest.raises(ValueError, match="too long"):
             await provider.generate(long_prompt)
 
+    @pytest.mark.asyncio
+    async def test_rejects_path_traversal_output_path(self, provider: SDLocalProvider, tmp_path):
+        image_bytes = b"img"
+        encoded = base64.b64encode(image_bytes).decode("utf-8")
+        unsafe_path_component = import_module("creator_domain.sanitize").UnsafePathComponent
+        mock_response = httpx.Response(
+            200,
+            json={"images": [encoded]},
+            request=httpx.Request("POST", "http://test"),
+        )
+        with patch.dict("os.environ", {"ARTIFACT_ROOT": str(tmp_path)}):
+            with patch("httpx.AsyncClient.post", return_value=mock_response):
+                bad_paths = (
+                    "../../etc/passwd",
+                    "data/artifacts/../../../etc/passwd",
+                    "/tmp/evil.wav",
+                )
+                for bad_path in bad_paths:
+                    with pytest.raises(unsafe_path_component, match="escapes artifact root"):
+                        await provider.generate("a cat", params={"output_path": bad_path})
+
 
 # ---------------------------------------------------------------------------
 # Piper TTS Provider
@@ -219,3 +242,23 @@ class TestPiperTTSFailurePaths:
         assert payload["speaker_id"] == 2
         assert "ignore_me" not in payload
         mock_warning.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_rejects_path_traversal_output_path(self, provider: PiperTTSProvider, tmp_path):
+        wav_header_only = b"\x00" * 44
+        unsafe_path_component = import_module("creator_domain.sanitize").UnsafePathComponent
+        mock_response = httpx.Response(
+            200,
+            content=wav_header_only,
+            request=httpx.Request("POST", "http://test"),
+        )
+        with patch.dict("os.environ", {"ARTIFACT_ROOT": str(tmp_path)}):
+            with patch("httpx.AsyncClient.post", return_value=mock_response):
+                bad_paths = (
+                    "../../etc/passwd",
+                    "data/artifacts/../../../etc/passwd",
+                    "/tmp/evil.wav",
+                )
+                for bad_path in bad_paths:
+                    with pytest.raises(unsafe_path_component, match="escapes artifact root"):
+                        await provider.generate("Hello", params={"output_path": bad_path})
