@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -15,7 +15,7 @@ class UsageEvent(BaseModel):
     run_id: int | None = Field(default=None, ge=1)
     provider: str = Field(max_length=50)
     model_key: str = Field(max_length=100)
-    operation_type: str = Field(max_length=50)
+    operation_type: Literal["llm", "image_gen", "tts", "stt", "render"]
     input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
     image_count: int | None = Field(default=None, ge=0)

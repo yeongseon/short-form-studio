@@ -17,7 +17,7 @@ class VisualAsset(BaseModel):
     prompt_snapshot: str | None = None
     model_used: str | None = Field(default=None, max_length=100)
     provider_type: str | None = Field(default=None, max_length=50)
-    storage_provider: str | None = None
+    storage_provider: str | None = Field(default=None, max_length=50)
     storage_key: str | None = None
     is_active: bool = True
     created_at: datetime

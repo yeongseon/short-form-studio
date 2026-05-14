@@ -356,7 +356,7 @@ def test_usage_event_from_row_drops_unknown_db_columns() -> None:
                 "id": 1,
                 "provider": "openai",
                 "model_key": "gpt-4o-mini",
-                "operation_type": "script",
+                "operation_type": "llm",
                 "created_at": _ts(),
             },
         ),
@@ -523,4 +523,13 @@ def test_string_field_length_alignment_with_db() -> None:
         UsageEvent(
             id=1, provider="x" * 51, model_key="gpt",
             operation_type="llm", created_at=_ts(),
+        )
+
+
+def test_usage_event_rejects_invalid_operation_type() -> None:
+    """operation_type must be one of the allowed DB CHECK values."""
+    with pytest.raises(ValidationError):
+        UsageEvent(
+            id=1, provider="openai", model_key="gpt",
+            operation_type="script", created_at=_ts(),
         )
