@@ -24,6 +24,7 @@ from creator_provider.registry import ProviderRegistry
 from creator_service.audio_service import audio_service as _audio_service
 from creator_service.cost_config import COST_PARAGRAPH_AUDIO
 from creator_service.run_service import run_service as _run_service
+from creator_service.script_service import script_service as _script_service
 from creator_service.telemetry import trace_task
 from creator_service.usage_service import record_provider_call
 from tasks import task_runner as _task_runner
@@ -78,28 +79,19 @@ def generate_paragraph_audio(
             {RunStage.AUDIO_GENERATING.value, RunStage.SUBTITLE_GENERATING.value}
         ),
         success_stage=None,
-        # Paragraph workers are dispatched by the parent audio pipeline task after
-        # stage validation, so these per-section executions intentionally skip a
-        # second stage guard to avoid false negatives during fan-out.
-        skip_stage_guard=True,
     )
 
     async def execute(ctx: TaskContext) -> TaskResult:
-        run = await _run_service.storage.get_run(run_id)
-        if run is None:
-            raise ValueError(f"Run {run_id} not found")
-        script_data = run.get("script_data") or {}
-        sections = script_data.get("sections") if isinstance(script_data, dict) else []
+        draft = await _script_service.get_active_draft(run_id)
+        if draft is None:
+            raise ValueError(f"No script draft found for run {run_id}")
+
+        sections = draft.structured_script or []
         section_text: str | None = None
-        if isinstance(sections, list):
-            for section in sections:
-                if not isinstance(section, dict):
-                    continue
-                if section.get("section_id") == section_id:
-                    raw_text = section.get("text")
-                    if isinstance(raw_text, str):
-                        section_text = raw_text
-                    break
+        for section in sections:
+            if section.section_id == section_id:
+                section_text = (section.display_text or section.text or "").strip()
+                break
         if section_text is None:
             raise ValueError(f"Section '{section_id}' not found for run {run_id}")
 
