@@ -121,6 +121,10 @@ def generate_paragraph_audio(
                     "Provider timed out during paragraph audio generation "
                     f"for run {run_id} section {section_id}"
                 ) from exc
+            except ProviderTimeoutError:
+                raise
+            except RateLimitError:
+                raise
             except SoftTimeLimitExceeded:
                 raise
             except Exception as exc:

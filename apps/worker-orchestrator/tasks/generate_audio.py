@@ -113,6 +113,10 @@ def generate_audio(
                 raise ProviderTimeoutError(
                     f"Provider timed out during audio generation for run {run_id}"
                 ) from exc
+            except ProviderTimeoutError:
+                raise
+            except RateLimitError:
+                raise
             except SoftTimeLimitExceeded:
                 raise
             except Exception as exc:

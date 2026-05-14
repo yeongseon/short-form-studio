@@ -112,6 +112,10 @@ def generate_subtitles(
                 raise ProviderTimeoutError(
                     f"Provider timed out during subtitle generation for run {run_id}"
                 ) from exc
+            except ProviderTimeoutError:
+                raise
+            except RateLimitError:
+                raise
             except SoftTimeLimitExceeded:
                 raise
             except Exception as exc:
