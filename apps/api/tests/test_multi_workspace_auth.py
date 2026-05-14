@@ -142,3 +142,19 @@ async def test_invalid_x_workspace_id_returns_404(multi_workspace_client):
     )
     
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_bearer_token_with_workspace_id_header(multi_workspace_client):
+    """Test that bearer token auth works with X-Workspace-Id header."""
+    client, api_key = multi_workspace_client
+    
+    response = await client.get(
+        "/api/creator/test",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "X-Workspace-Id": "20",
+        },
+    )
+    
+    assert response.status_code == 200
