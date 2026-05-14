@@ -189,11 +189,15 @@ async def test_record_task_queued_failure_revokes_task(
         raise RuntimeError("db failure")
 
     revoke_calls: list[tuple[str, bool]] = []
+    mark_tasks_revoked_calls: list[list[str]] = []
     celery_app = SimpleNamespace(
         control=SimpleNamespace(
             revoke=lambda task_id, terminate=False: revoke_calls.append((task_id, terminate))
         )
     )
+
+    async def _mock_mark_tasks_revoked(task_ids: list[str]) -> None:
+        mark_tasks_revoked_calls.append(task_ids)
 
     monkeypatch.setattr(
         "shorts_api.routes.creator_runs_storyboard.script_service.get_active_draft",
@@ -222,6 +226,10 @@ async def test_record_task_queued_failure_revokes_task(
         _mock_record_task_queued,
     )
     monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard.task_tracking_service.mark_tasks_revoked",
+        _mock_mark_tasks_revoked,
+    )
+    monkeypatch.setattr(
         creator_runs_storyboard,
         "__import__",
         lambda name: SimpleNamespace(celery_app=celery_app)
@@ -237,6 +245,7 @@ async def test_record_task_queued_failure_revokes_task(
         )
         assert resp.status_code == 503
         assert revoke_calls == [("task-123", True)]
+        assert mark_tasks_revoked_calls == [["task-123"]]
     finally:
         app.dependency_overrides.pop(require_run_access, None)
 
@@ -287,11 +296,15 @@ async def test_post_dispatch_revoke_on_concurrent_cancellation(
         return None
 
     revoke_calls: list[tuple[str, bool]] = []
+    mark_tasks_revoked_calls: list[list[str]] = []
     celery_app = SimpleNamespace(
         control=SimpleNamespace(
             revoke=lambda task_id, terminate=False: revoke_calls.append((task_id, terminate))
         )
     )
+
+    async def _mock_mark_tasks_revoked(task_ids: list[str]) -> None:
+        mark_tasks_revoked_calls.append(task_ids)
 
     monkeypatch.setattr(
         "shorts_api.routes.creator_runs_storyboard.script_service.get_active_draft",
@@ -322,6 +335,10 @@ async def test_post_dispatch_revoke_on_concurrent_cancellation(
         _mock_record_task_queued,
     )
     monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard.task_tracking_service.mark_tasks_revoked",
+        _mock_mark_tasks_revoked,
+    )
+    monkeypatch.setattr(
         creator_runs_storyboard,
         "__import__",
         lambda name: SimpleNamespace(celery_app=celery_app)
@@ -337,5 +354,261 @@ async def test_post_dispatch_revoke_on_concurrent_cancellation(
         )
         assert resp.status_code == 409
         assert revoke_calls == [("task-123", True)]
+        assert mark_tasks_revoked_calls == [["task-123"]]
+    finally:
+        app.dependency_overrides.pop(require_run_access, None)
+
+
+@pytest.mark.asyncio
+async def test_bulk_audio_post_dispatch_revoke_on_concurrent_cancellation(
+    client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that mark_tasks_revoked is called when bulk audio dispatch faces concurrent cancellation."""
+    run = SimpleNamespace(
+        id=1,
+        status="running",
+        current_stage="VISUAL_ASSET_REVIEW",
+        project_id=1,
+    )
+
+    async def _require_run_access(run_id: int) -> tuple[CurrentUser, Any]:
+        _ = run_id
+        return CurrentUser(user_id=1, workspace_id=1), run
+
+    app.dependency_overrides[require_run_access] = _require_run_access
+
+    async def _mock_get_active_draft(_run_id: int) -> Any:
+        section = SimpleNamespace(
+            section_id="sec-1",
+            text="Hello",
+            display_text="Hello",
+            type="narration",
+            speaker=None,
+            duration=None,
+            turn_kind=None,
+            visual_override=None,
+            image_prompt=None,
+        )
+        return SimpleNamespace(structured_script=[section])
+
+    async def _mock_check_workspace_quota(
+        _workspace_id: int, operation_type: str
+    ) -> tuple[bool, str]:
+        _ = operation_type
+        return True, "ok"
+
+    async def _mock_cancel_workspace_quota_reservation(
+        _workspace_id: int, operation_type: str
+    ) -> None:
+        _ = operation_type
+        return None
+
+    states = [
+        SimpleNamespace(id=1, status="running", current_stage="VISUAL_ASSET_REVIEW"),
+        SimpleNamespace(id=1, status="cancelled", current_stage="VISUAL_ASSET_REVIEW"),
+    ]
+
+    async def _mock_get_fresh_run_for_dispatch(_run_id: int, _workspace_id: int) -> Any:
+        return states.pop(0)
+
+    async def _mock_list_paragraph_audio(_run_id: int) -> list:
+        return []
+
+    async def _mock_record_task_queued(_run_id: int, _task_name: str, _task_id: str) -> None:
+        return None
+
+    revoke_calls: list[str] = []
+    mark_tasks_revoked_calls: list[list[str]] = []
+    celery_app = SimpleNamespace(
+        control=SimpleNamespace(
+            revoke=lambda task_id, terminate=False: revoke_calls.append(task_id)
+        )
+    )
+
+    async def _mock_mark_tasks_revoked(task_ids: list[str]) -> None:
+        mark_tasks_revoked_calls.append(task_ids)
+
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard.script_service.get_active_draft",
+        _mock_get_active_draft,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard.validate_model_key",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard.check_workspace_quota",
+        _mock_check_workspace_quota,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard.cancel_workspace_quota_reservation",
+        _mock_cancel_workspace_quota_reservation,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard._get_fresh_run_for_dispatch",
+        _mock_get_fresh_run_for_dispatch,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard.audio_service.list_paragraph_audio",
+        _mock_list_paragraph_audio,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard.dispatch_paragraph_audio",
+        lambda **kwargs: "bulk-task-1",
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard.task_tracking_service.record_task_queued",
+        _mock_record_task_queued,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard.task_tracking_service.mark_tasks_revoked",
+        _mock_mark_tasks_revoked,
+    )
+    monkeypatch.setattr(
+        creator_runs_storyboard,
+        "__import__",
+        lambda name: SimpleNamespace(celery_app=celery_app)
+        if name == "celery_app"
+        else __import__(name),
+        raising=False,
+    )
+
+    try:
+        resp = await client.post(
+            "/api/creator/runs/1/storyboard/generate-all-audio",
+            json={"tts_model": "qwen3-tts", "voice": "default"},
+        )
+        assert resp.status_code == 409
+        assert revoke_calls == ["bulk-task-1"]
+        assert mark_tasks_revoked_calls == [["bulk-task-1"]]
+    finally:
+        app.dependency_overrides.pop(require_run_access, None)
+
+
+@pytest.mark.asyncio
+async def test_bulk_subtitles_record_failure_revokes_task(
+    client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Test that mark_tasks_revoked is called when bulk subtitles dispatch faces record_task_queued failure."""
+    run = SimpleNamespace(
+        id=1,
+        status="running",
+        current_stage="VISUAL_ASSET_REVIEW",
+        project_id=1,
+    )
+
+    async def _require_run_access(run_id: int) -> tuple[CurrentUser, Any]:
+        _ = run_id
+        return CurrentUser(user_id=1, workspace_id=1), run
+
+    app.dependency_overrides[require_run_access] = _require_run_access
+
+    async def _mock_get_active_draft(_run_id: int) -> Any:
+        section = SimpleNamespace(
+            section_id="sec-1",
+            text="Hello",
+            display_text="Hello",
+            type="narration",
+            speaker=None,
+            duration=None,
+            turn_kind=None,
+            visual_override=None,
+            image_prompt=None,
+        )
+        return SimpleNamespace(structured_script=[section])
+
+    async def _mock_check_workspace_quota(
+        _workspace_id: int, operation_type: str
+    ) -> tuple[bool, str]:
+        _ = operation_type
+        return True, "ok"
+
+    async def _mock_cancel_workspace_quota_reservation(
+        _workspace_id: int, operation_type: str
+    ) -> None:
+        _ = operation_type
+        return None
+
+    async def _mock_get_fresh_run_for_dispatch(_run_id: int, _workspace_id: int) -> Any:
+        return SimpleNamespace(id=1, status="running", current_stage="VISUAL_ASSET_REVIEW")
+
+    async def _mock_list_paragraph_audio(_run_id: int) -> list:
+        audio = SimpleNamespace(section_id="sec-1", path="/audio.mp3", id=1)
+        return [audio]
+
+    async def _mock_list_paragraph_subtitles(_run_id: int) -> list:
+        return []
+
+    async def _mock_record_task_queued(_run_id: int, _task_name: str, _task_id: str) -> None:
+        raise RuntimeError("db failure")
+
+    revoke_calls: list[str] = []
+    mark_tasks_revoked_calls: list[list[str]] = []
+    celery_app = SimpleNamespace(
+        control=SimpleNamespace(
+            revoke=lambda task_id, terminate=False: revoke_calls.append(task_id)
+        )
+    )
+
+    async def _mock_mark_tasks_revoked(task_ids: list[str]) -> None:
+        mark_tasks_revoked_calls.append(task_ids)
+
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard.script_service.get_active_draft",
+        _mock_get_active_draft,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard.validate_model_key",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard.check_workspace_quota",
+        _mock_check_workspace_quota,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard.cancel_workspace_quota_reservation",
+        _mock_cancel_workspace_quota_reservation,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard._get_fresh_run_for_dispatch",
+        _mock_get_fresh_run_for_dispatch,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard.audio_service.list_paragraph_audio",
+        _mock_list_paragraph_audio,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard.subtitle_service.list_paragraph_subtitles",
+        _mock_list_paragraph_subtitles,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard.dispatch_paragraph_subtitles",
+        lambda **kwargs: "sub-task-1",
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard.task_tracking_service.record_task_queued",
+        _mock_record_task_queued,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard.task_tracking_service.mark_tasks_revoked",
+        _mock_mark_tasks_revoked,
+    )
+    monkeypatch.setattr(
+        creator_runs_storyboard,
+        "__import__",
+        lambda name: SimpleNamespace(celery_app=celery_app)
+        if name == "celery_app"
+        else __import__(name),
+        raising=False,
+    )
+
+    try:
+        resp = await client.post(
+            "/api/creator/runs/1/storyboard/generate-all-subtitles",
+            json={"subtitle_model": "whisper-small", "subtitle_format": "srt"},
+        )
+        # Bulk endpoints catch exceptions and append error entries
+        assert revoke_calls == ["sub-task-1"]
+        assert mark_tasks_revoked_calls == [["sub-task-1"]]
     finally:
         app.dependency_overrides.pop(require_run_access, None)
