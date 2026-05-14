@@ -47,6 +47,8 @@ def _parse_int_env(name: str, default: int) -> int:
 
 MAX_MEMORY_MB = _parse_int_env("MAX_MEMORY_MB", 1024)
 _SHUTDOWN_REQUESTED = False
+_previous_sigterm_handler: object | None = None
+_previous_sigint_handler: object | None = None
 
 
 def _handle_sigterm(_signum: int, _frame: object | None) -> None:
@@ -55,6 +57,22 @@ def _handle_sigterm(_signum: int, _frame: object | None) -> None:
         return
     _SHUTDOWN_REQUESTED = True
     logging.getLogger(__name__).info("SIGTERM received; beginning Celery graceful shutdown")
+    # Chain to previous handler
+    prev = _previous_sigterm_handler
+    if callable(prev):
+        prev(_signum, _frame)
+
+
+def _handle_sigint(_signum: int, _frame: object | None) -> None:
+    global _SHUTDOWN_REQUESTED
+    if _SHUTDOWN_REQUESTED:
+        return
+    _SHUTDOWN_REQUESTED = True
+    logging.getLogger(__name__).info("SIGINT received; beginning Celery graceful shutdown")
+    # Chain to previous handler
+    prev = _previous_sigint_handler
+    if callable(prev):
+        prev(_signum, _frame)
 
 
 def is_shutting_down() -> bool:
@@ -112,9 +130,12 @@ celery_app.conf.update(
 
 validate_production_config(service_kind="worker")
 try:
+    _previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
     signal.signal(signal.SIGTERM, _handle_sigterm)
+    _previous_sigint_handler = signal.getsignal(signal.SIGINT)
+    signal.signal(signal.SIGINT, _handle_sigint)
 except ValueError:
-    logging.getLogger(__name__).debug("Skipping SIGTERM handler: not in main thread")
+    logging.getLogger(__name__).debug("Skipping signal handler registration: not in main thread")
 
 
 @after_setup_logger.connect

@@ -211,5 +211,15 @@ async def test_lifespan_restores_previous_sigterm_handler_after_exit(monkeypatch
     async with lifecycle_module.lifespan(app):
         pass
 
-    assert signal_calls[0] == (signal.SIGTERM, lifecycle_module._handle_sigterm)
-    assert signal_calls[-1] == (signal.SIGTERM, previous_handler)
+    # Should register SIGTERM and SIGINT handlers on startup
+    sigterm_setup_call = (signal.SIGTERM, lifecycle_module._handle_sigterm)
+    sigint_setup_call = (signal.SIGINT, lifecycle_module._handle_sigint)
+    
+    # Find setup calls (before restoration)
+    assert sigterm_setup_call in signal_calls
+    assert sigint_setup_call in signal_calls
+    
+    # Last two calls should be restoration of SIGTERM and SIGINT (in that order)
+    # SIGTERM is restored first, then SIGINT
+    assert signal_calls[-2] == (signal.SIGTERM, previous_handler)
+    assert signal_calls[-1] == (signal.SIGINT, previous_handler)

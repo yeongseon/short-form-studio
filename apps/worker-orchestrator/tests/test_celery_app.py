@@ -36,5 +36,5 @@ def test_sigterm_registration_skips_when_signal_raises_value_error() -> None:
         importlib.reload(celery_module)
 
     get_logger.return_value.debug.assert_called_once_with(
-        "Skipping SIGTERM handler: not in main thread"
+        "Skipping signal handler registration: not in main thread"
     )
