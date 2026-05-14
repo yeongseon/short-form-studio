@@ -56,13 +56,37 @@ class TestMapHttpxError:
         assert isinstance(result, ProviderError)
         assert not isinstance(result, (ProviderTimeoutError, RateLimitError))
 
-    def test_http_401_generic(self):
-        """HTTP 401 maps to generic ProviderError (not ProviderAuthError, which is for app-level auth)."""
+    def test_http_401_maps_to_auth_error(self):
+        """HTTP 401 maps to ProviderAuthError."""
         request = httpx.Request("POST", "http://test")
         response = httpx.Response(401, request=request)
         exc = httpx.HTTPStatusError("401", request=request, response=response)
         result = map_httpx_error(exc, "test")
-        assert isinstance(result, ProviderError)
+        assert isinstance(result, ProviderAuthError)
+
+    def test_http_403_maps_to_auth_error(self):
+        """HTTP 403 maps to ProviderAuthError."""
+        request = httpx.Request("POST", "http://test")
+        response = httpx.Response(403, request=request)
+        exc = httpx.HTTPStatusError("403", request=request, response=response)
+        result = map_httpx_error(exc, "test")
+        assert isinstance(result, ProviderAuthError)
+
+    def test_http_400_maps_to_validation_error(self):
+        """HTTP 400 maps to ProviderValidationError."""
+        request = httpx.Request("POST", "http://test")
+        response = httpx.Response(400, request=request)
+        exc = httpx.HTTPStatusError("400", request=request, response=response)
+        result = map_httpx_error(exc, "test")
+        assert isinstance(result, ProviderValidationError)
+
+    def test_http_422_maps_to_validation_error(self):
+        """HTTP 422 maps to ProviderValidationError."""
+        request = httpx.Request("POST", "http://test")
+        response = httpx.Response(422, request=request)
+        exc = httpx.HTTPStatusError("422", request=request, response=response)
+        result = map_httpx_error(exc, "test")
+        assert isinstance(result, ProviderValidationError)
 
     def test_prefix_included_in_message(self):
         exc = httpx.TimeoutException("timed out")
