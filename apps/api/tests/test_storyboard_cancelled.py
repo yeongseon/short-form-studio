@@ -21,64 +21,74 @@ def _make_cancelled_run() -> Any:
     )
 
 
-@pytest.fixture()
-def _override_cancelled(client: Any) -> Any:  # noqa: ARG001 – client needed for setup order
+def _install_cancelled_override() -> None:
     run = _make_cancelled_run()
 
     async def _require_run_access(run_id: int) -> tuple[CurrentUser, Any]:
+        _ = run_id
         return CurrentUser(user_id=1, workspace_id=1), run
 
     app.dependency_overrides[require_run_access] = _require_run_access
-    yield
+
+
+def _remove_run_access_override() -> None:
     app.dependency_overrides.pop(require_run_access, None)
 
 
 @pytest.mark.asyncio
-async def test_generate_paragraph_audio_rejects_cancelled_run(
-    client: Any, _override_cancelled: Any
-) -> None:
-    resp = await client.post(
-        "/api/creator/runs/1/storyboard/paragraphs/sec-1/generate-audio",
-        json={"tts_model": "qwen3-tts", "voice": "default"},
-    )
-    assert resp.status_code == 409
-    assert "cancelled" in resp.json()["detail"].lower()
+async def test_generate_paragraph_audio_rejects_cancelled_run(client: Any) -> None:
+    _install_cancelled_override()
+    try:
+        resp = await client.post(
+            "/api/creator/runs/1/storyboard/paragraphs/sec-1/generate-audio",
+            json={"tts_model": "qwen3-tts", "voice": "default"},
+        )
+        assert resp.status_code == 409
+        assert "cancelled" in resp.json()["detail"].lower()
+    finally:
+        _remove_run_access_override()
 
 
 @pytest.mark.asyncio
-async def test_generate_paragraph_subtitles_rejects_cancelled_run(
-    client: Any, _override_cancelled: Any
-) -> None:
-    resp = await client.post(
-        "/api/creator/runs/1/storyboard/paragraphs/sec-1/generate-subtitles",
-        json={"subtitle_model": "whisper-small", "subtitle_format": "srt"},
-    )
-    assert resp.status_code == 409
-    assert "cancelled" in resp.json()["detail"].lower()
+async def test_generate_paragraph_subtitles_rejects_cancelled_run(client: Any) -> None:
+    _install_cancelled_override()
+    try:
+        resp = await client.post(
+            "/api/creator/runs/1/storyboard/paragraphs/sec-1/generate-subtitles",
+            json={"subtitle_model": "whisper-small", "subtitle_format": "srt"},
+        )
+        assert resp.status_code == 409
+        assert "cancelled" in resp.json()["detail"].lower()
+    finally:
+        _remove_run_access_override()
 
 
 @pytest.mark.asyncio
-async def test_generate_all_paragraph_audio_rejects_cancelled_run(
-    client: Any, _override_cancelled: Any
-) -> None:
-    resp = await client.post(
-        "/api/creator/runs/1/storyboard/generate-all-audio",
-        json={"tts_model": "qwen3-tts", "voice": "default"},
-    )
-    assert resp.status_code == 409
-    assert "cancelled" in resp.json()["detail"].lower()
+async def test_generate_all_paragraph_audio_rejects_cancelled_run(client: Any) -> None:
+    _install_cancelled_override()
+    try:
+        resp = await client.post(
+            "/api/creator/runs/1/storyboard/generate-all-audio",
+            json={"tts_model": "qwen3-tts", "voice": "default"},
+        )
+        assert resp.status_code == 409
+        assert "cancelled" in resp.json()["detail"].lower()
+    finally:
+        _remove_run_access_override()
 
 
 @pytest.mark.asyncio
-async def test_generate_all_paragraph_subtitles_rejects_cancelled_run(
-    client: Any, _override_cancelled: Any
-) -> None:
-    resp = await client.post(
-        "/api/creator/runs/1/storyboard/generate-all-subtitles",
-        json={"subtitle_model": "whisper-small", "subtitle_format": "srt"},
-    )
-    assert resp.status_code == 409
-    assert "cancelled" in resp.json()["detail"].lower()
+async def test_generate_all_paragraph_subtitles_rejects_cancelled_run(client: Any) -> None:
+    _install_cancelled_override()
+    try:
+        resp = await client.post(
+            "/api/creator/runs/1/storyboard/generate-all-subtitles",
+            json={"subtitle_model": "whisper-small", "subtitle_format": "srt"},
+        )
+        assert resp.status_code == 409
+        assert "cancelled" in resp.json()["detail"].lower()
+    finally:
+        _remove_run_access_override()
 
 
 @pytest.mark.asyncio
@@ -93,6 +103,7 @@ async def test_dispatch_blocked_on_concurrent_cancellation(
     )
 
     async def _require_run_access(run_id: int) -> tuple[CurrentUser, Any]:
+        _ = run_id
         return CurrentUser(user_id=1, workspace_id=1), run
 
     app.dependency_overrides[require_run_access] = _require_run_access
@@ -105,9 +116,11 @@ async def test_dispatch_blocked_on_concurrent_cancellation(
     async def _mock_check_workspace_quota(
         _workspace_id: int, operation_type: str
     ) -> tuple[bool, str]:
+        _ = operation_type
         return True, "ok"
 
-    async def _mock_get_run(_run_id: int, workspace_id: int) -> Any:
+    async def _mock_get_run(_run_id: int, workspace_id: int | None = None) -> Any:
+        _ = workspace_id
         return SimpleNamespace(id=1, status="cancelled", current_stage="VISUAL_ASSET_REVIEW")
 
     monkeypatch.setattr(
@@ -152,6 +165,7 @@ async def test_record_task_queued_failure_revokes_task(
     )
 
     async def _require_run_access(run_id: int) -> tuple[CurrentUser, Any]:
+        _ = run_id
         return CurrentUser(user_id=1, workspace_id=1), run
 
     app.dependency_overrides[require_run_access] = _require_run_access
@@ -164,9 +178,11 @@ async def test_record_task_queued_failure_revokes_task(
     async def _mock_check_workspace_quota(
         _workspace_id: int, operation_type: str
     ) -> tuple[bool, str]:
+        _ = operation_type
         return True, "ok"
 
-    async def _mock_get_run(_run_id: int, workspace_id: int) -> Any:
+    async def _mock_get_run(_run_id: int, workspace_id: int | None = None) -> Any:
+        _ = workspace_id
         return SimpleNamespace(id=1, status="running", current_stage="VISUAL_ASSET_REVIEW")
 
     async def _mock_record_task_queued(_run_id: int, _task_name: str, _task_id: str) -> None:
@@ -220,6 +236,106 @@ async def test_record_task_queued_failure_revokes_task(
             json={"tts_model": "qwen3-tts", "voice": "default"},
         )
         assert resp.status_code == 503
+        assert revoke_calls == [("task-123", True)]
+    finally:
+        app.dependency_overrides.pop(require_run_access, None)
+
+
+@pytest.mark.asyncio
+async def test_post_dispatch_revoke_on_concurrent_cancellation(
+    client: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = SimpleNamespace(
+        id=1,
+        status="running",
+        current_stage="VISUAL_ASSET_REVIEW",
+        project_id=1,
+    )
+
+    async def _require_run_access(run_id: int) -> tuple[CurrentUser, Any]:
+        _ = run_id
+        return CurrentUser(user_id=1, workspace_id=1), run
+
+    app.dependency_overrides[require_run_access] = _require_run_access
+
+    async def _mock_get_active_draft(_run_id: int) -> Any:
+        return SimpleNamespace(
+            structured_script=[SimpleNamespace(section_id="sec-1", text="hello")]
+        )
+
+    async def _mock_check_workspace_quota(
+        _workspace_id: int, operation_type: str
+    ) -> tuple[bool, str]:
+        _ = operation_type
+        return True, "ok"
+
+    async def _mock_cancel_workspace_quota_reservation(
+        _workspace_id: int, operation_type: str
+    ) -> None:
+        _ = operation_type
+        return None
+
+    states = [
+        SimpleNamespace(id=1, status="running", current_stage="VISUAL_ASSET_REVIEW"),
+        SimpleNamespace(id=1, status="cancelled", current_stage="VISUAL_ASSET_REVIEW"),
+    ]
+
+    async def _mock_get_fresh_run_for_dispatch(_run_id: int, _workspace_id: int) -> Any:
+        return states.pop(0)
+
+    async def _mock_record_task_queued(_run_id: int, _task_name: str, _task_id: str) -> None:
+        return None
+
+    revoke_calls: list[tuple[str, bool]] = []
+    celery_app = SimpleNamespace(
+        control=SimpleNamespace(
+            revoke=lambda task_id, terminate=False: revoke_calls.append((task_id, terminate))
+        )
+    )
+
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard.script_service.get_active_draft",
+        _mock_get_active_draft,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard.validate_model_key",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard.check_workspace_quota",
+        _mock_check_workspace_quota,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard.cancel_workspace_quota_reservation",
+        _mock_cancel_workspace_quota_reservation,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard._get_fresh_run_for_dispatch",
+        _mock_get_fresh_run_for_dispatch,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard.dispatch_paragraph_audio",
+        lambda **kwargs: "task-123",
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_storyboard.task_tracking_service.record_task_queued",
+        _mock_record_task_queued,
+    )
+    monkeypatch.setattr(
+        creator_runs_storyboard,
+        "__import__",
+        lambda name: SimpleNamespace(celery_app=celery_app)
+        if name == "celery_app"
+        else __import__(name),
+        raising=False,
+    )
+
+    try:
+        resp = await client.post(
+            "/api/creator/runs/1/storyboard/paragraphs/sec-1/generate-audio",
+            json={"tts_model": "qwen3-tts", "voice": "default"},
+        )
+        assert resp.status_code == 409
         assert revoke_calls == [("task-123", True)]
     finally:
         app.dependency_overrides.pop(require_run_access, None)

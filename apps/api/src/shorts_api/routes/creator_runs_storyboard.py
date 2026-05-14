@@ -289,6 +289,21 @@ async def generate_paragraph_audio_endpoint(
             status_code=503,
             detail="Failed to enqueue paragraph audio task",
         ) from None
+
+    # Post-dispatch: close TOCTOU window — if run was cancelled between
+    # pre-check and dispatch, revoke the just-dispatched task immediately.
+    post_run = await _get_fresh_run_for_dispatch(run_id, user.workspace_id)
+    if post_run is None or getattr(post_run, "status", None) == "cancelled":
+        try:
+            celery_app = __import__("celery_app").celery_app
+            celery_app.control.revoke(task_id, terminate=True)
+        except Exception:
+            logger.warning(
+                "Failed to revoke task %s after concurrent cancel for run %d", task_id, run_id
+            )
+        await cancel_workspace_quota_reservation(user.workspace_id, "tts")
+        raise HTTPException(status_code=409, detail="Run was cancelled during dispatch")
+
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -370,6 +385,21 @@ async def generate_paragraph_subtitles_endpoint(
             status_code=503,
             detail="Failed to enqueue paragraph subtitle task",
         ) from None
+
+    # Post-dispatch: close TOCTOU window — if run was cancelled between
+    # pre-check and dispatch, revoke the just-dispatched task immediately.
+    post_run = await _get_fresh_run_for_dispatch(run_id, user.workspace_id)
+    if post_run is None or getattr(post_run, "status", None) == "cancelled":
+        try:
+            celery_app = __import__("celery_app").celery_app
+            celery_app.control.revoke(task_id, terminate=True)
+        except Exception:
+            logger.warning(
+                "Failed to revoke task %s after concurrent cancel for run %d", task_id, run_id
+            )
+        await cancel_workspace_quota_reservation(user.workspace_id, "stt")
+        raise HTTPException(status_code=409, detail="Run was cancelled during dispatch")
+
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -448,7 +478,6 @@ async def generate_all_paragraph_audio(
 
         try:
             await task_tracking_service.record_task_queued(run_id, "generate_paragraph_audio", tid)
-            task_ids.append({"section_id": section.section_id, "task_id": tid})
         except Exception:
             try:
                 celery_app = __import__("celery_app").celery_app
@@ -462,6 +491,21 @@ async def generate_all_paragraph_audio(
             task_ids.append(
                 {"section_id": section.section_id, "task_id": "", "error": "dispatch_failed"}
             )
+            continue
+
+        post_run = await _get_fresh_run_for_dispatch(run_id, user.workspace_id)
+        if post_run is None or getattr(post_run, "status", None) == "cancelled":
+            try:
+                celery_app = __import__("celery_app").celery_app
+                celery_app.control.revoke(tid, terminate=True)
+            except Exception:
+                logger.warning(
+                    "Failed to revoke task %s after concurrent cancel for run %d", tid, run_id
+                )
+            await cancel_workspace_quota_reservation(user.workspace_id, "tts")
+            raise HTTPException(status_code=409, detail="Run was cancelled during dispatch")
+
+        task_ids.append({"section_id": section.section_id, "task_id": tid})
     failed_count = sum(1 for t in task_ids if "error" in t)
     return {
         "run_id": run_id,
@@ -554,7 +598,6 @@ async def generate_all_paragraph_subtitles(
             await task_tracking_service.record_task_queued(
                 run_id, "generate_paragraph_subtitles", tid
             )
-            task_ids.append({"section_id": audio.section_id, "task_id": tid})
         except Exception:
             try:
                 celery_app = __import__("celery_app").celery_app
@@ -570,6 +613,21 @@ async def generate_all_paragraph_subtitles(
             task_ids.append(
                 {"section_id": audio.section_id, "task_id": "", "error": "dispatch_failed"}
             )
+            continue
+
+        post_run = await _get_fresh_run_for_dispatch(run_id, user.workspace_id)
+        if post_run is None or getattr(post_run, "status", None) == "cancelled":
+            try:
+                celery_app = __import__("celery_app").celery_app
+                celery_app.control.revoke(tid, terminate=True)
+            except Exception:
+                logger.warning(
+                    "Failed to revoke task %s after concurrent cancel for run %d", tid, run_id
+                )
+            await cancel_workspace_quota_reservation(user.workspace_id, "stt")
+            raise HTTPException(status_code=409, detail="Run was cancelled during dispatch")
+
+        task_ids.append({"section_id": audio.section_id, "task_id": tid})
     failed_count = sum(1 for t in task_ids if "error" in t)
     return {
         "run_id": run_id,
