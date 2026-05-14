@@ -188,9 +188,9 @@ def test_generate_paragraph_subtitles_with_gpu_lock(monkeypatch: pytest.MonkeyPa
 
     lock_calls: list[str] = []
     release_calls: list[str] = []
-    monkeypatch.setattr(module, "acquire_gpu_lock", lambda _, task_id: lock_calls.append(task_id))
+    monkeypatch.setattr(module, "acquire_gpu_lock", lambda _, task_id: (lock_calls.append(task_id) or f"{task_id}:fake-token"))
     monkeypatch.setattr(
-        module, "release_gpu_lock", lambda _, task_id: release_calls.append(task_id)
+        module, "release_gpu_lock", lambda _, token: release_calls.append(token.split(':')[0]) or True
     )
 
     subtitle_service = FakeSubtitleService(artifact_id=61)

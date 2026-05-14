@@ -179,12 +179,12 @@ def test_generate_subtitles_success(monkeypatch: pytest.MonkeyPatch) -> None:
     lock_calls: list[str] = []
     release_calls: list[str] = []
     monkeypatch.setattr(
-        generate_subtitles_module, "acquire_gpu_lock", lambda _, task_id: lock_calls.append(task_id)
+        generate_subtitles_module, "acquire_gpu_lock", lambda _, task_id: (lock_calls.append(task_id) or f"{task_id}:fake-token")
     )
     monkeypatch.setattr(
         generate_subtitles_module,
         "release_gpu_lock",
-        lambda _, task_id: release_calls.append(task_id),
+        lambda _, token: release_calls.append(token.split(':')[0]) or True,
     )
 
     script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Hello world script"))

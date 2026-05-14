@@ -155,12 +155,12 @@ def test_generate_script_happy_path_local_model_with_gpu_lock(
     monkeypatch.setattr(
         generate_script_module,
         "acquire_gpu_lock",
-        lambda client, task_id: lock_calls.append(task_id),
+        lambda client, task_id: (lock_calls.append(task_id) or f"{task_id}:fake-token"),
     )
     monkeypatch.setattr(
         generate_script_module,
         "release_gpu_lock",
-        lambda client, task_id: release_calls.append(task_id),
+        lambda client, token: release_calls.append(token.split(':')[0]) or True,
     )
 
     script_service = FakeScriptService()
@@ -321,9 +321,9 @@ def test_generate_script_releases_gpu_lock_when_llm_fails(monkeypatch: pytest.Mo
     _patch_redis(monkeypatch, redis_client)
 
     released: list[str] = []
-    monkeypatch.setattr(generate_script_module, "acquire_gpu_lock", lambda *_: True)
+    monkeypatch.setattr(generate_script_module, "acquire_gpu_lock", lambda *_: "run-106:fake-token")
     monkeypatch.setattr(
-        generate_script_module, "release_gpu_lock", lambda _, task_id: released.append(task_id)
+        generate_script_module, "release_gpu_lock", lambda _, token: released.append(token.split(':')[0]) or True
     )
 
     script_service = FakeScriptService()
@@ -459,7 +459,7 @@ def test_release_gpu_lock_failure_still_propagates_original_error(
     redis_client = object()
     _patch_redis(monkeypatch, redis_client)
 
-    monkeypatch.setattr(generate_script_module, "acquire_gpu_lock", lambda *_: True)
+    monkeypatch.setattr(generate_script_module, "acquire_gpu_lock", lambda *_: "run-400:fake-token")
     monkeypatch.setattr(
         generate_script_module,
         "release_gpu_lock",
