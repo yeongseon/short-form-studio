@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import SimpleNamespace
+import asyncio
 from typing import Any
 
 import pytest
@@ -21,6 +22,11 @@ from tasks import (
     generate_subtitles as generate_subtitles_module,
     generate_paragraph_subtitles as generate_paragraph_subtitles_module,
 )
+
+
+async def _async_value(val: Any) -> Any:
+    return val
+
 
 
 # ============================================================================
@@ -77,13 +83,14 @@ class _FakeRegistry:
 class _FakeStorage:
     """Minimal storage that allows tasks to proceed."""
 
-    def __init__(self, run_id: int = 1, stage: str = "VISUAL_ASSET_REVIEW") -> None:
+    def __init__(self, run_id: int = 1, stage: str = "VISUAL_ASSET_REVIEW", extra: dict[str, object] | None = None) -> None:
         self._run_id = run_id
         self._stage = stage
+        self._extra = extra or {}
 
     async def get_run(self, run_id: int) -> dict[str, object] | None:
         if run_id == self._run_id:
-            return {"id": run_id, "current_stage": self._stage}
+            return {"id": run_id, "current_stage": self._stage, **self._extra}
         return None
 
     async def conditional_update_run(
@@ -98,8 +105,8 @@ class _FakeStorage:
         return {"id": run_id, **updates}
 
 
-def _make_storage(run_id: int = 1, stage: str = "VISUAL_ASSET_REVIEW") -> _FakeStorage:
-    return _FakeStorage(run_id, stage)
+def _make_storage(run_id: int = 1, stage: str = "VISUAL_ASSET_REVIEW", extra: dict[str, object] | None = None) -> _FakeStorage:
+    return _FakeStorage(run_id, stage, extra)
 
 
 def _patch_registry(monkeypatch: pytest.MonkeyPatch, module: Any, registry: _FakeRegistry) -> None:
@@ -238,7 +245,7 @@ def test_generate_paragraph_audio_preserves_provider_timeout(
     )
 
     audio_service = _FakeAudioServiceForParagraph(artifact_id=1)
-    storage = _make_storage(run_id=1, stage="AUDIO_GENERATING")
+    storage = _make_storage(run_id=1, stage="AUDIO_GENERATING", extra={"script_data": {"sections": [{"section_id": "s1", "text": "Test"}]}})
 
     monkeypatch.setattr(generate_paragraph_audio_module, "_audio_service", audio_service)
     monkeypatch.setattr(
@@ -249,7 +256,7 @@ def test_generate_paragraph_audio_preserves_provider_timeout(
     run_callable = getattr(task, "run", task)
 
     with pytest.raises(ProviderTimeoutError, match="timeout"):
-        run_callable(run_id=1, section_id="s1", section_text="Test")
+        run_callable(run_id=1, section_id="s1")
 
 
 def test_generate_paragraph_audio_preserves_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -259,7 +266,7 @@ def test_generate_paragraph_audio_preserves_rate_limit(monkeypatch: pytest.Monke
     )
 
     audio_service = _FakeAudioServiceForParagraph(artifact_id=1)
-    storage = _make_storage(run_id=1, stage="AUDIO_GENERATING")
+    storage = _make_storage(run_id=1, stage="AUDIO_GENERATING", extra={"script_data": {"sections": [{"section_id": "s1", "text": "Test"}]}})
 
     monkeypatch.setattr(generate_paragraph_audio_module, "_audio_service", audio_service)
     monkeypatch.setattr(
@@ -270,7 +277,7 @@ def test_generate_paragraph_audio_preserves_rate_limit(monkeypatch: pytest.Monke
     run_callable = getattr(task, "run", task)
 
     with pytest.raises(RateLimitError, match="rate limited"):
-        run_callable(run_id=1, section_id="s1", section_text="Test")
+        run_callable(run_id=1, section_id="s1")
 
 
 # ============================================================================
@@ -484,9 +491,10 @@ def test_generate_paragraph_subtitles_preserves_provider_timeout(
     provider = _FakeProvider(error=ProviderTimeoutError("timeout"))
     _patch_registry(monkeypatch, generate_paragraph_subtitles_module, _FakeRegistry(_FakeEntry(), provider))
 
-    audio_file = tmp_path / "test_audio.wav"
-    audio_file.write_bytes(b"fake audio")
-    monkeypatch.setattr(generate_paragraph_subtitles_module, "_ARTIFACT_ROOT", str(tmp_path))
+    monkeypatch.setattr(generate_paragraph_subtitles_module, "_audio_service",
+        SimpleNamespace(get_paragraph_audio=lambda *a, **kw: _async_value(SimpleNamespace(path="test_audio.wav"))))
+    monkeypatch.setattr(generate_paragraph_subtitles_module, "validate_artifact_path", lambda p, r: p)
+    monkeypatch.setattr(generate_paragraph_subtitles_module, "os", SimpleNamespace(path=SimpleNamespace(exists=lambda _: True)))
 
     storage = _make_storage(run_id=1, stage="SUBTITLE_GENERATING")
     monkeypatch.setattr(generate_paragraph_subtitles_module, "_run_service", SimpleNamespace(storage=storage))
@@ -496,7 +504,7 @@ def test_generate_paragraph_subtitles_preserves_provider_timeout(
     run_callable = getattr(task, "run", task)
 
     with pytest.raises(ProviderTimeoutError, match="timeout"):
-        run_callable(run_id=1, section_id="s1", audio_path=str(audio_file))
+        run_callable(run_id=1, section_id="s1")
 
 
 def test_generate_paragraph_subtitles_preserves_rate_limit(
@@ -505,9 +513,10 @@ def test_generate_paragraph_subtitles_preserves_rate_limit(
     provider = _FakeProvider(error=RateLimitError("rate limited"))
     _patch_registry(monkeypatch, generate_paragraph_subtitles_module, _FakeRegistry(_FakeEntry(), provider))
 
-    audio_file = tmp_path / "test_audio.wav"
-    audio_file.write_bytes(b"fake audio")
-    monkeypatch.setattr(generate_paragraph_subtitles_module, "_ARTIFACT_ROOT", str(tmp_path))
+    monkeypatch.setattr(generate_paragraph_subtitles_module, "_audio_service",
+        SimpleNamespace(get_paragraph_audio=lambda *a, **kw: _async_value(SimpleNamespace(path="test_audio.wav"))))
+    monkeypatch.setattr(generate_paragraph_subtitles_module, "validate_artifact_path", lambda p, r: p)
+    monkeypatch.setattr(generate_paragraph_subtitles_module, "os", SimpleNamespace(path=SimpleNamespace(exists=lambda _: True)))
 
     storage = _make_storage(run_id=1, stage="SUBTITLE_GENERATING")
     monkeypatch.setattr(generate_paragraph_subtitles_module, "_run_service", SimpleNamespace(storage=storage))
@@ -517,7 +526,7 @@ def test_generate_paragraph_subtitles_preserves_rate_limit(
     run_callable = getattr(task, "run", task)
 
     with pytest.raises(RateLimitError, match="rate limited"):
-        run_callable(run_id=1, section_id="s1", audio_path=str(audio_file))
+        run_callable(run_id=1, section_id="s1")
 
 
 def test_generate_paragraph_subtitles_rejects_path_traversal(
@@ -533,7 +542,8 @@ def test_generate_paragraph_subtitles_rejects_path_traversal(
     audio_file.write_bytes(b"fake audio")
     artifact_root = tmp_path / "artifacts"
     artifact_root.mkdir()
-    monkeypatch.setattr(generate_paragraph_subtitles_module, "_ARTIFACT_ROOT", str(artifact_root))
+    monkeypatch.setattr(generate_paragraph_subtitles_module, "_audio_service",
+        SimpleNamespace(get_paragraph_audio=lambda *a, **kw: _async_value(SimpleNamespace(path=str(audio_file)))))
 
     storage = _make_storage(run_id=1, stage="SUBTITLE_GENERATING")
     monkeypatch.setattr(generate_paragraph_subtitles_module, "_run_service", SimpleNamespace(storage=storage))
@@ -542,8 +552,8 @@ def test_generate_paragraph_subtitles_rejects_path_traversal(
     task = generate_paragraph_subtitles_module.generate_paragraph_subtitles
     run_callable = getattr(task, "run", task)
 
-    with pytest.raises(ValueError, match="audio_path escapes artifact root"):
-        run_callable(run_id=1, section_id="s1", audio_path=str(audio_file))
+    with pytest.raises(ValueError, match="outside artifact root"):
+        run_callable(run_id=1, section_id="s1")
 
 
 def test_generate_paragraph_subtitles_rejects_symlink_escape(
@@ -559,7 +569,8 @@ def test_generate_paragraph_subtitles_rejects_symlink_escape(
     secret.write_text("sensitive data")
     symlink = artifact_root / "evil.wav"
     symlink.symlink_to(secret)
-    monkeypatch.setattr(generate_paragraph_subtitles_module, "_ARTIFACT_ROOT", str(artifact_root))
+    monkeypatch.setattr(generate_paragraph_subtitles_module, "_audio_service",
+        SimpleNamespace(get_paragraph_audio=lambda *a, **kw: _async_value(SimpleNamespace(path=str(symlink)))))
 
     storage = _make_storage(run_id=1, stage="SUBTITLE_GENERATING")
     monkeypatch.setattr(generate_paragraph_subtitles_module, "_run_service", SimpleNamespace(storage=storage))
@@ -568,5 +579,5 @@ def test_generate_paragraph_subtitles_rejects_symlink_escape(
     task = generate_paragraph_subtitles_module.generate_paragraph_subtitles
     run_callable = getattr(task, "run", task)
 
-    with pytest.raises(ValueError, match="audio_path escapes artifact root"):
-        run_callable(run_id=1, section_id="s1", audio_path=str(symlink))
+    with pytest.raises(ValueError, match="outside artifact root"):
+        run_callable(run_id=1, section_id="s1")
