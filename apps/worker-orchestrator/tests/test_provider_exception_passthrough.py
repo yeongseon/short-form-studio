@@ -382,10 +382,8 @@ class _FakeVisualPlanServiceWithPlan:
         pass
 
 
-def test_generate_scene_image_catches_provider_timeout_per_scene(monkeypatch: pytest.MonkeyPatch) -> None:
-    """generate_scene_image catches exceptions per-scene rather than re-raising.
-    When a single scene fails with ProviderTimeoutError, it's recorded as a failed scene.
-    """
+def test_generate_scene_image_propagates_provider_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """generate_scene_image re-raises ProviderTimeoutError for Celery retry."""
     provider = _FakeProvider(error=ProviderTimeoutError("timeout"))
     _patch_registry(monkeypatch, generate_scene_image_module, _FakeRegistry(_FakeEntry(), provider))
 
@@ -396,14 +394,11 @@ def test_generate_scene_image_catches_provider_timeout_per_scene(monkeypatch: py
     task = generate_scene_image_module.generate_scene_image
     run_callable = getattr(task, "run", task)
 
-    # scene_image catches per-scene exceptions; the task completes with 'failed' status
-    result = run_callable(run_id=1, scene_id="scene-1")
-    assert result["status"] == "failed"
-    assert result["failed"] == 1
+    with pytest.raises(ProviderTimeoutError, match="timeout"):
+        run_callable(run_id=1, scene_id="scene-1")
 
-
-def test_generate_scene_image_catches_rate_limit_per_scene(monkeypatch: pytest.MonkeyPatch) -> None:
-    """generate_scene_image catches RateLimitError per-scene rather than re-raising."""
+def test_generate_scene_image_propagates_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """generate_scene_image re-raises RateLimitError for Celery retry."""
     provider = _FakeProvider(error=RateLimitError("rate limited"))
     _patch_registry(monkeypatch, generate_scene_image_module, _FakeRegistry(_FakeEntry(), provider))
 
@@ -414,9 +409,8 @@ def test_generate_scene_image_catches_rate_limit_per_scene(monkeypatch: pytest.M
     task = generate_scene_image_module.generate_scene_image
     run_callable = getattr(task, "run", task)
 
-    result = run_callable(run_id=1, scene_id="scene-1")
-    assert result["status"] == "failed"
-    assert result["failed"] == 1
+    with pytest.raises(RateLimitError, match="rate limited"):
+        run_callable(run_id=1, scene_id="scene-1")
 
 
 # ============================================================================

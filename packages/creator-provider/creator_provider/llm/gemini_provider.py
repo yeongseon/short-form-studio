@@ -46,4 +46,7 @@ class GeminiProvider(LLMProvider):
         if not candidates:
             raise ProviderError("Gemini API returned no candidates")
         parts = candidates[0].get("content", {}).get("parts", [])
-        return "".join(part.get("text", "") for part in parts)
+        text = "".join(part.get("text", "") for part in parts)
+        if not text:
+            raise ProviderError("Gemini API returned empty content")
+        return text

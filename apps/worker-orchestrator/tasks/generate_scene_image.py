@@ -219,6 +219,10 @@ def generate_scene_image(
                 results.append(scene_result)
             except SoftTimeLimitExceeded:
                 raise
+            except ProviderTimeoutError:
+                raise
+            except RateLimitError:
+                raise
             except Exception as exc:
                 scene_result.update({"status": "failed", "error": str(exc)})
                 failed_scenes.append(scene_result)

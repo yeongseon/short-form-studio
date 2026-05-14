@@ -57,6 +57,9 @@ class AnthropicProvider(LLMProvider):
         content_blocks = data.get("content", [])
         if not content_blocks:
             raise ProviderError("Anthropic API returned no content blocks")
-        return "".join(
+        text = "".join(
             block.get("text", "") for block in content_blocks if block.get("type") == "text"
         )
+        if not text:
+            raise ProviderError("Anthropic API returned empty content")
+        return text

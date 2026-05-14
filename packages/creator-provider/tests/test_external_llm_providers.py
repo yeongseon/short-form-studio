@@ -114,6 +114,23 @@ class TestOpenAIProvider:
             ):
                 await provider.generate("test prompt")
 
+    @pytest.mark.asyncio
+    async def test_generate_empty_content_raises_provider_error(self):
+        mock_response = mock.MagicMock()
+        mock_response.raise_for_status = mock.MagicMock()
+        mock_response.json.return_value = {
+            "choices": [{"message": {"content": ""}}],
+        }
+
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}):
+            from creator_provider.llm.openai_provider import OpenAIProvider
+
+            provider = OpenAIProvider(endpoint="https://api.openai.com", model_key="gpt-4o-mini")
+            with (
+                mock.patch("httpx.AsyncClient.post", return_value=mock_response),
+                pytest.raises(ProviderError, match="empty content"),
+            ):
+                await provider.generate("test prompt")
 
 class TestAnthropicProvider:
     def test_constructor_sets_attributes(self):
@@ -240,6 +257,26 @@ class TestAnthropicProvider:
             ):
                 await provider.generate("test prompt")
 
+    @pytest.mark.asyncio
+    async def test_generate_empty_text_raises_provider_error(self):
+        mock_response = mock.MagicMock()
+        mock_response.raise_for_status = mock.MagicMock()
+        mock_response.json.return_value = {
+            "content": [{"type": "text", "text": ""}],
+        }
+
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "ak-test"}):
+            from creator_provider.llm.anthropic_provider import AnthropicProvider
+
+            provider = AnthropicProvider(
+                endpoint="https://api.anthropic.com",
+                model_key="claude-sonnet-4-20250514",
+            )
+            with (
+                mock.patch("httpx.AsyncClient.post", return_value=mock_response),
+                pytest.raises(ProviderError, match="empty content"),
+            ):
+                await provider.generate("test prompt")
 
 class TestGeminiProvider:
     def test_constructor_sets_attributes(self):
@@ -375,6 +412,26 @@ class TestGeminiProvider:
             ):
                 await provider.generate("test prompt")
 
+    @pytest.mark.asyncio
+    async def test_generate_empty_text_raises_provider_error(self):
+        mock_response = mock.MagicMock()
+        mock_response.raise_for_status = mock.MagicMock()
+        mock_response.json.return_value = {
+            "candidates": [{"content": {"parts": [{"text": ""}]}}],
+        }
+
+        with mock.patch.dict(os.environ, {"GOOGLE_API_KEY": "gk-test"}):
+            from creator_provider.llm.gemini_provider import GeminiProvider
+
+            provider = GeminiProvider(
+                endpoint="https://generativelanguage.googleapis.com",
+                model_key="gemini-2.0-flash",
+            )
+            with (
+                mock.patch("httpx.AsyncClient.post", return_value=mock_response),
+                pytest.raises(ProviderError, match="empty content"),
+            ):
+                await provider.generate("test prompt")
 
 class TestOllamaProvider:
     def test_constructor_sets_attributes(self):

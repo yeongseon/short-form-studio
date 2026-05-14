@@ -54,4 +54,7 @@ class OpenAIProvider(LLMProvider):
         choices = data.get("choices", [])
         if not choices:
             raise ProviderError("OpenAI API returned no choices")
-        return str(choices[0].get("message", {}).get("content", ""))
+        content = str(choices[0].get("message", {}).get("content", ""))
+        if not content:
+            raise ProviderError("OpenAI API returned empty content")
+        return content
