@@ -13,7 +13,7 @@ class VisualScene(BaseModel):
     scene_index: int = Field(ge=0)
     section_type: str
     original_text: str
-    prompt: str
+    prompt: str = Field(max_length=2000)
     prompt_edited: bool = False
     prompt_source: Literal["auto_generated", "user_edited", "model_suggested"] = "auto_generated"
     style_tags: list[str] = Field(default_factory=list)

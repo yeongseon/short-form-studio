@@ -7,9 +7,9 @@ from .render_profile import RenderProfile
 
 @dataclass
 class RenderInput:
-    image_paths: list[Path]       # ordered scene images
-    audio_path: Path | None       # narration audio
-    subtitle_path: Path | None    # SRT subtitle file
+    image_paths: list[Path]  # ordered scene images
+    audio_path: Path | None  # narration audio
+    subtitle_path: Path | None  # SRT subtitle file
     scene_durations: list[float]  # duration per scene in seconds
 
 
@@ -46,6 +46,14 @@ class FFmpegService:
         """
         cmd = ["ffmpeg", "-y"]  # overwrite output
 
+        if len(input_data.image_paths) != len(input_data.scene_durations):
+            raise ValueError(
+                f"image_paths ({len(input_data.image_paths)}) and "
+                f"scene_durations ({len(input_data.scene_durations)}) must have equal length"
+            )
+        if not input_data.image_paths:
+            raise ValueError("image_paths must not be empty")
+
         # --- inputs --------------------------------------------------------
         filter_parts: list[str] = []
         for i, (img, dur) in enumerate(
@@ -62,21 +70,15 @@ class FFmpegService:
             )
 
         # --- concat --------------------------------------------------------
-        concat_inputs = "".join(
-            f"[v{i}]" for i in range(len(input_data.image_paths))
-        )
+        concat_inputs = "".join(f"[v{i}]" for i in range(len(input_data.image_paths)))
 
         # Determine whether we need a subtitle stage after concat.
-        need_subs = (
-            self.profile.burn_subtitles
-            and input_data.subtitle_path is not None
-        )
+        need_subs = self.profile.burn_subtitles and input_data.subtitle_path is not None
 
         if need_subs:
             # Concat → [vcat], then subtitle burn-in → [vout]
             filter_parts.append(
-                f"{concat_inputs}concat="
-                f"n={len(input_data.image_paths)}:v=1:a=0[vcat]"
+                f"{concat_inputs}concat=n={len(input_data.image_paths)}:v=1:a=0[vcat]"
             )
             assert input_data.subtitle_path is not None  # guaranteed by need_subs check
             escaped = _escape_subtitle_path(input_data.subtitle_path)
@@ -86,8 +88,7 @@ class FFmpegService:
             )
         else:
             filter_parts.append(
-                f"{concat_inputs}concat="
-                f"n={len(input_data.image_paths)}:v=1:a=0[vout]"
+                f"{concat_inputs}concat=n={len(input_data.image_paths)}:v=1:a=0[vout]"
             )
 
         cmd.extend(["-filter_complex", ";".join(filter_parts)])
@@ -95,19 +96,23 @@ class FFmpegService:
         # --- stream mapping ------------------------------------------------
         if input_data.audio_path:
             cmd.extend(["-i", str(input_data.audio_path)])
-            cmd.extend(
-                ["-map", "[vout]", "-map", f"{len(input_data.image_paths)}:a"]
-            )
+            cmd.extend(["-map", "[vout]", "-map", f"{len(input_data.image_paths)}:a"])
         else:
             cmd.extend(["-map", "[vout]"])
 
         # --- codec settings ------------------------------------------------
-        cmd.extend([
-            "-c:v", self.profile.video_codec.value,
-            "-crf", str(self.profile.crf),
-            "-preset", self.profile.preset,
-            "-r", str(self.profile.fps),
-        ])
+        cmd.extend(
+            [
+                "-c:v",
+                self.profile.video_codec.value,
+                "-crf",
+                str(self.profile.crf),
+                "-preset",
+                self.profile.preset,
+                "-r",
+                str(self.profile.fps),
+            ]
+        )
 
         if input_data.audio_path:
             cmd.extend(["-c:a", self.profile.audio_codec.value])
@@ -130,9 +135,12 @@ class FFmpegService:
         """Probe audio file duration in seconds using ffprobe."""
         cmd = [
             "ffprobe",
-            "-v", "error",
-            "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
             audio_path,
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -152,9 +160,7 @@ class FFmpegService:
         out.parent.mkdir(parents=True, exist_ok=True)
 
         # Build concat list file
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".txt", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             for p in audio_paths:
                 # FFmpeg concat requires single-quoted paths with inner quotes escaped
                 escaped = p.replace("'", "'\\''")
@@ -163,11 +169,16 @@ class FFmpegService:
 
         try:
             cmd = [
-                "ffmpeg", "-y",
-                "-f", "concat",
-                "-safe", "0",
-                "-i", concat_list,
-                "-c", "copy",
+                "ffmpeg",
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                concat_list,
+                "-c",
+                "copy",
                 str(out),
             ]
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)

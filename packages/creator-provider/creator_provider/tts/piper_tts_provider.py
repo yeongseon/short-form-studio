@@ -9,6 +9,7 @@ import httpx
 
 from creator_provider.base import AudioResult, TTSProvider
 from creator_provider.exceptions import map_httpx_error
+from creator_provider.validation import MAX_TTS_TEXT_CHARS, validate_prompt_length
 
 
 class PiperTTSProvider(TTSProvider):
@@ -22,6 +23,7 @@ class PiperTTSProvider(TTSProvider):
         voice: str = "default",
         params: dict[str, Any] | None = None,
     ) -> AudioResult:
+        validate_prompt_length(text, MAX_TTS_TEXT_CHARS, "TTS")
         merged_params: dict[str, Any] = dict(params or {})
         payload: dict[str, Any] = {
             "text": text,

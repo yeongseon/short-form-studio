@@ -9,6 +9,7 @@ import httpx
 
 from creator_provider.base import ImageProvider, ImageResult
 from creator_provider.exceptions import ProviderError, map_httpx_error
+from creator_provider.validation import MAX_IMAGE_PROMPT_CHARS, validate_prompt_length
 from creator_provider.versioned_assets import get_loaded_asset_versions, get_prompt, get_schema
 
 
@@ -22,6 +23,7 @@ class SDLocalProvider(ImageProvider):
         self.model_key = model_key
 
     async def generate(self, prompt: str, params: dict[str, Any] | None = None) -> ImageResult:
+        validate_prompt_length(prompt, MAX_IMAGE_PROMPT_CHARS, "Image")
         merged_params: dict[str, Any] = dict(params or {})
         width = int(merged_params.get("width", self._SD_LOCAL_SCHEMA["default_width"]))
         height = int(merged_params.get("height", self._SD_LOCAL_SCHEMA["default_height"]))

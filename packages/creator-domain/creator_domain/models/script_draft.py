@@ -23,7 +23,7 @@ class ScriptSection(BaseModel):
     duration: float | None = None
     turn_kind: str | None = None
     visual_override: VisualOverride | None = None
-    image_prompt: str | None = None
+    image_prompt: str | None = Field(default=None, max_length=2000)
     mood: str | None = None
     composition: str | None = None
     style_tags: list[str] = Field(default_factory=list)

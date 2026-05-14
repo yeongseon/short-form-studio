@@ -10,6 +10,7 @@ import httpx
 from creator_provider.api_keys import resolve_api_key
 from creator_provider.base import ImageProvider, ImageResult
 from creator_provider.exceptions import ProviderError, map_httpx_error
+from creator_provider.validation import MAX_IMAGE_PROMPT_CHARS, validate_prompt_length
 
 
 class DalleProvider(ImageProvider):
@@ -19,6 +20,7 @@ class DalleProvider(ImageProvider):
         self.api_key = resolve_api_key("openai")
 
     async def generate(self, prompt: str, params: dict[str, Any] | None = None) -> ImageResult:
+        validate_prompt_length(prompt, MAX_IMAGE_PROMPT_CHARS, "Image")
         merged = dict(params or {})
         width = int(merged.get("width", 1024))
         height = int(merged.get("height", 1792))

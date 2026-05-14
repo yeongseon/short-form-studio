@@ -13,7 +13,7 @@ from creator_service.project_service import project_service
 from creator_service.run_service import ConflictError, run_service
 from creator_service.stage_review_service import stage_review_service
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from creator_domain.models.pipeline_run import PipelineRun
@@ -72,12 +72,12 @@ class ApproveVisualAssetsRequest(BaseModel):
 
 class GenerateScriptRequest(BaseModel):
     model_key: str = "qwen3-4b"
-    instructions: str | None = None
+    instructions: str | None = Field(default=None, max_length=32_000)
 
 
 class GenerateVisualPlanRequest(BaseModel):
     model_key: str = "qwen3-4b"
-    style_preset: str | None = None
+    style_preset: str | None = Field(default=None, max_length=200)
 
 
 class GenerateAudioRequest(BaseModel):

@@ -1,4 +1,5 @@
 """Parse JSON scene array into ScriptSection domain objects."""
+
 from __future__ import annotations
 
 import json
@@ -41,6 +42,8 @@ def parse_json_scenes(raw_json: str) -> list[ScriptSection]:
 
     if not scenes_data:
         raise ValueError("No scenes found in JSON")
+    if len(scenes_data) > 200:
+        raise ValueError("Too many scenes (max 200)")
 
     sections: list[ScriptSection] = []
     for idx, scene in enumerate(scenes_data):
@@ -50,9 +53,18 @@ def parse_json_scenes(raw_json: str) -> list[ScriptSection]:
         text = scene.get("text", "").strip()
         if not text:
             raise ValueError(f"Scene at index {idx} is missing required 'text' field")
+        if len(text) > 10000:
+            raise ValueError(f"Scene at index {idx} text exceeds 10000 character limit")
 
         section_type = scene.get("type", "body")
         section_id = f"{section_type}-{idx + 1}"
+
+        image_prompt_val = scene.get("image_prompt")
+        if image_prompt_val and len(image_prompt_val) > 2000:
+            raise ValueError(
+                f"Scene {idx + 1} image_prompt exceeds 2000 character limit"
+            )
+
 
         sections.append(
             ScriptSection(
@@ -64,7 +76,7 @@ def parse_json_scenes(raw_json: str) -> list[ScriptSection]:
                 duration=scene.get("duration"),
                 turn_kind=scene.get("turn_kind"),
                 visual_override=None,
-                image_prompt=scene.get("image_prompt"),
+                image_prompt=image_prompt_val,
                 mood=scene.get("mood"),
                 composition=scene.get("composition"),
                 style_tags=scene.get("style_tags", []),

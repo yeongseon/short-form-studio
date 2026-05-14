@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from creator_domain.models.script_draft import ScriptDraft, ScriptSection
 
 from .markdown_parser import parse_markdown
+
+logger = logging.getLogger(__name__)
 
 
 class ScriptStorageBackend(Protocol):
@@ -95,16 +98,26 @@ class ScriptService:
             if existing_json:
                 try:
                     existing_data = json.loads(existing_json)
-                    existing_sections = [ScriptSection.model_validate(section) for section in existing_data]
+                    existing_sections = [
+                        ScriptSection.model_validate(section) for section in existing_data
+                    ]
                 except (json.JSONDecodeError, Exception):
+                    logger.warning(
+                        "Malformed structured_script_json for run/draft id=%s",
+                        current.get("id", run_id),
+                    )
                     existing_sections = None
 
         if markdown_content is not None and structured_script is None:
-            structured_script = parse_markdown(markdown_content, existing_sections=existing_sections)
+            structured_script = parse_markdown(
+                markdown_content, existing_sections=existing_sections
+            )
 
         structured_script_json: str | None = None
         if structured_script is not None:
-            structured_script_json = json.dumps([section.model_dump(mode="json") for section in structured_script])
+            structured_script_json = json.dumps(
+                [section.model_dump(mode="json") for section in structured_script]
+            )
 
         row = await self.storage.save_draft(
             {
@@ -139,6 +152,10 @@ class ScriptService:
                 data = json.loads(structured_json)
                 structured_script = [ScriptSection.model_validate(section) for section in data]
             except (json.JSONDecodeError, Exception):
+                logger.warning(
+                    "Malformed structured_script_json for run/draft id=%s",
+                    row.get("id", row.get("run_id", "unknown")),
+                )
                 structured_script = None
 
         return ScriptDraft(

@@ -6,6 +6,7 @@ import httpx
 
 from creator_provider.base import LLMProvider
 from creator_provider.exceptions import ProviderError, map_httpx_error
+from creator_provider.validation import MAX_LLM_PROMPT_CHARS, validate_prompt_length
 from creator_provider.versioned_assets import get_tool_definition
 
 
@@ -18,6 +19,7 @@ class OllamaProvider(LLMProvider):
         self.model_name = model_key.replace("-", ":", 1)
 
     async def generate(self, prompt: str, params: dict[str, Any] | None = None) -> str:
+        validate_prompt_length(prompt, MAX_LLM_PROMPT_CHARS, "LLM")
         # Use the /api/chat endpoint with think=false to disable Qwen3's
         # extended thinking mode, which is far too slow on consumer GPUs.
         message_template = cast(

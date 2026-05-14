@@ -23,6 +23,7 @@ from shorts_api.routes.creator_runs_utils import (
     dispatch_paragraph_audio,
     dispatch_paragraph_subtitles,
     validate_model_key,
+    validate_path_id,
 )
 from shorts_api.auth import CurrentUser, require_run_access
 
@@ -210,6 +211,7 @@ async def generate_paragraph_audio_endpoint(
 ) -> dict[str, object]:
     effective = request or ParagraphAudioRequest()
     _, run = access
+    validate_path_id(section_id, "section_id")
     if run.current_stage not in STORYBOARD_ALLOWED_STAGES:
         raise HTTPException(
             status_code=409,
@@ -266,6 +268,7 @@ async def generate_paragraph_subtitles_endpoint(
 ) -> dict[str, object]:
     effective = request or ParagraphSubtitlesRequest()
     _, run = access
+    validate_path_id(section_id, "section_id")
     if run.current_stage not in STORYBOARD_ALLOWED_STAGES:
         raise HTTPException(
             status_code=409,

@@ -12,7 +12,7 @@ from creator_service.task_dispatch_service import (
     dispatch_generate_visual_plan,
 )
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 if TYPE_CHECKING:
     from creator_domain.models.pipeline_run import PipelineRun
@@ -58,6 +58,13 @@ class ImageTuningParams(BaseModel):
         str,
         Field(max_length=1000, description="Negative prompt"),
     ] = ""
+
+    @field_validator("sampler_name")
+    @classmethod
+    def validate_sampler(cls, v: str) -> str:
+        if v not in _VALID_SAMPLERS:
+            raise ValueError(f"Invalid sampler '{v}'. Must be one of: {sorted(_VALID_SAMPLERS)}")
+        return v
 
 
 class GenerateVisualAssetsRequest(BaseModel):

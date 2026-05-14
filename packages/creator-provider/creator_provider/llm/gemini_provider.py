@@ -7,6 +7,7 @@ import httpx
 from creator_provider.api_keys import resolve_api_key
 from creator_provider.base import LLMProvider
 from creator_provider.exceptions import ProviderError, map_httpx_error
+from creator_provider.validation import MAX_LLM_PROMPT_CHARS, validate_prompt_length
 
 
 class GeminiProvider(LLMProvider):
@@ -19,6 +20,7 @@ class GeminiProvider(LLMProvider):
         self.api_key: str = api_key
 
     async def generate(self, prompt: str, params: dict[str, Any] | None = None) -> str:
+        validate_prompt_length(prompt, MAX_LLM_PROMPT_CHARS, "LLM")
         timeout = (params or {}).get("timeout", 120.0)
         max_tokens = (params or {}).get("max_tokens", 2048)
 

@@ -9,6 +9,7 @@ import httpx
 from creator_provider.api_keys import resolve_api_key
 from creator_provider.base import ImageProvider, ImageResult
 from creator_provider.exceptions import ProviderError, map_httpx_error
+from creator_provider.validation import MAX_IMAGE_PROMPT_CHARS, validate_prompt_length
 from creator_provider.versioned_assets import get_loaded_asset_versions, get_schema
 
 
@@ -21,6 +22,7 @@ class StabilityProvider(ImageProvider):
         self.api_key = resolve_api_key("stability")
 
     async def generate(self, prompt: str, params: dict[str, Any] | None = None) -> ImageResult:
+        validate_prompt_length(prompt, MAX_IMAGE_PROMPT_CHARS, "Image")
         merged = dict(params or {})
         aspect_ratio = str(merged.get("aspect_ratio", "9:16"))
         output_format = str(merged.get("output_format", "png"))

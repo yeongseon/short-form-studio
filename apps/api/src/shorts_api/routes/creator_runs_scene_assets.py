@@ -20,7 +20,7 @@ from creator_service.task_dispatch_service import (
 from creator_service.task_tracking_service import task_tracking_service
 from creator_service.visual_asset_service import visual_asset_service
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from creator_domain.models.pipeline_run import PipelineRun
@@ -34,6 +34,7 @@ from shorts_api.routes.creator_runs_core import (
 from shorts_api.routes.creator_runs_utils import (
     _has_active_tasks_for_run,
     validate_model_key,
+    validate_path_id,
     validate_render_profile,
 )
 from shorts_api.routes.creator_runs_visuals import ImageTuningParams
@@ -63,7 +64,7 @@ async def _enforce_run_quota(run_id: int, operation_type: str) -> int:
 
 class RegenerateSceneImageRequest(BaseModel):
     model_key: str = "sd15"
-    prompt_override: str | None = None
+    prompt_override: str | None = Field(default=None, max_length=2000)
     image_params: ImageTuningParams | None = None
 
 
@@ -84,6 +85,7 @@ async def generate_scene_image_endpoint(
 ) -> dict[str, object]:
     effective_request = request or GenerateSceneImageRequest()
     _, run = access
+    validate_path_id(scene_id, "scene_id")
 
     allowed_stages = frozenset(
         {"VISUAL_PLAN_REVIEW", "VISUAL_ASSET_GENERATING", "VISUAL_ASSET_REVIEW"}
@@ -137,6 +139,7 @@ async def regenerate_scene_image_endpoint(
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
     _, run = access
+    validate_path_id(scene_id, "scene_id")
 
     allowed_stages = frozenset({"VISUAL_ASSET_REVIEW", "VISUAL_ASSET_GENERATING"})
     if run.current_stage not in allowed_stages:
@@ -200,6 +203,7 @@ async def list_visual_assets_by_scene(
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
     _ = access
+    validate_path_id(scene_id, "scene_id")
 
     assets = await visual_asset_service.list_by_scene(run_id, scene_id)
     return {
@@ -218,6 +222,7 @@ async def select_active_asset(
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
     _, run = access
+    validate_path_id(scene_id, "scene_id")
 
     allowed_stages = frozenset({"VISUAL_ASSET_REVIEW", "VISUAL_ASSET_GENERATING"})
     if run.current_stage not in allowed_stages:

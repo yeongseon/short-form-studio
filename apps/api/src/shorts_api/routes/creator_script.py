@@ -37,7 +37,7 @@ run_script_router = APIRouter(prefix="/runs/{run_id}/script", tags=["script"])
 class ImportMarkdownRequest(BaseModel):
     markdown: str = Field(..., max_length=500_000)
     model_defaults: dict[str, str] | None = None
-    style_preset: str = "default"
+    style_preset: str = Field(default="default", max_length=200)
 
 
 @router.post("/import-markdown", status_code=201)
@@ -79,7 +79,7 @@ async def import_markdown(
 class ImportJsonRequest(BaseModel):
     json_script: str = Field(..., max_length=500_000)
     model_defaults: dict[str, str] | None = None
-    style_preset: str = "default"
+    style_preset: str = Field(default="default", max_length=200)
 
 
 @router.post("/import-json", status_code=201)

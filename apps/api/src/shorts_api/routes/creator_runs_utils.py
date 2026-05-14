@@ -1,6 +1,7 @@
 """Shared validation and run task helpers for creator routes."""
 
 import logging
+import re
 from collections.abc import Mapping
 from importlib import import_module
 
@@ -24,6 +25,7 @@ __all__ = [
     "validate_model_key",
     "validate_render_profile",
     "validate_model_defaults",
+    "validate_path_id",
     "_revoke_active_tasks_for_run",
     "_has_active_tasks_for_run",
     "cas_dispatch_with_rollback",
@@ -112,3 +114,15 @@ async def _has_active_tasks_for_run(run_id: int) -> bool:
 
 
 _EXPORTED_RUN_HELPERS = (_revoke_active_tasks_for_run, _has_active_tasks_for_run)
+
+_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,128}$")
+
+
+def validate_path_id(value: str, name: str = "id") -> str:
+    """Validate scene_id / section_id path parameters."""
+    if not _ID_PATTERN.match(value):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid {name}: must be 1-128 alphanumeric chars, hyphens, or underscores",
+        )
+    return value
