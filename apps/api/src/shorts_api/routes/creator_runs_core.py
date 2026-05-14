@@ -91,7 +91,7 @@ class GenerateSubtitlesRequest(BaseModel):
 
 
 class RenderRequest(BaseModel):
-    render_profile: str = "shorts_default"
+    render_profile: str = Field(default="shorts_default", max_length=256)
 
 
 class UpdateModelDefaultsRequest(BaseModel):
