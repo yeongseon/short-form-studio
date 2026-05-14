@@ -112,6 +112,10 @@ def _mark_shutdown() -> None:
 def _handle_sigterm(_signum: int, _frame: object | None) -> None:
     logger.info("SIGTERM received; enabling graceful shutdown mode")
     _mark_shutdown()
+    # Chain to previous handler (e.g. Uvicorn's) so the server can exit gracefully
+    prev = _previous_sigterm_handler
+    if callable(prev):
+        prev(_signum, _frame)
 
 
 @asynccontextmanager
@@ -119,8 +123,12 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     global _previous_sigterm_handler
     shutdown_state.is_shutting_down = False
     shutdown_state.inflight_requests = 0
-    _previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
-    signal.signal(signal.SIGTERM, _handle_sigterm)
+    try:
+        _previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
+        signal.signal(signal.SIGTERM, _handle_sigterm)
+    except ValueError:
+        _previous_sigterm_handler = None
+        logger.debug("Skipping SIGTERM handler registration outside main thread")
     if ENABLE_PROCESS_RESOURCE_GUARD:
         _apply_resource_limits()
         logger.info(
@@ -141,5 +149,6 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         with contextlib.suppress(asyncio.CancelledError):
             await cpu_monitor_task
     if _previous_sigterm_handler is not None:
-        signal.signal(signal.SIGTERM, _previous_sigterm_handler)
+        with contextlib.suppress(ValueError):
+            signal.signal(signal.SIGTERM, _previous_sigterm_handler)
     await close_pool()
