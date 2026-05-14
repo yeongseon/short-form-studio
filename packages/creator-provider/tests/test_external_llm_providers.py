@@ -132,6 +132,7 @@ class TestOpenAIProvider:
             ):
                 await provider.generate("test prompt")
 
+
 class TestAnthropicProvider:
     def test_constructor_sets_attributes(self):
         with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "ak-test"}):
@@ -277,6 +278,7 @@ class TestAnthropicProvider:
                 pytest.raises(ProviderError, match="empty content"),
             ):
                 await provider.generate("test prompt")
+
 
 class TestGeminiProvider:
     def test_constructor_sets_attributes(self):
@@ -433,6 +435,7 @@ class TestGeminiProvider:
             ):
                 await provider.generate("test prompt")
 
+
 class TestOllamaProvider:
     def test_constructor_sets_attributes(self):
         from creator_provider.llm.ollama_provider import OllamaProvider
@@ -522,3 +525,27 @@ class TestOllamaProvider:
             pytest.raises(ProviderError, match="empty content"),
         ):
             await provider.generate("test prompt")
+
+    @pytest.mark.asyncio
+    async def test_generate_filters_unallowlisted_params_and_logs_warning(self):
+        mock_response = mock.MagicMock()
+        mock_response.raise_for_status = mock.MagicMock()
+        mock_response.json.return_value = {"message": {"content": "Hello"}}
+
+        from creator_provider.llm.ollama_provider import OllamaProvider
+
+        provider = OllamaProvider("http://localhost:11434", "qwen3-4b")
+        with (
+            mock.patch("httpx.AsyncClient.post", return_value=mock_response) as mock_post,
+            mock.patch("creator_provider.llm.ollama_provider.logger.warning") as mock_warning,
+        ):
+            result = await provider.generate(
+                "test prompt",
+                params={"temperature": 0.2, "evil_param": True},
+            )
+
+        assert result == "Hello"
+        payload = mock_post.call_args.kwargs["json"]
+        assert payload["temperature"] == 0.2
+        assert "evil_param" not in payload
+        mock_warning.assert_called_once()

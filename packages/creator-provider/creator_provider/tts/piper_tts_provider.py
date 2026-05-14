@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import struct
 import tempfile
 from pathlib import Path
@@ -12,7 +13,14 @@ from creator_provider.exceptions import map_httpx_error
 from creator_provider.validation import MAX_TTS_TEXT_CHARS, validate_prompt_length
 
 
+logger = logging.getLogger(__name__)
+
+
 class PiperTTSProvider(TTSProvider):
+    _ALLOWED_API_KEYS = frozenset(
+        {"speaker_id", "length_scale", "noise_scale", "noise_w", "sentence_silence", "sample_rate"}
+    )
+
     def __init__(self, endpoint: str, model_key: str):
         self.endpoint = endpoint.rstrip("/")
         self.model_key = model_key
@@ -29,7 +37,14 @@ class PiperTTSProvider(TTSProvider):
             "text": text,
             "voice": voice,
         }
-        payload.update(merged_params)
+        filtered_keys = [
+            key for key in merged_params if key not in self._ALLOWED_API_KEYS | {"output_path"}
+        ]
+        if filtered_keys:
+            logger.warning("Filtered unsupported Piper params: %s", sorted(filtered_keys))
+        for key in self._ALLOWED_API_KEYS:
+            if key in merged_params:
+                payload[key] = merged_params[key]
 
         url = f"{self.endpoint}/api/tts"
         try:

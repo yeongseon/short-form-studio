@@ -20,7 +20,7 @@ class ScriptSection(BaseModel):
     text: str
     display_text: str | None = None
     speaker: str | None = "host"
-    duration: float | None = None
+    duration: float | None = Field(default=None, ge=0)
     turn_kind: str | None = None
     visual_override: VisualOverride | None = None
     image_prompt: str | None = Field(default=None, max_length=2000)

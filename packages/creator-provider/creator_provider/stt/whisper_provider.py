@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from importlib import import_module
 from pathlib import Path
@@ -11,7 +12,24 @@ from creator_provider.base import STTProvider, SubtitleResult
 from creator_provider.exceptions import map_httpx_error
 
 
+logger = logging.getLogger(__name__)
+
+
 class WhisperSTTProvider(STTProvider):
+    _ALLOWED_FORM_KEYS = frozenset(
+        {
+            "task",
+            "temperature",
+            "initial_prompt",
+            "word_timestamps",
+            "beam_size",
+            "best_of",
+            "patience",
+            "condition_on_previous_text",
+            "vad_filter",
+        }
+    )
+
     def __init__(self, endpoint: str, model_key: str):
         self.endpoint = endpoint.rstrip("/")
         self.model_key = model_key
@@ -29,9 +47,13 @@ class WhisperSTTProvider(STTProvider):
             "format": subtitle_format,
             "language": language,
         }
-        for key, value in merged_params.items():
-            if key not in {"output_path", "format", "language"}:
-                form_fields[key] = value
+        allowed_passthrough_keys = self._ALLOWED_FORM_KEYS | {"output_path", "format", "language"}
+        filtered_keys = [key for key in merged_params if key not in allowed_passthrough_keys]
+        if filtered_keys:
+            logger.warning("Filtered unsupported Whisper params: %s", sorted(filtered_keys))
+        for key in self._ALLOWED_FORM_KEYS:
+            if key in merged_params:
+                form_fields[key] = merged_params[key]
 
         source_path = Path(audio_path)
         url = f"{self.endpoint}/transcribe"
