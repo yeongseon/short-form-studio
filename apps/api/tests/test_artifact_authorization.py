@@ -58,6 +58,62 @@ async def test_artifact_endpoint_unauthorized_access_idor(client: AsyncClient, m
 
 
 @pytest.mark.asyncio
+async def test_artifact_endpoint_project_not_found(client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that artifact endpoint returns 404 when project is not found."""
+    mock_run = MagicMock()
+    mock_run.id = 1
+    mock_run.project_id = 1
+    
+    async def mock_get_run(run_id, workspace_id):
+        if run_id == 1 and workspace_id == 1:
+            return mock_run
+        return None
+    
+    async def mock_get_project(project_id, workspace_id):
+        return None  # Project not found
+    
+    monkeypatch.setattr("creator_service.run_service.run_service.get_run", mock_get_run)
+    monkeypatch.setattr("creator_service.project_service.project_service.get_project", mock_get_project)
+    
+    # Request should fail with 404
+    response = await client.get("/api/artifacts/files/1/render/output.mp4")
+    assert response.status_code == 404, f"Expected 404, got {response.status_code}: {response.text}"
+
+
+@pytest.mark.asyncio
+async def test_artifact_endpoint_workspace_access_denied(client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Test that artifact endpoint returns 404 when workspace access is denied."""
+    mock_run = MagicMock()
+    mock_run.id = 1
+    mock_run.project_id = 1
+    
+    mock_project = MagicMock()
+    mock_project.id = 1
+    mock_project.workspace_id = 2  # Different workspace
+    
+    async def mock_get_run(run_id, workspace_id):
+        if run_id == 1 and workspace_id == 1:
+            return mock_run
+        return None
+    
+    async def mock_get_project(project_id, workspace_id):
+        if project_id == 1 and workspace_id == 1:
+            return mock_project
+        return None
+    
+    async def mock_check_access(workspace_id, user_id):
+        return False  # User does not have access to workspace 2
+    
+    monkeypatch.setattr("creator_service.run_service.run_service.get_run", mock_get_run)
+    monkeypatch.setattr("creator_service.project_service.project_service.get_project", mock_get_project)
+    monkeypatch.setattr("creator_service.workspace_service.workspace_service.check_access", mock_check_access)
+    
+    # Request should fail with 404
+    response = await client.get("/api/artifacts/files/1/render/output.mp4")
+    assert response.status_code == 404, f"Expected 404, got {response.status_code}: {response.text}"
+
+
+@pytest.mark.asyncio
 async def test_deprecated_artifact_endpoint_authorized(client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """Test that deprecated artifact endpoint works for authorized user."""
     mock_run = MagicMock()
