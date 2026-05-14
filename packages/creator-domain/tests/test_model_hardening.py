@@ -471,3 +471,56 @@ def test_valid_data_regression_check() -> None:
         prompt="prompt",
     )
     assert scene.scene_index == 0
+
+
+def test_negative_optional_ids_are_rejected() -> None:
+    """Optional FK fields with ge=1 must reject negative values."""
+    with pytest.raises(ValidationError):
+        UsageEvent(
+            id=1, workspace_id=-1, provider="openai", model_key="gpt",
+            operation_type="llm", created_at=_ts(),
+        )
+    with pytest.raises(ValidationError):
+        Project(id=1, workspace_id=-1, created_at=_ts(), updated_at=_ts())
+    with pytest.raises(ValidationError):
+        User(id=1, email="a@b.com", workspace_id=-1, created_at=_ts(), updated_at=_ts())
+    with pytest.raises(ValidationError):
+        VisualScene(
+            scene_id="s1", section_id="s1", scene_index=0,
+            section_type="narration", original_text="t", prompt="p",
+            latest_asset_id=-1,
+        )
+
+
+def test_negative_counts_are_rejected() -> None:
+    """Count/token fields with ge=0 must reject negative values."""
+    with pytest.raises(ValidationError):
+        UsageEvent(
+            id=1, provider="openai", model_key="gpt",
+            operation_type="llm", created_at=_ts(), input_tokens=-1,
+        )
+    with pytest.raises(ValidationError):
+        StoryboardResponse(run_id=1, paragraphs=[], total_paragraphs=-1)
+
+
+def test_pipeline_run_from_row_handles_non_object_json() -> None:
+    """Non-dict JSON (e.g. arrays) should not crash, just warn and set None."""
+    run = PipelineRun.from_row({
+        "id": 1, "project_id": 1,
+        "created_at": _ts(), "updated_at": _ts(),
+        "model_defaults_json": '[]',
+        "metadata_json": '"just a string"',
+    })
+    assert run.model_defaults is None
+    assert run.metadata is None
+
+
+def test_string_field_length_alignment_with_db() -> None:
+    """String fields must not exceed DB column limits."""
+    with pytest.raises(ValidationError):
+        User(id=1, email="a" * 256, created_at=_ts(), updated_at=_ts())
+    with pytest.raises(ValidationError):
+        UsageEvent(
+            id=1, provider="x" * 51, model_key="gpt",
+            operation_type="llm", created_at=_ts(),
+        )

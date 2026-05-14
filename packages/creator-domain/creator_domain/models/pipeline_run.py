@@ -26,7 +26,7 @@ class PipelineRun(BaseModel):
     restart_from: RunStage | None = None
     model_defaults: ModelSelection | None = None
     metadata: dict[str, object] | None = None
-    style_preset: str | None = None
+    style_preset: str | None = Field(default=None, max_length=100)
     started_at: datetime | None = None
     finished_at: datetime | None = None
     created_at: datetime
@@ -50,9 +50,14 @@ class PipelineRun(BaseModel):
         raw_defaults = mapped.pop("model_defaults_json", None)
         if raw_defaults is not None:
             try:
-                mapped["model_defaults"] = cast(
-                    dict[str, object], json.loads(cast(str, raw_defaults))
-                )
+                parsed = json.loads(cast(str, raw_defaults))
+                if isinstance(parsed, dict):
+                    mapped["model_defaults"] = cast(dict[str, object], parsed)
+                else:
+                    logger.warning(
+                        "Non-object JSON in model_defaults_json column for row id=%s", mapped.get("id")
+                    )
+                    mapped["model_defaults"] = None
             except (json.JSONDecodeError, TypeError):
                 logger.warning(
                     "Malformed JSON in model_defaults_json column for row id=%s", mapped.get("id")
@@ -61,7 +66,14 @@ class PipelineRun(BaseModel):
         raw_meta = mapped.pop("metadata_json", None)
         if raw_meta is not None:
             try:
-                mapped["metadata"] = cast(dict[str, object], json.loads(cast(str, raw_meta)))
+                parsed_meta = json.loads(cast(str, raw_meta))
+                if isinstance(parsed_meta, dict):
+                    mapped["metadata"] = cast(dict[str, object], parsed_meta)
+                else:
+                    logger.warning(
+                        "Non-object JSON in metadata_json column for row id=%s", mapped.get("id")
+                    )
+                    mapped["metadata"] = None
             except (json.JSONDecodeError, TypeError):
                 logger.warning(
                     "Malformed JSON in metadata_json column for row id=%s", mapped.get("id")

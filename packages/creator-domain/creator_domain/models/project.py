@@ -9,7 +9,7 @@ class Project(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
     id: int = Field(ge=1)
-    workspace_id: int | None = None
+    workspace_id: int | None = Field(default=None, ge=1)
     title: str | None = Field(default=None, max_length=255)
     source_type: Literal["idea", "markdown", "pasted_json", "url"] = "idea"
     idea_brief: str | None = None

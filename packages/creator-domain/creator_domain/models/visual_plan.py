@@ -20,7 +20,7 @@ class VisualScene(BaseModel):
     mood: str | None = None
     composition: str | None = None
     generation_status: Literal["pending", "generating", "completed", "failed"] = "pending"
-    latest_asset_id: int | None = None
+    latest_asset_id: int | None = Field(default=None, ge=1)
 
 
 class VisualPlan(BaseModel):

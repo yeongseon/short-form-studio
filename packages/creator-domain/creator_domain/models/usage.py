@@ -10,15 +10,15 @@ class UsageEvent(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", protected_namespaces=())
 
     id: int = Field(ge=1)
-    workspace_id: int | None = None
-    project_id: int | None = None
-    run_id: int | None = None
-    provider: str
-    model_key: str
-    operation_type: str
-    input_tokens: int | None = None
-    output_tokens: int | None = None
-    image_count: int | None = None
+    workspace_id: int | None = Field(default=None, ge=1)
+    project_id: int | None = Field(default=None, ge=1)
+    run_id: int | None = Field(default=None, ge=1)
+    provider: str = Field(max_length=50)
+    model_key: str = Field(max_length=100)
+    operation_type: str = Field(max_length=50)
+    input_tokens: int | None = Field(default=None, ge=0)
+    output_tokens: int | None = Field(default=None, ge=0)
+    image_count: int | None = Field(default=None, ge=0)
     audio_seconds: float | None = Field(default=None, ge=0)
     estimated_cost_usd: float | None = Field(default=None, ge=0)
     created_at: datetime

@@ -50,7 +50,7 @@ class StoryboardParagraph(BaseModel):
     image_prompt: str | None = None
     image_url: str | None = None
     audio_url: str | None = None
-    audio_duration: float | None = None
+    audio_duration: float | None = Field(default=None, ge=0)
     subtitles_url: str | None = None
     subtitle_entries: list[dict[str, object]] | None = None
     status: ParagraphStatus = ParagraphStatus.IDLE
@@ -58,9 +58,9 @@ class StoryboardParagraph(BaseModel):
 
     # Scene/asset metadata for cross-reference
     scene_id: str | None = Field(default=None, max_length=128)
-    image_asset_id: int | None = None
-    audio_artifact_id: int | None = None
-    subtitle_artifact_id: int | None = None
+    image_asset_id: int | None = Field(default=None, ge=1)
+    audio_artifact_id: int | None = Field(default=None, ge=1)
+    subtitle_artifact_id: int | None = Field(default=None, ge=1)
 
 
 class StoryboardResponse(BaseModel):
@@ -71,5 +71,5 @@ class StoryboardResponse(BaseModel):
     run_id: int = Field(ge=1)
     paragraphs: list[StoryboardParagraph]
     render_ready: bool = False
-    total_paragraphs: int = 0
-    ready_paragraphs: int = 0
+    total_paragraphs: int = Field(ge=0, default=0)
+    ready_paragraphs: int = Field(ge=0, default=0)

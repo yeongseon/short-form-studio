@@ -9,9 +9,9 @@ class User(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
     id: int = Field(ge=1)
-    email: str = Field(max_length=320)
+    email: str = Field(max_length=255)
     name: str | None = None
-    workspace_id: int | None = None
+    workspace_id: int | None = Field(default=None, ge=1)
     auth_provider: str = "api_key"
     auth_subject: str = ""
     created_at: datetime
@@ -23,7 +23,7 @@ class Workspace(BaseModel):
 
     id: int = Field(ge=1)
     name: str
-    slug: str = Field(max_length=64)
+    slug: str = Field(max_length=100)
     owner_id: int = Field(ge=1)
     created_at: datetime
     updated_at: datetime
