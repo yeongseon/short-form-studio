@@ -36,7 +36,7 @@ class TestDalleProvider:
         mock_response.json.return_value = {"data": [{"b64_json": encoded}]}
 
         output_path = tmp_path / "nested" / "dalle.png"
-        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}):
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "ARTIFACT_ROOT": str(tmp_path)}):
             from creator_provider.image.dalle_provider import DalleProvider
 
             provider = DalleProvider(endpoint="https://api.openai.com", model_key="dall-e-3")
@@ -119,7 +119,7 @@ class TestStabilityProvider:
         mock_response.content = image_bytes
 
         output_path = tmp_path / "nested" / "stability.webp"
-        with mock.patch.dict(os.environ, {"STABILITY_API_KEY": "st-test"}):
+        with mock.patch.dict(os.environ, {"STABILITY_API_KEY": "st-test", "ARTIFACT_ROOT": str(tmp_path)}):
             from creator_provider.image.stability_provider import StabilityProvider
 
             provider = StabilityProvider(
@@ -221,7 +221,7 @@ class TestImagenProvider:
         }
 
         output_path = tmp_path / "nested" / "imagen.png"
-        with mock.patch.dict(os.environ, {"GOOGLE_API_KEY": "gk-test"}):
+        with mock.patch.dict(os.environ, {"GOOGLE_API_KEY": "gk-test", "ARTIFACT_ROOT": str(tmp_path)}):
             from creator_provider.image.imagen_provider import ImagenProvider
 
             provider = ImagenProvider(

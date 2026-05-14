@@ -11,6 +11,7 @@ from typing import Any
 from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
+from creator_domain.sanitize import UnsafePathComponent, validate_artifact_path
 from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
 from creator_service.audio_service import audio_service as _audio_service
 from creator_service.cost_config import COST_RENDER_VIDEO
@@ -46,6 +47,10 @@ def _resolve_profile(name: str) -> RenderProfile:
         logger.warning("Unknown render profile %r, falling back to default", name)
         return RenderProfile.default()
     return factory()
+
+
+def _validate_manifest_path(path: str) -> None:
+    validate_artifact_path(path, _ARTIFACT_ROOT)
 
 
 @celery_app.task(
@@ -95,13 +100,36 @@ def render_video(self, run_id: int, render_profile: str = "shorts_default") -> d
 
         profile_data = manifest["render_profile"]
         scene_count = len(manifest["scenes"])
-        image_paths = [Path(scene["asset_path"]) for scene in manifest["scenes"]]
+        image_paths: list[Path] = []
+        for scene in manifest["scenes"]:
+            asset_path = str(scene["asset_path"])
+            try:
+                _validate_manifest_path(asset_path)
+                image_paths.append(Path(asset_path))
+            except UnsafePathComponent as exc:
+                raise RuntimeError(
+                    f"Unsafe manifest path for run {run_id}: scene asset_path {asset_path!r}"
+                ) from exc
         ffmpeg = FFmpegService(profile=_resolve_profile(render_profile))
 
         paragraph_audio = await _audio_service.list_paragraph_audio(run_id)
         paragraph_subtitles = await _subtitle_service.list_paragraph_subtitles(run_id)
         run_audio_path = manifest["audio_path"]
         run_sub_path = manifest["subtitle_path"]
+        if run_audio_path:
+            try:
+                _validate_manifest_path(str(run_audio_path))
+            except UnsafePathComponent as exc:
+                raise RuntimeError(
+                    f"Unsafe manifest path for run {run_id}: audio_path {run_audio_path!r}"
+                ) from exc
+        if run_sub_path:
+            try:
+                _validate_manifest_path(str(run_sub_path))
+            except UnsafePathComponent as exc:
+                raise RuntimeError(
+                    f"Unsafe manifest path for run {run_id}: subtitle_path {run_sub_path!r}"
+                ) from exc
         audio_path: Path | None = None
         subtitle_path: Path | None = None
 
@@ -120,12 +148,23 @@ def render_video(self, run_id: int, render_profile: str = "shorts_default") -> d
                 sid in audio_by_section for sid in ordered_sections
             )
             if all_audio_covered:
-                ordered_audio_paths = [audio_by_section[sid].path for sid in ordered_sections]
+                ordered_audio_paths: list[str] = []
+                validated_audio_by_section: dict[str, str] = {}
+                for sid in ordered_sections:
+                    raw_audio_path = str(audio_by_section[sid].path)
+                    try:
+                        _validate_manifest_path(raw_audio_path)
+                        ordered_audio_paths.append(raw_audio_path)
+                        validated_audio_by_section[sid] = raw_audio_path
+                    except UnsafePathComponent as exc:
+                        raise RuntimeError(
+                            f"Unsafe manifest path for run {run_id}: paragraph audio path {raw_audio_path!r}"
+                        ) from exc
                 duration_by_section: dict[str, float] = {}
                 for sid in ordered_sections:
                     try:
                         duration_by_section[sid] = ffmpeg.get_audio_duration(
-                            audio_by_section[sid].path
+                            validated_audio_by_section[sid]
                         )
                     except Exception:
                         duration_by_section[sid] = 5.0
@@ -148,8 +187,18 @@ def render_video(self, run_id: int, render_profile: str = "shorts_default") -> d
                     )
                     if all_subtitles_covered:
                         merged_sub_path = f"{_ARTIFACT_ROOT}/{run_id}/render/subtitles_merged.srt"
+                        merged_sub_inputs: list[str] = []
+                        for sid in ordered_sections:
+                            raw_subtitle_path = str(sub_by_section[sid].path)
+                            try:
+                                _validate_manifest_path(raw_subtitle_path)
+                                merged_sub_inputs.append(raw_subtitle_path)
+                            except UnsafePathComponent as exc:
+                                raise RuntimeError(
+                                    f"Unsafe manifest path for run {run_id}: paragraph subtitle path {raw_subtitle_path!r}"
+                                ) from exc
                         ffmpeg.merge_subtitles(
-                            [sub_by_section[sid].path for sid in ordered_sections],
+                            merged_sub_inputs,
                             [duration_by_section[sid] for sid in ordered_sections],
                             merged_sub_path,
                         )

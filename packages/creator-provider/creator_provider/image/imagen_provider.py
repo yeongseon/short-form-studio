@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import os
 import tempfile
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
@@ -91,7 +93,13 @@ class ImagenProvider(ImageProvider):
 
         output_path_str = merged.get("output_path")
         if output_path_str:
-            output_path = Path(str(output_path_str))
+            candidate_output = str(output_path_str)
+            artifact_root = os.getenv("ARTIFACT_ROOT")
+            validated_output = import_module("creator_domain.sanitize").validate_artifact_path(
+                candidate_output,
+                artifact_root or "data/artifacts",
+            )
+            output_path = Path(validated_output)
         else:
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                 output_path = Path(tmp.name)
