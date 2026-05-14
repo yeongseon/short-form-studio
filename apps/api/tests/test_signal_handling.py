@@ -117,3 +117,8 @@ async def test_previous_handlers_restored_on_shutdown():
             # Should have registered both SIGTERM and SIGINT initially
             assert any(call[0] == (signal.SIGTERM, lifecycle._handle_sigterm) for call in calls)
             assert any(call[0] == (signal.SIGINT, lifecycle._handle_sigint) for call in calls)
+            # Verify restoration to distinct previous handlers
+            assert any(call[0] == (signal.SIGTERM, previous_sigterm) for call in calls), \
+                "SIGTERM not restored to its distinct previous handler"
+            assert any(call[0] == (signal.SIGINT, previous_sigint) for call in calls), \
+                "SIGINT not restored to its distinct previous handler"
