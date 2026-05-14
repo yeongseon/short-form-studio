@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from creator_domain.models import REVIEW_STAGES, RunStage, can_transition
+
+logger = logging.getLogger(__name__)
 
 
 class StageReviewStorageBackend(Protocol):
@@ -139,15 +142,38 @@ class StageReviewService:
             )
 
         # 4. Record approval (only after CAS succeeds — no orphan reviews)
-        await self.storage.create_review(
-            {
-                "run_id": run_id,
-                "stage_name": stage_name,
-                "review_status": "approved",
-                "reviewer": reviewer,
-                "notes": notes,
-            }
-        )
+        try:
+            await self.storage.create_review(
+                {
+                    "run_id": run_id,
+                    "stage_name": stage_name,
+                    "review_status": "approved",
+                    "reviewer": reviewer,
+                    "notes": notes,
+                }
+            )
+        except Exception as exc:
+            # Roll back stage on review insert failure.
+            rollback_ok, _ = await run_service.storage.conditional_update_run(
+                run_id,
+                {"current_stage": stage.value},
+                frozenset({target.value}),
+                workspace_id=workspace_id,
+            )
+            if not rollback_ok:
+                logger.critical(
+                    "INCONSISTENCY: review insert failed AND rollback failed "
+                    "for run %s (stage %s -> %s). Manual intervention required.",
+                    run_id,
+                    stage.value,
+                    target.value,
+                )
+                raise RuntimeError(
+                    f"Stage rollback failed for run {run_id}: review insert failed "
+                    f"and stage could not be restored from {target.value} to {stage.value}. "
+                    f"Original error: {exc}"
+                ) from exc
+            raise
 
         updated_run = await run_service.get_run(run_id, workspace_id=workspace_id)
         if updated_run is None:
