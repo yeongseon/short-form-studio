@@ -428,25 +428,28 @@ class GpuLockContext:
             self._renewal_task = None
 
     def release(self, lock_id: str | None = None) -> None:
-        """Release GPU lock if acquired."""
+        """Release GPU lock if acquired. Raises RuntimeError if lock was lost."""
         self.stop_auto_renewal()
-        if not self.acquired or self._token is None:
-            return
-        try:
-            released = release_gpu_lock(self.redis_client, self._token)
-            if released:
-                self.released_at = _utc_now_iso()
-            else:
-                logger.warning(
-                    "GPU lock release returned False for %s (lock expired or stolen)",
-                    lock_id or self.task_id,
-                )
-        except Exception:
-            logger.exception("Failed to release GPU lock for %s", lock_id or self.task_id)
-        finally:
-            self.acquired = False
-            self._token = None
-
+        was_lost = self.lock_lost
+        if self.acquired and self._token is not None:
+            try:
+                released = release_gpu_lock(self.redis_client, self._token)
+                if released:
+                    self.released_at = _utc_now_iso()
+                else:
+                    logger.warning(
+                        "GPU lock release returned False for %s (lock expired or stolen)",
+                        lock_id or self.task_id,
+                    )
+            except Exception:
+                logger.exception("Failed to release GPU lock for %s", lock_id or self.task_id)
+            finally:
+                self.acquired = False
+                self._token = None
+        if was_lost:
+            raise RuntimeError(
+                f"GPU lock was lost during execution for {lock_id or self.task_id}"
+            )
 
 def validate_task_message(message: dict[str, Any]) -> dict[str, Any]:
     if "run_id" not in message:
