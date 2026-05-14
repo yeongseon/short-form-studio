@@ -37,6 +37,20 @@ class TestGpuLockContextRenew:
 
         assert result is False
 
+    def test_renew_uses_shared_default_timeout(self) -> None:
+        """renew() without explicit timeout must use GPU_LOCK_TIMEOUT_SECONDS."""
+        from creator_provider.gpu_lock import GPU_LOCK_TIMEOUT_SECONDS
+
+        ctx = GpuLockContext(task_id="run-1")
+        ctx.redis_client = MagicMock()
+        ctx.acquired = True
+        ctx._token = "run-1:abc123"
+
+        with patch("tasks.task_runner.renew_gpu_lock", return_value=True) as mock_renew:
+            ctx.renew()
+
+        mock_renew.assert_called_once_with(ctx.redis_client, "run-1:abc123", timeout=GPU_LOCK_TIMEOUT_SECONDS)
+
 
 class TestGpuLockContextRelease:
     def test_released_at_set_only_on_successful_release(self) -> None:

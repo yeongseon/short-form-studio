@@ -44,7 +44,7 @@ from typing import Any, Awaitable, Callable
 from celery.exceptions import Ignore, SoftTimeLimitExceeded
 from creator_domain.models.stage import RunStage
 from creator_provider.exceptions import ProviderTimeoutError, RateLimitError
-from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock, renew_gpu_lock
+from creator_provider.gpu_lock import GPU_LOCK_TIMEOUT_SECONDS, acquire_gpu_lock, release_gpu_lock, renew_gpu_lock
 from creator_provider.versioned_assets import clear_loaded_asset_versions
 from creator_service.run_service import run_service as _run_service
 from creator_service.task_tracking_service import task_tracking_service as _task_tracking_service
@@ -374,7 +374,7 @@ class GpuLockContext:
         self.acquired = True
         self.acquired_at = _utc_now_iso()
 
-    def renew(self, timeout: int = 600) -> bool:
+    def renew(self, timeout: int = GPU_LOCK_TIMEOUT_SECONDS) -> bool:
         """Renew GPU lock lease. Returns True if renewed, False if lock lost."""
         if not self.acquired or self._token is None or self.redis_client is None:
             return False
