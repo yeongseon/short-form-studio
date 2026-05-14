@@ -45,6 +45,7 @@ from celery.exceptions import Ignore, SoftTimeLimitExceeded
 from creator_domain.models.stage import RunStage
 from creator_provider.exceptions import ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
+from creator_provider.versioned_assets import clear_loaded_asset_versions
 from creator_service.run_service import run_service as _run_service
 from creator_service.task_tracking_service import task_tracking_service as _task_tracking_service
 from creator_service.usage_service import resolve_workspace_id_from_run
@@ -121,6 +122,8 @@ async def _run_task_inner(
     execute: Callable[[TaskContext], Awaitable[TaskResult]],
 ) -> dict[str, object]:
     """Inner async execution with full lifecycle management."""
+    # Reset asset version tracking to isolate from import-time loads
+    clear_loaded_asset_versions()
     start_time = datetime.now(timezone.utc)
 
     # 1. Task tracking: start
@@ -273,8 +276,12 @@ def run_task(
     - Other errors → mark_failed + FAILED transition, re-raise
     """
     request = getattr(celery_self, "request", None)
-    raw_args = getattr(request, "args", ()) or ()
-    raw_kwargs = getattr(request, "kwargs", {}) or {}
+    raw_args = getattr(request, "args", None)
+    raw_kwargs = getattr(request, "kwargs", None)
+    if raw_args is None:
+        raw_args = ()
+    if raw_kwargs is None:
+        raw_kwargs = {}
     if not isinstance(raw_args, (list, tuple)):
         raise ValueError(f"Malformed broker message: args is {type(raw_args).__name__}, expected list/tuple")
     if not isinstance(raw_kwargs, dict):

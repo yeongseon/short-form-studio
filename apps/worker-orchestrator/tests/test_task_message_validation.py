@@ -107,3 +107,20 @@ def test_run_task_rejects_list_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     with pytest.raises(ValueError, match="kwargs is list"):
         run_task(stub, 1, config, lambda ctx: None)
+
+
+def test_run_task_rejects_falsy_empty_string_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Empty string args (falsy) should be rejected, not coerced via 'or ()'."""
+    def _track_asyncio_run(_coroutine):
+        raise AssertionError("_run_task_inner must not run")
+
+    monkeypatch.setattr("tasks.task_runner.asyncio.run", _track_asyncio_run)
+
+    stub = _CelerySelfStub(request=_RequestStubWithArgs(args="", kwargs={}))
+    config = TaskRunnerConfig(
+        task_name="generate_script",
+        allowed_stages=frozenset({task_runner.RunStage.IDEA_READY}),
+        safe_stages=frozenset({task_runner.RunStage.IDEA_READY.value}),
+    )
+    with pytest.raises(ValueError, match="args is str"):
+        run_task(stub, 1, config, lambda ctx: None)
