@@ -173,7 +173,16 @@ def test_generate_paragraph_subtitles_success(monkeypatch: pytest.MonkeyPatch) -
             },
         )
     ]
-    assert len(subtitle_service.calls) >= 1  # Updated: storage fields may be present
+    assert len(subtitle_service.calls) == 1
+    call = subtitle_service.calls[0]
+    assert call["run_id"] == 101
+    assert call["section_id"] == "hook-1"
+    assert call["path"] == "data/artifacts/101/subtitles/hook-1.srt"
+    assert call["fmt"] == "srt"
+    assert call["model_used"] == "whisper-small"
+    assert call["provider_type"] == "faster-whisper"
+    assert call["storage_provider"] == "local"
+    assert "storage_key" in call
 
 
 def test_generate_paragraph_subtitles_audio_not_found(monkeypatch: pytest.MonkeyPatch) -> None:

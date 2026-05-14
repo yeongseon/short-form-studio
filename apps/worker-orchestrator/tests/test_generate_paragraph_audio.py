@@ -191,7 +191,16 @@ def test_generate_paragraph_audio_success(monkeypatch: pytest.MonkeyPatch) -> No
             },
         )
     ]
-    assert len(audio_service.calls) >= 1  # Updated: storage fields may be present
+    assert len(audio_service.calls) == 1
+    call = audio_service.calls[0]
+    assert call["run_id"] == 101
+    assert call["section_id"] == "hook-1"
+    assert call["path"] == "data/artifacts/101/audio/hook-1.wav"
+    assert call["model_used"] == "qwen3-tts"
+    assert call["provider_type"] == "qwen_tts"
+    assert call["voice"] == "en_US-lessac-medium"
+    assert call["storage_provider"] == "local"
+    assert "storage_key" in call
     assert script_service.calls == [101]
 
 

@@ -226,9 +226,10 @@ def test_generate_subtitles_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(subtitle_service.calls) == 1
     call = subtitle_service.calls[0]
     assert call["run_id"] == 101
-    assert call["format"]
-    assert call["model_used"]
-    assert call["provider_type"]
+    assert call["path"] == "data/artifacts/101/subtitles/subtitles.srt"
+    assert call["format"] == "srt"
+    assert call["model_used"] == "whisper-large"
+    assert call["provider_type"] == "faster-whisper"
     assert call["storage_provider"] == "local"
     assert "storage_key" in call
     assert storage.calls == [(101, {"current_stage": "RENDER_GENERATING", "status": "running"})]
