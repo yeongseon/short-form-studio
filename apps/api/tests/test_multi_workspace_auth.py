@@ -5,7 +5,7 @@
 import hashlib
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from httpx import AsyncClient
 from shorts_api.auth import ApiKeyMiddleware, CurrentUser
@@ -24,8 +24,9 @@ def _make_app() -> FastAPI:
     test_app.add_middleware(ApiKeyMiddleware)
 
     @test_app.get("/api/creator/test")
-    async def test_endpoint():
-        return {"status": "ok"}
+    async def test_endpoint(request: Request):
+        user = request.state.user
+        return {"status": "ok", "workspace_id": user.workspace_id}
 
     return test_app
 
@@ -94,6 +95,7 @@ async def test_x_workspace_id_selects_correct_workspace(multi_workspace_client):
     )
     
     assert response.status_code == 200
+    assert response.json()["workspace_id"] == 20
 
 
 @pytest.mark.asyncio
@@ -126,6 +128,7 @@ async def test_missing_x_workspace_id_falls_back_to_first_workspace(multi_worksp
     )
     
     assert response.status_code == 200
+    assert response.json()["workspace_id"] == 10
 
 
 @pytest.mark.asyncio
@@ -158,3 +161,4 @@ async def test_bearer_token_with_workspace_id_header(multi_workspace_client):
     )
     
     assert response.status_code == 200
+    assert response.json()["workspace_id"] == 20

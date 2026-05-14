@@ -368,22 +368,6 @@ async def test_get_current_user_without_workspace_membership_returns_404(monkeyp
     assert exc_info.value.detail == "Not found"
 
 
-    async def _fetch_one(query: str, *args):
-        if "FROM api_keys" in query:
-            return {"user_id": 123}
-        if "FROM workspace_members" in query:
-            return None
-        return None
-
-    monkeypatch.setattr("shorts_api.auth.fetch_one", _fetch_one)
-    request = Request({"type": "http", "headers": [(b"x-api-key", b"valid-key")]})
-
-    with pytest.raises(HTTPException) as exc_info:
-        await get_current_user(request)
-    assert exc_info.value.status_code == 404
-    assert exc_info.value.detail == "Not found"
-
-
 @pytest.mark.asyncio
 async def test_require_workspace_access_denies_without_membership(monkeypatch):
     async def _no_access(_workspace_id: int, _user_id: int) -> bool:
