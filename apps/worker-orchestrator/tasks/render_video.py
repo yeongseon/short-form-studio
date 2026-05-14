@@ -50,8 +50,6 @@ def _resolve_profile(name: str) -> RenderProfile:
 
 
 def _validate_manifest_path(path: str) -> None:
-    if "ARTIFACT_ROOT" not in os.environ and Path(path).is_absolute():
-        return
     validate_artifact_path(path, _ARTIFACT_ROOT)
 
 

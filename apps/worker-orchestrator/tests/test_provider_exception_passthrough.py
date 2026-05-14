@@ -447,6 +447,7 @@ def test_generate_subtitles_preserves_provider_timeout(monkeypatch: pytest.Monke
     monkeypatch.setattr(generate_subtitles_module, "_run_service", SimpleNamespace(storage=storage))
     monkeypatch.setattr(generate_subtitles_module, "_script_service", _FakeScriptService(draft=draft))
     monkeypatch.setattr(generate_subtitles_module, "_audio_service", _FakeAudioServiceForSubtitles())
+    monkeypatch.setattr(generate_subtitles_module, "validate_artifact_path", lambda p, r: p)
 
     task = generate_subtitles_module.generate_subtitles
     run_callable = getattr(task, "run", task)
@@ -464,6 +465,7 @@ def test_generate_subtitles_preserves_rate_limit(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(generate_subtitles_module, "_run_service", SimpleNamespace(storage=storage))
     monkeypatch.setattr(generate_subtitles_module, "_script_service", _FakeScriptService(draft=draft))
     monkeypatch.setattr(generate_subtitles_module, "_audio_service", _FakeAudioServiceForSubtitles())
+    monkeypatch.setattr(generate_subtitles_module, "validate_artifact_path", lambda p, r: p)
 
     task = generate_subtitles_module.generate_subtitles
     run_callable = getattr(task, "run", task)

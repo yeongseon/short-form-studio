@@ -122,7 +122,7 @@ class TestOpenAITTSProvider:
         mock_response.content = audio_bytes
 
         output_path = tmp_path / "nested" / "openai.mp3"
-        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}):
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "ARTIFACT_ROOT": str(tmp_path)}):
             from creator_provider.tts.openai_tts_provider import OpenAITTSProvider
 
             provider = OpenAITTSProvider(endpoint="https://api.openai.com", model_key="openai-tts-1")

@@ -56,14 +56,11 @@ class WhisperSTTProvider(STTProvider):
         if output_path:
             candidate_output = str(output_path)
             artifact_root = os.getenv("ARTIFACT_ROOT")
-            if artifact_root is None and Path(candidate_output).is_absolute():
-                destination = Path(candidate_output)
-            else:
-                validated_output = import_module("creator_domain.sanitize").validate_artifact_path(
-                    candidate_output,
-                    artifact_root or "data/artifacts",
-                )
-                destination = Path(validated_output)
+            validated_output = import_module("creator_domain.sanitize").validate_artifact_path(
+                candidate_output,
+                artifact_root or "data/artifacts",
+            )
+            destination = Path(validated_output)
             destination.parent.mkdir(parents=True, exist_ok=True)
             if subtitle_format == "vtt":
                 destination.write_text(_segments_to_vtt(segments), encoding="utf-8")

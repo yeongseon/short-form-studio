@@ -94,10 +94,7 @@ def generate_subtitles(
         if not audio_path:
             raise RuntimeError(f"No audio artifact found for run {run_id}; cannot transcribe")
         try:
-            if "ARTIFACT_ROOT" not in os.environ and Path(audio_path).is_absolute():
-                pass
-            else:
-                validate_artifact_path(audio_path, _ARTIFACT_ROOT)
+            validate_artifact_path(audio_path, _ARTIFACT_ROOT)
         except UnsafePathComponent as exc:
             raise RuntimeError(
                 f"Unsafe audio artifact path for run {run_id}: {audio_path!r}"

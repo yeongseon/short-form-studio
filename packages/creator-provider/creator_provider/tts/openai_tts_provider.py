@@ -65,14 +65,11 @@ class OpenAITTSProvider(TTSProvider):
         if output_path_str:
             candidate_output = str(output_path_str)
             artifact_root = os.getenv("ARTIFACT_ROOT")
-            if artifact_root is None and Path(candidate_output).is_absolute():
-                output_path = Path(candidate_output)
-            else:
-                validated_output = import_module("creator_domain.sanitize").validate_artifact_path(
-                    candidate_output,
-                    artifact_root or "data/artifacts",
-                )
-                output_path = Path(validated_output)
+            validated_output = import_module("creator_domain.sanitize").validate_artifact_path(
+                candidate_output,
+                artifact_root or "data/artifacts",
+            )
+            output_path = Path(validated_output)
         else:
             with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
                 output_path = Path(tmp.name)

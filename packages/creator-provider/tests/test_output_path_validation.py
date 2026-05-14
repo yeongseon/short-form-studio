@@ -198,3 +198,79 @@ async def test_providers_accept_output_path_within_artifact_root(
             await method(params=params, **call_kwargs)
 
     assert good_path.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("provider_factory", "method_name", "payload_factory", "call_kwargs"),
+    [
+        (
+            lambda: __import__(
+                "creator_provider.image.dalle_provider", fromlist=["DalleProvider"]
+            ).DalleProvider(endpoint="https://api.openai.com", model_key="dall-e-3"),
+            "generate",
+            lambda: {"data": [{"b64_json": base64.b64encode(b"img").decode("utf-8")}]},
+            {"prompt": "test"},
+        ),
+        (
+            lambda: __import__(
+                "creator_provider.image.stability_provider", fromlist=["StabilityProvider"]
+            ).StabilityProvider(endpoint="https://api.stability.ai", model_key="sd3-medium"),
+            "generate",
+            lambda: b"img",
+            {"prompt": "test"},
+        ),
+        (
+            lambda: __import__(
+                "creator_provider.image.imagen_provider", fromlist=["ImagenProvider"]
+            ).ImagenProvider(
+                endpoint="https://generativelanguage.googleapis.com", model_key="imagen-3"
+            ),
+            "generate",
+            lambda: {
+                "generatedImages": [
+                    {"image": {"imageBytes": base64.b64encode(b"img").decode("utf-8")}}
+                ]
+            },
+            {"prompt": "test"},
+        ),
+        (
+            lambda: __import__(
+                "creator_provider.tts.openai_tts_provider", fromlist=["OpenAITTSProvider"]
+            ).OpenAITTSProvider(endpoint="https://api.openai.com", model_key="tts-1"),
+            "generate",
+            lambda: b"audio",
+            {"text": "test"},
+        ),
+    ],
+)
+async def test_absolute_path_rejected_when_artifact_root_unset(
+    provider_factory, method_name, payload_factory, call_kwargs,
+) -> None:
+    """Regression: absolute output_path must be rejected even when ARTIFACT_ROOT is unset."""
+    mock_response = mock.MagicMock()
+    mock_response.raise_for_status = mock.MagicMock()
+    payload = payload_factory()
+    if isinstance(payload, bytes):
+        mock_response.content = payload
+    else:
+        mock_response.json.return_value = payload
+
+    env_without_root = {
+        "OPENAI_API_KEY": "sk-test",
+        "STABILITY_API_KEY": "st-test",
+        "GOOGLE_API_KEY": "gk-test",
+    }
+    with (
+        mock.patch.dict(os.environ, env_without_root, clear=False),
+        mock.patch.dict(os.environ, {}, clear=False),
+        mock.patch("httpx.AsyncClient.post", return_value=mock_response),
+    ):
+        # Remove ARTIFACT_ROOT if present
+        os.environ.pop("ARTIFACT_ROOT", None)
+        provider = provider_factory()
+        method = getattr(provider, method_name)
+        params = {"output_path": "/etc/passwd"}
+
+        with pytest.raises(UnsafePathComponent):
+            await method(params=params, **call_kwargs)
