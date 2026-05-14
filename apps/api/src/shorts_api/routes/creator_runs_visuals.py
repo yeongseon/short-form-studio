@@ -90,7 +90,7 @@ async def generate_visual_plan_trigger(
             f"expected one of {sorted(allowed_stages)}",
         )
 
-    validate_model_key(request.model_key)
+    validate_model_key(request.model_key, expected_category="llm")
     return await cas_dispatch_with_rollback(
         run_id=run_id,
         expected_stages=allowed_stages,
@@ -128,7 +128,7 @@ async def generate_visual_assets_trigger(
             f"expected one of {sorted(allowed_stages)}",
         )
 
-    validate_model_key(request.model_key)
+    validate_model_key(request.model_key, expected_category="image")
     return await cas_dispatch_with_rollback(
         run_id=run_id,
         expected_stages=allowed_stages,

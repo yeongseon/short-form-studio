@@ -99,7 +99,7 @@ async def generate_scene_image_endpoint(
             f"expected one of {sorted(allowed_stages)}",
         )
 
-    validate_model_key(effective_request.model_key)
+    validate_model_key(effective_request.model_key, expected_category="image")
     workspace_id = await _enforce_run_quota(
         run_id, "image_gen", workspace_id=access[0].workspace_id
     )
@@ -153,7 +153,7 @@ async def regenerate_scene_image_endpoint(
             f"expected one of {sorted(allowed_stages)}",
         )
 
-    validate_model_key(request.model_key)
+    validate_model_key(request.model_key, expected_category="image")
     workspace_id = await _enforce_run_quota(
         run_id, "image_gen", workspace_id=access[0].workspace_id
     )
@@ -267,7 +267,7 @@ async def generate_audio_trigger(
             f"expected one of {sorted(allowed_stages)}",
         )
 
-    validate_model_key(request.tts_model)
+    validate_model_key(request.tts_model, expected_category="tts")
     return await cas_dispatch_with_rollback(
         run_id=run_id,
         expected_stages=allowed_stages,
@@ -305,7 +305,7 @@ async def generate_subtitles_trigger(
             f"expected one of {sorted(allowed_stages)}",
         )
 
-    validate_model_key(request.subtitle_model)
+    validate_model_key(request.subtitle_model, expected_category="stt")
     return await cas_dispatch_with_rollback(
         run_id=run_id,
         expected_stages=allowed_stages,

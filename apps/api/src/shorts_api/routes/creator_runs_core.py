@@ -271,7 +271,7 @@ async def generate_script_trigger(
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    validate_model_key(request.model_key)
+    validate_model_key(request.model_key, expected_category="llm")
     idea_brief = project.idea_brief or project.title or ""
 
     return await cas_dispatch_with_rollback(
