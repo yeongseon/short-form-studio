@@ -380,3 +380,78 @@ def test_cas_dispatch_with_rollback_releases_quota_on_stage_conflict(
 
     assert exc.value.status_code == 409
     assert cancel_calls == [(999, "llm")]
+
+
+def test_cas_dispatch_with_rollback_rejects_cancelled_run() -> None:
+    """cas_dispatch_with_rollback must refuse to dispatch for cancelled runs."""
+    service = TaskDispatchService()
+
+    class _CancelledRunStorage:
+        async def conditional_update_run(
+            self,
+            _run_id: int,
+            _updates: dict[str, object],
+            *,
+            expected_stages: frozenset[str],
+            workspace_id: int | None = None,
+        ) -> tuple[bool, dict[str, object] | None]:
+            raise AssertionError("Should not reach CAS update for cancelled run")
+
+    class _CancelledRunService:
+        def __init__(self) -> None:
+            self.storage = _CancelledRunStorage()
+
+        async def get_run(self, _run_id: int, **_kw: object) -> object:
+            return SimpleNamespace(status="cancelled", project_id=1)
+
+    def _dispatcher(**_: object) -> str:
+        raise AssertionError("Should not dispatch for cancelled run")
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            service.cas_dispatch_with_rollback(
+                run_id=42,
+                expected_stages=frozenset({"IDEA_READY", "SCRIPT_REVIEW"}),
+                target_stage="SCRIPT_GENERATING",
+                dispatcher=_dispatcher,
+                dispatcher_args={"run_id": 42},
+                run_service=_CancelledRunService(),
+                rollback_stage="SCRIPT_REVIEW",
+                rollback_restart_from=None,
+                enqueue_error_detail="Failed to enqueue",
+            )
+        )
+
+    assert exc.value.status_code == 409
+    assert "cancelled" in exc.value.detail.lower()
+
+
+def test_cas_dispatch_with_rollback_allows_non_cancelled_run() -> None:
+    """cas_dispatch_with_rollback proceeds normally for non-cancelled runs."""
+    service = TaskDispatchService()
+    run_service = _FakeRunService()
+
+    # Patch get_run onto _FakeRunService so the cancelled-check can fetch status
+    async def _get_run(_run_id: int, **_kw: object) -> object:
+        return SimpleNamespace(status="running", project_id=1)
+
+    run_service.get_run = _get_run  # type: ignore[attr-defined]
+
+    def _dispatcher(**_: object) -> str:
+        return "sync-test-1-abc"
+
+    result = asyncio.run(
+        service.cas_dispatch_with_rollback(
+            run_id=7,
+            expected_stages=frozenset({"SCRIPT_REVIEW"}),
+            target_stage="SCRIPT_GENERATING",
+            dispatcher=_dispatcher,
+            dispatcher_args={"run_id": 7},
+            run_service=run_service,
+            rollback_stage="SCRIPT_REVIEW",
+            rollback_restart_from=None,
+            enqueue_error_detail="Failed to enqueue",
+        )
+    )
+
+    assert result["task_id"] == "sync-test-1-abc"

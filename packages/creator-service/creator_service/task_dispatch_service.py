@@ -214,6 +214,19 @@ class TaskDispatchService:
         workspace_id: int | None = None,
     ) -> dict[str, object]:
         run_service_obj = cast(Any, run_service)
+
+        # Reject dispatch for cancelled runs to prevent race between
+        # stop_run() and concurrent trigger requests.
+        try:
+            _pre_run = await run_service_obj.get_run(run_id)
+        except Exception:
+            _pre_run = None
+        if _pre_run is not None and getattr(_pre_run, "status", None) == "cancelled":
+            raise HTTPException(
+                status_code=409,
+                detail="Run is cancelled; cannot dispatch new tasks",
+            )
+
         workspace_id_for_reservation: int | None = None
         if quota_operation_type is not None:
             from creator_service.project_service import project_service
