@@ -282,6 +282,10 @@ async def generate_paragraph_audio_endpoint(
         try:
             celery_app = __import__("celery_app").celery_app
             celery_app.control.revoke(task_id, terminate=True)
+            try:
+                await task_tracking_service.mark_tasks_revoked([task_id])
+            except Exception:
+                logger.warning("Failed to mark task %s as revoked in tracking", task_id)
         except Exception:
             logger.warning("Failed to revoke untracked task %s for run %d", task_id, run_id)
         await cancel_workspace_quota_reservation(user.workspace_id, "tts")
@@ -297,6 +301,10 @@ async def generate_paragraph_audio_endpoint(
         try:
             celery_app = __import__("celery_app").celery_app
             celery_app.control.revoke(task_id, terminate=True)
+            try:
+                await task_tracking_service.mark_tasks_revoked([task_id])
+            except Exception:
+                logger.warning("Failed to mark task %s as revoked in tracking", task_id)
         except Exception:
             logger.warning(
                 "Failed to revoke task %s after concurrent cancel for run %d", task_id, run_id
@@ -378,6 +386,10 @@ async def generate_paragraph_subtitles_endpoint(
         try:
             celery_app = __import__("celery_app").celery_app
             celery_app.control.revoke(task_id, terminate=True)
+            try:
+                await task_tracking_service.mark_tasks_revoked([task_id])
+            except Exception:
+                logger.warning("Failed to mark task %s as revoked in tracking", task_id)
         except Exception:
             logger.warning("Failed to revoke untracked task %s for run %d", task_id, run_id)
         await cancel_workspace_quota_reservation(user.workspace_id, "stt")
@@ -393,6 +405,10 @@ async def generate_paragraph_subtitles_endpoint(
         try:
             celery_app = __import__("celery_app").celery_app
             celery_app.control.revoke(task_id, terminate=True)
+            try:
+                await task_tracking_service.mark_tasks_revoked([task_id])
+            except Exception:
+                logger.warning("Failed to mark task %s as revoked in tracking", task_id)
         except Exception:
             logger.warning(
                 "Failed to revoke task %s after concurrent cancel for run %d", task_id, run_id
@@ -482,6 +498,10 @@ async def generate_all_paragraph_audio(
             try:
                 celery_app = __import__("celery_app").celery_app
                 celery_app.control.revoke(tid, terminate=True)
+                try:
+                    await task_tracking_service.mark_tasks_revoked([tid])
+                except Exception:
+                    logger.warning("Failed to mark task %s as revoked in tracking", tid)
             except Exception:
                 logger.warning("Failed to revoke untracked task %s for run %d", tid, run_id)
             await cancel_workspace_quota_reservation(user.workspace_id, "tts")
@@ -498,6 +518,10 @@ async def generate_all_paragraph_audio(
             try:
                 celery_app = __import__("celery_app").celery_app
                 celery_app.control.revoke(tid, terminate=True)
+                try:
+                    await task_tracking_service.mark_tasks_revoked([tid])
+                except Exception:
+                    logger.warning("Failed to mark task %s as revoked in tracking", tid)
             except Exception:
                 logger.warning(
                     "Failed to revoke task %s after concurrent cancel for run %d", tid, run_id
@@ -602,6 +626,10 @@ async def generate_all_paragraph_subtitles(
             try:
                 celery_app = __import__("celery_app").celery_app
                 celery_app.control.revoke(tid, terminate=True)
+                try:
+                    await task_tracking_service.mark_tasks_revoked([tid])
+                except Exception:
+                    logger.warning("Failed to mark task %s as revoked in tracking", tid)
             except Exception:
                 logger.warning("Failed to revoke untracked task %s for run %d", tid, run_id)
             await cancel_workspace_quota_reservation(user.workspace_id, "stt")
@@ -620,6 +648,10 @@ async def generate_all_paragraph_subtitles(
             try:
                 celery_app = __import__("celery_app").celery_app
                 celery_app.control.revoke(tid, terminate=True)
+                try:
+                    await task_tracking_service.mark_tasks_revoked([tid])
+                except Exception:
+                    logger.warning("Failed to mark task %s as revoked in tracking", tid)
             except Exception:
                 logger.warning(
                     "Failed to revoke task %s after concurrent cancel for run %d", tid, run_id

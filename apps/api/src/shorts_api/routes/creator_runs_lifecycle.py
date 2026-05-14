@@ -107,12 +107,16 @@ async def delete_run(
 ) -> dict[str, object]:
     user, run = access
 
-    # Stop run first to prevent new task dispatch, then collect active IDs
-    # before CASCADE removes task rows on delete.
+    # Mark run as cancelled to block any concurrent dispatch attempts.
+    # Unlike stop_run() which only works during generating stages, this
+    # works from any stage (including review stages where storyboard
+    # dispatch is allowed).
     try:
-        await run_service.stop_run(run_id, workspace_id=user.workspace_id)
-    except (ConflictError, ValueError):
-        pass  # Already stopped or in terminal state — safe to proceed
+        await run_service.storage.update_run(
+            run_id, {"status": "cancelled"}, workspace_id=user.workspace_id
+        )
+    except Exception:
+        pass  # Best-effort — run will be deleted shortly anyway
     collect_result = await _collect_active_celery_ids(run.id)
     if isinstance(collect_result, tuple):
         celery_ids, collect_reliable = collect_result
