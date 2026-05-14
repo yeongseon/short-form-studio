@@ -66,3 +66,44 @@ def test_run_task_rejects_malformed_payload_at_entrypoint(monkeypatch: pytest.Mo
     with pytest.raises(ValueError, match="run_id must be int"):
         run_task(_CelerySelfStub(), "not-an-int", config, _never_called)  # type: ignore[arg-type]
     assert called["inner"] is False
+
+
+@dataclass
+class _RequestStubWithArgs:
+    id: str = "task-1"
+    args: object = ()
+    kwargs: object = None
+
+
+def test_run_task_rejects_string_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    """args that are a string should be rejected, not coerced to list of chars."""
+    def _track_asyncio_run(_coroutine):
+        raise AssertionError("_run_task_inner must not run")
+
+    monkeypatch.setattr("tasks.task_runner.asyncio.run", _track_asyncio_run)
+
+    stub = _CelerySelfStub(request=_RequestStubWithArgs(args="evil", kwargs={}))
+    config = TaskRunnerConfig(
+        task_name="generate_script",
+        allowed_stages=frozenset({task_runner.RunStage.IDEA_READY}),
+        safe_stages=frozenset({task_runner.RunStage.IDEA_READY.value}),
+    )
+    with pytest.raises(ValueError, match="args is str"):
+        run_task(stub, 1, config, lambda ctx: None)
+
+
+def test_run_task_rejects_list_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """kwargs that are a list should be rejected, not coerced to dict."""
+    def _track_asyncio_run(_coroutine):
+        raise AssertionError("_run_task_inner must not run")
+
+    monkeypatch.setattr("tasks.task_runner.asyncio.run", _track_asyncio_run)
+
+    stub = _CelerySelfStub(request=_RequestStubWithArgs(args=(), kwargs=[("a", "b")]))
+    config = TaskRunnerConfig(
+        task_name="generate_script",
+        allowed_stages=frozenset({task_runner.RunStage.IDEA_READY}),
+        safe_stages=frozenset({task_runner.RunStage.IDEA_READY.value}),
+    )
+    with pytest.raises(ValueError, match="kwargs is list"):
+        run_task(stub, 1, config, lambda ctx: None)

@@ -486,6 +486,7 @@ def test_generate_paragraph_subtitles_preserves_provider_timeout(
 
     audio_file = tmp_path / "test_audio.wav"
     audio_file.write_bytes(b"fake audio")
+    monkeypatch.setattr(generate_paragraph_subtitles_module, "_ARTIFACT_ROOT", str(tmp_path))
 
     storage = _make_storage(run_id=1, stage="SUBTITLE_GENERATING")
     monkeypatch.setattr(generate_paragraph_subtitles_module, "_run_service", SimpleNamespace(storage=storage))
@@ -506,6 +507,7 @@ def test_generate_paragraph_subtitles_preserves_rate_limit(
 
     audio_file = tmp_path / "test_audio.wav"
     audio_file.write_bytes(b"fake audio")
+    monkeypatch.setattr(generate_paragraph_subtitles_module, "_ARTIFACT_ROOT", str(tmp_path))
 
     storage = _make_storage(run_id=1, stage="SUBTITLE_GENERATING")
     monkeypatch.setattr(generate_paragraph_subtitles_module, "_run_service", SimpleNamespace(storage=storage))
@@ -516,3 +518,55 @@ def test_generate_paragraph_subtitles_preserves_rate_limit(
 
     with pytest.raises(RateLimitError, match="rate limited"):
         run_callable(run_id=1, section_id="s1", audio_path=str(audio_file))
+
+
+def test_generate_paragraph_subtitles_rejects_path_traversal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """audio_path outside artifact root must be rejected."""
+    provider = _FakeProvider()
+    _patch_registry(monkeypatch, generate_paragraph_subtitles_module, _FakeRegistry(_FakeEntry(), provider))
+
+    # Audio file exists but is outside artifact root
+    audio_file = tmp_path / "outside" / "evil.wav"
+    audio_file.parent.mkdir(parents=True, exist_ok=True)
+    audio_file.write_bytes(b"fake audio")
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    monkeypatch.setattr(generate_paragraph_subtitles_module, "_ARTIFACT_ROOT", str(artifact_root))
+
+    storage = _make_storage(run_id=1, stage="SUBTITLE_GENERATING")
+    monkeypatch.setattr(generate_paragraph_subtitles_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr(generate_paragraph_subtitles_module, "_subtitle_service", _FakeSubtitleService())
+
+    task = generate_paragraph_subtitles_module.generate_paragraph_subtitles
+    run_callable = getattr(task, "run", task)
+
+    with pytest.raises(ValueError, match="audio_path escapes artifact root"):
+        run_callable(run_id=1, section_id="s1", audio_path=str(audio_file))
+
+
+def test_generate_paragraph_subtitles_rejects_symlink_escape(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    """Symlink pointing outside artifact root must be rejected."""
+    provider = _FakeProvider()
+    _patch_registry(monkeypatch, generate_paragraph_subtitles_module, _FakeRegistry(_FakeEntry(), provider))
+
+    artifact_root = tmp_path / "artifacts"
+    artifact_root.mkdir()
+    secret = tmp_path / "secret.txt"
+    secret.write_text("sensitive data")
+    symlink = artifact_root / "evil.wav"
+    symlink.symlink_to(secret)
+    monkeypatch.setattr(generate_paragraph_subtitles_module, "_ARTIFACT_ROOT", str(artifact_root))
+
+    storage = _make_storage(run_id=1, stage="SUBTITLE_GENERATING")
+    monkeypatch.setattr(generate_paragraph_subtitles_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr(generate_paragraph_subtitles_module, "_subtitle_service", _FakeSubtitleService())
+
+    task = generate_paragraph_subtitles_module.generate_paragraph_subtitles
+    run_callable = getattr(task, "run", task)
+
+    with pytest.raises(ValueError, match="audio_path escapes artifact root"):
+        run_callable(run_id=1, section_id="s1", audio_path=str(symlink))

@@ -160,7 +160,7 @@ def test_generate_paragraph_subtitles_success(monkeypatch: pytest.MonkeyPatch) -
     ]
 
 
-def test_generate_paragraph_subtitles_audio_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_generate_paragraph_subtitles_audio_not_found(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
     provider = FakeProvider()
     _patch_registry(
         monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider)
@@ -171,6 +171,7 @@ def test_generate_paragraph_subtitles_audio_not_found(monkeypatch: pytest.Monkey
     monkeypatch.setattr(module, "_subtitle_service", subtitle_service)
     monkeypatch.setattr(module, "_audio_service", audio_service)
 
+    missing = str(tmp_path / "missing.wav")
     with pytest.raises(RuntimeError, match="Audio file not found"):
         _invoke_task(run_id=102, section_id="hook-2")
 
@@ -178,7 +179,7 @@ def test_generate_paragraph_subtitles_audio_not_found(monkeypatch: pytest.Monkey
     assert subtitle_service.calls == []
 
 
-def test_generate_paragraph_subtitles_with_gpu_lock(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_generate_paragraph_subtitles_with_gpu_lock(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
     provider = FakeProvider()
     entry = FakeEntry(requires_gpu=True)
     _patch_registry(monkeypatch, FakeRegistry(entry=entry, provider=provider))
@@ -209,7 +210,7 @@ def test_generate_paragraph_subtitles_with_gpu_lock(monkeypatch: pytest.MonkeyPa
     assert release_calls == ["sub-103-hook-3"]
 
 
-def test_generate_paragraph_subtitles_provider_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_generate_paragraph_subtitles_provider_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> None:
     provider = FakeProvider(error=RuntimeError("subtitle provider failed"))
     entry = FakeEntry(requires_gpu=False)
     _patch_registry(monkeypatch, FakeRegistry(entry=entry, provider=provider))
@@ -221,6 +222,8 @@ def test_generate_paragraph_subtitles_provider_failure(monkeypatch: pytest.Monke
     monkeypatch.setattr(module, "validate_artifact_path", lambda path, _root: path)
     monkeypatch.setattr(module.os.path, "exists", lambda _: True)
 
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"fake")
     with pytest.raises(
         module.ProviderError,
         match="Provider failed paragraph subtitle generation",

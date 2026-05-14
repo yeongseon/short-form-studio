@@ -273,11 +273,17 @@ def run_task(
     - Other errors → mark_failed + FAILED transition, re-raise
     """
     request = getattr(celery_self, "request", None)
+    raw_args = getattr(request, "args", ()) or ()
+    raw_kwargs = getattr(request, "kwargs", {}) or {}
+    if not isinstance(raw_args, (list, tuple)):
+        raise ValueError(f"Malformed broker message: args is {type(raw_args).__name__}, expected list/tuple")
+    if not isinstance(raw_kwargs, dict):
+        raise ValueError(f"Malformed broker message: kwargs is {type(raw_kwargs).__name__}, expected dict")
     message = {
         "run_id": run_id,
         "task_name": config.task_name,
-        "args": list(getattr(request, "args", ()) or ()),
-        "kwargs": dict(getattr(request, "kwargs", {}) or {}),
+        "args": list(raw_args),
+        "kwargs": dict(raw_kwargs),
     }
     validated_message = validate_task_message(message)
     validated_run_id = validated_message["run_id"]
