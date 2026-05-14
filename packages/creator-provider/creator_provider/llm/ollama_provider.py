@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, cast
 
 import httpx
@@ -10,7 +11,47 @@ from creator_provider.validation import MAX_LLM_PROMPT_CHARS, validate_prompt_le
 from creator_provider.versioned_assets import get_tool_definition
 
 
+logger = logging.getLogger(__name__)
+
+
 class OllamaProvider(LLMProvider):
+    _ALLOWED_API_KEYS = frozenset(
+        {
+            "stream",
+            "format",
+            "keep_alive",
+            "tools",
+            "think",
+            "temperature",
+            "top_k",
+            "top_p",
+            "repeat_penalty",
+            "seed",
+            "num_ctx",
+            "num_predict",
+            "stop",
+        }
+    )
+
+    # Keys allowed inside the nested "options" dict (Ollama modelfile params)
+    _ALLOWED_OPTION_KEYS = frozenset(
+        {
+            "temperature",
+            "top_k",
+            "top_p",
+            "repeat_penalty",
+            "seed",
+            "num_ctx",
+            "num_predict",
+            "stop",
+            "num_gpu",
+            "num_thread",
+            "mirostat",
+            "mirostat_eta",
+            "mirostat_tau",
+        }
+    )
+
     def __init__(self, endpoint: str, model_key: str):
         self.endpoint = endpoint.rstrip("/")
         # model_key is our internal catalog key (e.g. "qwen3-4b").
@@ -38,7 +79,22 @@ class OllamaProvider(LLMProvider):
             "options": {"num_predict": 2048},
         }
         if params:
-            payload.update(params)
+            filtered_keys = [key for key in params if key not in self._ALLOWED_API_KEYS and key != "options"]
+            if filtered_keys:
+                logger.warning("Filtered unsupported Ollama params: %s", sorted(filtered_keys))
+            for key in self._ALLOWED_API_KEYS:
+                if key in params:
+                    payload[key] = params[key]
+            # Filter nested options dict if provided
+            if "options" in params and isinstance(params["options"], dict):
+                raw_opts = params["options"]
+                filtered_opts = {k: v for k, v in raw_opts.items() if k in self._ALLOWED_OPTION_KEYS}
+                rejected = sorted(set(raw_opts) - set(filtered_opts))
+                if rejected:
+                    logger.warning("Filtered unsupported Ollama options: %s", rejected)
+                if filtered_opts:
+                    payload.setdefault("options", {})
+                    payload["options"].update(filtered_opts)
 
         url = f"{self.endpoint}/api/chat"
         try:

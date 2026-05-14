@@ -197,3 +197,25 @@ class TestPiperTTSFailurePaths:
         long_text = "x" * 6000
         with pytest.raises(ValueError, match="too long"):
             await provider.generate(long_text)
+
+    @pytest.mark.asyncio
+    async def test_filters_unallowlisted_params_and_logs_warning(self, provider: PiperTTSProvider):
+        wav_header_only = b"\x00" * 44
+        mock_response = httpx.Response(
+            200,
+            content=wav_header_only,
+            request=httpx.Request("POST", "http://test"),
+        )
+        with (
+            patch("httpx.AsyncClient.post", return_value=mock_response) as mock_post,
+            patch("creator_provider.tts.piper_tts_provider.logger.warning") as mock_warning,
+        ):
+            await provider.generate(
+                "Hello",
+                params={"speaker_id": 2, "ignore_me": "x"},
+            )
+
+        payload = mock_post.call_args.kwargs["json"]
+        assert payload["speaker_id"] == 2
+        assert "ignore_me" not in payload
+        mock_warning.assert_called_once()

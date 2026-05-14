@@ -30,6 +30,24 @@ from tasks.task_runner import TaskContext, TaskResult, TaskRunnerConfig, run_tas
 
 logger = logging.getLogger(__name__)
 _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
+_ALLOWED_RENDER_PROFILE_KEYS: dict[str, type[Any] | tuple[type[Any], ...]] = {
+    "name": str,
+    "width": int,
+    "height": int,
+    "fps": int,
+    "video_codec": str,
+    "audio_codec": str,
+    "transition_style": str,
+    "min_duration_seconds": (int, float),
+    "max_duration_seconds": (int, float),
+    "crf": int,
+    "preset": str,
+    "burn_subtitles": bool,
+    "subtitle_font_size": int,
+    "resolution": str,
+    "codec": str,
+    "bitrate": str,
+}
 _PROFILE_REGISTRY: dict[str, Callable[[], RenderProfile]] = {
     "shorts_default": RenderProfile.default,
     "high_quality": RenderProfile.high_quality,
@@ -47,6 +65,24 @@ def _resolve_profile(name: str) -> RenderProfile:
         logger.warning("Unknown render profile %r, falling back to default", name)
         return RenderProfile.default()
     return factory()
+
+
+def _validate_manifest_render_profile(raw_profile: Any) -> dict[str, Any]:
+    if not isinstance(raw_profile, dict):
+        raise RuntimeError("Invalid render_profile: expected object")
+
+    unknown = set(raw_profile.keys()) - set(_ALLOWED_RENDER_PROFILE_KEYS.keys())
+    if unknown:
+        raise RuntimeError(f"Invalid render_profile: unknown keys {sorted(unknown)!r}")
+
+    for key, value in raw_profile.items():
+        expected_type = _ALLOWED_RENDER_PROFILE_KEYS[key]
+        if not isinstance(value, expected_type):
+            raise RuntimeError(
+                f"Invalid render_profile: key {key!r} has invalid type {type(value).__name__}"
+            )
+
+    return raw_profile
 
 
 def _validate_manifest_path(path: str) -> None:
@@ -98,7 +134,7 @@ def render_video(self, run_id: int, render_profile: str = "shorts_default") -> d
         if not manifest["scenes"]:
             raise RuntimeError("No scenes found for render")
 
-        profile_data = manifest["render_profile"]
+        profile_data = _validate_manifest_render_profile(manifest["render_profile"])
         scene_count = len(manifest["scenes"])
         image_paths: list[Path] = []
         for scene in manifest["scenes"]:

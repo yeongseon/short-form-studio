@@ -298,3 +298,33 @@ def test_generate_paragraph_audio_section_not_found(monkeypatch: pytest.MonkeyPa
         _invoke_task(run_id=108, section_id="missing")
 
     assert provider.calls == []
+
+
+def test_generate_paragraph_audio_works_even_when_run_stage_is_not_audio(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakeProvider()
+    entry = FakeEntry(requires_gpu=False)
+    _patch_registry(monkeypatch, FakeRegistry(entry=entry, provider=provider))
+
+    audio_service = FakeAudioService(artifact_id=79)
+    monkeypatch.setattr(
+        module,
+        "_run_service",
+        FakeRunService(
+            {
+                "current_stage": "SCRIPT_REVIEW",
+                "script_data": {
+                    "sections": [
+                        {"section_id": "hook-9", "text": "Nested paragraph"},
+                    ]
+                },
+            }
+        ),
+    )
+    monkeypatch.setattr(module, "_audio_service", audio_service)
+
+    result = _invoke_task(run_id=109, section_id="hook-9")
+
+    assert result["status"] == "success"
+    assert result["audio_artifact_id"] == 79

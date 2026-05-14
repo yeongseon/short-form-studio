@@ -78,6 +78,9 @@ def generate_paragraph_audio(
             {RunStage.AUDIO_GENERATING.value, RunStage.SUBTITLE_GENERATING.value}
         ),
         success_stage=None,
+        # Paragraph workers are dispatched by the parent audio pipeline task after
+        # stage validation, so these per-section executions intentionally skip a
+        # second stage guard to avoid false negatives during fan-out.
         skip_stage_guard=True,
     )
 

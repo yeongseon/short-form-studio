@@ -13,7 +13,7 @@ class VisualAsset(BaseModel):
     run_id: int = Field(ge=1)
     scene_id: str = Field(max_length=100)
     version: int = Field(ge=0, default=1)
-    asset_path: str
+    asset_path: str = Field(max_length=1024)
     prompt_snapshot: str | None = None
     model_used: str | None = Field(default=None, max_length=100)
     provider_type: str | None = Field(default=None, max_length=50)

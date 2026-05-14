@@ -23,6 +23,7 @@ class ShutdownState:
 
 
 shutdown_state = ShutdownState()
+_previous_sigterm_handler: object | None = None
 
 
 def _parse_int_env(name: str, default: int) -> int:
@@ -43,7 +44,12 @@ def _parse_int_env(name: str, default: int) -> int:
 MAX_MEMORY_MB = _parse_int_env("MAX_MEMORY_MB", 1024)
 MAX_CPU_PERCENT = _parse_int_env("MAX_CPU_PERCENT", 80)
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
-ENABLE_PROCESS_RESOURCE_GUARD = os.getenv("ENABLE_PROCESS_RESOURCE_GUARD", "false").lower() in {"1", "true", "yes", "on"}
+ENABLE_PROCESS_RESOURCE_GUARD = os.getenv("ENABLE_PROCESS_RESOURCE_GUARD", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 
 def _apply_resource_limits() -> None:
@@ -103,10 +109,18 @@ def _mark_shutdown() -> None:
     logger.info("Graceful shutdown initiated; draining in-flight requests")
 
 
+def _handle_sigterm(_signum: int, _frame: object | None) -> None:
+    logger.info("SIGTERM received; enabling graceful shutdown mode")
+    _mark_shutdown()
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    global _previous_sigterm_handler
     shutdown_state.is_shutting_down = False
     shutdown_state.inflight_requests = 0
+    _previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
+    signal.signal(signal.SIGTERM, _handle_sigterm)
     if ENABLE_PROCESS_RESOURCE_GUARD:
         _apply_resource_limits()
         logger.info(
@@ -126,4 +140,6 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         cpu_monitor_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await cpu_monitor_task
+    if _previous_sigterm_handler is not None:
+        signal.signal(signal.SIGTERM, _previous_sigterm_handler)
     await close_pool()
