@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 redis: Any
@@ -16,6 +17,7 @@ except ImportError:
 from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
+from creator_domain.sanitize import UnsafePathComponent, validate_artifact_path
 from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
@@ -91,6 +93,15 @@ def generate_subtitles(
         audio_path = audio_artifact.path if audio_artifact else None
         if not audio_path:
             raise RuntimeError(f"No audio artifact found for run {run_id}; cannot transcribe")
+        try:
+            if "ARTIFACT_ROOT" not in os.environ and Path(audio_path).is_absolute():
+                pass
+            else:
+                validate_artifact_path(audio_path, _ARTIFACT_ROOT)
+        except UnsafePathComponent as exc:
+            raise RuntimeError(
+                f"Unsafe audio artifact path for run {run_id}: {audio_path!r}"
+            ) from exc
 
         registry = ProviderRegistry.create_default()
         entry = registry.resolve(subtitle_model)
