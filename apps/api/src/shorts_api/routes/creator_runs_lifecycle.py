@@ -27,8 +27,6 @@ async def stop_run(
 ) -> dict[str, object]:
     user, run = access
 
-    await _revoke_active_tasks_for_run(run.id)
-
     try:
         updated = await run_service.stop_run(run_id, workspace_id=user.workspace_id)
     except ConflictError as exc:
@@ -38,6 +36,8 @@ async def stop_run(
         if "not found" in detail.lower():
             raise HTTPException(status_code=404, detail=detail) from exc
         raise HTTPException(status_code=400, detail=detail) from exc
+
+    await _revoke_active_tasks_for_run(run.id)
 
     return updated.model_dump(mode="json")
 
@@ -105,8 +105,6 @@ async def delete_run(
 ) -> dict[str, object]:
     user, run = access
 
-    await _revoke_active_tasks_for_run(run.id)
-
     try:
         deleted = await run_service.delete_run(run_id, workspace_id=user.workspace_id)
     except ValueError as exc:
@@ -114,6 +112,7 @@ async def delete_run(
     if not deleted:
         raise HTTPException(status_code=404, detail="Run not found")
 
+    await _revoke_active_tasks_for_run(run.id)
     await artifact_download_service.delete_artifacts_for_run(run_id)
 
     return {"deleted": True, "run_id": run_id}

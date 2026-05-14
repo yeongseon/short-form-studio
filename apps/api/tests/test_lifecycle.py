@@ -503,7 +503,7 @@ async def test_delete_run_returns_404_for_workspace_mismatch(client, stub_lifecy
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Run not found"}
-    assert revoke_tasks.calls == [132]
+    assert revoke_tasks.calls == []
     assert artifact_lifecycle_svc.delete_artifacts_for_run_calls == []
 
 
