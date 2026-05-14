@@ -153,7 +153,7 @@ class GpuLockTests(unittest.TestCase):
         redis_client.set.return_value = True
         redis_client.eval.return_value = 1  # renew + release both succeed
 
-        renew_calls: list[tuple] = []
+        renew_calls: list[tuple[object, ...]] = []
         original_renew = renew_gpu_lock
 
         def tracking_renew(*args, **kwargs):
@@ -161,7 +161,7 @@ class GpuLockTests(unittest.TestCase):
             return True
 
         async def _run() -> None:
-            with patch('creator_provider.gpu_lock.renew_gpu_lock', side_effect=tracking_renew):
+            with patch("creator_provider.gpu_lock.renew_gpu_lock", side_effect=tracking_renew):
                 # timeout=2, so renewal_interval = 1 second
                 async with gpu_lock_context(redis_client, "task-renew", timeout=2) as token:
                     # Wait long enough for at least one renewal
@@ -170,6 +170,66 @@ class GpuLockTests(unittest.TestCase):
         asyncio.run(_run())
         # At least one renewal should have been attempted
         self.assertGreaterEqual(len(renew_calls), 1)
+
+    def test_context_manager_sets_lock_lost_on_renewal_failure(self) -> None:
+        redis_client = Mock()
+        real_sleep = asyncio.sleep
+
+        call_count = 0
+
+        def _renew_side_effect(*args: object, **kwargs: object) -> bool:
+            nonlocal call_count
+            call_count += 1
+            return False
+
+        async def _no_sleep(_: float) -> None:
+            return
+
+        async def _run() -> None:
+            with self.assertRaises(RuntimeError):
+                with (
+                    patch(
+                        "creator_provider.gpu_lock.renew_gpu_lock", side_effect=_renew_side_effect
+                    ),
+                    patch("creator_provider.gpu_lock.asyncio.sleep", side_effect=_no_sleep),
+                ):
+                    async with gpu_lock_context(redis_client, "task-renew-fail", timeout=1):
+                        for _ in range(100):
+                            if call_count >= 1:
+                                break
+                            await real_sleep(0.001)
+
+        asyncio.run(_run())
+
+    def test_context_manager_sets_lock_lost_on_renewal_exception(self) -> None:
+        redis_client = Mock()
+        real_sleep = asyncio.sleep
+
+        call_count = 0
+
+        def _renew_side_effect(*args: object, **kwargs: object) -> bool:
+            nonlocal call_count
+            call_count += 1
+            raise RuntimeError("renew blew up")
+
+        async def _no_sleep(_: float) -> None:
+            return
+
+        async def _run() -> None:
+            with self.assertRaises(RuntimeError):
+                with (
+                    patch(
+                        "creator_provider.gpu_lock.renew_gpu_lock", side_effect=_renew_side_effect
+                    ),
+                    patch("creator_provider.gpu_lock.asyncio.sleep", side_effect=_no_sleep),
+                ):
+                    async with gpu_lock_context(redis_client, "task-renew-error", timeout=1):
+                        for _ in range(100):
+                            if call_count >= 1:
+                                break
+                            await real_sleep(0.001)
+
+        asyncio.run(_run())
 
 
 if __name__ == "__main__":

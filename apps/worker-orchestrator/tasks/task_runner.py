@@ -44,7 +44,12 @@ from typing import Any, Awaitable, Callable
 from celery.exceptions import Ignore, SoftTimeLimitExceeded
 from creator_domain.models.stage import RunStage
 from creator_provider.exceptions import ProviderTimeoutError, RateLimitError
-from creator_provider.gpu_lock import GPU_LOCK_TIMEOUT_SECONDS, acquire_gpu_lock, release_gpu_lock, renew_gpu_lock
+from creator_provider.gpu_lock import (
+    GPU_LOCK_TIMEOUT_SECONDS,
+    acquire_gpu_lock,
+    release_gpu_lock,
+    renew_gpu_lock,
+)
 from creator_provider.versioned_assets import clear_loaded_asset_versions
 from creator_service.run_service import run_service as _run_service
 from creator_service.task_tracking_service import task_tracking_service as _task_tracking_service
@@ -288,9 +293,13 @@ def run_task(
     if raw_kwargs is None:
         raw_kwargs = {}
     if not isinstance(raw_args, (list, tuple)):
-        raise ValueError(f"Malformed broker message: args is {type(raw_args).__name__}, expected list/tuple")
+        raise ValueError(
+            f"Malformed broker message: args is {type(raw_args).__name__}, expected list/tuple"
+        )
     if not isinstance(raw_kwargs, dict):
-        raise ValueError(f"Malformed broker message: kwargs is {type(raw_kwargs).__name__}, expected dict")
+        raise ValueError(
+            f"Malformed broker message: kwargs is {type(raw_kwargs).__name__}, expected dict"
+        )
     message = {
         "run_id": run_id,
         "task_name": config.task_name,
@@ -361,6 +370,7 @@ class GpuLockContext:
     task_id: str
     redis_client: Any | None = None
     acquired: bool = False
+    lock_lost: bool = False
     _token: str | None = None
     acquired_at: str | None = None
     released_at: str | None = None
@@ -373,6 +383,7 @@ class GpuLockContext:
             raise RuntimeError("Redis client is unavailable; cannot acquire GPU lock")
         self._token = acquire_gpu_lock(self.redis_client, lock_id or self.task_id)
         self.acquired = True
+        self.lock_lost = False
         self.acquired_at = _utc_now_iso()
         self.start_auto_renewal()
 
@@ -387,6 +398,7 @@ class GpuLockContext:
         if not self.acquired or self._renewal_task is not None:
             return
         import asyncio
+
         interval = max(timeout // 2, 1)
 
         async def _renew_loop() -> None:
@@ -397,9 +409,13 @@ class GpuLockContext:
                 try:
                     ok = self.renew(timeout=timeout)
                     if not ok:
+                        self.lock_lost = True
+                        self.acquired = False
                         logger.warning("GPU lease renewal failed for %s (lock lost)", self.task_id)
                         break
                 except Exception:
+                    self.lock_lost = True
+                    self.acquired = False
                     logger.warning("GPU lease renewal error for %s", self.task_id, exc_info=True)
                     break
 
@@ -421,7 +437,10 @@ class GpuLockContext:
             if released:
                 self.released_at = _utc_now_iso()
             else:
-                logger.warning("GPU lock release returned False for %s (lock expired or stolen)", lock_id or self.task_id)
+                logger.warning(
+                    "GPU lock release returned False for %s (lock expired or stolen)",
+                    lock_id or self.task_id,
+                )
         except Exception:
             logger.exception("Failed to release GPU lock for %s", lock_id or self.task_id)
         finally:

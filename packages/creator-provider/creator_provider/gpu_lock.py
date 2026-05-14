@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import time
 import uuid
@@ -7,6 +8,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 GPU_LOCK_KEY = os.getenv("GPU_LOCK_KEY", "gpu:lock")
+logger = logging.getLogger(__name__)
 
 
 def _parse_timeout_seconds() -> int:
@@ -105,22 +107,32 @@ async def gpu_lock_context(
     Starts a background renewal task that extends the lease at half the timeout
     interval to prevent expiry during long-running GPU operations.
     """
+    lock_lost = False
     token = await asyncio.to_thread(acquire_gpu_lock, redis_client, task_id, timeout)
     renewal_interval = max(timeout // 2, 1)
 
     async def _auto_renew() -> None:
+        nonlocal lock_lost
         while True:
             await asyncio.sleep(renewal_interval)
             try:
                 ok = await asyncio.to_thread(renew_gpu_lock, redis_client, token, timeout)
                 if not ok:
+                    lock_lost = True
+                    logger.warning("GPU lock renewal failed for task %s", task_id)
                     break
             except Exception:
+                lock_lost = True
+                logger.warning("GPU lock renewal raised for task %s", task_id, exc_info=True)
                 break
 
     renewal_task = asyncio.create_task(_auto_renew())
+    body_failed = False
     try:
         yield token
+    except Exception:
+        body_failed = True
+        raise
     finally:
         renewal_task.cancel()
         try:
@@ -128,3 +140,6 @@ async def gpu_lock_context(
         except asyncio.CancelledError:
             pass
         release_gpu_lock(redis_client, token)
+    if lock_lost and not body_failed:
+        logger.warning("GPU lock was lost during execution for task %s", task_id)
+        raise RuntimeError(f"GPU lock lost during execution for task '{task_id}'")
