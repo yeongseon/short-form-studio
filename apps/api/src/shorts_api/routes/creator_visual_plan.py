@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from creator_domain.models import RunStage
 from creator_domain.models.visual_plan import VisualScene
@@ -93,9 +93,11 @@ class PatchSceneRequest(BaseModel):
     prompt: str | None = Field(default=None, max_length=2000)
     prompt_edited: bool | None = None
     prompt_source: Literal["auto_generated", "user_edited", "model_suggested"] | None = None
-    style_tags: list[str] | None = None
-    mood: str | None = None
-    composition: str | None = None
+    style_tags: list[Annotated[str, Field(max_length=256)]] | None = Field(
+        default=None, max_length=32
+    )
+    mood: str | None = Field(default=None, max_length=256)
+    composition: str | None = Field(default=None, max_length=256)
     expected_version: int | None = None
 
 

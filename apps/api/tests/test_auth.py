@@ -259,6 +259,45 @@ async def test_options_without_origin_requires_auth(authed_client):
 
 
 @pytest.mark.asyncio
+async def test_middleware_without_workspace_membership_returns_404(api_key, monkeypatch):
+    expected_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+
+    class _Conn:
+        async def fetchrow(self, _query: str, key_hash: str):
+            if key_hash == expected_hash:
+                return {"user_id": 1}
+            return None
+
+        async def fetch(self, _query: str, _user_id: int):
+            return []
+
+    class _Acquire:
+        async def __aenter__(self):
+            return _Conn()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            _ = (exc_type, exc, tb)
+            return False
+
+    class _Pool:
+        def acquire(self):
+            return _Acquire()
+
+    async def _get_pool_stub(self):
+        _ = self
+        return _Pool()
+
+    monkeypatch.setattr("shorts_api.auth.ApiKeyMiddleware._get_pool", _get_pool_stub)
+
+    app = _make_app(api_key=api_key)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        response = await ac.get("/api/creator/data", headers={"X-API-Key": api_key})
+        assert response.status_code == 404
+        assert response.json() == {"detail": "Not found"}
+
+
+@pytest.mark.asyncio
 async def test_get_current_user_without_api_key_returns_401():
     request = Request({"type": "http", "headers": []})
     with pytest.raises(HTTPException) as exc_info:
@@ -303,12 +342,30 @@ async def test_get_current_user_resolves_from_api_keys_and_membership(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_get_current_user_without_workspace_membership_returns_404(monkeypatch):
+    async def _fetch_one(query: str, *args):
+        if "FROM api_keys" in query:
+            return {"user_id": 123}
+        if "FROM workspace_members" in query:
+            return None
+        return None
+
+    monkeypatch.setattr("shorts_api.auth.fetch_one", _fetch_one)
+    request = Request({"type": "http", "headers": [(b"x-api-key", b"valid-key")]})
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_current_user(request)
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Not found"
+
+
+@pytest.mark.asyncio
 async def test_require_workspace_access_denies_without_membership(monkeypatch):
     async def _no_access(_workspace_id: int, _user_id: int) -> bool:
         return False
 
     monkeypatch.setattr("shorts_api.auth.workspace_service.check_access", _no_access)
-    user = CurrentUser(user_id=1, workspace_id=None)
+    user = CurrentUser(user_id=1, workspace_id=1)
 
     with pytest.raises(HTTPException) as exc_info:
         await require_workspace_access(99, user)

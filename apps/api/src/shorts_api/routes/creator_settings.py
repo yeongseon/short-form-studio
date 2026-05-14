@@ -32,6 +32,7 @@ class ApiKeyStatus(BaseModel):
 
 @router.get("/settings/api-keys")
 async def list_api_keys() -> list[ApiKeyStatus]:
+    # No resource-scoped access helper: this endpoint reports process-level provider key presence only.
     result: list[ApiKeyStatus] = []
     for provider, env_var in _PROVIDER_ENV_MAP.items():
         value = os.getenv(env_var, "").strip()
@@ -43,5 +44,3 @@ async def list_api_keys() -> list[ApiKeyStatus]:
             )
         )
     return result
-
-

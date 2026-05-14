@@ -32,7 +32,7 @@ router = APIRouter(tags=["runs"])
 
 class CreateRunRequest(BaseModel):
     model_defaults: dict[str, str] | None = None
-    style_preset: str = "default"
+    style_preset: str = Field(default="default", max_length=256)
     metadata: dict[str, object] | None = None
 
 
@@ -56,37 +56,37 @@ class RestartRunRequest(BaseModel):
 
 
 class ApproveScriptRequest(BaseModel):
-    reviewer: str = "agent"
-    notes: str | None = None
+    reviewer: str = Field(default="agent", max_length=256)
+    notes: str | None = Field(default=None, max_length=1000)
 
 
 class ApproveVisualPlanRequest(BaseModel):
-    reviewer: str = "agent"
-    notes: str | None = None
+    reviewer: str = Field(default="agent", max_length=256)
+    notes: str | None = Field(default=None, max_length=1000)
 
 
 class ApproveVisualAssetsRequest(BaseModel):
-    reviewer: str = "agent"
-    notes: str | None = None
+    reviewer: str = Field(default="agent", max_length=256)
+    notes: str | None = Field(default=None, max_length=1000)
 
 
 class GenerateScriptRequest(BaseModel):
-    model_key: str = "qwen3-4b"
+    model_key: str = Field(default="qwen3-4b", max_length=256)
     instructions: str | None = Field(default=None, max_length=32_000)
 
 
 class GenerateVisualPlanRequest(BaseModel):
-    model_key: str = "qwen3-4b"
+    model_key: str = Field(default="qwen3-4b", max_length=256)
     style_preset: str | None = Field(default=None, max_length=200)
 
 
 class GenerateAudioRequest(BaseModel):
-    tts_model: str = "qwen3-tts"
-    voice: str = "default"
+    tts_model: str = Field(default="qwen3-tts", max_length=256)
+    voice: str = Field(default="default", max_length=256)
 
 
 class GenerateSubtitlesRequest(BaseModel):
-    subtitle_model: str = "whisper-small"
+    subtitle_model: str = Field(default="whisper-small", max_length=256)
     subtitle_format: Literal["srt", "vtt"] = "srt"
 
 
@@ -95,11 +95,11 @@ class RenderRequest(BaseModel):
 
 
 class UpdateModelDefaultsRequest(BaseModel):
-    script_model: str | None = None
-    image_model: str | None = None
-    tts_model: str | None = None
-    subtitle_model: str | None = None
-    render_profile: str | None = None
+    script_model: str | None = Field(default=None, max_length=256)
+    image_model: str | None = Field(default=None, max_length=256)
+    tts_model: str | None = Field(default=None, max_length=256)
+    subtitle_model: str | None = Field(default=None, max_length=256)
+    render_profile: str | None = Field(default=None, max_length=256)
 
 
 @router.post("/projects/{project_id}/runs", status_code=201)
@@ -267,7 +267,7 @@ async def generate_script_trigger(
             f"expected one of {sorted(allowed_stages)}",
         )
 
-    project = await project_service.get_project(run.project_id)
+    project = await project_service.get_project(run.project_id, workspace_id=user.workspace_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
