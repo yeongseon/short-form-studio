@@ -1,5 +1,8 @@
 """Test resource guard opt-in functionality via env var."""
 
+import signal
+from unittest.mock import Mock
+
 import pytest
 
 
@@ -161,3 +164,52 @@ def test_sigterm_handler_marks_shutdown_flag() -> None:
     lifecycle_module._handle_sigterm(15, None)
 
     assert lifecycle_module.shutdown_state.is_shutting_down is True
+
+
+@pytest.mark.asyncio
+async def test_lifespan_sigterm_handler_chains_to_previous_handler(monkeypatch) -> None:
+    import importlib
+    import shorts_api.lifecycle as lifecycle_module
+    from fastapi import FastAPI
+
+    importlib.reload(lifecycle_module)
+    lifecycle_module.shutdown_state.is_shutting_down = False
+
+    previous_handler = Mock()
+    monkeypatch.setattr(lifecycle_module.signal, "getsignal", lambda sig: previous_handler)
+    monkeypatch.setattr(lifecycle_module.signal, "signal", lambda *_args: previous_handler)
+
+    app = FastAPI(lifespan=lifecycle_module.lifespan)
+    async with lifecycle_module.lifespan(app):
+        lifecycle_module._handle_sigterm(signal.SIGTERM, None)
+
+    previous_handler.assert_called_once_with(signal.SIGTERM, None)
+
+
+@pytest.mark.asyncio
+async def test_lifespan_restores_previous_sigterm_handler_after_exit(monkeypatch) -> None:
+    import importlib
+    import shorts_api.lifecycle as lifecycle_module
+    from fastapi import FastAPI
+
+    importlib.reload(lifecycle_module)
+
+    previous_handler = Mock()
+    signal_calls: list[tuple[int, object]] = []
+
+    def _getsignal(_sig: int) -> object:
+        return previous_handler
+
+    def _signal(sig: int, handler: object) -> object:
+        signal_calls.append((sig, handler))
+        return previous_handler
+
+    monkeypatch.setattr(lifecycle_module.signal, "getsignal", _getsignal)
+    monkeypatch.setattr(lifecycle_module.signal, "signal", _signal)
+
+    app = FastAPI(lifespan=lifecycle_module.lifespan)
+    async with lifecycle_module.lifespan(app):
+        pass
+
+    assert signal_calls[0] == (signal.SIGTERM, lifecycle_module._handle_sigterm)
+    assert signal_calls[-1] == (signal.SIGTERM, previous_handler)
