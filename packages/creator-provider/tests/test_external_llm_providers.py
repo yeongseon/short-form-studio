@@ -549,3 +549,29 @@ class TestOllamaProvider:
         assert payload["temperature"] == 0.2
         assert "evil_param" not in payload
         mock_warning.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_generate_filters_nested_options_keys(self):
+        mock_response = mock.MagicMock()
+        mock_response.raise_for_status = mock.MagicMock()
+        mock_response.json.return_value = {"message": {"content": "Hello"}}
+
+        from creator_provider.llm.ollama_provider import OllamaProvider
+
+        provider = OllamaProvider("http://localhost:11434", "qwen3-4b")
+        with (
+            mock.patch("httpx.AsyncClient.post", return_value=mock_response) as mock_post,
+            mock.patch("creator_provider.llm.ollama_provider.logger.warning") as mock_warning,
+        ):
+            result = await provider.generate(
+                "test prompt",
+                params={"options": {"temperature": 0.5, "evil_nested": 999, "num_ctx": 4096}},
+            )
+
+        assert result == "Hello"
+        payload = mock_post.call_args.kwargs["json"]
+        opts = payload["options"]
+        assert opts["temperature"] == 0.5
+        assert opts["num_ctx"] == 4096
+        assert "evil_nested" not in opts
+        assert mock_warning.call_count == 2  # top-level 'options' filtered + nested 'evil_nested' filtered

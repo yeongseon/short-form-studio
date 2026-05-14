@@ -19,7 +19,6 @@ class OllamaProvider(LLMProvider):
         {
             "stream",
             "format",
-            "options",
             "keep_alive",
             "tools",
             "think",
@@ -31,6 +30,25 @@ class OllamaProvider(LLMProvider):
             "num_ctx",
             "num_predict",
             "stop",
+        }
+    )
+
+    # Keys allowed inside the nested "options" dict (Ollama modelfile params)
+    _ALLOWED_OPTION_KEYS = frozenset(
+        {
+            "temperature",
+            "top_k",
+            "top_p",
+            "repeat_penalty",
+            "seed",
+            "num_ctx",
+            "num_predict",
+            "stop",
+            "num_gpu",
+            "num_thread",
+            "mirostat",
+            "mirostat_eta",
+            "mirostat_tau",
         }
     )
 
@@ -67,6 +85,16 @@ class OllamaProvider(LLMProvider):
             for key in self._ALLOWED_API_KEYS:
                 if key in params:
                     payload[key] = params[key]
+            # Filter nested options dict if provided
+            if "options" in params and isinstance(params["options"], dict):
+                raw_opts = params["options"]
+                filtered_opts = {k: v for k, v in raw_opts.items() if k in self._ALLOWED_OPTION_KEYS}
+                rejected = sorted(set(raw_opts) - set(filtered_opts))
+                if rejected:
+                    logger.warning("Filtered unsupported Ollama options: %s", rejected)
+                if filtered_opts:
+                    payload.setdefault("options", {})
+                    payload["options"].update(filtered_opts)
 
         url = f"{self.endpoint}/api/chat"
         try:
