@@ -154,8 +154,7 @@ async def serve_artifact(artifact_path: str, user: CurrentUser = Depends(get_cur
         # Validate user has access to this run's artifacts
         await _validate_artifact_access(run_id, user)
     except ValueError:
-        # If run_id is not numeric, skip IDOR check (for backward compatibility with non-numeric paths)
-        pass
+        raise HTTPException(status_code=404, detail="Not found")
 
     try:
         safe_components = [
@@ -200,8 +199,7 @@ async def serve_local_artifact_file(path: str, user: CurrentUser = Depends(get_c
         # Validate user has access to this run's artifacts
         await _validate_artifact_access(run_id, user)
     except ValueError:
-        # If run_id is not numeric, skip IDOR check (for backward compatibility with non-numeric paths)
-        pass
+        raise HTTPException(status_code=404, detail="Not found")
 
     try:
         safe_components = [
