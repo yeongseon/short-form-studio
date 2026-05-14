@@ -161,3 +161,92 @@ def test_render_video_rejects_traversal_manifest_paths(monkeypatch: pytest.Monke
     run_callable: Callable[..., dict[str, object]] = getattr(task, "run", task)
     with pytest.raises(RuntimeError, match="manifest path"):
         run_callable(run_id=run_id)
+
+
+def test_generate_subtitles_rejects_absolute_path_when_artifact_root_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: absolute audio artifact path must be rejected even without ARTIFACT_ROOT."""
+    monkeypatch.delenv("ARTIFACT_ROOT", raising=False)
+    # Force module to re-evaluate _ARTIFACT_ROOT default
+    monkeypatch.setattr(generate_subtitles_module, "_ARTIFACT_ROOT", "data/artifacts")
+    monkeypatch.setattr(generate_subtitles_module, "ProviderRegistry", _Registry)
+    monkeypatch.setattr(
+        generate_subtitles_module,
+        "_run_service",
+        SimpleNamespace(storage=_Storage(run_id=500, stage="AUDIO_GENERATING")),
+    )
+    monkeypatch.setattr(
+        generate_subtitles_module,
+        "_script_service",
+        SimpleNamespace(get_active_draft=lambda _rid: _async_return(_ScriptDraft())),
+    )
+    monkeypatch.setattr(
+        generate_subtitles_module,
+        "_audio_service",
+        SimpleNamespace(
+            get_latest=lambda _rid: _async_return(
+                _AudioArtifact(path="/etc/shadow")
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        generate_subtitles_module,
+        "_subtitle_service",
+        _SubtitleService(),
+    )
+
+    task = generate_subtitles_module.generate_subtitles
+    run_callable: Callable[..., dict[str, object]] = getattr(task, "run", task)
+    with pytest.raises(RuntimeError, match="audio artifact path"):
+        run_callable(run_id=500)
+
+
+def test_render_video_rejects_absolute_path_when_artifact_root_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: absolute manifest paths must be rejected even without ARTIFACT_ROOT."""
+    monkeypatch.delenv("ARTIFACT_ROOT", raising=False)
+    monkeypatch.setattr(render_video_module, "_ARTIFACT_ROOT", "data/artifacts")
+    run_id = 501
+    manifest = {
+        "run_id": run_id,
+        "scenes": [{"scene_id": "scene-1", "asset_path": "/etc/shadow"}],
+        "audio_path": "data/artifacts/501/audio/audio.wav",
+        "subtitle_path": "data/artifacts/501/subtitles/subtitles.srt",
+        "render_profile": {"max_duration_seconds": 30.0},
+    }
+
+    monkeypatch.setattr(
+        render_video_module,
+        "_run_service",
+        SimpleNamespace(storage=_Storage(run_id=run_id, stage="RENDER_GENERATING")),
+    )
+    monkeypatch.setattr(render_video_module, "_render_service", _RenderService(manifest))
+    monkeypatch.setattr(render_video_module, "_visual_asset_service", SimpleNamespace())
+    monkeypatch.setattr(
+        render_video_module,
+        "_audio_service",
+        SimpleNamespace(list_paragraph_audio=lambda _rid: _async_return([])),
+    )
+    monkeypatch.setattr(
+        render_video_module,
+        "_subtitle_service",
+        SimpleNamespace(list_paragraph_subtitles=lambda _rid: _async_return([])),
+    )
+    monkeypatch.setattr(
+        render_video_module,
+        "_visual_plan_service",
+        SimpleNamespace(get_active_plan=lambda _rid: _async_return(None)),
+    )
+    monkeypatch.setattr(
+        render_video_module,
+        "_script_service",
+        SimpleNamespace(get_active_draft=lambda _rid: _async_return(None)),
+    )
+    monkeypatch.setattr(render_video_module, "FFmpegService", _FFmpeg)
+
+    task = render_video_module.render_video
+    run_callable: Callable[..., dict[str, object]] = getattr(task, "run", task)
+    with pytest.raises(RuntimeError, match="manifest path"):
+        run_callable(run_id=run_id)

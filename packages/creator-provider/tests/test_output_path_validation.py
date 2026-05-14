@@ -274,3 +274,30 @@ async def test_absolute_path_rejected_when_artifact_root_unset(
 
         with pytest.raises(UnsafePathComponent):
             await method(params=params, **call_kwargs)
+
+
+@pytest.mark.asyncio
+async def test_whisper_absolute_path_rejected_when_artifact_root_unset(
+    tmp_path: Path,
+) -> None:
+    """Regression: WhisperSTTProvider must reject absolute output_path even without ARTIFACT_ROOT."""
+    audio_file = tmp_path / "audio.wav"
+    audio_file.write_bytes(b"RIFF" + b"\x00" * 100)
+
+    mock_response = mock.MagicMock()
+    mock_response.raise_for_status = mock.MagicMock()
+    mock_response.json.return_value = {"segments": [], "text": ""}
+
+    from creator_provider.stt.whisper_provider import WhisperSTTProvider
+
+    with (
+        mock.patch.dict(os.environ, {}, clear=False),
+        mock.patch("httpx.AsyncClient.post", return_value=mock_response),
+    ):
+        os.environ.pop("ARTIFACT_ROOT", None)
+        provider = WhisperSTTProvider(endpoint="http://whisper:9000", model_key="whisper-small")
+        with pytest.raises(UnsafePathComponent):
+            await provider.transcribe(
+                audio_path=str(audio_file),
+                params={"output_path": "/etc/passwd"},
+            )
