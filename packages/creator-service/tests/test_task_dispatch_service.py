@@ -12,7 +12,9 @@ from creator_service.task_dispatch_service import (
 
 class _FakeRunStorage:
     def __init__(self) -> None:
-        self.calls: list[tuple[int, dict[str, object], frozenset[str], int | None]] = []
+        self.calls: list[
+            tuple[int, dict[str, object], frozenset[str], int | None, frozenset[str] | None]
+        ] = []
 
     async def conditional_update_run(
         self,
@@ -21,8 +23,9 @@ class _FakeRunStorage:
         *,
         expected_stages: frozenset[str],
         workspace_id: int | None = None,
+        rejected_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
-        self.calls.append((run_id, updates, expected_stages, workspace_id))
+        self.calls.append((run_id, updates, expected_stages, workspace_id, rejected_statuses))
         return True, {"current_stage": "SCRIPT_REVIEW"}
 
 
@@ -321,9 +324,11 @@ def test_cas_dispatch_with_rollback_releases_quota_on_stage_conflict(
             *,
             expected_stages: frozenset[str],
             workspace_id: int | None = None,
+            rejected_statuses: frozenset[str] | None = None,
         ) -> tuple[bool, dict[str, object] | None]:
             _ = expected_stages
             _ = workspace_id
+            _ = rejected_statuses
             return False, {"current_stage": "SCRIPT_GENERATING"}
 
     class _ConflictRunService:
@@ -397,7 +402,11 @@ def test_cas_dispatch_with_rollback_rejects_cancelled_run() -> None:
             *,
             expected_stages: frozenset[str],
             workspace_id: int | None = None,
+            rejected_statuses: frozenset[str] | None = None,
         ) -> tuple[bool, dict[str, object] | None]:
+            _ = expected_stages
+            _ = workspace_id
+            _ = rejected_statuses
             raise AssertionError("Should not reach CAS update for cancelled run")
 
     class _CancelledRunService:
@@ -429,6 +438,52 @@ def test_cas_dispatch_with_rollback_rejects_cancelled_run() -> None:
     assert "cancelled" in exc.value.detail.lower()
 
 
+def test_cas_dispatch_rejects_concurrent_cancellation_atomically() -> None:
+    service = TaskDispatchService()
+
+    class _ConcurrentCancelStorage:
+        async def conditional_update_run(
+            self,
+            _run_id: int,
+            _updates: dict[str, object],
+            *,
+            expected_stages: frozenset[str],
+            workspace_id: int | None = None,
+            rejected_statuses: frozenset[str] | None = None,
+        ) -> tuple[bool, dict[str, object] | None]:
+            _ = expected_stages
+            _ = workspace_id
+            _ = rejected_statuses
+            return False, {"current_stage": "SCRIPT_GENERATING", "status": "cancelled"}
+
+    class _ConcurrentCancelRunService:
+        def __init__(self) -> None:
+            self.storage = _ConcurrentCancelStorage()
+
+        async def get_run(self, _run_id: int, **_kw: object) -> object:
+            return SimpleNamespace(status="running", project_id=1)
+
+    def _dispatcher(**_: object) -> str:
+        raise AssertionError("Should not dispatch when CAS rejects cancelled run")
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            service.cas_dispatch_with_rollback(
+                run_id=42,
+                expected_stages=frozenset({"SCRIPT_REVIEW"}),
+                target_stage="SCRIPT_GENERATING",
+                dispatcher=_dispatcher,
+                dispatcher_args={"run_id": 42},
+                run_service=_ConcurrentCancelRunService(),
+                rollback_stage="SCRIPT_REVIEW",
+                rollback_restart_from=None,
+                enqueue_error_detail="Failed to enqueue",
+            )
+        )
+
+    assert exc.value.status_code == 409
+
+
 def test_cas_dispatch_with_rollback_allows_non_cancelled_run() -> None:
     """cas_dispatch_with_rollback proceeds normally for non-cancelled runs."""
     service = TaskDispatchService()
@@ -458,6 +513,98 @@ def test_cas_dispatch_with_rollback_allows_non_cancelled_run() -> None:
     )
 
     assert result["task_id"] == "sync-test-1-abc"
+
+
+def test_cas_dispatch_post_dispatch_revoke_on_concurrent_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = TaskDispatchService()
+    revoked: list[tuple[str, bool]] = []
+
+    class _Storage:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+
+        async def conditional_update_run(
+            self,
+            run_id: int,
+            updates: dict[str, object],
+            *,
+            expected_stages: frozenset[str],
+            workspace_id: int | None = None,
+            rejected_statuses: frozenset[str] | None = None,
+        ) -> tuple[bool, dict[str, object] | None]:
+            self.calls.append(
+                {
+                    "run_id": run_id,
+                    "updates": updates,
+                    "expected_stages": expected_stages,
+                    "workspace_id": workspace_id,
+                    "rejected_statuses": rejected_statuses,
+                }
+            )
+            return True, {"current_stage": "SCRIPT_GENERATING"}
+
+    class _RunService:
+        def __init__(self) -> None:
+            self.storage = _Storage()
+            self._calls = 0
+
+        async def get_run(self, _run_id: int, **_kw: object) -> object:
+            self._calls += 1
+            if self._calls == 1:
+                return SimpleNamespace(status="running", project_id=1)
+            return SimpleNamespace(status="cancelled", project_id=1)
+
+    class _TrackingService:
+        async def record_task_queued(self, _run_id: int, _task_type: str, _task_id: str) -> None:
+            return None
+
+        async def mark_tasks_revoked(self, _task_ids: list[str]) -> None:
+            return None
+
+    celery_app_module = ModuleType("celery_app")
+    setattr(
+        celery_app_module,
+        "celery_app",
+        SimpleNamespace(
+            control=SimpleNamespace(
+                revoke=lambda task_id, terminate: revoked.append((task_id, terminate))
+            )
+        ),
+    )
+    monkeypatch.setitem(__import__("sys").modules, "celery_app", celery_app_module)
+
+    def fake_import_module(name: str) -> object:
+        if name == "creator_service.task_tracking_service":
+            return SimpleNamespace(task_tracking_service=_TrackingService())
+        raise AssertionError(f"unexpected import: {name}")
+
+    monkeypatch.setattr("creator_service.task_dispatch_service.import_module", fake_import_module)
+
+    run_service = _RunService()
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            service.cas_dispatch_with_rollback(
+                run_id=42,
+                expected_stages=frozenset({"SCRIPT_REVIEW"}),
+                target_stage="SCRIPT_GENERATING",
+                dispatcher=lambda **_: "celery-999",
+                dispatcher_args={"run_id": 42},
+                run_service=run_service,
+                rollback_stage="SCRIPT_REVIEW",
+                rollback_restart_from=None,
+                enqueue_error_detail="Failed to enqueue",
+            )
+        )
+
+    assert exc.value.status_code == 409
+    assert revoked == [("celery-999", True)]
+    assert run_service.storage.calls[1]["updates"] == {
+        "current_stage": "SCRIPT_REVIEW",
+        "restart_from": None,
+    }
 
 
 def test_cas_dispatch_with_rollback_returns_503_when_get_run_raises() -> None:
@@ -547,7 +694,11 @@ def test_cas_dispatch_with_rollback_passes_workspace_id_to_preflight() -> None:
             *,
             expected_stages: frozenset[str],
             workspace_id: int | None = None,
+            rejected_statuses: frozenset[str] | None = None,
         ) -> tuple[bool, dict[str, object] | None]:
+            _ = expected_stages
+            _ = workspace_id
+            _ = rejected_statuses
             return True, {"current_stage": "SCRIPT_GENERATING", "id": 42}
 
     class _StrictRunService:
@@ -565,7 +716,7 @@ def test_cas_dispatch_with_rollback_passes_workspace_id_to_preflight() -> None:
         dispatched = True
         return "sync-test-42"
 
-    result = asyncio.run(
+    asyncio.run(
         service.cas_dispatch_with_rollback(
             run_id=42,
             expected_stages=frozenset({"IDEA_READY", "SCRIPT_REVIEW"}),
