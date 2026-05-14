@@ -183,28 +183,17 @@ def generate_scene_image(
                 from creator_service.artifact_storage_integration import store_artifact_file
 
                 uploaded = store_artifact_file(run_id, target_path, "image/png")
-                try:
-                    asset = await _visual_asset_service.create_asset(
-                        run_id=run_id,
-                        scene_id=target_scene.scene_id,
-                        asset_path=target_path,
-                        prompt_snapshot=effective_prompt,
-                        model_used=model_key,
-                        provider_type=entry.provider_type,
-                        storage_provider=uploaded.storage_provider,
-                        storage_key=uploaded.key,
-                        is_active=is_active,
-                    )
-                except TypeError:
-                    asset = await _visual_asset_service.create_asset(
-                        run_id=run_id,
-                        scene_id=target_scene.scene_id,
-                        asset_path=target_path,
-                        prompt_snapshot=effective_prompt,
-                        model_used=model_key,
-                        provider_type=entry.provider_type,
-                        is_active=is_active,
-                    )
+                asset = await _visual_asset_service.create_asset(
+                    run_id=run_id,
+                    scene_id=target_scene.scene_id,
+                    asset_path=target_path,
+                    prompt_snapshot=effective_prompt,
+                    model_used=model_key,
+                    provider_type=entry.provider_type,
+                    storage_provider=uploaded.storage_provider,
+                    storage_key=uploaded.key,
+                    is_active=is_active,
+                )
 
                 scene_result.update(
                     {

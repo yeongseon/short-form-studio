@@ -103,6 +103,8 @@ class FakeAudioService:
         model_used: str | None = None,
         provider_type: str | None = None,
         voice: str | None = None,
+        storage_provider: str | None = None,
+        storage_key: str | None = None,
     ) -> FakeAudioArtifact:
         call_data = {
             "run_id": run_id,
@@ -110,6 +112,8 @@ class FakeAudioService:
             "model_used": model_used,
             "provider_type": provider_type,
             "voice": voice,
+            "storage_provider": storage_provider,
+            "storage_key": storage_key,
         }
         self.calls.append(call_data)
         return FakeAudioArtifact(id=self.artifact_id, path=path)
@@ -190,15 +194,15 @@ def test_generate_audio_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert params is not None
     assert "voice" not in params
 
-    assert audio_service.calls == [
-        {
-            "run_id": 101,
-            "path": "data/artifacts/101/audio/audio.wav",
-            "model_used": "qwen3-tts",
-            "provider_type": "qwen_tts",
-            "voice": "en_US-lessac-medium",
-        }
-    ]
+    assert len(audio_service.calls) == 1
+    call = audio_service.calls[0]
+    assert call["run_id"] == 101
+    assert call["path"] == "data/artifacts/101/audio/audio.wav"
+    assert call["model_used"] == "qwen3-tts"
+    assert call["provider_type"] == "qwen_tts"
+    assert call["voice"] == "en_US-lessac-medium"
+    assert call["storage_provider"] == "local"
+    assert "storage_key" in call
     assert storage.calls == [(101, {"current_stage": "SUBTITLE_GENERATING", "status": "running"})]
     assert storage.cas_calls[0][2] == frozenset({"VISUAL_ASSET_REVIEW", "AUDIO_GENERATING"})
 

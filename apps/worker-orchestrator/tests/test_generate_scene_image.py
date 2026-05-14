@@ -160,13 +160,15 @@ class FakeVisualAssetService:
     async def create_asset(
         self,
         run_id: int,
-        scene_id: str,
+        scene_id: int,
         asset_path: str,
         *,
         prompt_snapshot: str | None = None,
         model_used: str | None = None,
         provider_type: str | None = None,
-        is_active: bool = True,
+        storage_provider: str | None = None,
+        storage_key: str | None = None,
+        is_active: bool | None = None,
     ) -> FakeVisualAsset:
         call_data = {
             "run_id": run_id,
@@ -175,6 +177,8 @@ class FakeVisualAssetService:
             "prompt_snapshot": prompt_snapshot,
             "model_used": model_used,
             "provider_type": provider_type,
+            "storage_provider": storage_provider,
+            "storage_key": storage_key,
             "is_active": is_active,
         }
         self.calls.append(call_data)

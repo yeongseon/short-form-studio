@@ -155,24 +155,15 @@ def generate_subtitles(
         from creator_service.artifact_storage_integration import store_artifact_file
 
         uploaded = store_artifact_file(run_id, subtitle_path, f"application/{subtitle_format}")
-        try:
-            artifact = await _subtitle_service.create_artifact(
-                run_id=run_id,
-                path=subtitle_path,
-                format=subtitle_format,
-                model_used=subtitle_model,
-                provider_type=entry.provider_type,
-                storage_provider=uploaded.storage_provider,
-                storage_key=uploaded.key,
-            )
-        except TypeError:
-            artifact = await _subtitle_service.create_artifact(
-                run_id=run_id,
-                path=subtitle_path,
-                format=subtitle_format,
-                model_used=subtitle_model,
-                provider_type=entry.provider_type,
-            )
+        artifact = await _subtitle_service.create_artifact(
+            run_id=run_id,
+            path=subtitle_path,
+            format=subtitle_format,
+            model_used=subtitle_model,
+            provider_type=entry.provider_type,
+            storage_provider=uploaded.storage_provider,
+            storage_key=uploaded.key,
+        )
 
         return TaskResult(
             status="success",

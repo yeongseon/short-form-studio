@@ -290,18 +290,13 @@ def render_video(self, run_id: int, render_profile: str = "shorts_default") -> d
         from creator_service.artifact_storage_integration import store_artifact_file
 
         uploaded = store_artifact_file(run_id, output_path, "video/mp4")
-        try:
-            artifact = await _render_service.create_artifact(
-                run_id=run_id,
-                path=output_path,
-                render_profile=render_profile,
-                storage_provider=uploaded.storage_provider,
-                storage_key=uploaded.key,
-            )
-        except TypeError:
-            artifact = await _render_service.create_artifact(
-                run_id=run_id, path=output_path, render_profile=render_profile
-            )
+        artifact = await _render_service.create_artifact(
+            run_id=run_id,
+            path=output_path,
+            render_profile=render_profile,
+            storage_provider=uploaded.storage_provider,
+            storage_key=uploaded.key,
+        )
 
         return TaskResult(
             status="success",
