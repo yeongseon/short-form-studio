@@ -139,15 +139,25 @@ class StageReviewService:
             )
 
         # 4. Record approval (only after CAS succeeds — no orphan reviews)
-        await self.storage.create_review(
-            {
-                "run_id": run_id,
-                "stage_name": stage_name,
-                "review_status": "approved",
-                "reviewer": reviewer,
-                "notes": notes,
-            }
-        )
+        try:
+            await self.storage.create_review(
+                {
+                    "run_id": run_id,
+                    "stage_name": stage_name,
+                    "review_status": "approved",
+                    "reviewer": reviewer,
+                    "notes": notes,
+                }
+            )
+        except Exception:
+            # Roll back stage on review insert failure.
+            await run_service.storage.conditional_update_run(
+                run_id,
+                {"current_stage": stage.value},
+                frozenset({target.value}),
+                workspace_id=workspace_id,
+            )
+            raise
 
         updated_run = await run_service.get_run(run_id, workspace_id=workspace_id)
         if updated_run is None:
