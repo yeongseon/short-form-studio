@@ -10,8 +10,9 @@ Key invariant: 1 paragraph = 1 image = 1 audio = N subtitles.
 from __future__ import annotations
 
 from enum import Enum
+from typing import ClassVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ParagraphStatus(str, Enum):
@@ -27,6 +28,8 @@ class ParagraphStatus(str, Enum):
 
 
 class StaleFlags(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
     """Tracks which downstream artifacts are stale after an upstream edit."""
 
     prompt_stale: bool = False
@@ -38,31 +41,35 @@ class StaleFlags(BaseModel):
 class StoryboardParagraph(BaseModel):
     """One paragraph in the unified storyboard view."""
 
-    section_id: str
-    order: int
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    section_id: str = Field(max_length=100)
+    order: int = Field(ge=0)
     text: str
     display_text: str | None = None
     image_prompt: str | None = None
     image_url: str | None = None
     audio_url: str | None = None
-    audio_duration: float | None = None
+    audio_duration: float | None = Field(default=None, ge=0)
     subtitles_url: str | None = None
     subtitle_entries: list[dict[str, object]] | None = None
     status: ParagraphStatus = ParagraphStatus.IDLE
     stale_flags: StaleFlags | None = None
 
     # Scene/asset metadata for cross-reference
-    scene_id: str | None = None
-    image_asset_id: int | None = None
-    audio_artifact_id: int | None = None
-    subtitle_artifact_id: int | None = None
+    scene_id: str | None = Field(default=None, max_length=100)
+    image_asset_id: int | None = Field(default=None, ge=1)
+    audio_artifact_id: int | None = Field(default=None, ge=1)
+    subtitle_artifact_id: int | None = Field(default=None, ge=1)
 
 
 class StoryboardResponse(BaseModel):
     """Full storyboard data for a run."""
 
-    run_id: int
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    run_id: int = Field(ge=1)
     paragraphs: list[StoryboardParagraph]
     render_ready: bool = False
-    total_paragraphs: int = 0
-    ready_paragraphs: int = 0
+    total_paragraphs: int = Field(ge=0, default=0)
+    ready_paragraphs: int = Field(ge=0, default=0)

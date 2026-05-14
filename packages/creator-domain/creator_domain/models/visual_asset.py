@@ -1,20 +1,23 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import ClassVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class VisualAsset(BaseModel):
-    id: int
-    run_id: int
-    scene_id: str
-    version: int = 1
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", protected_namespaces=())
+
+    id: int = Field(ge=1)
+    run_id: int = Field(ge=1)
+    scene_id: str = Field(max_length=100)
+    version: int = Field(ge=0, default=1)
     asset_path: str
     prompt_snapshot: str | None = None
-    model_used: str | None = None
-    provider_type: str | None = None
-    storage_provider: str | None = None
+    model_used: str | None = Field(default=None, max_length=100)
+    provider_type: str | None = Field(default=None, max_length=50)
+    storage_provider: str | None = Field(default=None, max_length=50)
     storage_key: str | None = None
     is_active: bool = True
     created_at: datetime
@@ -33,7 +36,9 @@ class VisualAsset(BaseModel):
         mapped = dict(row)
         if "provider" in mapped and "provider_type" not in mapped:
             mapped["provider_type"] = mapped.pop("provider")
-        return cls.model_validate(mapped)
+        known = set(cls.model_fields)
+        filtered = {key: value for key, value in mapped.items() if key in known}
+        return cls.model_validate(filtered)
 
     def to_json(self) -> str:
         return self.model_dump_json()
