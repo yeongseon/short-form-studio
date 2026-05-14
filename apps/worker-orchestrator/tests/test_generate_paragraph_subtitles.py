@@ -74,6 +74,23 @@ class FakeAudioService:
         return self.artifact
 
 
+class FakeRunStorage:
+    def __init__(self, run_row: dict[str, Any] | None) -> None:
+        self.run_row = run_row
+
+    async def get_run(self, run_id: int) -> dict[str, Any] | None:
+        if self.run_row is None:
+            return None
+        row = dict(self.run_row)
+        row["id"] = run_id
+        return row
+
+
+class FakeRunService:
+    def __init__(self, run_row: dict[str, Any] | None) -> None:
+        self.storage = FakeRunStorage(run_row)
+
+
 class FakeRegistry:
     def __init__(self, entry: FakeEntry, provider: FakeProvider) -> None:
         self.entry = entry
@@ -117,6 +134,9 @@ def test_generate_paragraph_subtitles_success(monkeypatch: pytest.MonkeyPatch) -
     )
     monkeypatch.setattr(module, "_subtitle_service", subtitle_service)
     monkeypatch.setattr(module, "_audio_service", audio_service)
+    monkeypatch.setattr(
+        module, "_run_service", FakeRunService({"current_stage": "AUDIO_GENERATING"})
+    )
     monkeypatch.setattr(module, "validate_artifact_path", lambda path, _root: path)
     monkeypatch.setattr(module.os.path, "exists", lambda _: True)
 
@@ -170,6 +190,9 @@ def test_generate_paragraph_subtitles_audio_not_found(monkeypatch: pytest.Monkey
     audio_service = FakeAudioService(artifact=None)
     monkeypatch.setattr(module, "_subtitle_service", subtitle_service)
     monkeypatch.setattr(module, "_audio_service", audio_service)
+    monkeypatch.setattr(
+        module, "_run_service", FakeRunService({"current_stage": "AUDIO_GENERATING"})
+    )
 
     with pytest.raises(RuntimeError, match="Audio file not found"):
         _invoke_task(run_id=102, section_id="hook-2")
@@ -188,15 +211,24 @@ def test_generate_paragraph_subtitles_with_gpu_lock(monkeypatch: pytest.MonkeyPa
 
     lock_calls: list[str] = []
     release_calls: list[str] = []
-    monkeypatch.setattr(module, "acquire_gpu_lock", lambda _, task_id: (lock_calls.append(task_id) or f"{task_id}:fake-token"))
     monkeypatch.setattr(
-        module, "release_gpu_lock", lambda _, token: release_calls.append(token.split(':')[0]) or True
+        module,
+        "acquire_gpu_lock",
+        lambda _, task_id: (lock_calls.append(task_id) or f"{task_id}:fake-token"),
+    )
+    monkeypatch.setattr(
+        module,
+        "release_gpu_lock",
+        lambda _, token: release_calls.append(token.split(":")[0]) or True,
     )
 
     subtitle_service = FakeSubtitleService(artifact_id=61)
     audio_service = FakeAudioService(artifact=FakeAudioArtifact(path="audio.wav"))
     monkeypatch.setattr(module, "_subtitle_service", subtitle_service)
     monkeypatch.setattr(module, "_audio_service", audio_service)
+    monkeypatch.setattr(
+        module, "_run_service", FakeRunService({"current_stage": "AUDIO_GENERATING"})
+    )
     monkeypatch.setattr(module, "validate_artifact_path", lambda path, _root: path)
     monkeypatch.setattr(module.os.path, "exists", lambda _: True)
 
@@ -220,6 +252,9 @@ def test_generate_paragraph_subtitles_provider_failure(
     audio_service = FakeAudioService(artifact=FakeAudioArtifact(path="audio.wav"))
     monkeypatch.setattr(module, "_subtitle_service", subtitle_service)
     monkeypatch.setattr(module, "_audio_service", audio_service)
+    monkeypatch.setattr(
+        module, "_run_service", FakeRunService({"current_stage": "AUDIO_GENERATING"})
+    )
     monkeypatch.setattr(module, "validate_artifact_path", lambda path, _root: path)
     monkeypatch.setattr(module.os.path, "exists", lambda _: True)
 
@@ -246,6 +281,9 @@ def test_generate_paragraph_subtitles_rejects_audio_path_outside_artifact_root(
     audio_service = FakeAudioService(artifact=FakeAudioArtifact(path="/etc/passwd"))
     monkeypatch.setattr(module, "_subtitle_service", subtitle_service)
     monkeypatch.setattr(module, "_audio_service", audio_service)
+    monkeypatch.setattr(
+        module, "_run_service", FakeRunService({"current_stage": "AUDIO_GENERATING"})
+    )
 
     with pytest.raises(ValueError, match="outside artifact root"):
         _invoke_task(run_id=105, section_id="hook-5")
@@ -253,7 +291,7 @@ def test_generate_paragraph_subtitles_rejects_audio_path_outside_artifact_root(
     assert subtitle_service.calls == []
 
 
-def test_generate_paragraph_subtitles_works_even_when_run_stage_is_not_subtitle(
+def test_generate_paragraph_subtitles_rejects_when_run_stage_is_not_subtitle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     provider = FakeProvider()
@@ -266,10 +304,11 @@ def test_generate_paragraph_subtitles_works_even_when_run_stage_is_not_subtitle(
     )
     monkeypatch.setattr(module, "_subtitle_service", subtitle_service)
     monkeypatch.setattr(module, "_audio_service", audio_service)
+    monkeypatch.setattr(module, "_run_service", FakeRunService({"current_stage": "SCRIPT_REVIEW"}))
     monkeypatch.setattr(module, "validate_artifact_path", lambda path, _root: path)
     monkeypatch.setattr(module.os.path, "exists", lambda _: True)
 
-    result = _invoke_task(run_id=111, section_id="hook-7")
-
-    assert result["status"] == "success"
-    assert result["subtitle_artifact_id"] == 44
+    with pytest.raises(
+        module._task_runner.StageGuardError, match="Run 111 is in stage SCRIPT_REVIEW"
+    ):
+        _invoke_task(run_id=111, section_id="hook-7")

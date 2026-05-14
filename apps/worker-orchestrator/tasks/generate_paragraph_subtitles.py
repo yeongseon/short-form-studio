@@ -74,10 +74,6 @@ def generate_paragraph_subtitles(
             {RunStage.AUDIO_GENERATING.value, RunStage.SUBTITLE_GENERATING.value}
         ),
         success_stage=None,
-        # Paragraph workers are dispatched by the parent subtitle pipeline task
-        # after stage validation, so these per-section executions intentionally
-        # skip a second stage guard during fan-out.
-        skip_stage_guard=True,
     )
 
     async def execute(ctx: TaskContext) -> TaskResult:
