@@ -41,8 +41,11 @@ def _override_run_access():
 
 # --- stop_run tests ---
 
+
 @pytest.mark.asyncio
-async def test_stop_run_revokes_after_service_call(client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_stop_run_revokes_after_service_call(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     tracker = _CallTracker()
     mock_updated = MagicMock()
     mock_updated.model_dump.return_value = {"id": 1, "status": "stopped"}
@@ -54,8 +57,12 @@ async def test_stop_run_revokes_after_service_call(client: AsyncClient, monkeypa
     async def _mock_revoke(run_id):
         tracker.order.append("revoke")
 
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle.run_service.stop_run", _mock_stop_run)
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle._revoke_active_tasks_for_run", _mock_revoke)
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle.run_service.stop_run", _mock_stop_run
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle._revoke_active_tasks_for_run", _mock_revoke
+    )
 
     response = await client.post("/api/creator/runs/1/stop")
     assert response.status_code == 200
@@ -63,7 +70,9 @@ async def test_stop_run_revokes_after_service_call(client: AsyncClient, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_stop_run_does_not_revoke_on_conflict(client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_stop_run_does_not_revoke_on_conflict(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     revoke_called = False
 
     async def _mock_stop_run(run_id, workspace_id):
@@ -73,8 +82,12 @@ async def test_stop_run_does_not_revoke_on_conflict(client: AsyncClient, monkeyp
         nonlocal revoke_called
         revoke_called = True
 
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle.run_service.stop_run", _mock_stop_run)
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle._revoke_active_tasks_for_run", _mock_revoke)
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle.run_service.stop_run", _mock_stop_run
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle._revoke_active_tasks_for_run", _mock_revoke
+    )
 
     response = await client.post("/api/creator/runs/1/stop")
     assert response.status_code == 409
@@ -83,14 +96,17 @@ async def test_stop_run_does_not_revoke_on_conflict(client: AsyncClient, monkeyp
 
 # --- delete_run tests ---
 
+
 @pytest.mark.asyncio
-async def test_delete_run_captures_ids_before_delete_revokes_after(client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_delete_run_captures_ids_before_delete_revokes_after(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Celery IDs must be captured BEFORE delete (CASCADE removes rows), then revoked AFTER."""
     tracker = _CallTracker()
 
     async def _mock_collect(run_id):
         tracker.order.append("collect_ids")
-        return ["celery-id-1", "celery-id-2"]
+        return ["celery-id-1", "celery-id-2"], True
 
     async def _mock_delete_run(run_id, workspace_id):
         tracker.order.append("delete_run")
@@ -99,14 +115,24 @@ async def test_delete_run_captures_ids_before_delete_revokes_after(client: Async
     async def _mock_revoke_ids(celery_ids, run_id):
         tracker.order.append("revoke_ids")
         assert celery_ids == ["celery-id-1", "celery-id-2"]
+        return True
 
     async def _mock_delete_artifacts(run_id):
         tracker.order.append("delete_artifacts")
 
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle._collect_active_celery_ids", _mock_collect)
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle.run_service.delete_run", _mock_delete_run)
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle._revoke_celery_ids", _mock_revoke_ids)
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle.artifact_download_service.delete_artifacts_for_run", _mock_delete_artifacts)
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle._collect_active_celery_ids", _mock_collect
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle.run_service.delete_run", _mock_delete_run
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle._revoke_celery_ids", _mock_revoke_ids
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle.artifact_download_service.delete_artifacts_for_run",
+        _mock_delete_artifacts,
+    )
 
     response = await client.delete("/api/creator/runs/1")
     assert response.status_code == 200
@@ -114,11 +140,13 @@ async def test_delete_run_captures_ids_before_delete_revokes_after(client: Async
 
 
 @pytest.mark.asyncio
-async def test_delete_run_does_not_revoke_on_failure(client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_delete_run_does_not_revoke_on_failure(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     revoke_called = False
 
     async def _mock_collect(run_id):
-        return ["celery-id-1"]
+        return ["celery-id-1"], True
 
     async def _mock_delete_run(run_id, workspace_id):
         raise ValueError("Run not found")
@@ -127,9 +155,15 @@ async def test_delete_run_does_not_revoke_on_failure(client: AsyncClient, monkey
         nonlocal revoke_called
         revoke_called = True
 
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle._collect_active_celery_ids", _mock_collect)
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle.run_service.delete_run", _mock_delete_run)
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle._revoke_celery_ids", _mock_revoke_ids)
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle._collect_active_celery_ids", _mock_collect
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle.run_service.delete_run", _mock_delete_run
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle._revoke_celery_ids", _mock_revoke_ids
+    )
 
     response = await client.delete("/api/creator/runs/1")
     assert response.status_code == 404
@@ -137,13 +171,15 @@ async def test_delete_run_does_not_revoke_on_failure(client: AsyncClient, monkey
 
 
 @pytest.mark.asyncio
-async def test_delete_run_not_deleted_skips_revoke(client: AsyncClient, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_delete_run_not_deleted_skips_revoke(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """If delete_run returns False, no revoke or artifact cleanup should happen."""
     revoke_called = False
     artifacts_called = False
 
     async def _mock_collect(run_id):
-        return ["celery-id-1"]
+        return ["celery-id-1"], True
 
     async def _mock_delete_run(run_id, workspace_id):
         return False
@@ -156,10 +192,19 @@ async def test_delete_run_not_deleted_skips_revoke(client: AsyncClient, monkeypa
         nonlocal artifacts_called
         artifacts_called = True
 
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle._collect_active_celery_ids", _mock_collect)
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle.run_service.delete_run", _mock_delete_run)
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle._revoke_celery_ids", _mock_revoke_ids)
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle.artifact_download_service.delete_artifacts_for_run", _mock_delete_artifacts)
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle._collect_active_celery_ids", _mock_collect
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle.run_service.delete_run", _mock_delete_run
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle._revoke_celery_ids", _mock_revoke_ids
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle.artifact_download_service.delete_artifacts_for_run",
+        _mock_delete_artifacts,
+    )
 
     response = await client.delete("/api/creator/runs/1")
     assert response.status_code == 404
@@ -167,7 +212,43 @@ async def test_delete_run_not_deleted_skips_revoke(client: AsyncClient, monkeypa
     assert artifacts_called is False
 
 
+@pytest.mark.asyncio
+async def test_delete_run_response_includes_revoke_reliable(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _mock_collect(run_id):
+        return ["celery-id-1"], True
+
+    async def _mock_delete_run(run_id, workspace_id):
+        return True
+
+    async def _mock_revoke_ids(celery_ids, run_id):
+        return True
+
+    async def _mock_delete_artifacts(run_id):
+        return None
+
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle._collect_active_celery_ids", _mock_collect
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle.run_service.delete_run", _mock_delete_run
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle._revoke_celery_ids", _mock_revoke_ids
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle.artifact_download_service.delete_artifacts_for_run",
+        _mock_delete_artifacts,
+    )
+
+    response = await client.delete("/api/creator/runs/1")
+    assert response.status_code == 200
+    assert response.json()["revoke_reliable"] is True
+
+
 # --- Unit tests for helper functions ---
+
 
 @pytest.mark.asyncio
 async def test_collect_active_celery_ids_returns_ids(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -183,11 +264,13 @@ async def test_collect_active_celery_ids_returns_ids(monkeypatch: pytest.MonkeyP
     )
 
     result = await _collect_active_celery_ids(42)
-    assert result == ["id-1", "id-2"]
+    assert result == (["id-1", "id-2"], True)
 
 
 @pytest.mark.asyncio
-async def test_collect_active_celery_ids_returns_empty_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_collect_active_celery_ids_returns_empty_on_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from shorts_api.routes.creator_runs_utils import _collect_active_celery_ids
 
     class _MockTracking:
@@ -200,11 +283,12 @@ async def test_collect_active_celery_ids_returns_empty_on_error(monkeypatch: pyt
     )
 
     result = await _collect_active_celery_ids(42)
-    assert result == []
+    assert result == ([], False)
 
 
 @pytest.mark.asyncio
 async def test_revoke_celery_ids_empty_list_is_noop() -> None:
     from shorts_api.routes.creator_runs_utils import _revoke_celery_ids
+
     # Should not raise or call anything
     await _revoke_celery_ids([], run_id=1)

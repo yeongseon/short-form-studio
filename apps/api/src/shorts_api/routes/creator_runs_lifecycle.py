@@ -113,7 +113,12 @@ async def delete_run(
         await run_service.stop_run(run_id, workspace_id=user.workspace_id)
     except (ConflictError, ValueError):
         pass  # Already stopped or in terminal state — safe to proceed
-    celery_ids = await _collect_active_celery_ids(run.id)
+    collect_result = await _collect_active_celery_ids(run.id)
+    if isinstance(collect_result, tuple):
+        celery_ids, collect_reliable = collect_result
+    else:
+        celery_ids = collect_result
+        collect_reliable = True
 
     try:
         deleted = await run_service.delete_run(run_id, workspace_id=user.workspace_id)
@@ -122,7 +127,12 @@ async def delete_run(
     if not deleted:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    await _revoke_celery_ids(celery_ids, run.id)
+    revoke_result = await _revoke_celery_ids(celery_ids, run.id)
+    revoke_reliable = bool(revoke_result) if revoke_result is not None else True
     await artifact_download_service.delete_artifacts_for_run(run_id)
 
-    return {"deleted": True, "run_id": run_id}
+    return {
+        "deleted": True,
+        "run_id": run_id,
+        "revoke_reliable": collect_reliable and revoke_reliable,
+    }

@@ -156,6 +156,7 @@ class StubRevokeTasks:
 
 class StubCollectCeleryIds:
     """Stub for _collect_active_celery_ids — returns empty list by default."""
+
     def __init__(self) -> None:
         self.calls: list[int] = []
 
@@ -166,6 +167,7 @@ class StubCollectCeleryIds:
 
 class StubRevokeCeleryIds:
     """Stub for _revoke_celery_ids — tracks calls."""
+
     def __init__(self) -> None:
         self.calls: list[tuple[list[str], int]] = []
 
@@ -485,7 +487,7 @@ async def test_delete_run_success_with_artifact_cleanup(client, stub_lifecycle_s
     response = await client.delete("/api/creator/runs/17")
 
     assert response.status_code == 200
-    assert response.json() == {"deleted": True, "run_id": 17}
+    assert response.json() == {"deleted": True, "run_id": 17, "revoke_reliable": True}
     # delete_run now uses _collect_active_celery_ids + _revoke_celery_ids (not _revoke_active_tasks_for_run)
     assert revoke_tasks.calls == []
     assert artifact_lifecycle_svc.delete_artifacts_for_run_calls == [17]
