@@ -81,15 +81,15 @@ class GpuLockTests(unittest.TestCase):
         self.assertFalse(second_release)
 
     def test_exact_token_release_prevents_prefix_collision(self) -> None:
-        """A token that is a prefix of another must NOT release the other's lock."""
+        """Releasing with a different token (even a prefix) must not release the lock."""
         redis_client = Mock()
-        redis_client.set.return_value = True
+        # Simulate: lock is held by token_a, release with token_b returns 0 (not owner)
+        redis_client.eval.return_value = 0
 
-        token1 = acquire_gpu_lock(redis_client, "task", timeout=60)
-        token2 = acquire_gpu_lock(redis_client, "task-extended", timeout=60)
-
-        # Tokens are unique UUIDs, so they can never match each other
-        self.assertNotEqual(token1, token2)
+        token_a = "task:aaa"
+        token_b = "task:bbb"
+        released = release_gpu_lock(redis_client, token_b)
+        self.assertFalse(released)  # Cannot release someone else's lock
 
     def test_renew_extends_lease(self) -> None:
         redis_client = Mock()

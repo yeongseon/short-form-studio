@@ -187,7 +187,7 @@ def test_generate_paragraph_audio_with_gpu_lock(monkeypatch: pytest.MonkeyPatch)
     release_calls: list[str] = []
     monkeypatch.setattr(module, "acquire_gpu_lock", lambda _, task_id: (lock_calls.append(task_id) or f"{task_id}:fake-token"))
     monkeypatch.setattr(
-        module, "release_gpu_lock", lambda _, token: release_calls.append(token.split(':')[0])
+        module, "release_gpu_lock", lambda _, token: release_calls.append(token.split(':')[0]) or True
     )
 
     audio_service = FakeAudioService(artifact_id=61)
@@ -227,7 +227,7 @@ def test_generate_paragraph_audio_provider_failure(monkeypatch: pytest.MonkeyPat
     release_calls: list[str] = []
     monkeypatch.setattr(module, "acquire_gpu_lock", lambda _, task_id: (lock_calls.append(task_id) or f"{task_id}:fake-token"))
     monkeypatch.setattr(
-        module, "release_gpu_lock", lambda _, token: release_calls.append(token.split(':')[0])
+        module, "release_gpu_lock", lambda _, token: release_calls.append(token.split(':')[0]) or True
     )
 
     audio_service = FakeAudioService()

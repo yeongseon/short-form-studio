@@ -184,7 +184,7 @@ def test_generate_subtitles_success(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         generate_subtitles_module,
         "release_gpu_lock",
-        lambda _, token: release_calls.append(token.split(':')[0]),
+        lambda _, token: release_calls.append(token.split(':')[0]) or True,
     )
 
     script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Hello world script"))

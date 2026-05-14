@@ -315,7 +315,7 @@ def test_generate_audio_with_gpu_lock(monkeypatch: pytest.MonkeyPatch) -> None:
         generate_audio_module, "acquire_gpu_lock", lambda _, task_id: (lock_calls.append(task_id) or f"{task_id}:fake-token")
     )
     monkeypatch.setattr(
-        generate_audio_module, "release_gpu_lock", lambda _, token: release_calls.append(token.split(':')[0])
+        generate_audio_module, "release_gpu_lock", lambda _, token: release_calls.append(token.split(':')[0]) or True
     )
 
     script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Lock script"))

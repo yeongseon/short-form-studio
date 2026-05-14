@@ -266,7 +266,7 @@ def test_happy_path_single_scene_with_gpu_lock(monkeypatch: pytest.MonkeyPatch) 
     lock_calls: list[str] = []
     release_calls: list[str] = []
     monkeypatch.setattr(generate_scene_image_module, "acquire_gpu_lock", lambda client, task_id: (lock_calls.append(task_id) or f"{task_id}:fake-token"))
-    monkeypatch.setattr(generate_scene_image_module, "release_gpu_lock", lambda client, token: release_calls.append(token.split(':')[0]))
+    monkeypatch.setattr(generate_scene_image_module, "release_gpu_lock", lambda client, token: release_calls.append(token.split(':')[0]) or True)
 
     plan = FakeVisualPlan(run_id=101, scenes=[FakeVisualScene(scene_id="scene-sec-0", prompt="A hook shot")])
     vp_service = FakeVisualPlanService(plan=plan)
@@ -674,7 +674,7 @@ def test_releases_gpu_lock_when_provider_fails(monkeypatch: pytest.MonkeyPatch) 
 
     released: list[str] = []
     monkeypatch.setattr(generate_scene_image_module, "acquire_gpu_lock", lambda *_: True)
-    monkeypatch.setattr(generate_scene_image_module, "release_gpu_lock", lambda _, task_id: released.append(task_id))
+    monkeypatch.setattr(generate_scene_image_module, "release_gpu_lock", lambda _, task_id: released.append(task_id) or True)
 
     plan = FakeVisualPlan(run_id=502, scenes=[FakeVisualScene()])
     vp_service = FakeVisualPlanService(plan=plan)
