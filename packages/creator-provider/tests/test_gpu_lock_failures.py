@@ -26,7 +26,7 @@ class TestAcquireGPULock:
         redis = MagicMock()
         redis.set.return_value = True
         result = acquire_gpu_lock(redis, "task-1", timeout=60)
-        assert result is True
+        assert isinstance(result, str)  # returns token string
         redis.set.assert_called_once()
 
     def test_acquire_timeout_raises(self):
@@ -39,7 +39,7 @@ class TestAcquireGPULock:
         redis = MagicMock()
         redis.set.side_effect = [False, False, True]  # fail twice, then succeed
         result = acquire_gpu_lock(redis, "task-1", timeout=60, retry_interval=0.01, max_wait=5.0)
-        assert result is True
+        assert isinstance(result, str)  # returns token string
         assert redis.set.call_count == 3
 
 
@@ -56,12 +56,13 @@ class TestReleaseGPULock:
         result = release_gpu_lock(redis, "task-1")
         assert result is False
 
-    def test_release_script_uses_correct_key_prefix(self):
+    def test_release_uses_exact_token_match(self):
         redis = MagicMock()
         redis.eval.return_value = 1
-        release_gpu_lock(redis, "my-task-id")
+        release_gpu_lock(redis, "my-task-id:uuid-token")
         args = redis.eval.call_args
-        assert "my-task-id:" in str(args)
+        # Exact token is passed, no prefix matching
+        assert "my-task-id:uuid-token" in str(args)
 
 
 class TestGPULockContextManager:

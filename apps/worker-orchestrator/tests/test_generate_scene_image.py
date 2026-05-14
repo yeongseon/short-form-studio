@@ -265,8 +265,8 @@ def test_happy_path_single_scene_with_gpu_lock(monkeypatch: pytest.MonkeyPatch) 
 
     lock_calls: list[str] = []
     release_calls: list[str] = []
-    monkeypatch.setattr(generate_scene_image_module, "acquire_gpu_lock", lambda client, task_id: lock_calls.append(task_id))
-    monkeypatch.setattr(generate_scene_image_module, "release_gpu_lock", lambda client, task_id: release_calls.append(task_id))
+    monkeypatch.setattr(generate_scene_image_module, "acquire_gpu_lock", lambda client, task_id: (lock_calls.append(task_id) or f"{task_id}:fake-token"))
+    monkeypatch.setattr(generate_scene_image_module, "release_gpu_lock", lambda client, token: release_calls.append(token.split(':')[0]))
 
     plan = FakeVisualPlan(run_id=101, scenes=[FakeVisualScene(scene_id="scene-sec-0", prompt="A hook shot")])
     vp_service = FakeVisualPlanService(plan=plan)

@@ -361,6 +361,7 @@ class GpuLockContext:
     task_id: str
     redis_client: Any | None = None
     acquired: bool = False
+    _token: str | None = None
     acquired_at: str | None = None
     released_at: str | None = None
 
@@ -369,21 +370,22 @@ class GpuLockContext:
         self.redis_client = _get_redis_client()
         if self.redis_client is None:
             raise RuntimeError("Redis client is unavailable; cannot acquire GPU lock")
-        acquire_gpu_lock(self.redis_client, lock_id or self.task_id)
+        self._token = acquire_gpu_lock(self.redis_client, lock_id or self.task_id)
         self.acquired = True
         self.acquired_at = _utc_now_iso()
 
     def release(self, lock_id: str | None = None) -> None:
         """Release GPU lock if acquired."""
-        if not self.acquired:
+        if not self.acquired or self._token is None:
             return
         try:
-            release_gpu_lock(self.redis_client, lock_id or self.task_id)
+            release_gpu_lock(self.redis_client, self._token)
             self.released_at = _utc_now_iso()
         except Exception:
             logger.exception("Failed to release GPU lock for %s", lock_id or self.task_id)
         finally:
             self.acquired = False
+            self._token = None
 
 
 def validate_task_message(message: dict[str, Any]) -> dict[str, Any]:
