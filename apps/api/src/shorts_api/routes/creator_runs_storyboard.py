@@ -51,7 +51,14 @@ async def _get_fresh_run_for_dispatch(run_id: int, workspace_id: int) -> Pipelin
     try:
         return await run_service.get_run(run_id, workspace_id=workspace_id)
     except TypeError:
-        return await run_service.get_run(run_id)
+        try:
+            return await run_service.get_run(run_id)
+        except Exception:
+            logger.warning("Failed to re-read run %s for dispatch check (fallback)", run_id, exc_info=True)
+            return None
+    except Exception:
+        logger.warning("Failed to re-read run %s for dispatch check", run_id, exc_info=True)
+        return None
 
 
 class ParagraphAudioRequest(BaseModel):
