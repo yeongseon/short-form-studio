@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib
+import sys
 
 from creator_service import telemetry
 
@@ -193,6 +194,7 @@ def test_add_trace_context_to_log_adds_ids(monkeypatch) -> None:
 
 
 def test_graceful_degradation_when_otel_missing(monkeypatch) -> None:
+    sys.modules["creator_service.telemetry"] = telemetry
     module = importlib.reload(telemetry)
     module._STATE.initialized = False
     module._STATE.enabled = False
@@ -212,6 +214,7 @@ def test_graceful_degradation_when_otel_missing(monkeypatch) -> None:
 
 
 def test_load_otel_handles_import_error(monkeypatch) -> None:
+    sys.modules["creator_service.telemetry"] = telemetry
     module = importlib.reload(telemetry)
 
     import builtins

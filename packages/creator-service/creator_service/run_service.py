@@ -39,6 +39,7 @@ class RunStorageBackend(Protocol):
         run_id: int,
         updates: dict[str, Any],
         expected_stages: frozenset[str],
+        workspace_id: int | None = None,
     ) -> tuple[bool, dict[str, Any] | None]:
         """Atomically update run only if current_stage is in expected_stages.
 
@@ -55,7 +56,7 @@ class RunStorageBackend(Protocol):
         """Return all run rows for a workspace, newest first."""
         ...
 
-    async def delete_run(self, run_id: int) -> bool:
+    async def delete_run(self, run_id: int, workspace_id: int | None = None) -> bool:
         """Delete a run by id. Returns True if deleted."""
         ...
 
@@ -63,7 +64,12 @@ class RunStorageBackend(Protocol):
         """Delete all runs for a project. Returns count of deleted rows."""
         ...
 
-    async def merge_model_defaults(self, run_id: int, updates_json: str) -> dict[str, Any]:
+    async def merge_model_defaults(
+        self,
+        run_id: int,
+        updates_json: str,
+        workspace_id: int | None = None,
+    ) -> dict[str, Any]:
         """Atomically merge JSON updates into model_defaults_json."""
         ...
 
@@ -126,9 +132,12 @@ class InMemoryRunStorage:
         run_id: int,
         updates: dict[str, Any],
         expected_stages: frozenset[str],
+        workspace_id: int | None = None,
     ) -> tuple[bool, dict[str, Any] | None]:
         row = self._rows.get(run_id)
         if row is None:
+            return False, None
+        if workspace_id is not None and row.get("workspace_id") != workspace_id:
             return False, None
         if row.get("current_stage") not in expected_stages:
             return False, dict(row)
@@ -148,15 +157,26 @@ class InMemoryRunStorage:
         rows.sort(key=lambda r: r.get("id", 0), reverse=True)
         return rows
 
-    async def delete_run(self, run_id: int) -> bool:
+    async def delete_run(self, run_id: int, workspace_id: int | None = None) -> bool:
+        if workspace_id is not None:
+            row = self._rows.get(run_id)
+            if row is None or row.get("workspace_id") != workspace_id:
+                return False
         if run_id in self._rows:
             del self._rows[run_id]
             return True
         return False
 
-    async def merge_model_defaults(self, run_id: int, updates_json: str) -> dict[str, Any]:
+    async def merge_model_defaults(
+        self,
+        run_id: int,
+        updates_json: str,
+        workspace_id: int | None = None,
+    ) -> dict[str, Any]:
         row = self._rows.get(run_id)
         if row is None:
+            raise ValueError(f"Run {run_id} not found")
+        if workspace_id is not None and row.get("workspace_id") != workspace_id:
             raise ValueError(f"Run {run_id} not found")
         current = json.loads(row.get("model_defaults_json") or "{}")
         updates = json.loads(updates_json)
@@ -264,6 +284,9 @@ class RunService:
             expected_version=int(getattr(run, "version", 0) or 0),
         )
         if row is None:
+            latest_run = await self.get_run(run_id, workspace_id=workspace_id)
+            if latest_run is None:
+                raise ValueError(f"Run {run_id} not found")
             raise ConflictError(f"Run {run_id} has stale version")
         return PipelineRun.from_row(row)
 
@@ -303,6 +326,9 @@ class RunService:
             expected_version=int(getattr(run, "version", 0) or 0),
         )
         if row is None:
+            latest_run = await self.get_run(run_id, workspace_id=workspace_id)
+            if latest_run is None:
+                raise ValueError(f"Run {run_id} not found")
             raise ConflictError(f"Run {run_id} has stale version")
         return PipelineRun.from_row(row)
 
@@ -350,6 +376,9 @@ class RunService:
             expected_version=int(getattr(run, "version", 0) or 0),
         )
         if row is None:
+            latest_run = await self.get_run(run_id, workspace_id=workspace_id)
+            if latest_run is None:
+                raise ValueError(f"Run {run_id} not found")
             raise ConflictError(f"Run {run_id} has stale version")
         return PipelineRun.from_row(row)
 
@@ -375,6 +404,9 @@ class RunService:
             expected_version=int(getattr(run, "version", 0) or 0),
         )
         if row is None:
+            latest_run = await self.get_run(run_id, workspace_id=workspace_id)
+            if latest_run is None:
+                raise ValueError(f"Run {run_id} not found")
             raise ConflictError(f"Run {run_id} has stale version")
         return PipelineRun.from_row(row)
 
@@ -404,6 +436,7 @@ class RunService:
             run_id,
             {"current_stage": target.value},
             frozenset({current.value}),
+            workspace_id=workspace_id,
         )
         if not ok:
             if row is None:
@@ -422,7 +455,11 @@ class RunService:
         run = await self.get_run(run_id, workspace_id=workspace_id)
         if run is None:
             raise ValueError(f"Run {run_id} not found")
-        row = await self.storage.merge_model_defaults(run_id, json.dumps(updates))
+        row = await self.storage.merge_model_defaults(
+            run_id,
+            json.dumps(updates),
+            workspace_id=workspace_id,
+        )
         return PipelineRun.from_row(row)
 
     async def delete_run(self, run_id: int, workspace_id: int | None = None) -> bool:
@@ -430,7 +467,7 @@ class RunService:
         run = await self.get_run(run_id, workspace_id=workspace_id)
         if run is None:
             raise ValueError(f"Run {run_id} not found")
-        return await self.storage.delete_run(run_id)
+        return await self.storage.delete_run(run_id, workspace_id=workspace_id)
 
 
 def _create_storage() -> RunStorageBackend:

@@ -49,6 +49,73 @@ def test_postgres_run_storage_update_run_scopes_by_workspace(monkeypatch):
     assert calls[0][1] == (5, "running", 77)
 
 
+def test_postgres_run_storage_conditional_update_scopes_by_workspace(monkeypatch):
+    storage = PostgresRunStorage()
+    calls: list[tuple[str, tuple[object, ...]]] = []
+
+    async def _fake_fetch_one(query: str, *args: object):
+        calls.append((query, args))
+        return None
+
+    monkeypatch.setattr("creator_service.postgres_run_storage.fetch_one", _fake_fetch_one)
+
+    ok, row = run(
+        storage.conditional_update_run(
+            7,
+            {"current_stage": "SCRIPT_GENERATING"},
+            frozenset({"SCRIPT_REVIEW"}),
+            workspace_id=42,
+        )
+    )
+
+    assert ok is False
+    assert row is None
+    assert len(calls) == 2
+    assert "UPDATE creator_runs SET" in calls[0][0]
+    assert "workspace_id = $" in calls[0][0]
+    assert calls[0][1] == (7, ["SCRIPT_REVIEW"], "SCRIPT_GENERATING", 42)
+    assert "SELECT * FROM creator_runs WHERE id = $1 AND workspace_id = $2" in calls[1][0]
+    assert calls[1][1] == (7, 42)
+
+
+def test_postgres_run_storage_merge_model_defaults_scopes_by_workspace(monkeypatch):
+    storage = PostgresRunStorage()
+    calls: list[tuple[str, tuple[object, ...]]] = []
+
+    async def _fake_fetch_one(query: str, *args: object):
+        calls.append((query, args))
+        return None
+
+    monkeypatch.setattr("creator_service.postgres_run_storage.fetch_one", _fake_fetch_one)
+
+    with pytest.raises(ValueError, match="Run 9 not found"):
+        run(storage.merge_model_defaults(9, '{"script_model":"a"}', workspace_id=33))
+
+    assert len(calls) == 1
+    assert "WHERE id = $1 AND workspace_id = $3" in calls[0][0]
+    assert calls[0][1] == (9, '{"script_model":"a"}', 33)
+
+
+def test_postgres_run_storage_delete_run_scopes_by_workspace(monkeypatch):
+    storage = PostgresRunStorage()
+    calls: list[tuple[str, tuple[object, ...]]] = []
+
+    async def _fake_fetch_one(query: str, *args: object):
+        calls.append((query, args))
+        return None
+
+    monkeypatch.setattr("creator_service.postgres_run_storage.fetch_one", _fake_fetch_one)
+
+    deleted = run(storage.delete_run(12, workspace_id=5))
+
+    assert deleted is False
+    assert len(calls) == 1
+    assert (
+        "DELETE FROM creator_runs WHERE id = $1 AND workspace_id = $2 RETURNING id" in calls[0][0]
+    )
+    assert calls[0][1] == (12, 5)
+
+
 def test_postgres_project_storage_fetch_project_scopes_by_workspace(monkeypatch):
     storage = PostgresProjectStorage()
     calls: list[tuple[str, tuple[object, ...]]] = []
@@ -120,6 +187,65 @@ def test_inmemory_run_storage_enforces_workspace_filtering_behavior():
     assert [row["id"] for row in rows] == [run_a["id"]]
     assert rows[0]["workspace_id"] == 11
     assert run(storage.get_run(run_b["id"], workspace_id=11)) is None
+
+
+def test_inmemory_conditional_update_run_scopes_by_workspace():
+    storage = InMemoryRunStorage()
+    created = run(
+        storage.create_run(
+            {
+                "project_id": 1,
+                "workspace_id": 100,
+                "current_stage": "SCRIPT_REVIEW",
+                "status": "pending",
+                "style_preset": "default",
+            }
+        )
+    )
+
+    ok, row = run(
+        storage.conditional_update_run(
+            created["id"],
+            {"current_stage": "SCRIPT_GENERATING"},
+            frozenset({"SCRIPT_REVIEW"}),
+            workspace_id=200,
+        )
+    )
+
+    assert ok is False
+    assert row is None
+    unchanged = run(storage.get_run(created["id"], workspace_id=100))
+    assert unchanged is not None
+    assert unchanged["current_stage"] == "SCRIPT_REVIEW"
+
+
+def test_inmemory_merge_model_defaults_and_delete_run_scope_by_workspace():
+    storage = InMemoryRunStorage()
+    created = run(
+        storage.create_run(
+            {
+                "project_id": 1,
+                "workspace_id": 100,
+                "current_stage": "IDEA_READY",
+                "status": "pending",
+                "style_preset": "default",
+                "model_defaults_json": "{}",
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match=f"Run {created['id']} not found"):
+        run(
+            storage.merge_model_defaults(
+                created["id"],
+                '{"script_model":"x"}',
+                workspace_id=200,
+            )
+        )
+
+    deleted = run(storage.delete_run(created["id"], workspace_id=200))
+    assert deleted is False
+    assert run(storage.get_run(created["id"], workspace_id=100)) is not None
 
 
 def test_run_service_advance_stage_conflict_with_inmemory_storage_cas(monkeypatch):

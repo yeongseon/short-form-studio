@@ -93,8 +93,13 @@ class StubRunStorage:
         self.run_service = run_service
 
     async def conditional_update_run(
-        self, run_id: int, updates: dict[str, object], expected_stages: frozenset[str]
+        self,
+        run_id: int,
+        updates: dict[str, object],
+        expected_stages: frozenset[str],
+        workspace_id: int | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
+        _ = workspace_id
         run = self.run_service.runs.get(run_id)
         if run is None:
             return False, None

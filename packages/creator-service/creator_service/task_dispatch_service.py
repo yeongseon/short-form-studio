@@ -260,6 +260,7 @@ class TaskDispatchService:
             run_id,
             updates,
             expected_stages=expected_stages,
+            workspace_id=workspace_id,
         )
         if not ok:
             if workspace_id_for_reservation is not None and quota_operation_type is not None:
@@ -299,6 +300,7 @@ class TaskDispatchService:
                 run_id,
                 {"current_stage": rollback_stage, "restart_from": rollback_restart_from},
                 expected_stages=frozenset({target_stage}),
+                workspace_id=workspace_id,
             )
             raise HTTPException(status_code=503, detail=enqueue_error_detail) from None
 
@@ -335,6 +337,7 @@ class TaskDispatchService:
                 run_id,
                 {"current_stage": rollback_stage, "restart_from": rollback_restart_from},
                 expected_stages=frozenset({target_stage}),
+                workspace_id=workspace_id,
             )
             raise HTTPException(status_code=503, detail=enqueue_error_detail) from None
         return {

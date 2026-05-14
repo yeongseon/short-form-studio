@@ -127,6 +127,7 @@ class StageReviewService:
             run_id,
             {"current_stage": target.value},
             frozenset({stage.value}),
+            workspace_id=workspace_id,
         )
 
         if not ok:

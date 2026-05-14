@@ -243,3 +243,99 @@ def test_conditional_update_run_increments_version_and_blocks_stale_lifecycle_wr
         )
     )
     assert stale is None
+
+
+@pytest.mark.parametrize(
+    ("method_name", "args"),
+    [
+        ("restart_run", (RunStage.SCRIPT_GENERATING.value,)),
+        ("advance_stage", (RunStage.SCRIPT_GENERATING.value,)),
+        ("stop_run", ()),
+        ("resume_run", ()),
+    ],
+)
+def test_lifecycle_cas_miss_raises_not_found_when_run_deleted(
+    method_name: str, args: tuple[str, ...]
+) -> None:
+    storage = InMemoryRunStorage()
+    service = RunService(storage)
+
+    current_stage = (
+        RunStage.SCRIPT_GENERATING.value if method_name == "stop_run" else RunStage.IDEA_READY.value
+    )
+    status = "cancelled" if method_name == "resume_run" else "pending"
+    created = asyncio.run(
+        service.create_run(
+            project_id=30,
+            model_defaults=None,
+            style_preset="default",
+            current_stage=current_stage,
+            status=status,
+            workspace_id=5,
+        )
+    )
+
+    original_update = storage.update_run
+
+    async def deleting_update_run(
+        run_id: int,
+        updates: dict[str, object],
+        *,
+        workspace_id: int | None = None,
+        expected_version: int | None = None,
+    ):
+        if expected_version is not None:
+            storage._rows.pop(run_id, None)
+            return None
+        return await original_update(
+            run_id,
+            updates,
+            workspace_id=workspace_id,
+            expected_version=expected_version,
+        )
+
+    storage.update_run = deleting_update_run  # type: ignore[method-assign]
+    method = getattr(service, method_name)
+
+    with pytest.raises(ValueError, match=f"Run {created.id} not found"):
+        asyncio.run(method(created.id, *args, workspace_id=5))
+
+
+def test_restart_run_cas_miss_stale_still_raises_conflict() -> None:
+    storage = InMemoryRunStorage()
+    service = RunService(storage)
+
+    created = asyncio.run(
+        service.create_run(
+            project_id=31,
+            model_defaults=None,
+            style_preset="default",
+            current_stage=RunStage.IDEA_READY.value,
+            workspace_id=8,
+        )
+    )
+
+    original_update = storage.update_run
+
+    async def stale_update_run(
+        run_id: int,
+        updates: dict[str, object],
+        *,
+        workspace_id: int | None = None,
+        expected_version: int | None = None,
+    ):
+        if expected_version is not None:
+            await original_update(run_id, {"status": "running"}, workspace_id=workspace_id)
+        return await original_update(
+            run_id,
+            updates,
+            workspace_id=workspace_id,
+            expected_version=expected_version,
+        )
+
+    storage.update_run = stale_update_run  # type: ignore[method-assign]
+
+    with pytest.raises(ConflictError, match="stale version"):
+        asyncio.run(
+            service.restart_run(created.id, RunStage.SCRIPT_GENERATING.value, workspace_id=8)
+        )

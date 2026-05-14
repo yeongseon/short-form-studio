@@ -12,7 +12,7 @@ from creator_service.task_dispatch_service import (
 
 class _FakeRunStorage:
     def __init__(self) -> None:
-        self.calls: list[tuple[int, dict[str, object], frozenset[str]]] = []
+        self.calls: list[tuple[int, dict[str, object], frozenset[str], int | None]] = []
 
     async def conditional_update_run(
         self,
@@ -20,8 +20,9 @@ class _FakeRunStorage:
         updates: dict[str, object],
         *,
         expected_stages: frozenset[str],
+        workspace_id: int | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
-        self.calls.append((run_id, updates, expected_stages))
+        self.calls.append((run_id, updates, expected_stages, workspace_id))
         return True, {"current_stage": "SCRIPT_REVIEW"}
 
 
@@ -316,8 +317,10 @@ def test_cas_dispatch_with_rollback_releases_quota_on_stage_conflict(
             _updates: dict[str, object],
             *,
             expected_stages: frozenset[str],
+            workspace_id: int | None = None,
         ) -> tuple[bool, dict[str, object] | None]:
             _ = expected_stages
+            _ = workspace_id
             return False, {"current_stage": "SCRIPT_GENERATING"}
 
     class _ConflictRunService:

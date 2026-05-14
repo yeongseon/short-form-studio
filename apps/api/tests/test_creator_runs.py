@@ -158,7 +158,9 @@ class StubRunStorage:
         run_id: int,
         updates: dict[str, object],
         expected_stages: frozenset[str],
+        workspace_id: int | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
+        _ = workspace_id
         self.conditional_update_calls.append(
             {
                 "run_id": run_id,
@@ -1056,7 +1058,8 @@ async def test_generate_script_cas_conflict(client, stub_generate_services):
     # initial get_run and the CAS call.  Because the route reads once then CAS,
     # we override conditional_update_run to simulate conflict.
 
-    async def cas_conflict(run_id, updates, expected_stages):
+    async def cas_conflict(run_id, updates, expected_stages, workspace_id=None):
+        _ = workspace_id
         # Return conflict: stage changed to SCRIPT_GENERATING
         return False, {"current_stage": "SCRIPT_GENERATING", "id": run_id}
 
@@ -1339,7 +1342,8 @@ async def test_generate_visual_plan_cas_conflict(client, stub_generate_visual_pl
     run_svc, dispatcher = stub_generate_visual_plan_services
     run_svc.runs[35] = _make_run(35, "VISUAL_PLAN_SETUP")
 
-    async def cas_conflict(run_id, updates, expected_stages):
+    async def cas_conflict(run_id, updates, expected_stages, workspace_id=None):
+        _ = workspace_id
         return False, {"current_stage": "VISUAL_PLAN_GENERATING", "id": run_id}
 
     run_svc.storage.conditional_update_run = cas_conflict
@@ -1583,7 +1587,8 @@ async def test_generate_visual_assets_cas_conflict(client, stub_generate_visual_
     run_svc, dispatcher = stub_generate_visual_assets_services
     run_svc.runs[65] = _make_run(65, "VISUAL_PLAN_REVIEW")
 
-    async def cas_conflict(run_id, updates, expected_stages):
+    async def cas_conflict(run_id, updates, expected_stages, workspace_id=None):
+        _ = workspace_id
         return False, {"current_stage": "VISUAL_ASSET_GENERATING", "id": run_id}
 
     run_svc.storage.conditional_update_run = cas_conflict
@@ -2442,7 +2447,8 @@ async def test_generate_audio_cas_conflict(client, stub_generate_audio_services)
     run_svc, dispatcher = stub_generate_audio_services
     run_svc.runs[115] = _make_audio_run(115, "VISUAL_ASSET_REVIEW")
 
-    async def cas_conflict(run_id, updates, expected_stages):
+    async def cas_conflict(run_id, updates, expected_stages, workspace_id=None):
+        _ = workspace_id
         return False, {"current_stage": "AUDIO_GENERATING", "id": run_id}
 
     run_svc.storage.conditional_update_run = cas_conflict
@@ -2687,7 +2693,8 @@ async def test_generate_subtitles_cas_conflict(client, stub_generate_subtitles_s
     run_svc, dispatcher = stub_generate_subtitles_services
     run_svc.runs[125] = _make_subtitle_run(125, "AUDIO_GENERATING")
 
-    async def cas_conflict(run_id, updates, expected_stages):
+    async def cas_conflict(run_id, updates, expected_stages, workspace_id=None):
+        _ = workspace_id
         return False, {"current_stage": "SUBTITLE_GENERATING", "id": run_id}
 
     run_svc.storage.conditional_update_run = cas_conflict
@@ -2911,7 +2918,8 @@ async def test_render_cas_conflict(client, stub_generate_render_services):
     run_svc, dispatcher = stub_generate_render_services
     run_svc.runs[134] = _make_render_run(134, "SUBTITLE_GENERATING")
 
-    async def cas_conflict(run_id, updates, expected_stages):
+    async def cas_conflict(run_id, updates, expected_stages, workspace_id=None):
+        _ = workspace_id
         return False, {"current_stage": "RENDER_GENERATING", "id": run_id}
 
     run_svc.storage.conditional_update_run = cas_conflict
