@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import ClassVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class UsageEvent(BaseModel):
-    id: int
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    id: int = Field(ge=1)
     workspace_id: int | None = None
     project_id: int | None = None
     run_id: int | None = None
@@ -16,22 +19,26 @@ class UsageEvent(BaseModel):
     input_tokens: int | None = None
     output_tokens: int | None = None
     image_count: int | None = None
-    audio_seconds: float | None = None
-    estimated_cost_usd: float | None = None
+    audio_seconds: float | None = Field(default=None, ge=0)
+    estimated_cost_usd: float | None = Field(default=None, ge=0)
     created_at: datetime
 
     @classmethod
     def from_row(cls, row: dict[str, object]) -> UsageEvent:
-        return cls.model_validate(row)
+        mapped = dict(row)
+        _ = mapped.pop("cost_config_version", None)
+        return cls.model_validate(mapped)
 
 
 class WorkspaceQuota(BaseModel):
-    id: int
-    workspace_id: int
-    monthly_llm_calls: int = 1000
-    monthly_image_generations: int = 200
-    monthly_tts_requests: int = 3600
-    monthly_cost_usd: float = 50.0
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    id: int = Field(ge=1)
+    workspace_id: int = Field(ge=1)
+    monthly_llm_calls: int = Field(ge=0, default=1000)
+    monthly_image_generations: int = Field(ge=0, default=200)
+    monthly_tts_requests: int = Field(ge=0, default=3600)
+    monthly_cost_usd: float = Field(ge=0, default=50.0)
     created_at: datetime
     updated_at: datetime
 
@@ -41,10 +48,12 @@ class WorkspaceQuota(BaseModel):
 
 
 class UsageSummary(BaseModel):
-    total_llm_calls: int
-    total_image_generations: int
-    total_tts_seconds: float
-    total_estimated_cost_usd: float
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    total_llm_calls: int = Field(ge=0)
+    total_image_generations: int = Field(ge=0)
+    total_tts_seconds: float = Field(ge=0)
+    total_estimated_cost_usd: float = Field(ge=0)
     by_provider: dict[str, float]
     by_operation: dict[str, int]
     period_start: datetime

@@ -1,16 +1,21 @@
 from datetime import datetime
+from typing import ClassVar
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class VisualOverride(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
     type: Literal["prompt", "image_url", "none"]
     value: str | None = None
 
 
 class ScriptSection(BaseModel):
-    section_id: str
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    section_id: str = Field(max_length=128)
     type: str
     text: str
     display_text: str | None = None
@@ -25,8 +30,10 @@ class ScriptSection(BaseModel):
 
 
 class ScriptDraft(BaseModel):
-    id: int
-    run_id: int
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    id: int = Field(ge=1)
+    run_id: int = Field(ge=1)
     source_type: Literal[
         "generated_by_model",
         "pasted_markdown",
@@ -36,11 +43,11 @@ class ScriptDraft(BaseModel):
     ]
     markdown_content: str | None = None
     structured_script: list[ScriptSection] | None = None
-    version: int = 1
+    version: int = Field(ge=0, default=1)
     created_at: datetime
 
     @classmethod
-    def from_dict(cls, data: dict) -> "ScriptDraft":
+    def from_dict(cls, data: dict[str, object]) -> "ScriptDraft":
         return cls.model_validate(data)
 
     def to_json(self) -> str:

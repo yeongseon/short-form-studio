@@ -1,12 +1,15 @@
 from datetime import datetime
+from typing import ClassVar
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class User(BaseModel):
-    id: int
-    email: str
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    id: int = Field(ge=1)
+    email: str = Field(max_length=320)
     name: str | None = None
     workspace_id: int | None = None
     auth_provider: str = "api_key"
@@ -16,16 +19,20 @@ class User(BaseModel):
 
 
 class Workspace(BaseModel):
-    id: int
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    id: int = Field(ge=1)
     name: str
-    slug: str
-    owner_id: int
+    slug: str = Field(max_length=64)
+    owner_id: int = Field(ge=1)
     created_at: datetime
     updated_at: datetime
 
 
 class WorkspaceMember(BaseModel):
-    workspace_id: int
-    user_id: int
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    workspace_id: int = Field(ge=1)
+    user_id: int = Field(ge=1)
     role: Literal["member", "admin", "owner"] = "member"
     joined_at: datetime

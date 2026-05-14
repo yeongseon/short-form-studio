@@ -1,11 +1,14 @@
 from datetime import datetime
+from typing import ClassVar
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class Project(BaseModel):
-    id: int
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    id: int = Field(ge=1)
     workspace_id: int | None = None
     title: str | None = Field(default=None, max_length=200)
     source_type: Literal["idea", "markdown", "pasted_json", "url"] = "idea"

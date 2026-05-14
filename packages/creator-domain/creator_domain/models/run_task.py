@@ -1,20 +1,23 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import ClassVar
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class RunTask(BaseModel):
-    id: int
-    run_id: int
-    task_type: str
-    celery_task_id: str
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    id: int = Field(ge=1)
+    run_id: int = Field(ge=1)
+    task_type: str = Field(max_length=64)
+    celery_task_id: str = Field(max_length=256)
     status: Literal["queued", "pending", "running", "success", "failed", "revoked", "rejected"] = (
         "queued"
     )
-    attempt: int = 1
+    attempt: int = Field(ge=1, default=1)
     started_at: datetime | None = None
     finished_at: datetime | None = None
     error_code: str | None = None

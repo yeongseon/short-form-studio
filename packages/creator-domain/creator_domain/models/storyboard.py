@@ -10,8 +10,9 @@ Key invariant: 1 paragraph = 1 image = 1 audio = N subtitles.
 from __future__ import annotations
 
 from enum import Enum
+from typing import ClassVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ParagraphStatus(str, Enum):
@@ -27,6 +28,8 @@ class ParagraphStatus(str, Enum):
 
 
 class StaleFlags(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
     """Tracks which downstream artifacts are stale after an upstream edit."""
 
     prompt_stale: bool = False
@@ -38,8 +41,10 @@ class StaleFlags(BaseModel):
 class StoryboardParagraph(BaseModel):
     """One paragraph in the unified storyboard view."""
 
-    section_id: str
-    order: int
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    section_id: str = Field(max_length=128)
+    order: int = Field(ge=0)
     text: str
     display_text: str | None = None
     image_prompt: str | None = None
@@ -52,7 +57,7 @@ class StoryboardParagraph(BaseModel):
     stale_flags: StaleFlags | None = None
 
     # Scene/asset metadata for cross-reference
-    scene_id: str | None = None
+    scene_id: str | None = Field(default=None, max_length=128)
     image_asset_id: int | None = None
     audio_artifact_id: int | None = None
     subtitle_artifact_id: int | None = None
@@ -61,7 +66,9 @@ class StoryboardParagraph(BaseModel):
 class StoryboardResponse(BaseModel):
     """Full storyboard data for a run."""
 
-    run_id: int
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    run_id: int = Field(ge=1)
     paragraphs: list[StoryboardParagraph]
     render_ready: bool = False
     total_paragraphs: int = 0

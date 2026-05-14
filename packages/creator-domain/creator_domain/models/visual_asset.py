@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import ClassVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class VisualAsset(BaseModel):
-    id: int
-    run_id: int
-    scene_id: str
-    version: int = 1
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+
+    id: int = Field(ge=1)
+    run_id: int = Field(ge=1)
+    scene_id: str = Field(max_length=128)
+    version: int = Field(ge=0, default=1)
     asset_path: str
     prompt_snapshot: str | None = None
     model_used: str | None = None
