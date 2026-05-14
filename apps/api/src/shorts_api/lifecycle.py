@@ -112,6 +112,10 @@ def _mark_shutdown() -> None:
 def _handle_sigterm(_signum: int, _frame: object | None) -> None:
     logger.info("SIGTERM received; enabling graceful shutdown mode")
     _mark_shutdown()
+    # Chain to previous handler (e.g. Uvicorn's) so the server can exit gracefully
+    prev = _previous_sigterm_handler
+    if callable(prev):
+        prev(_signum, _frame)
 
 
 @asynccontextmanager

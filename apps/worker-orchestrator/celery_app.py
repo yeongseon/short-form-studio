@@ -57,6 +57,10 @@ def _handle_sigterm(_signum: int, _frame: object | None) -> None:
     logging.getLogger(__name__).info("SIGTERM received; beginning Celery graceful shutdown")
 
 
+def is_shutting_down() -> bool:
+    """Check if a graceful shutdown has been requested."""
+    return _SHUTDOWN_REQUESTED
+
 def _apply_resource_limits() -> None:
     memory_limit_bytes = MAX_MEMORY_MB * 1024 * 1024
     resource.setrlimit(resource.RLIMIT_AS, (memory_limit_bytes, memory_limit_bytes))
@@ -107,7 +111,10 @@ celery_app.conf.update(
 )
 
 validate_production_config(service_kind="worker")
-signal.signal(signal.SIGTERM, _handle_sigterm)
+try:
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+except ValueError:
+    logging.getLogger(__name__).debug("Skipping SIGTERM handler: not in main thread")
 
 
 @after_setup_logger.connect

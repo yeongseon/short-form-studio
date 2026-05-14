@@ -122,6 +122,11 @@ async def _run_task_inner(
     execute: Callable[[TaskContext], Awaitable[TaskResult]],
 ) -> dict[str, object]:
     """Inner async execution with full lifecycle management."""
+    # Reject new work if graceful shutdown is in progress
+    from celery_app import is_shutting_down
+    if is_shutting_down():
+        logger.info("Rejecting task %s: graceful shutdown in progress", task_id)
+        raise Ignore()
     # Reset asset version tracking to isolate from import-time loads
     clear_loaded_asset_versions()
     start_time = datetime.now(timezone.utc)

@@ -19,3 +19,11 @@ def test_sigterm_handler_sets_shutdown_flag() -> None:
     celery_module._SHUTDOWN_REQUESTED = False
     celery_module._handle_sigterm(signal.SIGTERM, None)
     assert celery_module._SHUTDOWN_REQUESTED is True
+
+
+def test_is_shutting_down_returns_flag_state() -> None:
+    celery_module._SHUTDOWN_REQUESTED = False
+    assert celery_module.is_shutting_down() is False
+    celery_module._SHUTDOWN_REQUESTED = True
+    assert celery_module.is_shutting_down() is True
+    celery_module._SHUTDOWN_REQUESTED = False
