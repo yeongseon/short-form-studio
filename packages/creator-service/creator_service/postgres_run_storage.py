@@ -126,6 +126,7 @@ class PostgresRunStorage:
 
         keys = list(updates.keys())
         assignments = ", ".join(f"{key} = ${idx}" for idx, key in enumerate(keys, start=3))
+        assignments = f"{assignments}, version = version + 1"
         values = [run_id, list(expected_stages), *[updates[key] for key in keys]]
         query = (
             f"UPDATE creator_runs SET {assignments} "

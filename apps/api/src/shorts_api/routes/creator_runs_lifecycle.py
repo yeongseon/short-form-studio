@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from creator_service.artifact_download_service import artifact_download_service
-from creator_service.run_service import run_service
+from creator_service.run_service import ConflictError, run_service
 from fastapi import APIRouter, Depends, HTTPException
 
 if TYPE_CHECKING:
@@ -31,6 +31,8 @@ async def stop_run(
 
     try:
         updated = await run_service.stop_run(run_id, workspace_id=user.workspace_id)
+    except ConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         detail = str(exc)
         if "not found" in detail.lower():
@@ -47,6 +49,8 @@ async def resume_run(
     user, _ = access
     try:
         updated = await run_service.resume_run(run_id, workspace_id=user.workspace_id)
+    except ConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         detail = str(exc)
         if "not found" in detail.lower():

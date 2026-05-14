@@ -10,7 +10,7 @@ from creator_service.task_dispatch_service import (
     dispatch_generate_script,
 )
 from creator_service.project_service import project_service
-from creator_service.run_service import run_service
+from creator_service.run_service import ConflictError, run_service
 from creator_service.stage_review_service import stage_review_service
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -154,6 +154,8 @@ async def restart_run(
             from_stage=request.stage,
             workspace_id=user.workspace_id,
         )
+    except ConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         detail = str(exc)
         if "not found" in detail.lower():

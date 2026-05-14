@@ -133,6 +133,7 @@ class InMemoryRunStorage:
         if row.get("current_stage") not in expected_stages:
             return False, dict(row)
         row.update(updates)
+        row["version"] = int(row.get("version") or 0) + 1
         row["updated_at"] = datetime.now(timezone.utc)
         self._rows[run_id] = row
         return True, dict(row)

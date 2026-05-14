@@ -6,6 +6,7 @@ from typing import Literal
 
 import pytest
 import shorts_api.routes.creator_runs_utils as creator_runs_utils
+from creator_service.run_service import ConflictError
 from fastapi.routing import APIRoute
 from pydantic import BaseModel
 from shorts_api.main import projects_router, runs_router
@@ -45,6 +46,7 @@ class StubRunService:
         self.delete_run_calls: list[int] = []
         self.list_runs_by_project_calls: list[int] = []
         self.resume_errors: dict[int, Exception] = {}
+        self.stop_errors: dict[int, Exception] = {}
         self.go_back_errors: dict[int, Exception] = {}
         self.update_model_defaults_errors: dict[int, Exception] = {}
 
@@ -54,6 +56,9 @@ class StubRunService:
 
     async def stop_run(self, run_id: int, workspace_id: int | None = None) -> StubPipelineRun:
         self.stop_run_calls.append(run_id)
+        error = self.stop_errors.get(run_id)
+        if error is not None:
+            raise error
         run = self.runs.get(run_id)
         if run is None:
             raise ValueError("Run not found")
@@ -300,6 +305,30 @@ async def test_resume_run_wrong_state(client, stub_lifecycle_services):
 
     assert response.status_code == 400
     assert "can only resume" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_stop_run_conflict_returns_409(client, stub_lifecycle_services):
+    run_svc, _, _, _ = stub_lifecycle_services
+    run_svc.runs[112] = _make_run(112)
+    run_svc.stop_errors[112] = ConflictError("Run 112 has stale version")
+
+    response = await client.post("/api/creator/runs/112/stop")
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Run 112 has stale version"}
+
+
+@pytest.mark.asyncio
+async def test_resume_run_conflict_returns_409(client, stub_lifecycle_services):
+    run_svc, _, _, _ = stub_lifecycle_services
+    run_svc.runs[113] = _make_run(113, status="cancelled", stage="SCRIPT_REVIEW")
+    run_svc.resume_errors[113] = ConflictError("Run 113 has stale version")
+
+    response = await client.post("/api/creator/runs/113/resume")
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Run 113 has stale version"}
 
 
 @pytest.mark.asyncio

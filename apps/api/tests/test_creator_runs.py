@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Literal, cast
 
 import pytest
+from creator_service.run_service import ConflictError
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ValidationError
 from shorts_api.auth import CurrentUser, require_project_access, require_run_access
@@ -45,6 +46,7 @@ class StubRunService:
         self.advance_stage_calls: list[dict[str, object]] = []
         self.update_model_defaults_calls: list[dict[str, object]] = []
         self.runs: dict[int, StubPipelineRun] = {}
+        self.restart_errors: dict[int, Exception] = {}
         self.storage = StubRunStorage(self)
         self._next_id = 1
 
@@ -94,6 +96,9 @@ class StubRunService:
         self, run_id: int, from_stage: str, workspace_id: int | None = None
     ) -> StubPipelineRun:
         self.restart_run_calls.append({"run_id": run_id, "from_stage": from_stage})
+        error = self.restart_errors.get(run_id)
+        if error is not None:
+            raise error
 
         run = self.runs.get(run_id)
         if run is None:
@@ -505,6 +510,34 @@ async def test_restart_run_not_found(client, stub_run_service: StubRunService):
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Run not found"}
+
+
+@pytest.mark.asyncio
+async def test_restart_run_conflict_returns_409(client, stub_run_service: StubRunService):
+    now = datetime.now(timezone.utc)
+    stub_run_service.runs[4243] = StubPipelineRun(
+        id=4243,
+        project_id=2,
+        current_stage="IDEA_READY",
+        status="pending",
+        review_stage=None,
+        restart_from=None,
+        model_defaults=None,
+        metadata=None,
+        style_preset="default",
+        started_at=None,
+        finished_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    stub_run_service.restart_errors[4243] = ConflictError("Run 4243 has stale version")
+
+    response = await client.post(
+        "/api/creator/runs/4243/restart", json={"stage": "SCRIPT_GENERATING"}
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Run 4243 has stale version"}
 
 
 @pytest.fixture

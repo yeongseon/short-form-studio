@@ -207,3 +207,39 @@ def test_advance_stage_raises_conflict_for_stale_version() -> None:
 
     with pytest.raises(ConflictError, match="stale version"):
         asyncio.run(service.advance_stage(created.id, RunStage.SCRIPT_REVIEW.value, workspace_id=1))
+
+
+def test_conditional_update_run_increments_version_and_blocks_stale_lifecycle_write() -> None:
+    storage = InMemoryRunStorage()
+    service = RunService(storage)
+
+    created = asyncio.run(
+        service.create_run(
+            project_id=22,
+            model_defaults=None,
+            style_preset="default",
+            current_stage=RunStage.SCRIPT_REVIEW.value,
+            workspace_id=1,
+        )
+    )
+
+    ok, updated = asyncio.run(
+        storage.conditional_update_run(
+            created.id,
+            {"current_stage": RunStage.SCRIPT_GENERATING.value},
+            frozenset({RunStage.SCRIPT_REVIEW.value}),
+        )
+    )
+    assert ok is True
+    assert updated is not None
+    assert updated["version"] == 1
+
+    stale = asyncio.run(
+        storage.update_run(
+            created.id,
+            {"status": "cancelled"},
+            workspace_id=1,
+            expected_version=0,
+        )
+    )
+    assert stale is None
