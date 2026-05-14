@@ -154,6 +154,25 @@ class StubRevokeTasks:
         self.calls.append(run_id)
 
 
+class StubCollectCeleryIds:
+    """Stub for _collect_active_celery_ids — returns empty list by default."""
+    def __init__(self) -> None:
+        self.calls: list[int] = []
+
+    async def __call__(self, run_id: int) -> list[str]:
+        self.calls.append(run_id)
+        return []
+
+
+class StubRevokeCeleryIds:
+    """Stub for _revoke_celery_ids — tracks calls."""
+    def __init__(self) -> None:
+        self.calls: list[tuple[list[str], int]] = []
+
+    async def __call__(self, celery_ids: list[str], run_id: int) -> None:
+        self.calls.append((celery_ids, run_id))
+
+
 class StubArtifactLifecycleService:
     def __init__(self) -> None:
         self.delete_artifacts_for_run_calls: list[int] = []
@@ -191,6 +210,12 @@ def stub_lifecycle_services(
             monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
             monkeypatch.setitem(
                 route.endpoint.__globals__, "_revoke_active_tasks_for_run", revoke_tasks
+            )
+            monkeypatch.setitem(
+                route.endpoint.__globals__, "_collect_active_celery_ids", StubCollectCeleryIds()
+            )
+            monkeypatch.setitem(
+                route.endpoint.__globals__, "_revoke_celery_ids", StubRevokeCeleryIds()
             )
             monkeypatch.setitem(
                 route.endpoint.__globals__, "artifact_download_service", artifact_lifecycle_svc
@@ -461,7 +486,8 @@ async def test_delete_run_success_with_artifact_cleanup(client, stub_lifecycle_s
 
     assert response.status_code == 200
     assert response.json() == {"deleted": True, "run_id": 17}
-    assert revoke_tasks.calls == [17]
+    # delete_run now uses _collect_active_celery_ids + _revoke_celery_ids (not _revoke_active_tasks_for_run)
+    assert revoke_tasks.calls == []
     assert artifact_lifecycle_svc.delete_artifacts_for_run_calls == [17]
     assert run_svc.delete_run_calls == [17]
     assert run_svc.delete_run_workspace_ids == [1]

@@ -13,7 +13,9 @@ if TYPE_CHECKING:
 
 from shorts_api.routes.creator_runs_core import UpdateModelDefaultsRequest
 from shorts_api.routes.creator_runs_utils import (
+    _collect_active_celery_ids,
     _revoke_active_tasks_for_run,
+    _revoke_celery_ids,
     validate_model_defaults,
 )
 from shorts_api.auth import CurrentUser, require_run_access
@@ -105,6 +107,9 @@ async def delete_run(
 ) -> dict[str, object]:
     user, run = access
 
+    # Capture active task IDs BEFORE delete (CASCADE removes task rows)
+    celery_ids = await _collect_active_celery_ids(run.id)
+
     try:
         deleted = await run_service.delete_run(run_id, workspace_id=user.workspace_id)
     except ValueError as exc:
@@ -112,7 +117,7 @@ async def delete_run(
     if not deleted:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    await _revoke_active_tasks_for_run(run.id)
+    await _revoke_celery_ids(celery_ids, run.id)
     await artifact_download_service.delete_artifacts_for_run(run_id)
 
     return {"deleted": True, "run_id": run_id}
