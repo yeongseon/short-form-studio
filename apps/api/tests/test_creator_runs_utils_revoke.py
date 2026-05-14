@@ -12,6 +12,9 @@ class _TrackingServiceStub:
     def __init__(self) -> None:
         self.marked: list[str] = []
 
+    async def get_active_celery_ids(self, _run_id: int) -> list[str]:
+        return ["ok-1", "fail-1", "ok-2"]
+
     async def revoke_active_tasks(self, _run_id: int) -> list[str]:
         return ["ok-1", "fail-1", "ok-2"]
 

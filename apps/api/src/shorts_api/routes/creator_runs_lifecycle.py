@@ -107,7 +107,12 @@ async def delete_run(
 ) -> dict[str, object]:
     user, run = access
 
-    # Capture active task IDs BEFORE delete (CASCADE removes task rows)
+    # Stop run first to prevent new task dispatch, then collect active IDs
+    # before CASCADE removes task rows on delete.
+    try:
+        await run_service.stop_run(run_id, workspace_id=user.workspace_id)
+    except (ConflictError, ValueError):
+        pass  # Already stopped or in terminal state — safe to proceed
     celery_ids = await _collect_active_celery_ids(run.id)
 
     try:

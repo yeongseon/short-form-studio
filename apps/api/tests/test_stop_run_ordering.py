@@ -165,3 +165,46 @@ async def test_delete_run_not_deleted_skips_revoke(client: AsyncClient, monkeypa
     assert response.status_code == 404
     assert revoke_called is False
     assert artifacts_called is False
+
+
+# --- Unit tests for helper functions ---
+
+@pytest.mark.asyncio
+async def test_collect_active_celery_ids_returns_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    from shorts_api.routes.creator_runs_utils import _collect_active_celery_ids
+
+    class _MockTracking:
+        async def get_active_celery_ids(self, run_id):
+            return ["id-1", "id-2"]
+
+    monkeypatch.setattr(
+        "creator_service.task_tracking_service.task_tracking_service",
+        _MockTracking(),
+    )
+
+    result = await _collect_active_celery_ids(42)
+    assert result == ["id-1", "id-2"]
+
+
+@pytest.mark.asyncio
+async def test_collect_active_celery_ids_returns_empty_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from shorts_api.routes.creator_runs_utils import _collect_active_celery_ids
+
+    class _MockTracking:
+        async def get_active_celery_ids(self, run_id):
+            raise RuntimeError("DB down")
+
+    monkeypatch.setattr(
+        "creator_service.task_tracking_service.task_tracking_service",
+        _MockTracking(),
+    )
+
+    result = await _collect_active_celery_ids(42)
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_revoke_celery_ids_empty_list_is_noop() -> None:
+    from shorts_api.routes.creator_runs_utils import _revoke_celery_ids
+    # Should not raise or call anything
+    await _revoke_celery_ids([], run_id=1)
