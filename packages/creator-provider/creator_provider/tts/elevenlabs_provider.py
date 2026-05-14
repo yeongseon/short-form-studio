@@ -45,7 +45,10 @@ class ElevenLabsProvider(TTSProvider):
         similarity_boost = merged_params.get("similarity_boost", 0.75)
         output_format = merged_params.get("output_format", "mp3_44100_128")
 
-        url = f"{self.endpoint}/v1/text-to-speech/{urllib.parse.quote(voice_id, safe=str())}"
+        if not voice_id or not voice_id.strip():
+            raise ProviderError("voice_id must not be empty")
+
+        url = f"{self.endpoint}/v1/text-to-speech/{urllib.parse.quote(voice_id, safe='')}"
         headers = {
             "xi-api-key": self.api_key,
             "Content-Type": "application/json",

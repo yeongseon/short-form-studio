@@ -69,3 +69,15 @@ async def test_special_chars_voice_id_encoded(provider: ElevenLabsProvider, monk
     url = captured_urls[0]
     assert "/bad/" not in url
     assert "?" not in url.split("/v1/text-to-speech/")[1]
+
+
+@pytest.mark.asyncio
+async def test_empty_voice_id_raises_error(provider: ElevenLabsProvider) -> None:
+    """Empty or whitespace-only voice_id must raise ProviderError."""
+    from creator_provider.exceptions import ProviderError
+
+    with pytest.raises(ProviderError, match="voice_id must not be empty"):
+        await provider.generate(text="hello", voice="")
+
+    with pytest.raises(ProviderError, match="voice_id must not be empty"):
+        await provider.generate(text="hello", voice="   ")
