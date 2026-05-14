@@ -378,8 +378,8 @@ class RunService:
             raise ConflictError(f"Run {run_id} has stale version")
         return PipelineRun.from_row(row)
 
-    async def go_back(self, run_id: int) -> PipelineRun:
-        run = await self.get_run(run_id)
+    async def go_back(self, run_id: int, workspace_id: int | None = None) -> PipelineRun:
+        run = await self.get_run(run_id, workspace_id=workspace_id)
         if run is None:
             raise ValueError(f"Run {run_id} not found")
 
@@ -408,20 +408,28 @@ class RunService:
         if not ok:
             if row is None:
                 raise ValueError(f"Run {run_id} not found")
-            raise RuntimeError(
+            raise ConflictError(
                 f"Stage conflict: expected '{current.value}' but run is at '{row.get('current_stage')}'"
             )
         if row is None:
             raise ValueError(f"Run {run_id} not found")
         return PipelineRun.from_row(row)
 
-    async def update_model_defaults(self, run_id: int, updates: dict[str, str]) -> PipelineRun:
+    async def update_model_defaults(
+        self, run_id: int, updates: dict[str, str], workspace_id: int | None = None
+    ) -> PipelineRun:
         """Atomically merge model default updates (no read-merge-write race)."""
+        run = await self.get_run(run_id, workspace_id=workspace_id)
+        if run is None:
+            raise ValueError(f"Run {run_id} not found")
         row = await self.storage.merge_model_defaults(run_id, json.dumps(updates))
         return PipelineRun.from_row(row)
 
-    async def delete_run(self, run_id: int) -> bool:
+    async def delete_run(self, run_id: int, workspace_id: int | None = None) -> bool:
         """Delete a run and return True if deleted."""
+        run = await self.get_run(run_id, workspace_id=workspace_id)
+        if run is None:
+            raise ValueError(f"Run {run_id} not found")
         return await self.storage.delete_run(run_id)
 
 

@@ -71,7 +71,7 @@ async def generate_visual_plan_trigger(
     request: GenerateVisualPlanRequest,
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
-    _, run = access
+    user, run = access
     if run.current_stage == "VISUAL_PLAN_GENERATING" and await _has_active_tasks_for_run(run.id):
         raise HTTPException(status_code=409, detail="Visual plan generation already in progress")
 
@@ -99,6 +99,7 @@ async def generate_visual_plan_trigger(
         rollback_restart_from=run.restart_from,
         enqueue_error_detail="Failed to enqueue visual plan generation task",
         quota_operation_type="llm",
+        workspace_id=user.workspace_id,
     )
 
 
@@ -108,7 +109,7 @@ async def generate_visual_assets_trigger(
     request: GenerateVisualAssetsRequest,
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
-    _, run = access
+    user, run = access
     if run.current_stage == "VISUAL_ASSET_GENERATING" and await _has_active_tasks_for_run(run.id):
         raise HTTPException(status_code=409, detail="Visual asset generation already in progress")
 
@@ -139,4 +140,5 @@ async def generate_visual_assets_trigger(
         rollback_restart_from=run.restart_from,
         enqueue_error_detail="Failed to enqueue image generation task",
         quota_operation_type="image_gen",
+        workspace_id=user.workspace_id,
     )

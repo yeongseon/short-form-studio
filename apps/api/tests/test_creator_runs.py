@@ -36,6 +36,7 @@ class StubPipelineRun(BaseModel):
     finished_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    workspace_id: int = 1
 
 
 class StubRunService:
@@ -88,7 +89,8 @@ class StubRunService:
         self._next_id += 1
         return run
 
-    async def get_run(self, run_id: int) -> StubPipelineRun | None:
+    async def get_run(self, run_id: int, workspace_id: int | None = None) -> StubPipelineRun | None:
+        _ = workspace_id
         self.get_run_calls.append(run_id)
         return self.runs.get(run_id)
 
@@ -130,7 +132,10 @@ class StubRunService:
             reverse=True,
         )
 
-    async def update_model_defaults(self, run_id: int, updates: dict[str, str]) -> StubPipelineRun:
+    async def update_model_defaults(
+        self, run_id: int, updates: dict[str, str], workspace_id: int | None = None
+    ) -> StubPipelineRun:
+        _ = workspace_id
         self.update_model_defaults_calls.append({"run_id": run_id, "updates": updates})
         run = self.runs.get(run_id)
         if run is None:
@@ -187,6 +192,7 @@ class StubStageReviewService:
         target_stage: str,
         reviewer: str = "agent",
         notes: str | None = None,
+        workspace_id: int | None = None,
     ) -> StubPipelineRun:
         self.approve_calls.append(
             {
@@ -195,11 +201,14 @@ class StubStageReviewService:
                 "target_stage": target_stage,
                 "reviewer": reviewer,
                 "notes": notes,
+                "workspace_id": workspace_id,
             }
         )
 
         run = self._run_svc.runs.get(run_id)
         if run is None:
+            raise ValueError(f"Run {run_id} not found")
+        if workspace_id is not None and run.workspace_id != workspace_id:
             raise ValueError(f"Run {run_id} not found")
         if run.current_stage != stage_name:
             raise ValueError(
@@ -583,6 +592,7 @@ def _make_run(run_id: int, stage: str = "SCRIPT_REVIEW") -> StubPipelineRun:
         finished_at=None,
         created_at=now,
         updated_at=now,
+        workspace_id=1,
     )
 
 
@@ -607,6 +617,7 @@ async def test_approve_script_success(client, stub_approve_services):
             "target_stage": "VISUAL_PLAN_SETUP",
             "reviewer": "human",
             "notes": "Looks good",
+            "workspace_id": 1,
         }
     ]
 
@@ -738,8 +749,20 @@ async def test_approve_visual_plan_success(client, stub_approve_vp_services):
             "target_stage": "VISUAL_ASSET_GENERATING",
             "reviewer": "human",
             "notes": "Visual plan approved",
+            "workspace_id": 1,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_approve_script_returns_404_for_workspace_mismatch(client, stub_approve_services):
+    run_svc, _ = stub_approve_services
+    run_svc.runs[101] = _make_run(101, "SCRIPT_REVIEW").model_copy(update={"workspace_id": 2})
+
+    response = await client.post("/api/creator/runs/101/approve-script", json={})
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Run 101 not found"}
 
 
 @pytest.mark.asyncio

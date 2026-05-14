@@ -26,6 +26,7 @@ class StubPipelineRun(BaseModel):
     finished_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    workspace_id: int = 1
 
 
 class StubProject(BaseModel):
@@ -42,8 +43,11 @@ class StubRunService:
         self.stop_run_calls: list[int] = []
         self.resume_run_calls: list[int] = []
         self.go_back_calls: list[int] = []
+        self.go_back_workspace_ids: list[int | None] = []
         self.update_model_defaults_calls: list[dict[str, object]] = []
+        self.update_model_defaults_workspace_ids: list[int | None] = []
         self.delete_run_calls: list[int] = []
+        self.delete_run_workspace_ids: list[int | None] = []
         self.list_runs_by_project_calls: list[int] = []
         self.resume_errors: dict[int, Exception] = {}
         self.stop_errors: dict[int, Exception] = {}
@@ -78,25 +82,33 @@ class StubRunService:
         self.runs[run_id] = updated
         return updated
 
-    async def go_back(self, run_id: int) -> StubPipelineRun:
+    async def go_back(self, run_id: int, workspace_id: int | None = None) -> StubPipelineRun:
         self.go_back_calls.append(run_id)
+        self.go_back_workspace_ids.append(workspace_id)
         error = self.go_back_errors.get(run_id)
         if error is not None:
             raise error
         run = self.runs.get(run_id)
         if run is None:
             raise ValueError(f"Run {run_id} not found")
+        if workspace_id is not None and run.workspace_id != workspace_id:
+            raise ValueError(f"Run {run_id} not found")
         updated = run.model_copy(update={"current_stage": "SCRIPT_GENERATING"})
         self.runs[run_id] = updated
         return updated
 
-    async def update_model_defaults(self, run_id: int, updates: dict[str, str]) -> StubPipelineRun:
+    async def update_model_defaults(
+        self, run_id: int, updates: dict[str, str], workspace_id: int | None = None
+    ) -> StubPipelineRun:
         self.update_model_defaults_calls.append({"run_id": run_id, "updates": updates})
+        self.update_model_defaults_workspace_ids.append(workspace_id)
         error = self.update_model_defaults_errors.get(run_id)
         if error is not None:
             raise error
         run = self.runs.get(run_id)
         if run is None:
+            raise ValueError(f"Run {run_id} not found")
+        if workspace_id is not None and run.workspace_id != workspace_id:
             raise ValueError(f"Run {run_id} not found")
 
         merged = dict(run.model_defaults or {})
@@ -105,8 +117,14 @@ class StubRunService:
         self.runs[run_id] = updated
         return updated
 
-    async def delete_run(self, run_id: int) -> bool:
+    async def delete_run(self, run_id: int, workspace_id: int | None = None) -> bool:
         self.delete_run_calls.append(run_id)
+        self.delete_run_workspace_ids.append(workspace_id)
+        run = self.runs.get(run_id)
+        if run is None:
+            return False
+        if workspace_id is not None and run.workspace_id != workspace_id:
+            return False
         return self.runs.pop(run_id, None) is not None
 
     async def list_runs_by_project(self, project_id: int) -> list[StubPipelineRun]:
@@ -221,6 +239,7 @@ def _make_run(
     status: Literal["pending", "running", "paused", "completed", "failed", "cancelled"] = "running",
     stage: str = "SCRIPT_GENERATING",
     model_defaults: dict[str, str] | None = None,
+    workspace_id: int = 1,
 ) -> StubPipelineRun:
     now = datetime.now(timezone.utc)
     return StubPipelineRun(
@@ -237,6 +256,7 @@ def _make_run(
         finished_at=None,
         created_at=now,
         updated_at=now,
+        workspace_id=workspace_id,
     )
 
 
@@ -341,6 +361,7 @@ async def test_go_back_success(client, stub_lifecycle_services):
     assert response.status_code == 200
     assert response.json()["current_stage"] == "SCRIPT_GENERATING"
     assert run_svc.go_back_calls == [13]
+    assert run_svc.go_back_workspace_ids == [1]
 
 
 @pytest.mark.asyncio
@@ -370,7 +391,7 @@ async def test_go_back_invalid_state_returns_400(client, stub_lifecycle_services
 async def test_go_back_stage_conflict_returns_409(client, stub_lifecycle_services):
     run_svc, _, _, _ = stub_lifecycle_services
     run_svc.runs[15] = _make_run(15)
-    run_svc.go_back_errors[15] = RuntimeError(
+    run_svc.go_back_errors[15] = ConflictError(
         "Stage conflict: expected 'SCRIPT_REVIEW' but run is at 'VISUAL_PLAN_SETUP'"
     )
 
@@ -398,6 +419,7 @@ async def test_update_model_defaults_success(client, stub_lifecycle_services):
     assert run_svc.update_model_defaults_calls == [
         {"run_id": 16, "updates": {"image_model": "sd15"}}
     ]
+    assert run_svc.update_model_defaults_workspace_ids == [1]
 
 
 @pytest.mark.asyncio
@@ -442,6 +464,47 @@ async def test_delete_run_success_with_artifact_cleanup(client, stub_lifecycle_s
     assert revoke_tasks.calls == [17]
     assert artifact_lifecycle_svc.delete_artifacts_for_run_calls == [17]
     assert run_svc.delete_run_calls == [17]
+    assert run_svc.delete_run_workspace_ids == [1]
+
+
+@pytest.mark.asyncio
+async def test_go_back_returns_404_for_workspace_mismatch(client, stub_lifecycle_services):
+    run_svc, _, _, _ = stub_lifecycle_services
+    run_svc.runs[130] = _make_run(130, stage="SCRIPT_REVIEW", workspace_id=2)
+
+    response = await client.post("/api/creator/runs/130/go-back")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Run 130 not found"}
+
+
+@pytest.mark.asyncio
+async def test_update_model_defaults_returns_404_for_workspace_mismatch(
+    client, stub_lifecycle_services
+):
+    run_svc, _, _, _ = stub_lifecycle_services
+    run_svc.runs[131] = _make_run(131, workspace_id=2)
+
+    response = await client.patch(
+        "/api/creator/runs/131/model-defaults",
+        json={"script_model": "qwen3-4b"},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Run 131 not found"}
+
+
+@pytest.mark.asyncio
+async def test_delete_run_returns_404_for_workspace_mismatch(client, stub_lifecycle_services):
+    run_svc, _, revoke_tasks, artifact_lifecycle_svc = stub_lifecycle_services
+    run_svc.runs[132] = _make_run(132, workspace_id=2)
+
+    response = await client.delete("/api/creator/runs/132")
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Run not found"}
+    assert revoke_tasks.calls == [132]
+    assert artifact_lifecycle_svc.delete_artifacts_for_run_calls == []
 
 
 @pytest.mark.asyncio

@@ -45,10 +45,14 @@ class StubRunService:
         self.runs: dict[int, StubRun] = {}
         self.updated_defaults: list[dict[str, object]] = []
 
-    async def get_run(self, run_id: int) -> StubRun | None:
+    async def get_run(self, run_id: int, workspace_id: int | None = None) -> StubRun | None:
+        _ = workspace_id
         return self.runs.get(run_id)
 
-    async def update_model_defaults(self, run_id: int, updates: dict[str, str]) -> StubRun:
+    async def update_model_defaults(
+        self, run_id: int, updates: dict[str, str], workspace_id: int | None = None
+    ) -> StubRun:
+        _ = workspace_id
         run = self.runs.get(run_id)
         if run is None:
             raise ValueError(f"Run {run_id} not found")

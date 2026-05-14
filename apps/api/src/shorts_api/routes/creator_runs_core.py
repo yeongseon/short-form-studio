@@ -171,6 +171,7 @@ async def approve_script(
     request: ApproveScriptRequest,
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
+    user, _ = access
     try:
         updated_run = await stage_review_service.approve_and_advance(
             run_service=run_service,
@@ -179,6 +180,7 @@ async def approve_script(
             target_stage="VISUAL_PLAN_SETUP",
             reviewer=request.reviewer,
             notes=request.notes,
+            workspace_id=user.workspace_id,
         )
     except ValueError as exc:
         detail = str(exc)
@@ -197,6 +199,7 @@ async def approve_visual_plan(
     request: ApproveVisualPlanRequest,
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
+    user, _ = access
     try:
         updated_run = await stage_review_service.approve_and_advance(
             run_service=run_service,
@@ -205,6 +208,7 @@ async def approve_visual_plan(
             target_stage="VISUAL_ASSET_GENERATING",
             reviewer=request.reviewer,
             notes=request.notes,
+            workspace_id=user.workspace_id,
         )
     except ValueError as exc:
         detail = str(exc)
@@ -223,6 +227,7 @@ async def approve_visual_assets(
     request: ApproveVisualAssetsRequest,
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
+    user, _ = access
     try:
         updated_run = await stage_review_service.approve_and_advance(
             run_service=run_service,
@@ -231,6 +236,7 @@ async def approve_visual_assets(
             target_stage="AUDIO_GENERATING",
             reviewer=request.reviewer,
             notes=request.notes,
+            workspace_id=user.workspace_id,
         )
     except ValueError as exc:
         detail = str(exc)
@@ -249,7 +255,7 @@ async def generate_script_trigger(
     request: GenerateScriptRequest,
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
-    _, run = access
+    user, run = access
     if run.current_stage == "SCRIPT_GENERATING" and await _has_active_tasks_for_run(run.id):
         raise HTTPException(status_code=409, detail="Script generation already in progress")
 
@@ -285,4 +291,5 @@ async def generate_script_trigger(
         enqueue_error_detail="Failed to enqueue script generation task",
         restart_from_stage="SCRIPT_REVIEW",
         quota_operation_type="llm",
+        workspace_id=user.workspace_id,
     )
