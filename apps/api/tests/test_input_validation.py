@@ -4,17 +4,27 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
-
 import pytest
 from fastapi import HTTPException
 
 from creator_service.ffmpeg_service import FFmpegService, RenderInput
 from creator_service.json_script_parser import parse_json_scenes
 from shorts_api.auth import CurrentUser
-from shorts_api.routes.creator_runs_core import GenerateScriptRequest, generate_script_trigger
-from shorts_api.routes.creator_runs_scene_assets import GenerateAudioRequest, generate_audio_trigger
+from typing import Any, cast  # noqa: E402 — already imported above, dedup below
+from shorts_api.routes.creator_runs_core import (
+    GenerateScriptRequest,
+    GenerateSubtitlesRequest,
+    generate_script_trigger,
+)
+from shorts_api.routes.creator_runs_scene_assets import (
+    GenerateAudioRequest,
+    GenerateSceneImageRequest,
+    generate_audio_trigger,
+    generate_scene_image_endpoint,
+    generate_subtitles_trigger,
+)
 from shorts_api.routes.creator_runs_utils import validate_model_key
-from shorts_api.routes.creator_runs_utils import validate_path_id
+from shorts_api.routes.creator_runs_utils import validate_model_defaults, validate_path_id
 from shorts_api.routes.creator_runs_visuals import ImageTuningParams
 
 
@@ -286,6 +296,36 @@ def test_validate_model_key_accepts_matching_expected_category(
     validate_model_key("some-llm-model", expected_category="llm")
 
 
+def test_validate_model_defaults_rejects_tts_for_script_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from creator_provider.registry import ProviderRegistry
+
+    registry = _stub_registry_with_models()
+    monkeypatch.setattr(ProviderRegistry, "create_default", classmethod(lambda cls: registry))
+
+    with pytest.raises(HTTPException) as exc:
+        validate_model_defaults({"script_model": "some-tts-model"})
+
+    assert exc.value.status_code == 400
+    assert "is a tts model" in str(exc.value.detail)
+
+
+def test_validate_model_defaults_rejects_llm_for_image_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from creator_provider.registry import ProviderRegistry
+
+    registry = _stub_registry_with_models()
+    monkeypatch.setattr(ProviderRegistry, "create_default", classmethod(lambda cls: registry))
+
+    with pytest.raises(HTTPException) as exc:
+        validate_model_defaults({"image_model": "some-llm-model"})
+
+    assert exc.value.status_code == 400
+    assert "is a llm model" in str(exc.value.detail)
+
+
 @pytest.mark.asyncio
 async def test_generate_script_rejects_image_model_key(monkeypatch: pytest.MonkeyPatch) -> None:
     from creator_provider.registry import ProviderRegistry
@@ -343,5 +383,72 @@ async def test_generate_audio_rejects_llm_model_key(monkeypatch: pytest.MonkeyPa
 
     with pytest.raises(HTTPException) as exc:
         await generate_audio_trigger(run_id=1, request=request, access=(user, run))  # pyright: ignore[reportArgumentType]
+
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_generate_scene_image_rejects_llm_model_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    from creator_provider.registry import ProviderRegistry
+    import shorts_api.routes.creator_runs_scene_assets as creator_runs_scene_assets
+
+    registry = _stub_registry_with_models()
+    monkeypatch.setattr(ProviderRegistry, "create_default", classmethod(lambda cls: registry))
+
+    async def _fake_quota(run_id: int, operation_type: str, workspace_id: int) -> int:
+        _ = (run_id, operation_type)
+        return workspace_id
+
+    async def _fake_dispatch(**_: object) -> dict[str, object]:
+        return {"task_id": "t1"}
+
+    monkeypatch.setattr(creator_runs_scene_assets, "_enforce_run_quota", _fake_quota)
+    monkeypatch.setattr(creator_runs_scene_assets, "cas_dispatch_with_rollback", _fake_dispatch)
+
+    user = CurrentUser(user_id=1, workspace_id=1)
+    run = SimpleNamespace(
+        id=1,
+        project_id=7,
+        current_stage="VISUAL_PLAN_REVIEW",
+        restart_from=None,
+    )
+    access = (user, cast(Any, run))
+    request = GenerateSceneImageRequest(model_key="qwen3-4b")
+
+    with pytest.raises(HTTPException) as exc:
+        await generate_scene_image_endpoint(
+            run_id=1,
+            scene_id="scene-1",
+            request=request,
+            access=access,
+        )
+
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_generate_subtitles_rejects_tts_model_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    from creator_provider.registry import ProviderRegistry
+    import shorts_api.routes.creator_runs_scene_assets as creator_runs_scene_assets
+
+    registry = _stub_registry_with_models()
+    monkeypatch.setattr(ProviderRegistry, "create_default", classmethod(lambda cls: registry))
+
+    async def _fake_dispatch(**_: object) -> dict[str, object]:
+        return {"task_id": "t1"}
+
+    monkeypatch.setattr(creator_runs_scene_assets, "cas_dispatch_with_rollback", _fake_dispatch)
+
+    user = CurrentUser(user_id=1, workspace_id=1)
+    run = SimpleNamespace(id=1, project_id=7, current_stage="AUDIO_GENERATING", restart_from=None)
+    access = (user, cast(Any, run))
+    request = GenerateSubtitlesRequest(subtitle_model="some-tts-model")
+
+    with pytest.raises(HTTPException) as exc:
+        await generate_subtitles_trigger(
+            run_id=1,
+            request=request,
+            access=access,
+        )
 
     assert exc.value.status_code == 400
