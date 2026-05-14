@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from creator_domain.models.pipeline_run import PipelineRun
     from creator_domain.models.project import Project
 
-from creator_service.db import fetch_one
+from creator_service.db import fetch_all, fetch_one
 from creator_service.workspace_service import workspace_service
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -173,7 +173,20 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         if not member_workspace_ids:
             return JSONResponse(status_code=404, content={"detail": "Not found"})
 
-        user = CurrentUser(user_id=user_id_int, workspace_id=member_workspace_ids[0])
+        # Check for X-Workspace-Id header to pin to specific workspace
+        workspace_header = request.headers.get("X-Workspace-Id")
+        if workspace_header:
+            try:
+                requested_workspace_id = int(workspace_header)
+            except (TypeError, ValueError):
+                return JSONResponse(status_code=404, content={"detail": "Not found"})
+            if requested_workspace_id not in member_workspace_ids:
+                return JSONResponse(status_code=404, content={"detail": "Not found"})
+            selected_workspace_id = requested_workspace_id
+        else:
+            selected_workspace_id = member_workspace_ids[0]
+
+        user = CurrentUser(user_id=user_id_int, workspace_id=selected_workspace_id)
         request.state.user = user
         token = _current_user_ctx.set(user)
         try:
@@ -212,20 +225,36 @@ async def get_current_user(request: Request) -> CurrentUser:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     user_id = key_row["user_id"]
-    membership_row = await fetch_one(
+    
+    # Fetch all workspace memberships for this user
+    membership_rows = await fetch_all(
         """
         SELECT workspace_id
         FROM workspace_members
         WHERE user_id = $1
         ORDER BY workspace_id ASC
-        LIMIT 1
         """,
         user_id,
     )
-    if membership_row is None:
+    if not membership_rows:
         raise HTTPException(status_code=404, detail="Not found")
+    
+    member_workspace_ids = [row["workspace_id"] for row in membership_rows]
+    
+    # Check for X-Workspace-Id header to pin to specific workspace
+    workspace_header = request.headers.get("X-Workspace-Id")
+    if workspace_header:
+        try:
+            requested_workspace_id = int(workspace_header)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=404, detail="Not found")
+        if requested_workspace_id not in member_workspace_ids:
+            raise HTTPException(status_code=404, detail="Not found")
+        selected_workspace_id = requested_workspace_id
+    else:
+        selected_workspace_id = member_workspace_ids[0]
 
-    return CurrentUser(user_id=user_id, workspace_id=membership_row["workspace_id"])
+    return CurrentUser(user_id=user_id, workspace_id=selected_workspace_id)
 
 
 async def require_current_user(request: Request) -> CurrentUser:

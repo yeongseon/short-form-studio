@@ -327,11 +327,16 @@ async def test_get_current_user_resolves_from_api_keys_and_membership(monkeypatc
         calls.append((query, args))
         if "FROM api_keys" in query:
             return {"user_id": 123}
-        if "FROM workspace_members" in query:
-            return {"workspace_id": 10}
         return None
 
+    async def _fetch_all(query: str, *args):
+        calls.append((query, args))
+        if "FROM workspace_members" in query:
+            return [{"workspace_id": 10}]
+        return []
+
     monkeypatch.setattr("shorts_api.auth.fetch_one", _fetch_one)
+    monkeypatch.setattr("shorts_api.auth.fetch_all", _fetch_all)
     request = Request({"type": "http", "headers": [(b"x-api-key", b"valid-key")]})
     result = await get_current_user(request)
 
@@ -342,7 +347,28 @@ async def test_get_current_user_resolves_from_api_keys_and_membership(monkeypatc
 
 
 @pytest.mark.asyncio
+@pytest.mark.asyncio
 async def test_get_current_user_without_workspace_membership_returns_404(monkeypatch):
+    async def _fetch_one(query: str, *args):
+        if "FROM api_keys" in query:
+            return {"user_id": 123}
+        return None
+
+    async def _fetch_all(query: str, *args):
+        if "FROM workspace_members" in query:
+            return []
+        return []
+
+    monkeypatch.setattr("shorts_api.auth.fetch_one", _fetch_one)
+    monkeypatch.setattr("shorts_api.auth.fetch_all", _fetch_all)
+    request = Request({"type": "http", "headers": [(b"x-api-key", b"valid-key")]})
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_current_user(request)
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Not found"
+
+
     async def _fetch_one(query: str, *args):
         if "FROM api_keys" in query:
             return {"user_id": 123}
