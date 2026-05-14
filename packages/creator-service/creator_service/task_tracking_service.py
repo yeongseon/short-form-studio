@@ -257,10 +257,11 @@ class TaskTrackingService:
         return len(ids) > 0
 
     async def revoke_active_tasks(self, run_id: int) -> list[str]:
-        ids = await self.get_active_celery_ids(run_id)
-        for celery_id in ids:
+        return await self.get_active_celery_ids(run_id)
+
+    async def mark_tasks_revoked(self, celery_ids: list[str]) -> None:
+        for celery_id in celery_ids:
             await self.mark_revoked(celery_id)
-        return ids
 
 
 def _create_storage() -> TaskTrackingStorageBackend:

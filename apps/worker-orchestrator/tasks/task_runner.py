@@ -129,6 +129,7 @@ async def _run_task_inner(
     """Inner async execution with full lifecycle management."""
     # Reject new work if graceful shutdown is in progress
     from celery_app import is_shutting_down
+
     if is_shutting_down():
         logger.info("Rejecting task %s: graceful shutdown in progress", task_id)
         raise Ignore()
@@ -339,6 +340,12 @@ def run_task(
         raise
     except Exception as exc:
         if isinstance(exc, config.no_fail_transition_exceptions):
+            try:
+                asyncio.run(
+                    _task_tracking_service.mark_failed(task_id, type(exc).__name__, str(exc)[:500])
+                )
+            except Exception:
+                logger.warning("Failed to record task failure", exc_info=True)
             raise
         if (
             isinstance(exc, (ProviderTimeoutError, RateLimitError))
@@ -448,9 +455,8 @@ class GpuLockContext:
                 self.acquired = False
                 self._token = None
         if was_lost:
-            raise RuntimeError(
-                f"GPU lock was lost during execution for {lock_id or self.task_id}"
-            )
+            raise RuntimeError(f"GPU lock was lost during execution for {lock_id or self.task_id}")
+
 
 def validate_task_message(message: dict[str, Any]) -> dict[str, Any]:
     if "run_id" not in message:
