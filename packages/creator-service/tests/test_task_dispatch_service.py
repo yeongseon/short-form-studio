@@ -30,6 +30,9 @@ class _FakeRunService:
     def __init__(self) -> None:
         self.storage = _FakeRunStorage()
 
+    async def get_run(self, _run_id: int, **_kw: object) -> object:
+        return SimpleNamespace(status="running", project_id=1)
+
 
 def test_dispatch_generate_script_uses_sync_runner_when_redis_missing(
     monkeypatch: pytest.MonkeyPatch,
@@ -455,3 +458,77 @@ def test_cas_dispatch_with_rollback_allows_non_cancelled_run() -> None:
     )
 
     assert result["task_id"] == "sync-test-1-abc"
+
+
+def test_cas_dispatch_with_rollback_returns_503_when_get_run_raises() -> None:
+    """Fail-closed: if get_run raises, dispatch must be blocked with 503."""
+    service = TaskDispatchService()
+
+    class _ErrorRunStorage:
+        async def conditional_update_run(self, *_a: object, **_kw: object) -> object:
+            raise AssertionError("Should not reach CAS update")
+
+    class _ErrorRunService:
+        def __init__(self) -> None:
+            self.storage = _ErrorRunStorage()
+
+        async def get_run(self, _run_id: int, **_kw: object) -> object:
+            raise RuntimeError("DB connection lost")
+
+    def _dispatcher(**_: object) -> str:
+        raise AssertionError("Should not dispatch")
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            service.cas_dispatch_with_rollback(
+                run_id=42,
+                expected_stages=frozenset({"SCRIPT_REVIEW"}),
+                target_stage="SCRIPT_GENERATING",
+                dispatcher=_dispatcher,
+                dispatcher_args={"run_id": 42},
+                run_service=_ErrorRunService(),
+                rollback_stage="SCRIPT_REVIEW",
+                rollback_restart_from=None,
+                enqueue_error_detail="Failed to enqueue",
+            )
+        )
+
+    assert exc.value.status_code == 503
+    assert "verify run status" in exc.value.detail.lower()
+
+
+def test_cas_dispatch_with_rollback_returns_404_when_get_run_returns_none() -> None:
+    """If get_run returns None, dispatch must be blocked with 404."""
+    service = TaskDispatchService()
+
+    class _NoneRunStorage:
+        async def conditional_update_run(self, *_a: object, **_kw: object) -> object:
+            raise AssertionError("Should not reach CAS update")
+
+    class _NoneRunService:
+        def __init__(self) -> None:
+            self.storage = _NoneRunStorage()
+
+        async def get_run(self, _run_id: int, **_kw: object) -> object:
+            return None
+
+    def _dispatcher(**_: object) -> str:
+        raise AssertionError("Should not dispatch")
+
+    with pytest.raises(HTTPException) as exc:
+        asyncio.run(
+            service.cas_dispatch_with_rollback(
+                run_id=999,
+                expected_stages=frozenset({"SCRIPT_REVIEW"}),
+                target_stage="SCRIPT_GENERATING",
+                dispatcher=_dispatcher,
+                dispatcher_args={"run_id": 999},
+                run_service=_NoneRunService(),
+                rollback_stage="SCRIPT_REVIEW",
+                rollback_restart_from=None,
+                enqueue_error_detail="Failed to enqueue",
+            )
+        )
+
+    assert exc.value.status_code == 404
+    assert "not found" in exc.value.detail.lower()

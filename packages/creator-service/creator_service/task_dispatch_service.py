@@ -217,11 +217,17 @@ class TaskDispatchService:
 
         # Reject dispatch for cancelled runs to prevent race between
         # stop_run() and concurrent trigger requests.
+        # Fail-closed: if we cannot verify status, block dispatch.
         try:
             _pre_run = await run_service_obj.get_run(run_id)
         except Exception:
-            _pre_run = None
-        if _pre_run is not None and getattr(_pre_run, "status", None) == "cancelled":
+            raise HTTPException(
+                status_code=503,
+                detail="Unable to verify run status; dispatch blocked",
+            ) from None
+        if _pre_run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        if getattr(_pre_run, "status", None) == "cancelled":
             raise HTTPException(
                 status_code=409,
                 detail="Run is cancelled; cannot dispatch new tasks",

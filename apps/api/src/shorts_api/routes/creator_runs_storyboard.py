@@ -225,6 +225,13 @@ async def generate_paragraph_audio_endpoint(
             ),
         )
 
+    if getattr(run, "status", None) == "cancelled":
+        raise HTTPException(
+            status_code=409,
+            detail="Run is cancelled; cannot dispatch new tasks",
+        )
+
+
     draft = await script_service.get_active_draft(run_id)
     if draft is None or not draft.structured_script:
         raise HTTPException(status_code=400, detail="No script available")
@@ -286,6 +293,13 @@ async def generate_paragraph_subtitles_endpoint(
             ),
         )
 
+    if getattr(run, "status", None) == "cancelled":
+        raise HTTPException(
+            status_code=409,
+            detail="Run is cancelled; cannot dispatch new tasks",
+        )
+
+
     audio = await audio_service.get_paragraph_audio(run_id, section_id)
     if audio is None:
         raise HTTPException(
@@ -337,6 +351,13 @@ async def generate_all_paragraph_audio(
                 "Pipeline must be past visual asset review."
             ),
         )
+
+    if getattr(run, "status", None) == "cancelled":
+        raise HTTPException(
+            status_code=409,
+            detail="Run is cancelled; cannot dispatch new tasks",
+        )
+
 
     draft = await script_service.get_active_draft(run_id)
     if draft is None or not draft.structured_script:
@@ -400,6 +421,13 @@ async def generate_all_paragraph_subtitles(
                 "Pipeline must be past visual asset review."
             ),
         )
+
+    if getattr(run, "status", None) == "cancelled":
+        raise HTTPException(
+            status_code=409,
+            detail="Run is cancelled; cannot dispatch new tasks",
+        )
+
 
     audio_artifacts = await audio_service.list_paragraph_audio(run_id)
     if not audio_artifacts:
