@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+
+from shorts_api.auth import CurrentUser, get_current_user
 
 router = APIRouter(tags=["settings"])
 
@@ -31,7 +33,7 @@ class ApiKeyStatus(BaseModel):
 
 
 @router.get("/settings/api-keys")
-async def list_api_keys() -> list[ApiKeyStatus]:
+async def list_api_keys(user: CurrentUser = Depends(get_current_user)) -> list[ApiKeyStatus]:
     # No resource-scoped access helper: this endpoint reports process-level provider key presence only.
     result: list[ApiKeyStatus] = []
     for provider, env_var in _PROVIDER_ENV_MAP.items():

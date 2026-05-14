@@ -262,6 +262,32 @@ async def require_api_key_header(request: Request) -> str:
     return api_key
 
 
+async def check_run_ownership(
+    run_id: int, workspace_id: int, user_id: int
+) -> "PipelineRun":
+    """Verify run belongs to user's workspace.
+    
+    Returns the run object if access is verified.
+    Raises HTTPException(404) if run not found, project not found, or workspace access denied.
+    """
+    from creator_service.project_service import project_service
+    from creator_service.run_service import run_service
+
+    run = await run_service.get_run(run_id, workspace_id=workspace_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    project = await project_service.get_project(run.project_id, workspace_id=workspace_id)
+    if project is None or project.workspace_id is None:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    has_access = await workspace_service.check_access(project.workspace_id, user_id)
+    if not has_access:
+        raise HTTPException(status_code=404, detail="Not found")
+    
+    return run
+
+
 async def require_run_access(
     run_id: int,
     user: CurrentUser = Depends(require_current_user),
@@ -271,22 +297,8 @@ async def require_run_access(
     Returns (user, run) so route handlers can skip re-fetching.
     Raises 404 if run/project not found or workspace mismatch (prevents IDOR).
     """
-    from creator_service.project_service import project_service
-    from creator_service.run_service import run_service
-
-    run = await run_service.get_run(run_id, workspace_id=user.workspace_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="Run not found")
-
-    project = await project_service.get_project(run.project_id, workspace_id=user.workspace_id)
-    if project is None or project.workspace_id is None:
-        raise HTTPException(status_code=404, detail="Run not found")
-
-    has_access = await workspace_service.check_access(project.workspace_id, user.user_id)
-    if not has_access:
-        raise HTTPException(status_code=404, detail="Run not found")
+    run = await check_run_ownership(run_id, user.workspace_id, user.user_id)
     return RunAccessContext(user, run)
-
 
 async def require_project_access(
     project_id: int,

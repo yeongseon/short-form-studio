@@ -6,11 +6,12 @@ from creator_domain.sanitize import UnsafePathComponent, sanitize_path_component
 from creator_service.artifact_download_service import read_artifact_bytes
 from creator_service.db import get_pool
 from creator_service.model_health_service import ModelHealthService, ModelStatus
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from redis.asyncio import Redis
 from starlette import status
 from starlette.responses import Response
 
+from shorts_api.auth import CurrentUser, get_current_user
 from shorts_api.lifecycle import REDIS_URL, shutdown_state
 
 model_health = ModelHealthService()
@@ -50,6 +51,17 @@ def _resolve_redis_from_url():
         return getattr(main_module.Redis, "from_url", Redis.from_url)
     except Exception:
         return Redis.from_url
+
+
+async def _validate_artifact_access(run_id: int, user: CurrentUser) -> None:
+    """Validate that the user has access to the run's artifacts.
+    
+    Raises 404 if the run doesn't exist or belongs to a different workspace (anti-enumeration).
+    """
+    from shorts_api.auth import check_run_ownership
+    
+    # This will raise HTTPException(404) if access is denied
+    await check_run_ownership(run_id, user.workspace_id, user.user_id)
 
 
 async def healthz() -> dict[str, str]:
@@ -115,7 +127,7 @@ async def health() -> dict[str, object]:
     }
 
 
-async def serve_artifact(artifact_path: str):
+async def serve_artifact(artifact_path: str, user: CurrentUser = Depends(get_current_user)):
     environment = os.getenv("ENVIRONMENT", "development").lower()
     if environment in ("production", "staging"):
         raise HTTPException(status_code=404, detail="Not found")
@@ -123,6 +135,15 @@ async def serve_artifact(artifact_path: str):
     path_components = artifact_path.split("/")
     if not artifact_path or any(component in {"", ".", ".."} for component in path_components):
         raise HTTPException(status_code=400, detail="Invalid artifact path")
+
+    # Extract and validate run_id from path (format: {run_id}/... where run_id should be numeric)
+    try:
+        run_id_str = path_components[0]
+        run_id = int(run_id_str)
+        # Validate user has access to this run's artifacts
+        await _validate_artifact_access(run_id, user)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Not found")
 
     try:
         safe_components = [
@@ -147,7 +168,7 @@ async def serve_artifact(artifact_path: str):
         raise HTTPException(status_code=500, detail="Artifact read failed") from exc
 
 
-async def serve_local_artifact_file(path: str) -> Response:
+async def serve_local_artifact_file(path: str, user: CurrentUser = Depends(get_current_user)) -> Response:
     environment = os.getenv("ENVIRONMENT", "development").lower()
     if environment in ("production", "staging"):
         raise HTTPException(status_code=404, detail="Not found")
@@ -159,6 +180,15 @@ async def serve_local_artifact_file(path: str) -> Response:
         or any(component in {"", ".", ".."} for component in path_components)
     ):
         raise HTTPException(status_code=400, detail="Invalid artifact path")
+
+    # Extract and validate run_id from path (format: {run_id}/... where run_id should be numeric)
+    try:
+        run_id_str = path_components[0]
+        run_id = int(run_id_str)
+        # Validate user has access to this run's artifacts
+        await _validate_artifact_access(run_id, user)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Not found")
 
     try:
         safe_components = [

@@ -5,7 +5,9 @@ import logging
 from creator_provider.registry import ProviderRegistry
 from creator_service.model_catalog_service import ModelCatalogService
 from creator_service.model_health_service import ModelHealthService
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from shorts_api.auth import CurrentUser, get_current_user
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,7 @@ model_catalog_service = ModelCatalogService(
 
 @router.get("")
 async def list_models(
+    user: CurrentUser = Depends(get_current_user),
     category: str | None = Query(default=None),
 ) -> dict[str, list[dict[str, object]]]:
     """List available creator models by category."""
@@ -31,7 +34,7 @@ async def list_models(
 
 
 @router.get("/status")
-async def get_model_status() -> dict[str, object]:
+async def get_model_status(user: CurrentUser = Depends(get_current_user)) -> dict[str, object]:
     """Return provider-level status and GPU lock state."""
     # No resource-scoped access helper: status is provider-level infrastructure metadata.
     logger.info("Model status check requested")
