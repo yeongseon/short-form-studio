@@ -364,15 +364,17 @@ class GpuLockContext:
     _token: str | None = None
     acquired_at: str | None = None
     released_at: str | None = None
+    _renewal_task: Any | None = None
 
     def acquire(self, lock_id: str | None = None) -> None:
-        """Acquire GPU lock. Raises RuntimeError if Redis unavailable."""
+        """Acquire GPU lock and start auto-renewal. Raises RuntimeError if Redis unavailable."""
         self.redis_client = _get_redis_client()
         if self.redis_client is None:
             raise RuntimeError("Redis client is unavailable; cannot acquire GPU lock")
         self._token = acquire_gpu_lock(self.redis_client, lock_id or self.task_id)
         self.acquired = True
         self.acquired_at = _utc_now_iso()
+        self.start_auto_renewal()
 
     def renew(self, timeout: int = GPU_LOCK_TIMEOUT_SECONDS) -> bool:
         """Renew GPU lock lease. Returns True if renewed, False if lock lost."""
@@ -380,8 +382,38 @@ class GpuLockContext:
             return False
         return renew_gpu_lock(self.redis_client, self._token, timeout=timeout)
 
+    def start_auto_renewal(self, timeout: int = GPU_LOCK_TIMEOUT_SECONDS) -> None:
+        """Start background task to auto-renew the GPU lease at half the timeout interval."""
+        if not self.acquired or self._renewal_task is not None:
+            return
+        import asyncio
+        interval = max(timeout // 2, 1)
+
+        async def _renew_loop() -> None:
+            while self.acquired:
+                await asyncio.sleep(interval)
+                if not self.acquired:
+                    break
+                try:
+                    ok = self.renew(timeout=timeout)
+                    if not ok:
+                        logger.warning("GPU lease renewal failed for %s (lock lost)", self.task_id)
+                        break
+                except Exception:
+                    logger.warning("GPU lease renewal error for %s", self.task_id, exc_info=True)
+                    break
+
+        self._renewal_task = asyncio.create_task(_renew_loop())
+
+    def stop_auto_renewal(self) -> None:
+        """Cancel the auto-renewal background task."""
+        if self._renewal_task is not None:
+            self._renewal_task.cancel()
+            self._renewal_task = None
+
     def release(self, lock_id: str | None = None) -> None:
         """Release GPU lock if acquired."""
+        self.stop_auto_renewal()
         if not self.acquired or self._token is None:
             return
         try:
