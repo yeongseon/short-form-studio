@@ -13,6 +13,7 @@ See DLQ_MONITORING.md for operational procedures, alerting setup, and task recov
 import logging
 import os
 import json
+import signal
 from datetime import datetime, timezone
 import resource
 from typing import Any
@@ -45,6 +46,15 @@ def _parse_int_env(name: str, default: int) -> int:
 
 
 MAX_MEMORY_MB = _parse_int_env("MAX_MEMORY_MB", 1024)
+_SHUTDOWN_REQUESTED = False
+
+
+def _handle_sigterm(_signum: int, _frame: object | None) -> None:
+    global _SHUTDOWN_REQUESTED
+    if _SHUTDOWN_REQUESTED:
+        return
+    _SHUTDOWN_REQUESTED = True
+    logging.getLogger(__name__).info("SIGTERM received; beginning Celery graceful shutdown")
 
 
 def _apply_resource_limits() -> None:
@@ -97,6 +107,7 @@ celery_app.conf.update(
 )
 
 validate_production_config(service_kind="worker")
+signal.signal(signal.SIGTERM, _handle_sigterm)
 
 
 @after_setup_logger.connect

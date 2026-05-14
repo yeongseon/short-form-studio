@@ -152,3 +152,12 @@ async def test_cpu_monitor_task_not_created_when_disabled(monkeypatch):
 
         # Verify create_task was NOT called
         mock_create_task.assert_not_called()
+
+
+def test_sigterm_handler_marks_shutdown_flag() -> None:
+    import shorts_api.lifecycle as lifecycle_module
+
+    lifecycle_module.shutdown_state.is_shutting_down = False
+    lifecycle_module._handle_sigterm(15, None)
+
+    assert lifecycle_module.shutdown_state.is_shutting_down is True

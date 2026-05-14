@@ -705,3 +705,63 @@ def test_render_video_handles_sparse_paragraph_artifacts(
     assert render_input.scene_durations == [15.0, 15.0]
     assert fake_ffmpeg.concatenate_calls == []
     assert fake_ffmpeg.merge_calls == []
+
+
+def test_render_video_rejects_non_dict_manifest_render_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = 211
+    storage = _make_storage(run_id=run_id, stage="RENDER_GENERATING")
+    manifest = _manifest(run_id=run_id)
+    manifest["render_profile"] = "shorts_default"
+    fake_render_service = FakeRenderService(
+        manifest=manifest,
+        artifact_path="data/artifacts/211/render/output.mp4",
+    )
+    fake_vas = FakeVisualAssetService()
+    fake_audio = FakeAudioService()
+    fake_subtitle = FakeSubtitleService()
+    fake_ffmpeg = FakeFFmpegService()
+    _patch_services(
+        monkeypatch,
+        storage=storage,
+        fake_render_service=fake_render_service,
+        fake_vas=fake_vas,
+        fake_audio=fake_audio,
+        fake_subtitle=fake_subtitle,
+        fake_ffmpeg=fake_ffmpeg,
+    )
+
+    with pytest.raises(RuntimeError, match="Invalid render_profile"):
+        _invoke_task(run_id=run_id)
+
+
+def test_render_video_rejects_unknown_manifest_render_profile_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = 212
+    storage = _make_storage(run_id=run_id, stage="RENDER_GENERATING")
+    manifest = _manifest(run_id=run_id)
+    profile = dict(manifest["render_profile"])
+    profile["unexpected_key"] = True
+    manifest["render_profile"] = profile
+    fake_render_service = FakeRenderService(
+        manifest=manifest,
+        artifact_path="data/artifacts/212/render/output.mp4",
+    )
+    fake_vas = FakeVisualAssetService()
+    fake_audio = FakeAudioService()
+    fake_subtitle = FakeSubtitleService()
+    fake_ffmpeg = FakeFFmpegService()
+    _patch_services(
+        monkeypatch,
+        storage=storage,
+        fake_render_service=fake_render_service,
+        fake_vas=fake_vas,
+        fake_audio=fake_audio,
+        fake_subtitle=fake_subtitle,
+        fake_ffmpeg=fake_ffmpeg,
+    )
+
+    with pytest.raises(RuntimeError, match="Invalid render_profile"):
+        _invoke_task(run_id=run_id)
