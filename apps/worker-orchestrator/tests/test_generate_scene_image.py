@@ -289,6 +289,8 @@ def test_happy_path_single_scene_with_gpu_lock(monkeypatch: pytest.MonkeyPatch) 
     assert va_service.calls[0]["scene_id"] == "scene-sec-0"
     assert va_service.calls[0]["prompt_snapshot"] == "A hook shot"
     assert storage.calls == [(101, {"current_stage": "VISUAL_ASSET_REVIEW", "status": "running"})]
+    assert va_service.calls[0]["storage_provider"] == "local"
+    assert va_service.calls[0]["storage_key"] is not None
 
 
 def test_happy_path_all_scenes(monkeypatch: pytest.MonkeyPatch) -> None:
