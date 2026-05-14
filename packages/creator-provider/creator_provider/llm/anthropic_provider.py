@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
 from creator_provider.api_keys import resolve_api_key
 from creator_provider.base import LLMProvider
+from creator_provider.exceptions import map_httpx_error
 from creator_provider.versioned_assets import get_tool_definition
 
 
@@ -23,7 +24,9 @@ class AnthropicProvider(LLMProvider):
     async def generate(self, prompt: str, params: dict[str, Any] | None = None) -> str:
         max_tokens = (params or {}).get("max_tokens", 2048)
         timeout = (params or {}).get("timeout", 120.0)
-        message_template = get_tool_definition("llm_chat_message")["message_template"]
+        message_template = cast(
+            dict[str, str], get_tool_definition("llm_chat_message")["message_template"]
+        )
 
         payload = {
             "model": self.model_key,
@@ -48,7 +51,7 @@ class AnthropicProvider(LLMProvider):
                 response = await client.post(url, json=payload, headers=headers)
                 response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"Anthropic API request failed: {exc}") from exc
+            raise map_httpx_error(exc, "Anthropic API") from exc
 
         data = response.json()
         content_blocks = data.get("content", [])

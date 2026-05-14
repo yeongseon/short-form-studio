@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
 from creator_provider.base import LLMProvider
+from creator_provider.exceptions import map_httpx_error
 from creator_provider.versioned_assets import get_tool_definition
 
 
@@ -19,7 +20,9 @@ class OllamaProvider(LLMProvider):
     async def generate(self, prompt: str, params: dict[str, Any] | None = None) -> str:
         # Use the /api/chat endpoint with think=false to disable Qwen3's
         # extended thinking mode, which is far too slow on consumer GPUs.
-        message_template = get_tool_definition("llm_chat_message")["message_template"]
+        message_template = cast(
+            dict[str, str], get_tool_definition("llm_chat_message")["message_template"]
+        )
         payload: dict[str, Any] = {
             "model": self.model_name,
             "messages": [
@@ -45,7 +48,7 @@ class OllamaProvider(LLMProvider):
                 )
                 response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"Failed to connect to Ollama provider at {url}: {exc}") from exc
+            raise map_httpx_error(exc, f"Ollama at {url}") from exc
 
         data = response.json()
         return str(data.get("message", {}).get("content", ""))
