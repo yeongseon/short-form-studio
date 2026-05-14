@@ -1,13 +1,19 @@
+# pyright: reportMissingImports=false
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
 
 from creator_service.ffmpeg_service import FFmpegService, RenderInput
 from creator_service.json_script_parser import parse_json_scenes
+from shorts_api.auth import CurrentUser
+from shorts_api.routes.creator_runs_core import GenerateScriptRequest, generate_script_trigger
+from shorts_api.routes.creator_runs_scene_assets import GenerateAudioRequest, generate_audio_trigger
+from shorts_api.routes.creator_runs_utils import validate_model_key
 from shorts_api.routes.creator_runs_utils import validate_path_id
 from shorts_api.routes.creator_runs_visuals import ImageTuningParams
 
@@ -119,8 +125,11 @@ def test_visual_scene_rejects_oversized_prompt() -> None:
 
     with pytest.raises(ValidationError):
         VisualScene(
-            scene_id="s1", section_id="s1", scene_index=0,
-            section_type="narration", original_text="text",
+            scene_id="s1",
+            section_id="s1",
+            scene_index=0,
+            section_type="narration",
+            original_text="text",
             prompt="x" * 2001,
         )
 
@@ -177,7 +186,9 @@ def test_script_section_rejects_oversized_image_prompt() -> None:
 
     with pytest.raises(ValidationError):
         ScriptSection(
-            section_id="s1", type="narration", text="hello",
+            section_id="s1",
+            type="narration",
+            text="hello",
             image_prompt="x" * 2001,
         )
 
@@ -186,7 +197,9 @@ def test_script_section_accepts_valid_image_prompt() -> None:
     from creator_domain.models.script_draft import ScriptSection
 
     section = ScriptSection(
-        section_id="s1", type="narration", text="hello",
+        section_id="s1",
+        type="narration",
+        text="hello",
         image_prompt="a beautiful sunset",
     )
     assert section.image_prompt == "a beautiful sunset"
@@ -198,3 +211,137 @@ def test_json_script_parser_rejects_oversized_image_prompt() -> None:
     with pytest.raises(ValueError, match="image_prompt exceeds 2000 character limit"):
         parse_json_scenes(json.dumps(payload))
 
+
+def _stub_registry_with_models() -> object:
+    from creator_provider.registry import ModelCatalogEntry, ProviderCategory, ProviderRegistry
+
+    registry = ProviderRegistry()
+    registry.register_model(
+        ModelCatalogEntry(
+            model_key="some-tts-model",
+            provider_type="stub",
+            endpoint="http://stub",
+            category=ProviderCategory.TTS,
+        )
+    )
+    registry.register_model(
+        ModelCatalogEntry(
+            model_key="some-llm-model",
+            provider_type="stub",
+            endpoint="http://stub",
+            category=ProviderCategory.LLM,
+        )
+    )
+    registry.register_model(
+        ModelCatalogEntry(
+            model_key="sd15",
+            provider_type="stub",
+            endpoint="http://stub",
+            category=ProviderCategory.IMAGE,
+        )
+    )
+    registry.register_model(
+        ModelCatalogEntry(
+            model_key="qwen3-4b",
+            provider_type="stub",
+            endpoint="http://stub",
+            category=ProviderCategory.LLM,
+        )
+    )
+    registry.register_model(
+        ModelCatalogEntry(
+            model_key="qwen3-tts",
+            provider_type="stub",
+            endpoint="http://stub",
+            category=ProviderCategory.TTS,
+        )
+    )
+    return registry
+
+
+def test_validate_model_key_rejects_wrong_expected_category(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from creator_provider.registry import ProviderRegistry
+
+    registry = _stub_registry_with_models()
+    monkeypatch.setattr(ProviderRegistry, "create_default", classmethod(lambda cls: registry))
+
+    with pytest.raises(HTTPException) as exc:
+        validate_model_key("some-tts-model", expected_category="llm")
+
+    assert exc.value.status_code == 400
+    assert "is a tts model" in str(exc.value.detail)
+    assert "llm model is required" in str(exc.value.detail)
+
+
+def test_validate_model_key_accepts_matching_expected_category(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from creator_provider.registry import ProviderRegistry
+
+    registry = _stub_registry_with_models()
+    monkeypatch.setattr(ProviderRegistry, "create_default", classmethod(lambda cls: registry))
+
+    validate_model_key("some-llm-model", expected_category="llm")
+
+
+@pytest.mark.asyncio
+async def test_generate_script_rejects_image_model_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    from creator_provider.registry import ProviderRegistry
+    import shorts_api.routes.creator_runs_core as creator_runs_core
+
+    registry = _stub_registry_with_models()
+    monkeypatch.setattr(ProviderRegistry, "create_default", classmethod(lambda cls: registry))
+
+    async def _no_active_tasks(_: int) -> bool:
+        return False
+
+    async def _fake_project(project_id: int, workspace_id: int | None = None) -> object:
+        _ = workspace_id
+        return SimpleNamespace(id=project_id, title="title", idea_brief="brief")
+
+    async def _fake_dispatch(**_: object) -> dict[str, object]:
+        return {"task_id": "t1"}
+
+    monkeypatch.setattr(creator_runs_core, "_has_active_tasks_for_run", _no_active_tasks)
+    monkeypatch.setattr(creator_runs_core.project_service, "get_project", _fake_project)
+    monkeypatch.setattr(creator_runs_core, "cas_dispatch_with_rollback", _fake_dispatch)
+
+    user = CurrentUser(user_id=1, workspace_id=1)
+    run = SimpleNamespace(id=1, project_id=7, current_stage="IDEA_READY", restart_from=None)
+    request = GenerateScriptRequest(model_key="sd15")
+
+    with pytest.raises(HTTPException) as exc:
+        await generate_script_trigger(run_id=1, request=request, access=(user, run))  # pyright: ignore[reportArgumentType]
+
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_generate_audio_rejects_llm_model_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    from creator_provider.registry import ProviderRegistry
+    import shorts_api.routes.creator_runs_scene_assets as creator_runs_scene_assets
+
+    registry = _stub_registry_with_models()
+    monkeypatch.setattr(ProviderRegistry, "create_default", classmethod(lambda cls: registry))
+
+    async def _no_active_tasks(_: int) -> bool:
+        return False
+
+    async def _fake_dispatch(**_: object) -> dict[str, object]:
+        return {"task_id": "t1"}
+
+    monkeypatch.setattr(creator_runs_scene_assets, "_has_active_tasks_for_run", _no_active_tasks)
+    monkeypatch.setattr(creator_runs_scene_assets, "cas_dispatch_with_rollback", _fake_dispatch)
+
+    user = CurrentUser(user_id=1, workspace_id=1)
+    run = SimpleNamespace(
+        id=1, project_id=7, current_stage="VISUAL_ASSET_REVIEW", restart_from=None
+    )
+    request = GenerateAudioRequest(tts_model="qwen3-4b")
+
+    with pytest.raises(HTTPException) as exc:
+        await generate_audio_trigger(run_id=1, request=request, access=(user, run))  # pyright: ignore[reportArgumentType]
+
+    assert exc.value.status_code == 400

@@ -40,12 +40,22 @@ __all__ = [
 ]
 
 
-def validate_model_key(model_key: str) -> None:
+def validate_model_key(model_key: str, expected_category: str | None = None) -> None:
     try:
-        from creator_provider.registry import ProviderRegistry
+        from creator_provider.registry import ProviderCategory, ProviderRegistry
 
         registry = ProviderRegistry.create_default()
-        registry.resolve(model_key)
+        entry = registry.resolve(model_key)
+        if expected_category is not None:
+            expected = ProviderCategory(expected_category)
+            if entry.category != expected:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Model '{model_key}' is a {entry.category.value} model, "
+                        f"but a {expected_category} model is required here."
+                    ),
+                )
     except KeyError:
         raise HTTPException(
             status_code=400,
@@ -78,10 +88,10 @@ def validate_model_defaults(model_defaults: Mapping[str, str] | None) -> None:
         return
 
     validators = {
-        "script_model": validate_model_key,
-        "image_model": validate_model_key,
-        "tts_model": validate_model_key,
-        "subtitle_model": validate_model_key,
+        "script_model": lambda v: validate_model_key(v, expected_category="llm"),
+        "image_model": lambda v: validate_model_key(v, expected_category="image"),
+        "tts_model": lambda v: validate_model_key(v, expected_category="tts"),
+        "subtitle_model": lambda v: validate_model_key(v, expected_category="stt"),
         "render_profile": validate_render_profile,
     }
 

@@ -123,8 +123,9 @@ def contract_services(
         task_counter["value"] += 1
         return f"subtitle-task-{task_counter['value']}"
 
-    def validate_model_key(model_key: str) -> None:
+    def validate_model_key(model_key: str, expected_category: str | None = None) -> None:
         _ = model_key
+        _ = expected_category
 
     def validate_model_defaults(model_defaults: dict[str, str] | None) -> None:
         _ = model_defaults
