@@ -574,4 +574,4 @@ class TestOllamaProvider:
         assert opts["temperature"] == 0.5
         assert opts["num_ctx"] == 4096
         assert "evil_nested" not in opts
-        assert mock_warning.call_count == 2  # top-level 'options' filtered + nested 'evil_nested' filtered
+        assert mock_warning.call_count == 1  # nested 'evil_nested' filtered

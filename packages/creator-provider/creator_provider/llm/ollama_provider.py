@@ -79,7 +79,7 @@ class OllamaProvider(LLMProvider):
             "options": {"num_predict": 2048},
         }
         if params:
-            filtered_keys = [key for key in params if key not in self._ALLOWED_API_KEYS]
+            filtered_keys = [key for key in params if key not in self._ALLOWED_API_KEYS and key != "options"]
             if filtered_keys:
                 logger.warning("Filtered unsupported Ollama params: %s", sorted(filtered_keys))
             for key in self._ALLOWED_API_KEYS:
