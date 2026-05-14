@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from importlib import import_module
 import struct
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -54,7 +55,10 @@ class TestQwenTTSProviderGenerate(unittest.TestCase):
         mock_client_cls.return_value = mock_ctx
 
         provider = QwenTTSProvider(endpoint="http://tts:8100", model_key="qwen3-tts")
-        self._run(provider.generate("Hello", voice="default", params={"output_path": "/tmp/test.wav"}))
+        with patch.dict("os.environ", {"ARTIFACT_ROOT": "/tmp"}):
+            self._run(
+                provider.generate("Hello", voice="default", params={"output_path": "/tmp/test.wav"})
+            )
 
         mock_client.post.assert_called_once()
         call_args = mock_client.post.call_args
@@ -74,7 +78,14 @@ class TestQwenTTSProviderGenerate(unittest.TestCase):
         mock_client_cls.return_value = mock_ctx
 
         provider = QwenTTSProvider(endpoint="http://tts:8100", model_key="qwen3-tts")
-        self._run(provider.generate("Test text", voice="custom_voice", params={"language": "en", "speed": 1.5, "output_path": "/tmp/out.wav"}))
+        with patch.dict("os.environ", {"ARTIFACT_ROOT": "/tmp"}):
+            self._run(
+                provider.generate(
+                    "Test text",
+                    voice="custom_voice",
+                    params={"language": "en", "speed": 1.5, "output_path": "/tmp/out.wav"},
+                )
+            )
 
         call_args = mock_client.post.call_args
         payload = call_args.kwargs.get("json") or call_args.args[1]
@@ -97,7 +108,8 @@ class TestQwenTTSProviderGenerate(unittest.TestCase):
         mock_client_cls.return_value = mock_ctx
 
         provider = QwenTTSProvider(endpoint="http://tts:8100", model_key="qwen3-tts")
-        result = self._run(provider.generate("Hi", params={"output_path": "/tmp/test.wav"}))
+        with patch.dict("os.environ", {"ARTIFACT_ROOT": "/tmp"}):
+            result = self._run(provider.generate("Hi", params={"output_path": "/tmp/test.wav"}))
 
         self.assertEqual(result.model_key, "qwen3-tts")
         self.assertEqual(result.audio_path, "/tmp/test.wav")
@@ -109,7 +121,9 @@ class TestQwenTTSProviderGenerate(unittest.TestCase):
 
         mock_client = AsyncMock()
         request = httpx.Request("POST", "http://tts:8100/synthesize")
-        mock_client.post = AsyncMock(side_effect=httpx.ConnectError("Connection refused", request=request))
+        mock_client.post = AsyncMock(
+            side_effect=httpx.ConnectError("Connection refused", request=request)
+        )
         mock_ctx = AsyncMock()
         mock_ctx.__aenter__.return_value = mock_client
         mock_client_cls.return_value = mock_ctx
@@ -117,7 +131,8 @@ class TestQwenTTSProviderGenerate(unittest.TestCase):
         provider = QwenTTSProvider(endpoint="http://tts:8100", model_key="qwen3-tts")
 
         with self.assertRaises(RuntimeError) as ctx:
-            self._run(provider.generate("test", params={"output_path": "/tmp/x.wav"}))
+            with patch.dict("os.environ", {"ARTIFACT_ROOT": "/tmp"}):
+                self._run(provider.generate("test", params={"output_path": "/tmp/x.wav"}))
 
         self.assertIn("Qwen3 TTS provider", str(ctx.exception))
         self.assertIn("/synthesize", str(ctx.exception))
@@ -137,16 +152,46 @@ class TestQwenTTSProviderGenerate(unittest.TestCase):
 
         provider = QwenTTSProvider(endpoint="http://tts:8100", model_key="qwen3-tts")
 
-        with patch.dict("os.environ", {"TTS_DEFAULT_LANGUAGE": "en"}):
+        with patch.dict("os.environ", {"TTS_DEFAULT_LANGUAGE": "en", "ARTIFACT_ROOT": "/tmp"}):
             self._run(provider.generate("Hi", params={"output_path": "/tmp/out.wav"}))
 
-        payload = mock_client.post.call_args.kwargs.get("json") or mock_client.post.call_args.args[1]
+        payload = (
+            mock_client.post.call_args.kwargs.get("json") or mock_client.post.call_args.args[1]
+        )
         self.assertEqual(payload["language"], "en")
+
+    @patch("creator_provider.tts.qwen_tts_provider.httpx.AsyncClient")
+    def test_rejects_path_traversal_output_path(self, mock_client_cls: MagicMock) -> None:
+        wav = _make_wav_bytes()
+        mock_response = MagicMock()
+        mock_response.content = wav
+        mock_response.raise_for_status = MagicMock()
+        unsafe_path_component = import_module("creator_domain.sanitize").UnsafePathComponent
+
+        mock_client = AsyncMock()
+        mock_client.post = AsyncMock(return_value=mock_response)
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__.return_value = mock_client
+        mock_client_cls.return_value = mock_ctx
+
+        provider = QwenTTSProvider(endpoint="http://tts:8100", model_key="qwen3-tts")
+
+        with patch.dict("os.environ", {"ARTIFACT_ROOT": "/tmp/artifacts"}):
+            bad_paths = (
+                "../../etc/passwd",
+                "data/artifacts/../../../etc/passwd",
+                "/tmp/evil.wav",
+            )
+            for bad_path in bad_paths:
+                with self.assertRaisesRegex(unsafe_path_component, "escapes artifact root"):
+                    self._run(provider.generate("Hi", params={"output_path": bad_path}))
 
 
 class TestWavDuration(unittest.TestCase):
     def test_valid_wav_header(self) -> None:
-        wav = _make_wav_bytes(sample_rate=22050, num_channels=1, bits_per_sample=16, data_size=44100)
+        wav = _make_wav_bytes(
+            sample_rate=22050, num_channels=1, bits_per_sample=16, data_size=44100
+        )
         duration = _wav_duration_seconds(wav)
         self.assertAlmostEqual(duration, 1.0, places=2)
 

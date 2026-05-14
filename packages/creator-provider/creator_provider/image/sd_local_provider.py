@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import os
 import tempfile
+from importlib import import_module
 from pathlib import Path
 from typing import Any, cast
 
@@ -66,7 +68,15 @@ class SDLocalProvider(ImageProvider):
 
         requested_output = merged_params.get("output_path")
         if requested_output:
-            output_path = Path(str(requested_output))
+            candidate_output = str(requested_output)
+            artifact_root = os.getenv("ARTIFACT_ROOT")
+            # NOTE: validate-then-write race (symlink swap) is acceptable here;
+            # artifact directories are server-controlled and not user-writable.
+            validated_output = import_module("creator_domain.sanitize").validate_artifact_path(
+                candidate_output,
+                artifact_root or "data/artifacts",
+            )
+            output_path = Path(validated_output)
         else:
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                 output_path = Path(tmp.name)

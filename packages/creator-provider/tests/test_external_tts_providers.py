@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from importlib import import_module
 from pathlib import Path
 from unittest import mock
 
@@ -40,8 +41,13 @@ class TestElevenLabsProvider:
         mock_response.content = audio_bytes
 
         output_path = tmp_path / "nested" / "elevenlabs.mp3"
-        with mock.patch.dict(os.environ, {"ELEVENLABS_API_KEY": "el-test"}):
+        with mock.patch.dict(
+            os.environ, {"ELEVENLABS_API_KEY": "el-test", "ARTIFACT_ROOT": str(tmp_path)}
+        ):
             from creator_provider.tts.elevenlabs_provider import ElevenLabsProvider
+
+            unsafe_path_component = import_module("creator_domain.sanitize").UnsafePathComponent
+
 
             provider = ElevenLabsProvider(
                 endpoint="https://api.elevenlabs.io",
@@ -76,7 +82,10 @@ class TestElevenLabsProvider:
                 endpoint="https://api.elevenlabs.io",
                 model_key="elevenlabs-multilingual-v2",
             )
-            with mock.patch("httpx.AsyncClient.post", return_value=mock_response), pytest.raises(RuntimeError, match="ElevenLabs API request failed"):
+            with (
+                mock.patch("httpx.AsyncClient.post", return_value=mock_response),
+                pytest.raises(RuntimeError, match="ElevenLabs API request failed"),
+            ):
                 await provider.generate("test text")
 
     @pytest.mark.asyncio
@@ -92,8 +101,40 @@ class TestElevenLabsProvider:
                 endpoint="https://api.elevenlabs.io",
                 model_key="elevenlabs-multilingual-v2",
             )
-            with mock.patch("httpx.AsyncClient.post", return_value=mock_response), pytest.raises(RuntimeError, match="empty response"):
+            with (
+                mock.patch("httpx.AsyncClient.post", return_value=mock_response),
+                pytest.raises(RuntimeError, match="empty response"),
+            ):
                 await provider.generate("test text")
+
+    @pytest.mark.asyncio
+    async def test_generate_rejects_path_traversal_output_path(self, tmp_path: Path):
+        mock_response = mock.MagicMock()
+        mock_response.raise_for_status = mock.MagicMock()
+        mock_response.content = b"a" * 32000
+
+        with mock.patch.dict(
+            os.environ, {"ELEVENLABS_API_KEY": "el-test", "ARTIFACT_ROOT": str(tmp_path)}
+        ):
+            from creator_provider.tts.elevenlabs_provider import ElevenLabsProvider
+
+            unsafe_path_component = import_module("creator_domain.sanitize").UnsafePathComponent
+
+            provider = ElevenLabsProvider(
+                endpoint="https://api.elevenlabs.io",
+                model_key="elevenlabs-multilingual-v2",
+            )
+            bad_paths = (
+                "../../etc/passwd",
+                "data/artifacts/../../../etc/passwd",
+                "/tmp/evil.wav",
+            )
+            for bad_path in bad_paths:
+                with (
+                    mock.patch("httpx.AsyncClient.post", return_value=mock_response),
+                    pytest.raises(unsafe_path_component, match="escapes artifact root"),
+                ):
+                    await provider.generate("test text", params={"output_path": bad_path})
 
 
 class TestOpenAITTSProvider:
@@ -101,7 +142,9 @@ class TestOpenAITTSProvider:
         with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}):
             from creator_provider.tts.openai_tts_provider import OpenAITTSProvider
 
-            provider = OpenAITTSProvider(endpoint="https://api.openai.com", model_key="openai-tts-1")
+            provider = OpenAITTSProvider(
+                endpoint="https://api.openai.com", model_key="openai-tts-1"
+            )
             assert provider.endpoint == "https://api.openai.com"
             assert provider.model_key == "openai-tts-1"
             assert provider.api_key == "sk-test"
@@ -122,10 +165,14 @@ class TestOpenAITTSProvider:
         mock_response.content = audio_bytes
 
         output_path = tmp_path / "nested" / "openai.mp3"
-        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "ARTIFACT_ROOT": str(tmp_path)}):
+        with mock.patch.dict(
+            os.environ, {"OPENAI_API_KEY": "sk-test", "ARTIFACT_ROOT": str(tmp_path)}
+        ):
             from creator_provider.tts.openai_tts_provider import OpenAITTSProvider
 
-            provider = OpenAITTSProvider(endpoint="https://api.openai.com", model_key="openai-tts-1")
+            provider = OpenAITTSProvider(
+                endpoint="https://api.openai.com", model_key="openai-tts-1"
+            )
             with mock.patch("httpx.AsyncClient.post", return_value=mock_response) as mock_post:
                 result = await provider.generate(
                     "test text",
@@ -151,8 +198,13 @@ class TestOpenAITTSProvider:
         with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}):
             from creator_provider.tts.openai_tts_provider import OpenAITTSProvider
 
-            provider = OpenAITTSProvider(endpoint="https://api.openai.com", model_key="openai-tts-1")
-            with mock.patch("httpx.AsyncClient.post", return_value=mock_response), pytest.raises(RuntimeError, match="OpenAI TTS API request failed"):
+            provider = OpenAITTSProvider(
+                endpoint="https://api.openai.com", model_key="openai-tts-1"
+            )
+            with (
+                mock.patch("httpx.AsyncClient.post", return_value=mock_response),
+                pytest.raises(RuntimeError, match="OpenAI TTS API request failed"),
+            ):
                 await provider.generate("test text")
 
     @pytest.mark.asyncio
@@ -164,6 +216,11 @@ class TestOpenAITTSProvider:
         with mock.patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test"}):
             from creator_provider.tts.openai_tts_provider import OpenAITTSProvider
 
-            provider = OpenAITTSProvider(endpoint="https://api.openai.com", model_key="openai-tts-1")
-            with mock.patch("httpx.AsyncClient.post", return_value=mock_response), pytest.raises(RuntimeError, match="empty response"):
+            provider = OpenAITTSProvider(
+                endpoint="https://api.openai.com", model_key="openai-tts-1"
+            )
+            with (
+                mock.patch("httpx.AsyncClient.post", return_value=mock_response),
+                pytest.raises(RuntimeError, match="empty response"),
+            ):
                 await provider.generate("test text")
