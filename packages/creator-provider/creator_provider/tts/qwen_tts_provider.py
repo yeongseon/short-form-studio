@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 
 from creator_provider.base import AudioResult, TTSProvider
+from creator_provider.exceptions import map_httpx_error
 
 
 class QwenTTSProvider(TTSProvider):
@@ -36,7 +37,7 @@ class QwenTTSProvider(TTSProvider):
                 response = await client.post(url, json=payload)
                 response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"Failed to connect to Qwen3 TTS provider at {url}: {exc}") from exc
+            raise map_httpx_error(exc, f"Failed to connect to Qwen3 TTS provider at {url}") from exc
 
         audio_bytes = response.content
         requested_output = merged_params.get("output_path")

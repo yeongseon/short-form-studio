@@ -146,6 +146,10 @@ def generate_scene_image(
                             "Provider timed out during scene image generation "
                             f"for run {run_id} scene {target_scene.scene_id}"
                         ) from exc
+                    except ProviderTimeoutError:
+                        raise
+                    except RateLimitError:
+                        raise
                     except SoftTimeLimitExceeded:
                         raise
                     except Exception as exc:
@@ -214,6 +218,10 @@ def generate_scene_image(
                 )
                 results.append(scene_result)
             except SoftTimeLimitExceeded:
+                raise
+            except ProviderTimeoutError:
+                raise
+            except RateLimitError:
                 raise
             except Exception as exc:
                 scene_result.update({"status": "failed", "error": str(exc)})

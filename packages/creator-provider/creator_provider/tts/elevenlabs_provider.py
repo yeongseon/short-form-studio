@@ -9,6 +9,7 @@ import httpx
 
 from creator_provider.api_keys import resolve_api_key
 from creator_provider.base import AudioResult, TTSProvider
+from creator_provider.exceptions import ProviderError, map_httpx_error
 
 
 class ElevenLabsProvider(TTSProvider):
@@ -65,11 +66,11 @@ class ElevenLabsProvider(TTSProvider):
                 )
                 response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"ElevenLabs API request failed: {exc}") from exc
+            raise map_httpx_error(exc, "ElevenLabs API request failed") from exc
 
         audio_bytes = response.content
         if not audio_bytes:
-            raise RuntimeError("ElevenLabs API returned empty response")
+            raise ProviderError("ElevenLabs API returned empty response")
 
         output_path_str = merged_params.get("output_path")
         if output_path_str:

@@ -8,6 +8,7 @@ import httpx
 
 from creator_provider.api_keys import resolve_api_key
 from creator_provider.base import AudioResult, TTSProvider
+from creator_provider.exceptions import ProviderError, map_httpx_error
 
 
 class OpenAITTSProvider(TTSProvider):
@@ -50,11 +51,11 @@ class OpenAITTSProvider(TTSProvider):
                 response = await client.post(url, json=payload, headers=headers)
                 response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"OpenAI TTS API request failed: {exc}") from exc
+            raise map_httpx_error(exc, "OpenAI TTS API request failed") from exc
 
         audio_bytes = response.content
         if not audio_bytes:
-            raise RuntimeError("OpenAI TTS API returned empty response")
+            raise ProviderError("OpenAI TTS API returned empty response")
 
         output_path_str = merged_params.get("output_path")
         if output_path_str:

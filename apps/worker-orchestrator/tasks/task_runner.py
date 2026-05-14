@@ -45,6 +45,7 @@ from celery.exceptions import Ignore, SoftTimeLimitExceeded
 from creator_domain.models.stage import RunStage
 from creator_provider.exceptions import ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
+from creator_provider.versioned_assets import clear_loaded_asset_versions
 from creator_service.run_service import run_service as _run_service
 from creator_service.task_tracking_service import task_tracking_service as _task_tracking_service
 from creator_service.usage_service import resolve_workspace_id_from_run
@@ -121,6 +122,8 @@ async def _run_task_inner(
     execute: Callable[[TaskContext], Awaitable[TaskResult]],
 ) -> dict[str, object]:
     """Inner async execution with full lifecycle management."""
+    # Reset asset version tracking to isolate from import-time loads
+    clear_loaded_asset_versions()
     start_time = datetime.now(timezone.utc)
 
     # 1. Task tracking: start
@@ -157,6 +160,15 @@ async def _run_task_inner(
     if run is not None:
         workspace_id = await resolve_workspace_id_from_run(run_id)
         project_id = run.get("project_id")
+    logger.info(
+        "Task context resolved",
+        extra={
+            "task_name": config.task_name,
+            "run_id": run_id,
+            "workspace_id": workspace_id,
+            "project_id": project_id,
+        },
+    )
 
     # 4. Execute task-specific logic
     ctx = TaskContext(
@@ -263,11 +275,31 @@ def run_task(
     - Retryable errors → re-raise for Celery retry
     - Other errors → mark_failed + FAILED transition, re-raise
     """
-    task_id = str(getattr(getattr(celery_self, "request", None), "id", None) or f"run-{run_id}")
+    request = getattr(celery_self, "request", None)
+    raw_args = getattr(request, "args", None)
+    raw_kwargs = getattr(request, "kwargs", None)
+    if raw_args is None:
+        raw_args = ()
+    if raw_kwargs is None:
+        raw_kwargs = {}
+    if not isinstance(raw_args, (list, tuple)):
+        raise ValueError(f"Malformed broker message: args is {type(raw_args).__name__}, expected list/tuple")
+    if not isinstance(raw_kwargs, dict):
+        raise ValueError(f"Malformed broker message: kwargs is {type(raw_kwargs).__name__}, expected dict")
+    message = {
+        "run_id": run_id,
+        "task_name": config.task_name,
+        "args": list(raw_args),
+        "kwargs": dict(raw_kwargs),
+    }
+    validated_message = validate_task_message(message)
+    validated_run_id = validated_message["run_id"]
+
+    task_id = str(getattr(request, "id", None) or f"run-{validated_run_id}")
     safe_failure_stages = config.safe_failure_stages or config.safe_stages
 
     try:
-        return asyncio.run(_run_task_inner(run_id, task_id, config, execute))
+        return asyncio.run(_run_task_inner(validated_run_id, task_id, config, execute))
     except StageGuardError:
         try:
             asyncio.run(_task_tracking_service.mark_rejected(task_id, "stage_guard"))
@@ -277,17 +309,17 @@ def run_task(
             raise
         raise Ignore()
     except SoftTimeLimitExceeded:
-        logger.error("Task %s timed out for run %s", config.task_name, run_id)
+        logger.error("Task %s timed out for run %s", config.task_name, validated_run_id)
         try:
             asyncio.run(
                 _run_service.storage.conditional_update_run(
-                    run_id,
+                    validated_run_id,
                     {"current_stage": RunStage.FAILED.value, "status": "failed"},
                     expected_stages=safe_failure_stages,
                 )
             )
         except Exception:
-            logger.exception("Failed to mark run %d as FAILED after timeout", run_id)
+            logger.exception("Failed to mark run %d as FAILED after timeout", validated_run_id)
         raise
     except Exception as exc:
         if isinstance(exc, config.no_fail_transition_exceptions):
@@ -299,10 +331,16 @@ def run_task(
             raise
         try:
             asyncio.run(
-                _handle_general_failure(task_id, run_id, config.task_name, safe_failure_stages, exc)
+                _handle_general_failure(
+                    task_id,
+                    validated_run_id,
+                    config.task_name,
+                    safe_failure_stages,
+                    exc,
+                )
             )
         except Exception:
-            logger.exception("Failed error cleanup for run %d", run_id)
+            logger.exception("Failed error cleanup for run %d", validated_run_id)
         raise
 
 
@@ -339,3 +377,21 @@ class GpuLockContext:
             logger.exception("Failed to release GPU lock for %s", lock_id or self.task_id)
         finally:
             self.acquired = False
+
+
+def validate_task_message(message: dict[str, Any]) -> dict[str, Any]:
+    if "run_id" not in message:
+        raise ValueError("missing required field: run_id")
+    run_id = message["run_id"]
+    if isinstance(run_id, bool) or not isinstance(run_id, int):
+        raise ValueError("run_id must be int")
+    if run_id <= 0:
+        raise ValueError("run_id must be positive")
+
+    if "task_name" in message and not isinstance(message["task_name"], str):
+        raise ValueError("task_name must be str")
+    if "args" in message and not isinstance(message["args"], list):
+        raise ValueError("args must be list")
+    if "kwargs" in message and not isinstance(message["kwargs"], dict):
+        raise ValueError("kwargs must be dict")
+    return {k: message[k] for k in ("run_id", "task_name", "args", "kwargs") if k in message}

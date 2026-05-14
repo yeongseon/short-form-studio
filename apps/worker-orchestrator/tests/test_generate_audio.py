@@ -281,6 +281,26 @@ def test_generate_audio_provider_failure_marks_failed(monkeypatch: pytest.Monkey
     assert storage.cas_calls[0][2] == frozenset({"VISUAL_ASSET_REVIEW", "AUDIO_GENERATING"})
 
 
+def test_generate_audio_preserves_provider_timeout_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakeProvider(error=generate_audio_module.ProviderTimeoutError("provider timeout"))
+    _patch_registry(
+        monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider)
+    )
+
+    script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Some script"))
+    audio_service = FakeAudioService()
+    storage = _make_storage(run_id=108, stage="VISUAL_ASSET_REVIEW")
+    _patch_services(monkeypatch, script_service, audio_service, storage)
+
+    with pytest.raises(generate_audio_module.ProviderTimeoutError, match="provider timeout"):
+        _invoke_task(run_id=108)
+
+    assert audio_service.calls == []
+    assert storage.calls == []
+
+
 def test_generate_audio_with_gpu_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = FakeProvider()
     entry = FakeEntry(requires_gpu=True)

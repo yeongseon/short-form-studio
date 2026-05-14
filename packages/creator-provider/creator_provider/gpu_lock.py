@@ -1,3 +1,4 @@
+import asyncio
 import os
 import time
 from collections.abc import AsyncIterator
@@ -6,10 +7,16 @@ from typing import Any
 
 GPU_LOCK_KEY = os.getenv("GPU_LOCK_KEY", "gpu:lock")
 
-try:
-    GPU_LOCK_TIMEOUT_SECONDS = int(os.getenv("GPU_LOCK_TIMEOUT_SECONDS", "600"))
-except ValueError:
-    GPU_LOCK_TIMEOUT_SECONDS = 600
+
+def _parse_timeout_seconds() -> int:
+    raw = os.getenv("GPU_LOCK_TIMEOUT_SECONDS", "600")
+    try:
+        return int(raw)
+    except ValueError:
+        return 600
+
+
+GPU_LOCK_TIMEOUT_SECONDS = _parse_timeout_seconds()
 
 
 RELEASE_LOCK_SCRIPT = """
@@ -35,9 +42,10 @@ def acquire_gpu_lock(
 ) -> bool:
     start_time = time.monotonic()
     backoff = retry_interval
+    lease_expires_at = int(time.time()) + timeout
 
     while True:
-        lock_value = f"{task_id}:{int(time.time())}"
+        lock_value = f"{task_id}:{lease_expires_at}"
         acquired = redis_client.set(GPU_LOCK_KEY, lock_value, nx=True, ex=timeout)
         if acquired:
             return True
@@ -63,7 +71,7 @@ async def gpu_lock_context(
     task_id: str,
     timeout: int = GPU_LOCK_TIMEOUT_SECONDS,
 ) -> AsyncIterator[None]:
-    acquire_gpu_lock(redis_client, task_id, timeout=timeout)
+    await asyncio.to_thread(acquire_gpu_lock, redis_client, task_id, timeout)
     try:
         yield
     finally:

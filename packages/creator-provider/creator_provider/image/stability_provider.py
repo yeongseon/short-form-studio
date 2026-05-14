@@ -8,6 +8,7 @@ import httpx
 
 from creator_provider.api_keys import resolve_api_key
 from creator_provider.base import ImageProvider, ImageResult
+from creator_provider.exceptions import ProviderError, map_httpx_error
 from creator_provider.versioned_assets import get_loaded_asset_versions, get_schema
 
 
@@ -44,11 +45,11 @@ class StabilityProvider(ImageProvider):
                 response = await client.post(url, data=form_data, headers=headers)
                 response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"Stability AI API request failed: {exc}") from exc
+            raise map_httpx_error(exc, "Stability AI API request failed") from exc
 
         image_bytes = response.content
         if not image_bytes:
-            raise RuntimeError("Stability AI API returned empty response")
+            raise ProviderError("Stability AI API returned empty response")
 
         output_path_str = merged.get("output_path")
         if output_path_str:
@@ -67,7 +68,6 @@ class StabilityProvider(ImageProvider):
             model_key=self.model_key,
             metadata={"asset_versions": get_loaded_asset_versions()},
         )
-
 
     @staticmethod
     def _parse_aspect_ratio(ratio: str) -> tuple[int, int]:

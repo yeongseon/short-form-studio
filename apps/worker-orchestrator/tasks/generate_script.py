@@ -92,6 +92,10 @@ def generate_script(
                 raise ProviderTimeoutError(
                     f"Provider timed out during script generation for run {run_id}"
                 ) from exc
+            except ProviderTimeoutError:
+                raise
+            except RateLimitError:
+                raise
             except SoftTimeLimitExceeded:
                 raise
             except Exception as exc:

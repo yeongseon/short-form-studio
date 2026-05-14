@@ -3,18 +3,19 @@ from __future__ import annotations
 import base64
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
 from creator_provider.base import ImageProvider, ImageResult
+from creator_provider.exceptions import ProviderError, map_httpx_error
 from creator_provider.versioned_assets import get_loaded_asset_versions, get_prompt, get_schema
 
 
 class SDLocalProvider(ImageProvider):
     _SD_LOCAL_SCHEMA = get_schema("sd_local_image_request")
     _QUALITY_PREFIX = get_prompt("sd_local_quality_prefix").strip()
-    _ALLOWED_API_KEYS = frozenset(_SD_LOCAL_SCHEMA["allowed_api_keys"])
+    _ALLOWED_API_KEYS = frozenset(cast(list[str], _SD_LOCAL_SCHEMA["allowed_api_keys"]))
 
     def __init__(self, endpoint: str, model_key: str):
         self.endpoint = endpoint.rstrip("/")
@@ -52,10 +53,13 @@ class SDLocalProvider(ImageProvider):
                 response = await client.post(url, json=payload)
                 response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"Failed to connect to SD Local provider at {url}: {exc}") from exc
+            raise map_httpx_error(exc, f"Failed to connect to SD Local provider at {url}") from exc
 
         data = response.json()
-        image_base64 = str(data["images"][0]).split(",", 1)[-1]
+        images = data.get("images", [])
+        if not images:
+            raise ProviderError("SD Local provider returned no images")
+        image_base64 = str(images[0]).split(",", 1)[-1]
         image_bytes = base64.b64decode(image_base64)
 
         requested_output = merged_params.get("output_path")
@@ -75,4 +79,3 @@ class SDLocalProvider(ImageProvider):
             model_key=self.model_key,
             metadata={"asset_versions": get_loaded_asset_versions()},
         )
-

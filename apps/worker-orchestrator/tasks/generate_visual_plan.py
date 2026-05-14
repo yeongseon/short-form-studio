@@ -171,6 +171,10 @@ def generate_visual_plan(
                 raise ProviderTimeoutError(
                     f"Provider timed out during visual plan generation for run {run_id}"
                 ) from exc
+            except ProviderTimeoutError:
+                raise
+            except RateLimitError:
+                raise
             except SoftTimeLimitExceeded:
                 raise
             except Exception as exc:
