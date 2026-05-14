@@ -13,9 +13,7 @@ class StageReviewStorageBackend(Protocol):
         """Persist a review row and return stored row."""
         ...
 
-    async def get_latest_review(
-        self, run_id: int, stage_name: str
-    ) -> dict[str, Any] | None:
+    async def get_latest_review(self, run_id: int, stage_name: str) -> dict[str, Any] | None:
         """Fetch the most recent review for a run and stage."""
         ...
 
@@ -36,14 +34,8 @@ class InMemoryStageReviewStorage:
         self._next_id += 1
         return dict(saved)
 
-    async def get_latest_review(
-        self, run_id: int, stage_name: str
-    ) -> dict[str, Any] | None:
-        matches = [
-            r
-            for r in self._rows
-            if r["run_id"] == run_id and r["stage_name"] == stage_name
-        ]
+    async def get_latest_review(self, run_id: int, stage_name: str) -> dict[str, Any] | None:
+        matches = [r for r in self._rows if r["run_id"] == run_id and r["stage_name"] == stage_name]
         if not matches:
             return None
         return dict(max(matches, key=lambda r: r["created_at"]))
@@ -96,6 +88,7 @@ class StageReviewService:
         target_stage: str,
         reviewer: str = "agent",
         notes: str | None = None,
+        workspace_id: int | None = None,
     ) -> Any:
         """Atomically validate stage, record approval, and advance.
 
@@ -127,15 +120,14 @@ class StageReviewService:
             raise ValueError(f"Invalid target stage '{target_stage}'") from exc
 
         if not can_transition(stage, target):
-            raise ValueError(
-                f"Cannot transition from {stage.value} to {target.value}"
-            )
+            raise ValueError(f"Cannot transition from {stage.value} to {target.value}")
 
         # 3. Atomically advance stage (CAS — fails if stage changed concurrently)
         ok, row = await run_service.storage.conditional_update_run(
             run_id,
             {"current_stage": target.value},
             frozenset({stage.value}),
+            workspace_id=workspace_id,
         )
 
         if not ok:
@@ -157,14 +149,12 @@ class StageReviewService:
             }
         )
 
-        updated_run = await run_service.get_run(run_id)
+        updated_run = await run_service.get_run(run_id, workspace_id=workspace_id)
         if updated_run is None:
             raise ValueError(f"Run {run_id} not found")
         return updated_run
 
-    async def get_latest_review(
-        self, run_id: int, stage_name: str
-    ) -> dict[str, Any] | None:
+    async def get_latest_review(self, run_id: int, stage_name: str) -> dict[str, Any] | None:
         """Get the latest review for a run and stage."""
         return await self.storage.get_latest_review(run_id, stage_name)
 

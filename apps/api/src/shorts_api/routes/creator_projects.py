@@ -10,7 +10,12 @@ from creator_service.run_service import run_service
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from shorts_api.auth import CurrentUser, require_current_user, require_project_access, workspace_service
+from shorts_api.auth import (
+    CurrentUser,
+    require_current_user,
+    require_project_access,
+    workspace_service,
+)
 from shorts_api.routes import creator_runs_utils
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -60,7 +65,11 @@ async def update_project(
     access: tuple[CurrentUser, Project] = Depends(require_project_access),
 ) -> dict[str, object]:
     user, project = access
-    updated_project = await project_service.update_project(project_id, title=request.title)
+    updated_project = await project_service.update_project(
+        project_id,
+        title=request.title,
+        workspace_id=user.workspace_id,
+    )
     if updated_project is None:
         raise HTTPException(status_code=404, detail="Project not found")
     return updated_project.model_dump(mode="json")
@@ -116,7 +125,7 @@ async def delete_project(
 ) -> dict[str, object]:
     user, project = access
     run_ids = await _cleanup_project_resources(project.id)
-    deleted = await project_service.delete_project(project_id)
+    deleted = await project_service.delete_project(project_id, workspace_id=user.workspace_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Project not found")
 

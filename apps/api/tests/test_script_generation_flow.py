@@ -83,7 +83,9 @@ class StubProjectService:
         self.next_id += 1
         return project
 
-    async def get_project(self, project_id: int) -> StubProject | None:
+    async def get_project(
+        self, project_id: int, workspace_id: int | None = None
+    ) -> StubProject | None:
         return self.projects.get(project_id)
 
 
@@ -92,8 +94,13 @@ class StubRunStorage:
         self.run_service = run_service
 
     async def conditional_update_run(
-        self, run_id: int, updates: dict[str, object], expected_stages: frozenset[str]
+        self,
+        run_id: int,
+        updates: dict[str, object],
+        expected_stages: frozenset[str],
+        workspace_id: int | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
+        _ = workspace_id
         run = self.run_service.runs.get(run_id)
         if run is None:
             return False, None
@@ -132,7 +139,8 @@ class StubRunService:
         self.next_id += 1
         return run
 
-    async def get_run(self, run_id: int) -> StubRun | None:
+    async def get_run(self, run_id: int, workspace_id: int | None = None) -> StubRun | None:
+        _ = workspace_id
         return self.runs.get(run_id)
 
 
@@ -182,8 +190,9 @@ class StubStageReviewService:
         target_stage: str,
         reviewer: str = "agent",
         notes: str | None = None,
+        workspace_id: int | None = None,
     ) -> StubRun:
-        _ = run_service, reviewer, notes
+        _ = run_service, reviewer, notes, workspace_id
         run = self.run_service.runs.get(run_id)
         if run is None:
             raise ValueError("Run not found")

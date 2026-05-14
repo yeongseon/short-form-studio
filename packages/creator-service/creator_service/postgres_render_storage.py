@@ -68,16 +68,40 @@ class PostgresRenderStorage:
             artifact_id,
         )
 
-    async def list_by_run(self, run_id: int) -> list[dict[str, Any]]:
+    async def list_by_run(
+        self, run_id: int, workspace_id: int | None = None
+    ) -> list[dict[str, Any]]:
+        if workspace_id is None:
+            return await fetch_all(
+                """
+                SELECT *
+                FROM creator_artifacts
+                WHERE run_id = $1 AND artifact_type = 'video'
+                ORDER BY created_at DESC
+                """,
+                run_id,
+            )
         return await fetch_all(
             """
-            SELECT *
-            FROM creator_artifacts
-            WHERE run_id = $1 AND artifact_type = 'video'
-            ORDER BY created_at DESC
+            SELECT a.*
+            FROM creator_artifacts a
+            WHERE a.run_id = $1
+              AND a.artifact_type = 'video'
+              AND EXISTS (
+                SELECT 1
+                FROM creator_runs r
+                WHERE r.id = a.run_id AND r.workspace_id = $2
+              )
+            ORDER BY a.created_at DESC
             """,
             run_id,
+            workspace_id,
         )
+
+    async def get_artifacts_for_run(
+        self, run_id: int, workspace_id: int | None = None
+    ) -> list[dict[str, Any]]:
+        return await self.list_by_run(run_id, workspace_id=workspace_id)
 
     async def get_latest_by_run(self, run_id: int) -> dict[str, Any] | None:
         return await fetch_one(

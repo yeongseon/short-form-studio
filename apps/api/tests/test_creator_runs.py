@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Literal, cast
 
 import pytest
+from creator_service.run_service import ConflictError
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ValidationError
 from shorts_api.auth import CurrentUser, require_project_access, require_run_access
@@ -35,6 +36,7 @@ class StubPipelineRun(BaseModel):
     finished_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    workspace_id: int = 1
 
 
 class StubRunService:
@@ -45,6 +47,7 @@ class StubRunService:
         self.advance_stage_calls: list[dict[str, object]] = []
         self.update_model_defaults_calls: list[dict[str, object]] = []
         self.runs: dict[int, StubPipelineRun] = {}
+        self.restart_errors: dict[int, Exception] = {}
         self.storage = StubRunStorage(self)
         self._next_id = 1
 
@@ -86,12 +89,18 @@ class StubRunService:
         self._next_id += 1
         return run
 
-    async def get_run(self, run_id: int) -> StubPipelineRun | None:
+    async def get_run(self, run_id: int, workspace_id: int | None = None) -> StubPipelineRun | None:
+        _ = workspace_id
         self.get_run_calls.append(run_id)
         return self.runs.get(run_id)
 
-    async def restart_run(self, run_id: int, from_stage: str) -> StubPipelineRun:
+    async def restart_run(
+        self, run_id: int, from_stage: str, workspace_id: int | None = None
+    ) -> StubPipelineRun:
         self.restart_run_calls.append({"run_id": run_id, "from_stage": from_stage})
+        error = self.restart_errors.get(run_id)
+        if error is not None:
+            raise error
 
         run = self.runs.get(run_id)
         if run is None:
@@ -123,7 +132,10 @@ class StubRunService:
             reverse=True,
         )
 
-    async def update_model_defaults(self, run_id: int, updates: dict[str, str]) -> StubPipelineRun:
+    async def update_model_defaults(
+        self, run_id: int, updates: dict[str, str], workspace_id: int | None = None
+    ) -> StubPipelineRun:
+        _ = workspace_id
         self.update_model_defaults_calls.append({"run_id": run_id, "updates": updates})
         run = self.runs.get(run_id)
         if run is None:
@@ -146,7 +158,9 @@ class StubRunStorage:
         run_id: int,
         updates: dict[str, object],
         expected_stages: frozenset[str],
+        workspace_id: int | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
+        _ = workspace_id
         self.conditional_update_calls.append(
             {
                 "run_id": run_id,
@@ -180,6 +194,7 @@ class StubStageReviewService:
         target_stage: str,
         reviewer: str = "agent",
         notes: str | None = None,
+        workspace_id: int | None = None,
     ) -> StubPipelineRun:
         self.approve_calls.append(
             {
@@ -188,11 +203,14 @@ class StubStageReviewService:
                 "target_stage": target_stage,
                 "reviewer": reviewer,
                 "notes": notes,
+                "workspace_id": workspace_id,
             }
         )
 
         run = self._run_svc.runs.get(run_id)
         if run is None:
+            raise ValueError(f"Run {run_id} not found")
+        if workspace_id is not None and run.workspace_id != workspace_id:
             raise ValueError(f"Run {run_id} not found")
         if run.current_stage != stage_name:
             raise ValueError(
@@ -209,7 +227,7 @@ class StubProjectLookupService:
         self.existing_project_ids = existing_project_ids or {7, 8}
         self.get_project_calls: list[int] = []
 
-    async def get_project(self, project_id: int) -> object | None:
+    async def get_project(self, project_id: int, workspace_id: int | None = None) -> object | None:
         self.get_project_calls.append(project_id)
         if project_id in self.existing_project_ids:
             return {"id": project_id}
@@ -505,6 +523,34 @@ async def test_restart_run_not_found(client, stub_run_service: StubRunService):
     assert response.json() == {"detail": "Run not found"}
 
 
+@pytest.mark.asyncio
+async def test_restart_run_conflict_returns_409(client, stub_run_service: StubRunService):
+    now = datetime.now(timezone.utc)
+    stub_run_service.runs[4243] = StubPipelineRun(
+        id=4243,
+        project_id=2,
+        current_stage="IDEA_READY",
+        status="pending",
+        review_stage=None,
+        restart_from=None,
+        model_defaults=None,
+        metadata=None,
+        style_preset="default",
+        started_at=None,
+        finished_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    stub_run_service.restart_errors[4243] = ConflictError("Run 4243 has stale version")
+
+    response = await client.post(
+        "/api/creator/runs/4243/restart", json={"stage": "SCRIPT_GENERATING"}
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Run 4243 has stale version"}
+
+
 @pytest.fixture
 def stub_approve_services(
     monkeypatch: pytest.MonkeyPatch,
@@ -548,6 +594,7 @@ def _make_run(run_id: int, stage: str = "SCRIPT_REVIEW") -> StubPipelineRun:
         finished_at=None,
         created_at=now,
         updated_at=now,
+        workspace_id=1,
     )
 
 
@@ -572,6 +619,7 @@ async def test_approve_script_success(client, stub_approve_services):
             "target_stage": "VISUAL_PLAN_SETUP",
             "reviewer": "human",
             "notes": "Looks good",
+            "workspace_id": 1,
         }
     ]
 
@@ -703,8 +751,20 @@ async def test_approve_visual_plan_success(client, stub_approve_vp_services):
             "target_stage": "VISUAL_ASSET_GENERATING",
             "reviewer": "human",
             "notes": "Visual plan approved",
+            "workspace_id": 1,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_approve_script_returns_404_for_workspace_mismatch(client, stub_approve_services):
+    run_svc, _ = stub_approve_services
+    run_svc.runs[101] = _make_run(101, "SCRIPT_REVIEW").model_copy(update={"workspace_id": 2})
+
+    response = await client.post("/api/creator/runs/101/approve-script", json={})
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Run 101 not found"}
 
 
 @pytest.mark.asyncio
@@ -779,7 +839,9 @@ class StubProjectService:
     def __init__(self) -> None:
         self.projects: dict[int, StubProject] = {}
 
-    async def get_project(self, project_id: int) -> StubProject | None:
+    async def get_project(
+        self, project_id: int, workspace_id: int | None = None
+    ) -> StubProject | None:
         return self.projects.get(project_id)
 
 
@@ -996,7 +1058,8 @@ async def test_generate_script_cas_conflict(client, stub_generate_services):
     # initial get_run and the CAS call.  Because the route reads once then CAS,
     # we override conditional_update_run to simulate conflict.
 
-    async def cas_conflict(run_id, updates, expected_stages):
+    async def cas_conflict(run_id, updates, expected_stages, workspace_id=None):
+        _ = workspace_id
         # Return conflict: stage changed to SCRIPT_GENERATING
         return False, {"current_stage": "SCRIPT_GENERATING", "id": run_id}
 
@@ -1279,7 +1342,8 @@ async def test_generate_visual_plan_cas_conflict(client, stub_generate_visual_pl
     run_svc, dispatcher = stub_generate_visual_plan_services
     run_svc.runs[35] = _make_run(35, "VISUAL_PLAN_SETUP")
 
-    async def cas_conflict(run_id, updates, expected_stages):
+    async def cas_conflict(run_id, updates, expected_stages, workspace_id=None):
+        _ = workspace_id
         return False, {"current_stage": "VISUAL_PLAN_GENERATING", "id": run_id}
 
     run_svc.storage.conditional_update_run = cas_conflict
@@ -1523,7 +1587,8 @@ async def test_generate_visual_assets_cas_conflict(client, stub_generate_visual_
     run_svc, dispatcher = stub_generate_visual_assets_services
     run_svc.runs[65] = _make_run(65, "VISUAL_PLAN_REVIEW")
 
-    async def cas_conflict(run_id, updates, expected_stages):
+    async def cas_conflict(run_id, updates, expected_stages, workspace_id=None):
+        _ = workspace_id
         return False, {"current_stage": "VISUAL_ASSET_GENERATING", "id": run_id}
 
     run_svc.storage.conditional_update_run = cas_conflict
@@ -2382,7 +2447,8 @@ async def test_generate_audio_cas_conflict(client, stub_generate_audio_services)
     run_svc, dispatcher = stub_generate_audio_services
     run_svc.runs[115] = _make_audio_run(115, "VISUAL_ASSET_REVIEW")
 
-    async def cas_conflict(run_id, updates, expected_stages):
+    async def cas_conflict(run_id, updates, expected_stages, workspace_id=None):
+        _ = workspace_id
         return False, {"current_stage": "AUDIO_GENERATING", "id": run_id}
 
     run_svc.storage.conditional_update_run = cas_conflict
@@ -2627,7 +2693,8 @@ async def test_generate_subtitles_cas_conflict(client, stub_generate_subtitles_s
     run_svc, dispatcher = stub_generate_subtitles_services
     run_svc.runs[125] = _make_subtitle_run(125, "AUDIO_GENERATING")
 
-    async def cas_conflict(run_id, updates, expected_stages):
+    async def cas_conflict(run_id, updates, expected_stages, workspace_id=None):
+        _ = workspace_id
         return False, {"current_stage": "SUBTITLE_GENERATING", "id": run_id}
 
     run_svc.storage.conditional_update_run = cas_conflict
@@ -2851,7 +2918,8 @@ async def test_render_cas_conflict(client, stub_generate_render_services):
     run_svc, dispatcher = stub_generate_render_services
     run_svc.runs[134] = _make_render_run(134, "SUBTITLE_GENERATING")
 
-    async def cas_conflict(run_id, updates, expected_stages):
+    async def cas_conflict(run_id, updates, expected_stages, workspace_id=None):
+        _ = workspace_id
         return False, {"current_stage": "RENDER_GENERATING", "id": run_id}
 
     run_svc.storage.conditional_update_run = cas_conflict

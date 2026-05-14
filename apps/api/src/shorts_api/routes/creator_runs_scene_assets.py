@@ -179,7 +179,7 @@ async def regenerate_scene_image_endpoint(
 async def list_visual_assets_by_run(
     run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
 ) -> dict[str, object]:
-    _, run = access
+    _ = access
 
     grouped = await visual_asset_service.list_by_run(run_id)
     return {
@@ -199,7 +199,7 @@ async def list_visual_assets_by_scene(
     scene_id: str,
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
-    _, run = access
+    _ = access
 
     assets = await visual_asset_service.list_by_scene(run_id, scene_id)
     return {
@@ -244,7 +244,7 @@ async def generate_audio_trigger(
     request: GenerateAudioRequest,
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
-    _, run = access
+    user, run = access
     if run.current_stage == "AUDIO_GENERATING" and await _has_active_tasks_for_run(run.id):
         raise HTTPException(status_code=409, detail="Audio generation already in progress")
 
@@ -272,6 +272,7 @@ async def generate_audio_trigger(
         rollback_restart_from=run.restart_from,
         enqueue_error_detail="Failed to enqueue audio generation task",
         quota_operation_type="tts",
+        workspace_id=user.workspace_id,
     )
 
 
@@ -281,7 +282,7 @@ async def generate_subtitles_trigger(
     request: GenerateSubtitlesRequest,
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
-    _, run = access
+    user, run = access
     if run.current_stage == "SUBTITLE_GENERATING" and await _has_active_tasks_for_run(run.id):
         raise HTTPException(status_code=409, detail="Subtitle generation already in progress")
 
@@ -309,6 +310,7 @@ async def generate_subtitles_trigger(
         rollback_restart_from=run.restart_from,
         enqueue_error_detail="Failed to enqueue subtitle generation task",
         quota_operation_type="stt",
+        workspace_id=user.workspace_id,
     )
 
 
@@ -318,7 +320,7 @@ async def render_trigger(
     request: RenderRequest,
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
-    _, run = access
+    user, run = access
     if run.current_stage == "RENDER_GENERATING" and await _has_active_tasks_for_run(run.id):
         raise HTTPException(status_code=409, detail="Render already in progress")
 
@@ -345,6 +347,7 @@ async def render_trigger(
         rollback_restart_from=run.restart_from,
         enqueue_error_detail="Failed to enqueue render task",
         quota_operation_type="render",
+        workspace_id=user.workspace_id,
     )
 
 

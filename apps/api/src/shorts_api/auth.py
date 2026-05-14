@@ -274,11 +274,11 @@ async def require_run_access(
     from creator_service.project_service import project_service
     from creator_service.run_service import run_service
 
-    run = await run_service.get_run(run_id)
+    run = await run_service.get_run(run_id, workspace_id=user.workspace_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    project = await project_service.get_project(run.project_id)
+    project = await project_service.get_project(run.project_id, workspace_id=user.workspace_id)
     if project is None or project.workspace_id is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
@@ -299,7 +299,7 @@ async def require_project_access(
     """
     from creator_service.project_service import project_service
 
-    project = await project_service.get_project(project_id)
+    project = await project_service.get_project(project_id, workspace_id=user.workspace_id)
     if project is None or project.workspace_id is None:
         raise HTTPException(status_code=404, detail="Project not found")
 
