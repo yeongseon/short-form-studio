@@ -1,4 +1,5 @@
 """Routes for creator model management."""
+
 import logging
 
 from creator_provider.registry import ProviderRegistry
@@ -18,8 +19,11 @@ model_catalog_service = ModelCatalogService(
 
 
 @router.get("")
-async def list_models(category: str | None = Query(default=None)) -> dict[str, list[dict[str, object]]]:
+async def list_models(
+    category: str | None = Query(default=None),
+) -> dict[str, list[dict[str, object]]]:
     """List available creator models by category."""
+    # No resource-scoped access helper: this endpoint only exposes global model catalog metadata.
     if category is not None and category not in VALID_CATEGORIES:
         raise HTTPException(status_code=400, detail="Invalid category")
 
@@ -29,6 +33,7 @@ async def list_models(category: str | None = Query(default=None)) -> dict[str, l
 @router.get("/status")
 async def get_model_status() -> dict[str, object]:
     """Return provider-level status and GPU lock state."""
+    # No resource-scoped access helper: status is provider-level infrastructure metadata.
     logger.info("Model status check requested")
     status = await model_catalog_service.get_status()
     logger.info("Model status check completed")

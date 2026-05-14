@@ -171,7 +171,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
 
         member_workspace_ids = await self._resolve_member_workspaces(user_id_int)
         if not member_workspace_ids:
-            return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+            return JSONResponse(status_code=404, content={"detail": "Not found"})
 
         user = CurrentUser(user_id=user_id_int, workspace_id=member_workspace_ids[0])
         request.state.user = user
@@ -223,7 +223,7 @@ async def get_current_user(request: Request) -> CurrentUser:
         user_id,
     )
     if membership_row is None:
-        raise HTTPException(status_code=403, detail="No workspace membership")
+        raise HTTPException(status_code=404, detail="Not found")
 
     return CurrentUser(user_id=user_id, workspace_id=membership_row["workspace_id"])
 

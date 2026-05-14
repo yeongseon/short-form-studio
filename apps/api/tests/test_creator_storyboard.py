@@ -7,9 +7,16 @@ import pytest
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
 from pydantic import BaseModel
+from pydantic import ValidationError
 from shorts_api.auth import CurrentUser, require_run_access
 from shorts_api.main import app
 from shorts_api.main import runs_router
+from shorts_api.routes.creator_runs_storyboard import (
+    BulkParagraphAudioRequest,
+    BulkParagraphSubtitlesRequest,
+    ParagraphAudioRequest,
+    ParagraphSubtitlesRequest,
+)
 
 
 def _iter_api_routes(routes: Sequence[object]) -> list[APIRoute]:
@@ -186,3 +193,14 @@ async def test_generate_all_subtitles_rejects_invalid_subtitle_model(
 
     assert response.status_code == 400
     assert "Unknown model key" in response.json()["detail"]
+
+
+def test_storyboard_request_models_reject_overlong_strings() -> None:
+    with pytest.raises(ValidationError):
+        ParagraphAudioRequest(tts_model="x" * 257)
+    with pytest.raises(ValidationError):
+        ParagraphSubtitlesRequest(subtitle_model="x" * 257)
+    with pytest.raises(ValidationError):
+        BulkParagraphAudioRequest(voice="x" * 257)
+    with pytest.raises(ValidationError):
+        BulkParagraphSubtitlesRequest(subtitle_model="x" * 257)

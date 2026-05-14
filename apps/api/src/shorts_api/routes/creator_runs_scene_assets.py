@@ -43,23 +43,25 @@ from shorts_api.auth import CurrentUser, require_run_access
 router = APIRouter(tags=["runs"])
 
 
-async def _enforce_run_quota(run_id: int, operation_type: str) -> int:
+async def _enforce_run_quota(run_id: int, operation_type: str, workspace_id: int) -> int:
     from creator_service.usage_service import check_workspace_quota
 
-    run = await run_service.get_run(run_id)
+    run = await run_service.get_run(run_id, workspace_id=workspace_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    project = await project_service.get_project(run.project_id)
+    project = await project_service.get_project(run.project_id, workspace_id=workspace_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    workspace_id = getattr(project, "workspace_id", None)
-    if workspace_id is None:
+    project_workspace_id = getattr(project, "workspace_id", None)
+    if project_workspace_id is None:
         raise HTTPException(status_code=400, detail="Project workspace is not configured")
 
-    allowed, reason = await check_workspace_quota(int(workspace_id), operation_type=operation_type)
+    allowed, reason = await check_workspace_quota(
+        int(project_workspace_id), operation_type=operation_type
+    )
     if not allowed:
         raise HTTPException(status_code=429, detail=reason)
-    return int(workspace_id)
+    return int(project_workspace_id)
 
 
 class RegenerateSceneImageRequest(BaseModel):
@@ -98,7 +100,9 @@ async def generate_scene_image_endpoint(
         )
 
     validate_model_key(effective_request.model_key)
-    workspace_id = await _enforce_run_quota(run_id, "image_gen")
+    workspace_id = await _enforce_run_quota(
+        run_id, "image_gen", workspace_id=access[0].workspace_id
+    )
     try:
         task_id = dispatch_generate_scene_image(
             run_id=run_id,
@@ -150,7 +154,9 @@ async def regenerate_scene_image_endpoint(
         )
 
     validate_model_key(request.model_key)
-    workspace_id = await _enforce_run_quota(run_id, "image_gen")
+    workspace_id = await _enforce_run_quota(
+        run_id, "image_gen", workspace_id=access[0].workspace_id
+    )
     try:
         task_id = dispatch_generate_scene_image(
             run_id=run_id,

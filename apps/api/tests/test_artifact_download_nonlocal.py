@@ -1,33 +1,11 @@
 # pyright: reportMissingImports=false
 
 import pytest
-from fastapi import Request
 from types import SimpleNamespace
 
-from shorts_api.auth import require_current_user
+from shorts_api.auth import CurrentUser, require_run_access
 from shorts_api.main import app
 from shorts_api.routes import creator_artifact_download as route_mod  # type: ignore[attr-defined]
-
-
-class _StubRunStorage:
-    async def get_run(self, run_id: int):
-        return {"id": run_id, "project_id": 1}
-
-
-class _StubRunService:
-    def __init__(self):
-        self.storage = _StubRunStorage()
-
-
-class _StubProject:
-    workspace_id = 1
-
-
-class _StubProjectService:
-    async def get_project(self, project_id: int):
-        if project_id != 1:
-            return None
-        return _StubProject()
 
 
 class _StubArtifactDownloadService:
@@ -55,21 +33,10 @@ async def test_download_nonlocal_storage_redirects(client, monkeypatch: pytest.M
         "storage_key": "tenant/renders/output.mp4",
     }
 
-    monkeypatch.setattr(route_mod, "run_service", _StubRunService())
-    monkeypatch.setattr(route_mod, "project_service", _StubProjectService())
+    async def _stub_require_run_access(run_id: int):
+        return CurrentUser(user_id=101, workspace_id=1), SimpleNamespace(id=run_id, project_id=1)
 
-    async def _stub_check_access(workspace_id: int, user_id: int) -> bool:
-        return workspace_id == 1 and user_id == 101
-
-    monkeypatch.setattr(
-        route_mod, "workspace_service", SimpleNamespace(check_access=_stub_check_access)
-    )
-
-    async def _stub_require_current_user(request: Request):
-        _ = request
-        return SimpleNamespace(user_id=101, workspace_id=1)
-
-    monkeypatch.setitem(app.dependency_overrides, require_current_user, _stub_require_current_user)
+    monkeypatch.setitem(app.dependency_overrides, require_run_access, _stub_require_run_access)
     monkeypatch.setattr(
         route_mod, "artifact_download_service", _StubArtifactDownloadService(artifact)
     )
@@ -82,3 +49,5 @@ async def test_download_nonlocal_storage_redirects(client, monkeypatch: pytest.M
 
     assert response.status_code == 307
     assert response.headers["location"] == "https://cdn.example.test/tenant/renders/output.mp4"
+
+    app.dependency_overrides.pop(require_run_access, None)

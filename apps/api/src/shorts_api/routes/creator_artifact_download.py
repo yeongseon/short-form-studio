@@ -3,12 +3,18 @@
 import logging
 import os
 from datetime import datetime, timezone
+
 from creator_domain.sanitize import UnsafePathComponent, sanitize_path_component
 from creator_service.artifact_download_service import artifact_download_service
 from creator_service.project_service import project_service
 from creator_service.run_service import run_service
 from fastapi import APIRouter, Depends, HTTPException
-from shorts_api.auth import CurrentUser, require_current_user, workspace_service
+from shorts_api.auth import (
+    RunAccessContext,
+    require_current_user,
+    require_run_access,
+    workspace_service,
+)
 from starlette.responses import FileResponse, RedirectResponse
 
 logger = logging.getLogger(__name__)
@@ -19,33 +25,17 @@ router = APIRouter(tags=["runs"])
 async def download_artifact(
     run_id: int,
     artifact_id: int,
-    user: CurrentUser = Depends(require_current_user),
+    access: RunAccessContext = Depends(require_run_access),
+    _user=Depends(require_current_user),
 ):
-    run = await run_service.storage.get_run(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="Run not found")
-
-    project_id = run.get("project_id")
-    if not isinstance(project_id, int):
-        raise HTTPException(status_code=404, detail="Run not found")
-
-    project = await project_service.get_project(project_id)
-    if project is None:
-        raise HTTPException(status_code=404, detail="Project not found")
-
-    user_workspace_id = user.workspace_id
-    project_workspace_id = project.workspace_id
-
-    if project_workspace_id is None:
-        raise HTTPException(status_code=404, detail="Run not found")
-    if not await workspace_service.check_access(project_workspace_id, user.user_id):
-        raise HTTPException(status_code=404, detail="Run not found")
+    _current_user, run = access
+    _ = project_service, run_service, workspace_service, _user
 
     artifact = await artifact_download_service.get_artifact_by_id(artifact_id)
     if artifact is None:
         raise HTTPException(status_code=404, detail="Artifact not found")
 
-    if artifact.get("run_id") != run_id:
+    if artifact.get("run_id") != run.id:
         raise HTTPException(status_code=404, detail="Artifact not found")
 
     if artifact.get("storage_provider", "local") != "local":

@@ -1,6 +1,6 @@
 # pyright: reportMissingImports=false
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -8,7 +8,9 @@ import pytest
 from creator_domain.models import VisualScene
 from fastapi.routing import APIRoute
 from pydantic import BaseModel
+from pydantic import ValidationError
 from shorts_api.main import visual_plan_router
+from shorts_api.routes.creator_visual_plan import PatchSceneRequest
 
 
 class StubPipelineRun(BaseModel):
@@ -85,9 +87,17 @@ class StubVisualPlanService:
 
         if expected_version is not None and active.version != expected_version:
             from creator_service.visual_plan_service import VersionConflictError
+
             raise VersionConflictError(run_id, expected_version, active.version)
 
-        _patchable = {"prompt", "prompt_edited", "prompt_source", "style_tags", "mood", "composition"}
+        _patchable = {
+            "prompt",
+            "prompt_edited",
+            "prompt_source",
+            "style_tags",
+            "mood",
+            "composition",
+        }
         unknown = set(updates.keys()) - _patchable
         if unknown:
             raise ValueError(f"Cannot patch immutable/unknown fields: {sorted(unknown)}")
@@ -144,7 +154,9 @@ def _iter_api_routes(routes: Sequence[object]) -> list[APIRoute]:
 
 
 @pytest.fixture
-def stub_visual_plan_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunService, StubVisualPlanService]:
+def stub_visual_plan_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[tuple[StubRunService, StubVisualPlanService]]:
     from shorts_api.auth import CurrentUser, require_run_access
     from shorts_api.main import app
 
@@ -160,6 +172,7 @@ def stub_visual_plan_services(monkeypatch: pytest.MonkeyPatch) -> tuple[StubRunS
         run = run_svc.runs.get(run_id)
         if run is None:
             from fastapi import HTTPException
+
             raise HTTPException(status_code=404, detail="Run not found")
         return CurrentUser(user_id=1, workspace_id=1), run
 
@@ -596,3 +609,12 @@ async def test_patch_scene_with_expected_version_match(client, stub_visual_plan_
     body = response.json()
     assert body["version"] == 3
     assert body["scenes"][0]["prompt"] == "Updated"
+
+
+def test_patch_scene_request_rejects_overlong_fields() -> None:
+    with pytest.raises(ValidationError):
+        PatchSceneRequest(mood="x" * 257)
+    with pytest.raises(ValidationError):
+        PatchSceneRequest(composition="x" * 257)
+    with pytest.raises(ValidationError):
+        PatchSceneRequest(style_tags=["x" * 257])

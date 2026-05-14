@@ -12,7 +12,7 @@ from creator_service.task_tracking_service import task_tracking_service
 from creator_service.visual_asset_service import visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from creator_domain.models.pipeline_run import PipelineRun
@@ -43,22 +43,22 @@ router = APIRouter(tags=["runs"])
 
 
 class ParagraphAudioRequest(BaseModel):
-    tts_model: str = "qwen3-tts"
-    voice: str = "default"
+    tts_model: str = Field(default="qwen3-tts", max_length=256)
+    voice: str = Field(default="default", max_length=256)
 
 
 class ParagraphSubtitlesRequest(BaseModel):
-    subtitle_model: str = "whisper-small"
+    subtitle_model: str = Field(default="whisper-small", max_length=256)
     subtitle_format: Literal["srt", "vtt"] = "srt"
 
 
 class BulkParagraphAudioRequest(BaseModel):
-    tts_model: str = "qwen3-tts"
-    voice: str = "default"
+    tts_model: str = Field(default="qwen3-tts", max_length=256)
+    voice: str = Field(default="default", max_length=256)
 
 
 class BulkParagraphSubtitlesRequest(BaseModel):
-    subtitle_model: str = "whisper-small"
+    subtitle_model: str = Field(default="whisper-small", max_length=256)
     subtitle_format: Literal["srt", "vtt"] = "srt"
 
 

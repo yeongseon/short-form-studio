@@ -12,6 +12,12 @@ from shorts_api.auth import CurrentUser, require_project_access, require_run_acc
 from shorts_api.main import app
 from shorts_api.main import runs_router
 from shorts_api.routes.creator_runs_core import GenerateSubtitlesRequest
+from shorts_api.routes.creator_runs_core import (
+    ApproveScriptRequest,
+    CreateRunRequest,
+    GenerateAudioRequest,
+    UpdateModelDefaultsRequest,
+)
 from shorts_api.routes.creator_runs_storyboard import (
     BulkParagraphSubtitlesRequest,
     ParagraphSubtitlesRequest,
@@ -43,6 +49,7 @@ class StubRunService:
     def __init__(self) -> None:
         self.create_run_calls: list[dict[str, object]] = []
         self.get_run_calls: list[int] = []
+        self.get_run_workspace_ids: list[int | None] = []
         self.restart_run_calls: list[dict[str, object]] = []
         self.advance_stage_calls: list[dict[str, object]] = []
         self.update_model_defaults_calls: list[dict[str, object]] = []
@@ -90,8 +97,8 @@ class StubRunService:
         return run
 
     async def get_run(self, run_id: int, workspace_id: int | None = None) -> StubPipelineRun | None:
-        _ = workspace_id
         self.get_run_calls.append(run_id)
+        self.get_run_workspace_ids.append(workspace_id)
         return self.runs.get(run_id)
 
     async def restart_run(
@@ -226,9 +233,11 @@ class StubProjectLookupService:
     def __init__(self, existing_project_ids: set[int] | None = None) -> None:
         self.existing_project_ids = existing_project_ids or {7, 8}
         self.get_project_calls: list[int] = []
+        self.get_project_workspace_ids: list[int | None] = []
 
     async def get_project(self, project_id: int, workspace_id: int | None = None) -> object | None:
         self.get_project_calls.append(project_id)
+        self.get_project_workspace_ids.append(workspace_id)
         if project_id in self.existing_project_ids:
             return {"id": project_id}
         return None
@@ -838,10 +847,12 @@ class StubProject(BaseModel):
 class StubProjectService:
     def __init__(self) -> None:
         self.projects: dict[int, StubProject] = {}
+        self.get_project_workspace_ids: list[int | None] = []
 
     async def get_project(
         self, project_id: int, workspace_id: int | None = None
     ) -> StubProject | None:
+        self.get_project_workspace_ids.append(workspace_id)
         return self.projects.get(project_id)
 
 
@@ -940,6 +951,8 @@ async def test_generate_script_from_idea_ready(client, stub_generate_services):
             "instructions": "Focus on pasta",
         }
     ]
+    assert project_svc.get_project_workspace_ids
+    assert all(workspace_id == 1 for workspace_id in project_svc.get_project_workspace_ids)
 
 
 @pytest.mark.asyncio
@@ -1194,7 +1207,9 @@ def stub_generate_visual_plan_services(
         "shorts_api.routes.creator_runs_visuals.dispatch_generate_visual_plan", dispatcher
     )
 
-    async def _get_project(_project_id: int):
+    async def _get_project(_project_id: int, workspace_id: int | None = None):
+        _ = workspace_id
+
         class _Project:
             workspace_id = 1
 
@@ -1437,7 +1452,9 @@ def stub_generate_visual_assets_services(
         "shorts_api.routes.creator_runs_visuals.dispatch_generate_scene_image", dispatcher
     )
 
-    async def _get_project(_project_id: int):
+    async def _get_project(_project_id: int, workspace_id: int | None = None):
+        _ = workspace_id
+
         class _Project:
             workspace_id = 1
 
@@ -1523,6 +1540,26 @@ async def test_generate_visual_assets_retry_from_generating(
     }
     assert "VISUAL_ASSET_GENERATING" in cas_calls[0]["expected_stages"]
     assert len(dispatcher.calls) == 1
+
+
+def test_create_run_request_rejects_long_style_preset() -> None:
+    with pytest.raises(ValidationError):
+        CreateRunRequest(style_preset="x" * 257)
+
+
+def test_approve_script_request_rejects_long_reviewer() -> None:
+    with pytest.raises(ValidationError):
+        ApproveScriptRequest(reviewer="x" * 257)
+
+
+def test_generate_audio_request_rejects_long_voice() -> None:
+    with pytest.raises(ValidationError):
+        GenerateAudioRequest(voice="x" * 257)
+
+
+def test_update_model_defaults_rejects_long_model_key() -> None:
+    with pytest.raises(ValidationError):
+        UpdateModelDefaultsRequest(script_model="x" * 257)
 
 
 @pytest.mark.asyncio
@@ -1659,7 +1696,9 @@ def stub_single_scene_services(
         "shorts_api.routes.creator_runs_scene_assets.dispatch_generate_scene_image", dispatcher
     )
 
-    async def _get_project(_project_id: int):
+    async def _get_project(_project_id: int, workspace_id: int | None = None):
+        _ = workspace_id
+
         class _Project:
             workspace_id = 1
 
@@ -1712,6 +1751,7 @@ async def test_generate_scene_image_from_visual_plan_review(client, stub_single_
             "image_params": None,
         }
     ]
+    assert run_svc.get_run_workspace_ids == [1]
 
 
 @pytest.mark.asyncio
@@ -2285,7 +2325,9 @@ def stub_generate_audio_services(
         "shorts_api.routes.creator_runs_scene_assets.dispatch_generate_audio", dispatcher
     )
 
-    async def _get_project(_project_id: int):
+    async def _get_project(_project_id: int, workspace_id: int | None = None):
+        _ = workspace_id
+
         class _Project:
             workspace_id = 1
 
@@ -2531,7 +2573,9 @@ def stub_generate_subtitles_services(
         "shorts_api.routes.creator_runs_scene_assets.dispatch_generate_subtitles", dispatcher
     )
 
-    async def _get_project(_project_id: int):
+    async def _get_project(_project_id: int, workspace_id: int | None = None):
+        _ = workspace_id
+
         class _Project:
             workspace_id = 1
 
@@ -2776,7 +2820,9 @@ def stub_generate_render_services(
         "shorts_api.routes.creator_runs_scene_assets.dispatch_render_video", dispatcher
     )
 
-    async def _get_project(_project_id: int):
+    async def _get_project(_project_id: int, workspace_id: int | None = None):
+        _ = workspace_id
+
         class _Project:
             workspace_id = 1
 
