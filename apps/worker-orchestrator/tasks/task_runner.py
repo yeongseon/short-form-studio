@@ -370,7 +370,7 @@ def validate_task_message(message: dict[str, Any]) -> dict[str, Any]:
     if "run_id" not in message:
         raise ValueError("missing required field: run_id")
     run_id = message["run_id"]
-    if not isinstance(run_id, int):
+    if isinstance(run_id, bool) or not isinstance(run_id, int):
         raise ValueError("run_id must be int")
     if run_id <= 0:
         raise ValueError("run_id must be positive")

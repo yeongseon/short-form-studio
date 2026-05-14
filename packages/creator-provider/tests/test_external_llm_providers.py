@@ -110,7 +110,7 @@ class TestOpenAIProvider:
             provider = OpenAIProvider(endpoint="https://api.openai.com", model_key="gpt-4o-mini")
             with (
                 mock.patch("httpx.AsyncClient.post", return_value=mock_response),
-                pytest.raises(RuntimeError, match="no choices"),
+                pytest.raises(ProviderError, match="no choices"),
             ):
                 await provider.generate("test prompt")
 
@@ -236,7 +236,7 @@ class TestAnthropicProvider:
             )
             with (
                 mock.patch("httpx.AsyncClient.post", return_value=mock_response),
-                pytest.raises(RuntimeError, match="no content blocks"),
+                pytest.raises(ProviderError, match="no content blocks"),
             ):
                 await provider.generate("test prompt")
 
@@ -371,7 +371,7 @@ class TestGeminiProvider:
             )
             with (
                 mock.patch("httpx.AsyncClient.post", return_value=mock_response),
-                pytest.raises(RuntimeError, match="no candidates"),
+                pytest.raises(ProviderError, match="no candidates"),
             ):
                 await provider.generate("test prompt")
 
@@ -448,5 +448,20 @@ class TestOllamaProvider:
         with (
             mock.patch("httpx.AsyncClient.post", return_value=mock_response),
             pytest.raises(RateLimitError),
+        ):
+            await provider.generate("test prompt")
+
+    @pytest.mark.asyncio
+    async def test_generate_empty_content_raises_provider_error(self):
+        mock_response = mock.MagicMock()
+        mock_response.raise_for_status = mock.MagicMock()
+        mock_response.json.return_value = {"message": {"content": ""}}
+
+        from creator_provider.llm.ollama_provider import OllamaProvider
+
+        provider = OllamaProvider("http://localhost:11434", "qwen3-4b")
+        with (
+            mock.patch("httpx.AsyncClient.post", return_value=mock_response),
+            pytest.raises(ProviderError, match="empty content"),
         ):
             await provider.generate("test prompt")

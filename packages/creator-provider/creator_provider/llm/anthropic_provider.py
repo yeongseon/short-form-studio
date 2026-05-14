@@ -6,7 +6,7 @@ import httpx
 
 from creator_provider.api_keys import resolve_api_key
 from creator_provider.base import LLMProvider
-from creator_provider.exceptions import map_httpx_error
+from creator_provider.exceptions import ProviderError, map_httpx_error
 from creator_provider.versioned_assets import get_tool_definition
 
 
@@ -56,7 +56,7 @@ class AnthropicProvider(LLMProvider):
         data = response.json()
         content_blocks = data.get("content", [])
         if not content_blocks:
-            raise RuntimeError("Anthropic API returned no content blocks")
+            raise ProviderError("Anthropic API returned no content blocks")
         return "".join(
             block.get("text", "") for block in content_blocks if block.get("type") == "text"
         )

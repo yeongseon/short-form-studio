@@ -6,7 +6,7 @@ import httpx
 
 from creator_provider.api_keys import resolve_api_key
 from creator_provider.base import LLMProvider
-from creator_provider.exceptions import map_httpx_error
+from creator_provider.exceptions import ProviderError, map_httpx_error
 
 
 class GeminiProvider(LLMProvider):
@@ -44,6 +44,6 @@ class GeminiProvider(LLMProvider):
         data = response.json()
         candidates = data.get("candidates", [])
         if not candidates:
-            raise RuntimeError("Gemini API returned no candidates")
+            raise ProviderError("Gemini API returned no candidates")
         parts = candidates[0].get("content", {}).get("parts", [])
         return "".join(part.get("text", "") for part in parts)

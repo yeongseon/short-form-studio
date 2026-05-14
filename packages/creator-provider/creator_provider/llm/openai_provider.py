@@ -6,7 +6,7 @@ import httpx
 
 from creator_provider.api_keys import resolve_api_key
 from creator_provider.base import LLMProvider
-from creator_provider.exceptions import map_httpx_error
+from creator_provider.exceptions import ProviderError, map_httpx_error
 from creator_provider.versioned_assets import get_tool_definition
 
 
@@ -53,5 +53,5 @@ class OpenAIProvider(LLMProvider):
         data = response.json()
         choices = data.get("choices", [])
         if not choices:
-            raise RuntimeError("OpenAI API returned no choices")
+            raise ProviderError("OpenAI API returned no choices")
         return str(choices[0].get("message", {}).get("content", ""))

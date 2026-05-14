@@ -5,7 +5,7 @@ from typing import Any, cast
 import httpx
 
 from creator_provider.base import LLMProvider
-from creator_provider.exceptions import map_httpx_error
+from creator_provider.exceptions import ProviderError, map_httpx_error
 from creator_provider.versioned_assets import get_tool_definition
 
 
@@ -51,4 +51,7 @@ class OllamaProvider(LLMProvider):
             raise map_httpx_error(exc, f"Ollama at {url}") from exc
 
         data = response.json()
-        return str(data.get("message", {}).get("content", ""))
+        content = str(data.get("message", {}).get("content", ""))
+        if not content:
+            raise ProviderError("Ollama returned empty content")
+        return content

@@ -25,6 +25,7 @@ def test_validate_task_message_accepts_valid_payload() -> None:
         ({"run_id": "123"}, "run_id must be int"),
         ({"run_id": 0}, "run_id must be positive"),
         ({"run_id": -5}, "run_id must be positive"),
+        ({"run_id": True}, "run_id must be int"),
         ({"run_id": 1, "task_name": 2}, "task_name must be str"),
         ({"run_id": 1, "args": "bad"}, "args must be list"),
         ({"run_id": 1, "kwargs": []}, "kwargs must be dict"),
