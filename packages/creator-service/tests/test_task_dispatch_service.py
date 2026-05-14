@@ -532,3 +532,55 @@ def test_cas_dispatch_with_rollback_returns_404_when_get_run_returns_none() -> N
 
     assert exc.value.status_code == 404
     assert "not found" in exc.value.detail.lower()
+
+
+def test_cas_dispatch_with_rollback_passes_workspace_id_to_preflight() -> None:
+    """Preflight get_run must forward workspace_id to match run_service contract."""
+    service = TaskDispatchService()
+    received_kwargs: list[dict[str, object]] = []
+
+    class _StrictRunStorage:
+        async def conditional_update_run(
+            self,
+            _run_id: int,
+            _updates: dict[str, object],
+            *,
+            expected_stages: frozenset[str],
+            workspace_id: int | None = None,
+        ) -> tuple[bool, dict[str, object] | None]:
+            return True, {"current_stage": "SCRIPT_GENERATING", "id": 42}
+
+    class _StrictRunService:
+        def __init__(self) -> None:
+            self.storage = _StrictRunStorage()
+
+        async def get_run(self, run_id: int, *, workspace_id: int | None = None) -> object:
+            received_kwargs.append({"run_id": run_id, "workspace_id": workspace_id})
+            return SimpleNamespace(status="running", project_id=1)
+
+    dispatched = False
+
+    def _dispatcher(**_: object) -> str:
+        nonlocal dispatched
+        dispatched = True
+        return "sync-test-42"
+
+    result = asyncio.run(
+        service.cas_dispatch_with_rollback(
+            run_id=42,
+            expected_stages=frozenset({"IDEA_READY", "SCRIPT_REVIEW"}),
+            target_stage="SCRIPT_GENERATING",
+            dispatcher=_dispatcher,
+            dispatcher_args={"run_id": 42},
+            run_service=_StrictRunService(),
+            rollback_stage="SCRIPT_REVIEW",
+            rollback_restart_from=None,
+            enqueue_error_detail="Failed to enqueue",
+            workspace_id=7,
+        )
+    )
+
+    assert dispatched
+    # The preflight call MUST have received workspace_id=7
+    assert len(received_kwargs) >= 1
+    assert received_kwargs[0]["workspace_id"] == 7

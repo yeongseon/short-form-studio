@@ -219,7 +219,13 @@ class TaskDispatchService:
         # stop_run() and concurrent trigger requests.
         # Fail-closed: if we cannot verify status, block dispatch.
         try:
-            _pre_run = await run_service_obj.get_run(run_id)
+            if workspace_id is not None:
+                try:
+                    _pre_run = await run_service_obj.get_run(run_id, workspace_id=workspace_id)
+                except TypeError:
+                    _pre_run = await run_service_obj.get_run(run_id)
+            else:
+                _pre_run = await run_service_obj.get_run(run_id)
         except Exception:
             raise HTTPException(
                 status_code=503,

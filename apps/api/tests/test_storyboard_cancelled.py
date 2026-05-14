@@ -608,6 +608,10 @@ async def test_bulk_subtitles_record_failure_revokes_task(
             json={"subtitle_model": "whisper-small", "subtitle_format": "srt"},
         )
         # Bulk endpoints catch exceptions and append error entries
+        data = resp.json()
+        assert resp.status_code == 202
+        assert data["failed"] >= 1
+        assert any(t.get("error") == "dispatch_failed" for t in data["tasks"])
         assert revoke_calls == ["sub-task-1"]
         assert mark_tasks_revoked_calls == [["sub-task-1"]]
     finally:
