@@ -372,6 +372,8 @@ def validate_task_message(message: dict[str, Any]) -> dict[str, Any]:
     run_id = message["run_id"]
     if not isinstance(run_id, int):
         raise ValueError("run_id must be int")
+    if run_id <= 0:
+        raise ValueError("run_id must be positive")
 
     if "task_name" in message and not isinstance(message["task_name"], str):
         raise ValueError("task_name must be str")
@@ -379,4 +381,4 @@ def validate_task_message(message: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("args must be list")
     if "kwargs" in message and not isinstance(message["kwargs"], dict):
         raise ValueError("kwargs must be dict")
-    return message
+    return {k: message[k] for k in ("run_id", "task_name", "args", "kwargs") if k in message}
