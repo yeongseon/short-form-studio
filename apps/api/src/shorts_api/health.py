@@ -6,11 +6,12 @@ from creator_domain.sanitize import UnsafePathComponent, sanitize_path_component
 from creator_service.artifact_download_service import read_artifact_bytes
 from creator_service.db import get_pool
 from creator_service.model_health_service import ModelHealthService, ModelStatus
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from redis.asyncio import Redis
 from starlette import status
 from starlette.responses import Response
 
+from shorts_api.auth import CurrentUser, get_current_user
 from shorts_api.lifecycle import REDIS_URL, shutdown_state
 
 model_health = ModelHealthService()
@@ -115,7 +116,7 @@ async def health() -> dict[str, object]:
     }
 
 
-async def serve_artifact(artifact_path: str):
+async def serve_artifact(artifact_path: str, user: CurrentUser = Depends(get_current_user)):
     environment = os.getenv("ENVIRONMENT", "development").lower()
     if environment in ("production", "staging"):
         raise HTTPException(status_code=404, detail="Not found")
@@ -147,7 +148,7 @@ async def serve_artifact(artifact_path: str):
         raise HTTPException(status_code=500, detail="Artifact read failed") from exc
 
 
-async def serve_local_artifact_file(path: str) -> Response:
+async def serve_local_artifact_file(path: str, user: CurrentUser = Depends(get_current_user)) -> Response:
     environment = os.getenv("ENVIRONMENT", "development").lower()
     if environment in ("production", "staging"):
         raise HTTPException(status_code=404, detail="Not found")
