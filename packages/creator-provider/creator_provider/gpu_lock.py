@@ -139,7 +139,9 @@ async def gpu_lock_context(
             await renewal_task
         except asyncio.CancelledError:
             pass
-        release_gpu_lock(redis_client, token)
+        released = release_gpu_lock(redis_client, token)
+        if not released:
+            logger.warning("GPU lock release returned False for task %s (lock expired or stolen)", task_id)
+            lock_lost = True
     if lock_lost and not body_failed:
-        logger.warning("GPU lock was lost during execution for task %s", task_id)
         raise RuntimeError(f"GPU lock lost during execution for task '{task_id}'")

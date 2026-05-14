@@ -105,3 +105,30 @@ async def test_release_raises_when_lock_lost() -> None:
         # release() should raise RuntimeError because lock was lost
         with pytest.raises(RuntimeError, match="GPU lock was lost"):
             lock_ctx.release()
+
+
+@pytest.mark.asyncio
+async def test_release_raises_when_release_returns_false() -> None:
+    """release() must raise RuntimeError if release_gpu_lock returns False (expired/stolen)."""
+    redis_client = Mock()
+    lock_ctx = GpuLockContext("task-5")
+    sleep_gate = asyncio.Event()
+    real_sleep = asyncio.sleep
+
+    async def _sleep(_: float) -> None:
+        await sleep_gate.wait()
+
+    with (
+        patch("tasks.task_runner._get_redis_client", return_value=redis_client),
+        patch("tasks.task_runner.acquire_gpu_lock", return_value="task-5:token"),
+        patch("tasks.task_runner.renew_gpu_lock", return_value=True),
+        patch("tasks.task_runner.release_gpu_lock", return_value=False),
+        patch("tasks.task_runner.asyncio.sleep", side_effect=_sleep),
+    ):
+        lock_ctx.acquire()
+        await real_sleep(0)
+        # lock_lost is NOT set (renewal succeeds), but release returns False
+        assert lock_ctx.lock_lost is False
+        sleep_gate.set()
+        with pytest.raises(RuntimeError, match="GPU lock was lost"):
+            lock_ctx.release()

@@ -441,6 +441,7 @@ class GpuLockContext:
                         "GPU lock release returned False for %s (lock expired or stolen)",
                         lock_id or self.task_id,
                     )
+                    was_lost = True
             except Exception:
                 logger.exception("Failed to release GPU lock for %s", lock_id or self.task_id)
             finally:

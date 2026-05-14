@@ -232,5 +232,29 @@ class GpuLockTests(unittest.TestCase):
         asyncio.run(_run())
 
 
+    def test_context_raises_when_release_returns_false(self) -> None:
+        """gpu_lock_context must raise RuntimeError if release_gpu_lock returns False."""
+        redis_client = Mock()
+        redis_client.set.return_value = True
+        redis_client.eval.return_value = 0  # release returns False
+
+        async def _run() -> None:
+            sleep_gate = asyncio.Event()
+
+            async def _sleep(_: float) -> None:
+                await sleep_gate.wait()
+
+            with (
+                patch("creator_provider.gpu_lock.asyncio.sleep", side_effect=_sleep),
+                patch("creator_provider.gpu_lock.renew_gpu_lock", return_value=True),
+                patch("creator_provider.gpu_lock.release_gpu_lock", return_value=False),
+            ):
+                with self.assertRaises(RuntimeError):
+                    async with gpu_lock_context(redis_client, "task-release-fail", timeout=30):
+                        sleep_gate.set()
+
+        asyncio.run(_run())
+
+
 if __name__ == "__main__":
     unittest.main()
