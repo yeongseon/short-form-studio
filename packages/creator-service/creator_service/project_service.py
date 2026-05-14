@@ -7,6 +7,7 @@ the same async service-facing interface.
 
 from __future__ import annotations
 
+import inspect
 from datetime import datetime, timezone
 from typing import Any, Literal, Protocol
 
@@ -246,6 +247,7 @@ class ProjectService:
         return Project.model_validate(row)
 
     async def get_project(self, project_id: int, workspace_id: int | None = None) -> Project | None:
+        _require_workspace_id_for_api_calls("ProjectService.get_project", workspace_id)
         row = await self.db.fetch_project(project_id, workspace_id=workspace_id)
         if row is None:
             return None
@@ -256,6 +258,7 @@ class ProjectService:
     async def list_projects(
         self, limit: int = 20, offset: int = 0, workspace_id: int | None = None
     ) -> list[Project]:
+        _require_workspace_id_for_api_calls("ProjectService.list_projects", workspace_id)
         if limit < 0:
             raise ValueError("limit must be >= 0")
         if offset < 0:
@@ -287,7 +290,21 @@ class ProjectService:
 
     async def delete_project(self, project_id: int, workspace_id: int | None = None) -> bool:
         """Delete a project. FK cascade handles associated runs."""
+        _require_workspace_id_for_api_calls("ProjectService.delete_project", workspace_id)
         return await self.db.delete_project(project_id, workspace_id=workspace_id)
+
+
+def _is_api_context_call() -> bool:
+    for frame in inspect.stack(context=0):
+        module_name = frame.frame.f_globals.get("__name__", "")
+        if isinstance(module_name, str) and module_name.startswith("shorts_api.routes."):
+            return True
+    return False
+
+
+def _require_workspace_id_for_api_calls(method_name: str, workspace_id: int | None) -> None:
+    if workspace_id is None and _is_api_context_call():
+        raise ValueError(f"{method_name}: workspace_id is required for API calls")
 
 
 def _create_storage() -> ProjectStorageBackend:

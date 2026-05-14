@@ -3,6 +3,7 @@ from typing import Any, cast
 
 import pytest
 from creator_service.project_service import InMemoryProjectStorage, ProjectService
+import creator_service.project_service as project_service_module
 from creator_service.run_service import InMemoryRunStorage, RunService
 
 
@@ -55,7 +56,9 @@ def test_create_project_with_markdown_source_type(service: ProjectService) -> No
     assert project.url_source is None
 
 
-def test_create_project_with_invalid_source_type_raises_value_error(service: ProjectService) -> None:
+def test_create_project_with_invalid_source_type_raises_value_error(
+    service: ProjectService,
+) -> None:
     with pytest.raises(ValueError, match="Unsupported source_type"):
         run(service.create_project(title="Invalid", source_type=cast(Any, "pdf")))
 
@@ -65,7 +68,11 @@ def test_get_project_returns_none_for_missing_project(service: ProjectService) -
 
 
 def test_get_project_returns_existing_project(service: ProjectService) -> None:
-    created = run(service.create_project(title="Existing", source_type="url", url_source="https://example.com"))
+    created = run(
+        service.create_project(
+            title="Existing", source_type="url", url_source="https://example.com"
+        )
+    )
     fetched = run(service.get_project(created.id))
 
     assert fetched is not None
@@ -74,6 +81,35 @@ def test_get_project_returns_existing_project(service: ProjectService) -> None:
     assert fetched.source_type == "url"
     assert fetched.url_source == "https://example.com"
     assert fetched.model_dump()["latest_run"] is None
+
+
+def test_get_project_requires_workspace_id_for_api_context(service: ProjectService) -> None:
+    created = run(
+        service.create_project(
+            title="Existing",
+            source_type="url",
+            url_source="https://example.com",
+            workspace_id=1,
+        )
+    )
+
+    original = project_service_module._is_api_context_call
+    project_service_module._is_api_context_call = lambda: True
+    try:
+        with pytest.raises(ValueError, match="workspace_id is required"):
+            run(service.get_project(created.id))
+    finally:
+        project_service_module._is_api_context_call = original
+
+
+def test_list_projects_requires_workspace_id_for_api_context(service: ProjectService) -> None:
+    original = project_service_module._is_api_context_call
+    project_service_module._is_api_context_call = lambda: True
+    try:
+        with pytest.raises(ValueError, match="workspace_id is required"):
+            run(service.list_projects())
+    finally:
+        project_service_module._is_api_context_call = original
 
 
 def test_list_projects_returns_newest_first(service: ProjectService) -> None:
@@ -87,7 +123,9 @@ def test_list_projects_returns_newest_first(service: ProjectService) -> None:
 
 def test_list_projects_respects_limit_and_offset(service: ProjectService) -> None:
     first = run(service.create_project(title="First", source_type="idea", idea_brief="first idea"))
-    second = run(service.create_project(title="Second", source_type="idea", idea_brief="second idea"))
+    second = run(
+        service.create_project(title="Second", source_type="idea", idea_brief="second idea")
+    )
     third = run(service.create_project(title="Third", source_type="idea", idea_brief="third idea"))
 
     projects = run(service.list_projects(limit=1, offset=1))
@@ -103,7 +141,9 @@ def test_get_and_list_include_latest_run_summary(
     service: ProjectService,
     storage: InMemoryProjectStorage,
 ) -> None:
-    project = run(service.create_project(title="With Run", source_type="idea", idea_brief="test idea"))
+    project = run(
+        service.create_project(title="With Run", source_type="idea", idea_brief="test idea")
+    )
 
     run(storage.insert_run(project.id, current_stage="script_generating", status="running"))
     latest = run(storage.insert_run(project.id, current_stage="script_review", status="paused"))
@@ -128,7 +168,9 @@ def test_get_and_list_include_latest_run_summary_from_run_service(
     service: ProjectService,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    project = run(service.create_project(title="With Real Run", source_type="idea", idea_brief="test idea"))
+    project = run(
+        service.create_project(title="With Real Run", source_type="idea", idea_brief="test idea")
+    )
 
     run_service = RunService(InMemoryRunStorage())
     first = run(
@@ -169,7 +211,9 @@ def test_get_and_list_include_latest_run_summary_from_run_service(
     assert first.id != second.id
 
 
-def test_create_project_with_markdown_missing_source_raises_value_error(service: ProjectService) -> None:
+def test_create_project_with_markdown_missing_source_raises_value_error(
+    service: ProjectService,
+) -> None:
     with pytest.raises(ValueError, match="source_type='markdown' requires markdown_source"):
         run(service.create_project(title="Bad Markdown", source_type="markdown"))
 
@@ -184,8 +228,12 @@ def test_create_project_with_idea_missing_brief_raises_value_error(service: Proj
         run(service.create_project(title="Bad Idea", source_type="idea"))
 
 
-def test_create_project_idea_with_markdown_source_raises_value_error(service: ProjectService) -> None:
-    with pytest.raises(ValueError, match="source_type='idea' cannot have markdown_source or url_source set"):
+def test_create_project_idea_with_markdown_source_raises_value_error(
+    service: ProjectService,
+) -> None:
+    with pytest.raises(
+        ValueError, match="source_type='idea' cannot have markdown_source or url_source set"
+    ):
         run(
             service.create_project(
                 title="Conflicting Fields",
@@ -197,7 +245,9 @@ def test_create_project_idea_with_markdown_source_raises_value_error(service: Pr
 
 
 def test_create_project_idea_with_url_source_raises_value_error(service: ProjectService) -> None:
-    with pytest.raises(ValueError, match="source_type='idea' cannot have markdown_source or url_source set"):
+    with pytest.raises(
+        ValueError, match="source_type='idea' cannot have markdown_source or url_source set"
+    ):
         run(
             service.create_project(
                 title="Conflicting Fields",
@@ -208,8 +258,12 @@ def test_create_project_idea_with_url_source_raises_value_error(service: Project
         )
 
 
-def test_create_project_markdown_with_url_source_raises_value_error(service: ProjectService) -> None:
-    with pytest.raises(ValueError, match="source_type='markdown' cannot have idea_brief or url_source set"):
+def test_create_project_markdown_with_url_source_raises_value_error(
+    service: ProjectService,
+) -> None:
+    with pytest.raises(
+        ValueError, match="source_type='markdown' cannot have idea_brief or url_source set"
+    ):
         run(
             service.create_project(
                 title="Conflicting Fields",
@@ -220,8 +274,12 @@ def test_create_project_markdown_with_url_source_raises_value_error(service: Pro
         )
 
 
-def test_create_project_markdown_with_idea_brief_raises_value_error(service: ProjectService) -> None:
-    with pytest.raises(ValueError, match="source_type='markdown' cannot have idea_brief or url_source set"):
+def test_create_project_markdown_with_idea_brief_raises_value_error(
+    service: ProjectService,
+) -> None:
+    with pytest.raises(
+        ValueError, match="source_type='markdown' cannot have idea_brief or url_source set"
+    ):
         run(
             service.create_project(
                 title="Conflicting Fields",
@@ -233,7 +291,9 @@ def test_create_project_markdown_with_idea_brief_raises_value_error(service: Pro
 
 
 def test_create_project_url_with_idea_brief_raises_value_error(service: ProjectService) -> None:
-    with pytest.raises(ValueError, match="source_type='url' cannot have idea_brief or markdown_source set"):
+    with pytest.raises(
+        ValueError, match="source_type='url' cannot have idea_brief or markdown_source set"
+    ):
         run(
             service.create_project(
                 title="Conflicting Fields",
@@ -244,8 +304,12 @@ def test_create_project_url_with_idea_brief_raises_value_error(service: ProjectS
         )
 
 
-def test_create_project_url_with_markdown_source_raises_value_error(service: ProjectService) -> None:
-    with pytest.raises(ValueError, match="source_type='url' cannot have idea_brief or markdown_source set"):
+def test_create_project_url_with_markdown_source_raises_value_error(
+    service: ProjectService,
+) -> None:
+    with pytest.raises(
+        ValueError, match="source_type='url' cannot have idea_brief or markdown_source set"
+    ):
         run(
             service.create_project(
                 title="Conflicting Fields",
@@ -274,12 +338,16 @@ def test_create_project_with_pasted_json_source_type(service: ProjectService) ->
     assert project.url_source is None
 
 
-def test_create_project_pasted_json_missing_script_raises_value_error(service: ProjectService) -> None:
+def test_create_project_pasted_json_missing_script_raises_value_error(
+    service: ProjectService,
+) -> None:
     with pytest.raises(ValueError, match="source_type='pasted_json' requires json_script"):
         run(service.create_project(title="Bad JSON", source_type="pasted_json"))
 
 
-def test_create_project_pasted_json_with_idea_brief_raises_value_error(service: ProjectService) -> None:
+def test_create_project_pasted_json_with_idea_brief_raises_value_error(
+    service: ProjectService,
+) -> None:
     with pytest.raises(ValueError, match="source_type='pasted_json' cannot have"):
         run(
             service.create_project(
@@ -291,7 +359,9 @@ def test_create_project_pasted_json_with_idea_brief_raises_value_error(service: 
         )
 
 
-def test_create_project_pasted_json_with_markdown_source_raises_value_error(service: ProjectService) -> None:
+def test_create_project_pasted_json_with_markdown_source_raises_value_error(
+    service: ProjectService,
+) -> None:
     with pytest.raises(ValueError, match="source_type='pasted_json' cannot have"):
         run(
             service.create_project(

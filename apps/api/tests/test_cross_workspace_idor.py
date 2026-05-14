@@ -161,7 +161,7 @@ async def test_idor_get_storyboard(client: AsyncClient, monkeypatch: pytest.Monk
 async def test_idor_regenerate_scene_image(client: AsyncClient, monkeypatch: pytest.MonkeyPatch):
     _patch_cross_workspace(monkeypatch)
     r = await client.post(
-        "/api/creator/runs/99/scenes/scene-1/regenerate-image",
+        "/api/creator/runs/99/visual-plan/scenes/scene-1/regenerate-image",
         json={},
     )
     assert r.status_code == 404
