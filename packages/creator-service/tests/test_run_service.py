@@ -4,6 +4,7 @@ import json
 import pytest
 from creator_domain.models import ModelSelection, RunStage
 from creator_service.run_service import ConflictError, InMemoryRunStorage, RunService
+import creator_service.run_service as run_service_module
 
 
 def test_create_run_with_model_defaults_and_style_preset() -> None:
@@ -85,6 +86,63 @@ def test_get_run_returns_existing_run() -> None:
     assert fetched is not None
     assert fetched.id == created.id
     assert fetched.project_id == 9
+
+
+def test_get_run_requires_workspace_id_for_api_context() -> None:
+    service = RunService(InMemoryRunStorage())
+    created = asyncio.run(
+        service.create_run(
+            project_id=9,
+            model_defaults={"script_model": "qwen3-4b"},
+            style_preset="default",
+            workspace_id=3,
+        )
+    )
+
+    original = run_service_module._is_api_context_call
+    run_service_module._is_api_context_call = lambda: True
+    try:
+        with pytest.raises(ValueError, match="workspace_id is required"):
+            asyncio.run(service.get_run(created.id))
+    finally:
+        run_service_module._is_api_context_call = original
+
+
+def test_get_run_allows_missing_workspace_id_for_worker_context() -> None:
+    service = RunService(InMemoryRunStorage())
+    created = asyncio.run(
+        service.create_run(
+            project_id=9,
+            model_defaults={"script_model": "qwen3-4b"},
+            style_preset="default",
+            workspace_id=3,
+        )
+    )
+
+    fetched = asyncio.run(service.get_run(created.id))
+
+    assert fetched is not None
+    assert fetched.id == created.id
+
+
+def test_delete_run_requires_workspace_id_for_api_context() -> None:
+    service = RunService(InMemoryRunStorage())
+    created = asyncio.run(
+        service.create_run(
+            project_id=9,
+            model_defaults={"script_model": "qwen3-4b"},
+            style_preset="default",
+            workspace_id=3,
+        )
+    )
+
+    original = run_service_module._is_api_context_call
+    run_service_module._is_api_context_call = lambda: True
+    try:
+        with pytest.raises(ValueError, match="workspace_id is required"):
+            asyncio.run(service.delete_run(created.id))
+    finally:
+        run_service_module._is_api_context_call = original
 
 
 def test_restart_run_transitions_correctly() -> None:

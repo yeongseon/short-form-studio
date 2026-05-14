@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
@@ -242,6 +243,7 @@ class RunService:
         return PipelineRun.from_row(row)
 
     async def get_run(self, run_id: int, workspace_id: int | None = None) -> PipelineRun | None:
+        _require_workspace_id_for_api_calls("RunService.get_run", workspace_id)
         row = await self.storage.get_run(run_id, workspace_id=workspace_id)
         if row is None:
             return None
@@ -464,10 +466,24 @@ class RunService:
 
     async def delete_run(self, run_id: int, workspace_id: int | None = None) -> bool:
         """Delete a run and return True if deleted."""
+        _require_workspace_id_for_api_calls("RunService.delete_run", workspace_id)
         run = await self.get_run(run_id, workspace_id=workspace_id)
         if run is None:
             raise ValueError(f"Run {run_id} not found")
         return await self.storage.delete_run(run_id, workspace_id=workspace_id)
+
+
+def _is_api_context_call() -> bool:
+    for frame in inspect.stack(context=0):
+        module_name = frame.frame.f_globals.get("__name__", "")
+        if isinstance(module_name, str) and module_name.startswith("shorts_api.routes."):
+            return True
+    return False
+
+
+def _require_workspace_id_for_api_calls(method_name: str, workspace_id: int | None) -> None:
+    if workspace_id is None and _is_api_context_call():
+        raise ValueError(f"{method_name}: workspace_id is required for API calls")
 
 
 def _create_storage() -> RunStorageBackend:
