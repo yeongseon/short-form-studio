@@ -36,14 +36,24 @@ class TestModelEndpoints:
 
 
 class TestArtifactEndpoints:
-    """Tests for artifact endpoints authentication."""
+    """Tests for artifact endpoints authentication and authorization."""
     
     def test_serve_artifact_requires_auth(self, unauthenticated_client):
         """Test that serve_artifact returns 401 when not authenticated."""
-        response = unauthenticated_client.get("/artifacts/test/artifact.txt")
+        response = unauthenticated_client.get("/artifacts/1/audio/audio.wav")
+        assert response.status_code == 401, f"Expected 401, got {response.status_code}: {response.text}"
+    
+    def test_serve_artifact_invalid_path(self, unauthenticated_client):
+        """Test that serve_artifact returns 401 on invalid run_id (auth checked first)."""
+        response = unauthenticated_client.get("/artifacts/invalid/audio/audio.wav")
         assert response.status_code == 401, f"Expected 401, got {response.status_code}: {response.text}"
     
     def test_serve_local_artifact_file_requires_auth(self, unauthenticated_client):
         """Test that serve_local_artifact_file returns 401 when not authenticated."""
-        response = unauthenticated_client.get("/api/artifacts/files/test.txt")
+        response = unauthenticated_client.get("/api/artifacts/files/1/render/output.mp4")
+        assert response.status_code == 401, f"Expected 401, got {response.status_code}: {response.text}"
+    
+    def test_serve_local_artifact_file_invalid_path(self, unauthenticated_client):
+        """Test that serve_local_artifact_file returns 401 on invalid run_id (auth checked first)."""
+        response = unauthenticated_client.get("/api/artifacts/files/invalid/render/output.mp4")
         assert response.status_code == 401, f"Expected 401, got {response.status_code}: {response.text}"

@@ -53,6 +53,28 @@ def _resolve_redis_from_url():
         return Redis.from_url
 
 
+async def _validate_artifact_access(run_id: int, user: CurrentUser) -> None:
+    """Validate that the user has access to the run's artifacts.
+    
+    Raises 404 if the run doesn't exist or belongs to a different workspace (anti-enumeration).
+    """
+    from creator_service.project_service import project_service
+    from creator_service.run_service import run_service
+    from creator_service.workspace_service import workspace_service
+
+    run = await run_service.get_run(run_id, workspace_id=user.workspace_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+    project = await project_service.get_project(run.project_id, workspace_id=user.workspace_id)
+    if project is None or project.workspace_id is None:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+    has_access = await workspace_service.check_access(project.workspace_id, user.user_id)
+    if not has_access:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+
+
 async def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
@@ -125,6 +147,16 @@ async def serve_artifact(artifact_path: str, user: CurrentUser = Depends(get_cur
     if not artifact_path or any(component in {"", ".", ".."} for component in path_components):
         raise HTTPException(status_code=400, detail="Invalid artifact path")
 
+    # Extract and validate run_id from path (format: {run_id}/... where run_id should be numeric)
+    try:
+        run_id_str = path_components[0]
+        run_id = int(run_id_str)
+        # Validate user has access to this run's artifacts
+        await _validate_artifact_access(run_id, user)
+    except ValueError:
+        # If run_id is not numeric, skip IDOR check (for backward compatibility with non-numeric paths)
+        pass
+
     try:
         safe_components = [
             sanitize_path_component(component, label=f"artifact_path[{index}]")
@@ -160,6 +192,16 @@ async def serve_local_artifact_file(path: str, user: CurrentUser = Depends(get_c
         or any(component in {"", ".", ".."} for component in path_components)
     ):
         raise HTTPException(status_code=400, detail="Invalid artifact path")
+
+    # Extract and validate run_id from path (format: {run_id}/... where run_id should be numeric)
+    try:
+        run_id_str = path_components[0]
+        run_id = int(run_id_str)
+        # Validate user has access to this run's artifacts
+        await _validate_artifact_access(run_id, user)
+    except ValueError:
+        # If run_id is not numeric, skip IDOR check (for backward compatibility with non-numeric paths)
+        pass
 
     try:
         safe_components = [
