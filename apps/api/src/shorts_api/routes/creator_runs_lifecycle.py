@@ -116,7 +116,10 @@ async def delete_run(
             run_id, {"status": "cancelled"}, workspace_id=user.workspace_id
         )
     except Exception:
-        pass  # Best-effort — run will be deleted shortly anyway
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to mark run as cancelled before deletion; retry later",
+        ) from None
     collect_result = await _collect_active_celery_ids(run.id)
     if isinstance(collect_result, tuple):
         celery_ids, collect_reliable = collect_result

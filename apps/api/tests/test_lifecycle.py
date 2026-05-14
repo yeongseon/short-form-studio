@@ -53,6 +53,26 @@ class StubRunService:
         self.stop_errors: dict[int, Exception] = {}
         self.go_back_errors: dict[int, Exception] = {}
         self.update_model_defaults_errors: dict[int, Exception] = {}
+        self.storage = self._StorageStub(self)
+
+    class _StorageStub:
+        def __init__(self, parent: 'StubRunService') -> None:
+            self._parent = parent
+            self.update_run_calls: list[tuple[int, dict]] = []
+
+        async def update_run(
+            self, run_id: int, updates: dict, workspace_id: int | None = None, expected_version: int | None = None
+        ) -> dict | None:
+            self.update_run_calls.append((run_id, updates))
+            run = self._parent.runs.get(run_id)
+            if run is None:
+                return None
+            if workspace_id is not None and run.workspace_id != workspace_id:
+                return None
+            for k, v in updates.items():
+                if hasattr(run, k):
+                    object.__setattr__(run, k, v)
+            return {'id': run_id, **updates}
 
     async def get_run(self, run_id: int) -> StubPipelineRun | None:
         self.get_run_calls.append(run_id)

@@ -448,3 +448,39 @@ async def test_revoke_celery_ids_empty_list_is_noop() -> None:
 
     # Should not raise or call anything
     await _revoke_celery_ids([], run_id=1)
+
+
+@pytest.mark.asyncio
+async def test_delete_run_fails_closed_when_cancel_write_fails(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If pre-delete cancellation write fails, delete_run must return 503 (fail-closed)."""
+    delete_called = False
+
+    async def _mock_update_run(run_id, updates, workspace_id=None, expected_version=None):
+        raise RuntimeError("storage unavailable")
+
+    async def _mock_collect(run_id):
+        return ["celery-id-1"], True
+
+    async def _mock_delete_run(run_id, workspace_id):
+        nonlocal delete_called
+        delete_called = True
+        return True
+
+    async def _mock_revoke_ids(celery_ids, run_id):
+        pass
+
+    async def _mock_delete_artifacts(run_id):
+        pass
+
+    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle.run_service.storage.update_run", _mock_update_run)
+    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle._collect_active_celery_ids", _mock_collect)
+    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle.run_service.delete_run", _mock_delete_run)
+    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle._revoke_celery_ids", _mock_revoke_ids)
+    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle.artifact_download_service.delete_artifacts_for_run", _mock_delete_artifacts)
+
+    response = await client.delete("/api/creator/runs/1")
+    assert response.status_code == 503
+    assert "cancel" in response.json()["detail"].lower()
+    assert delete_called is False, "delete_run must not proceed if cancellation write fails"
