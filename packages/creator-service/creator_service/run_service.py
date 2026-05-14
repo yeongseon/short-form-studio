@@ -220,14 +220,16 @@ class RunService:
         )
         return PipelineRun.from_row(row)
 
-    async def get_run(self, run_id: int) -> PipelineRun | None:
-        row = await self.storage.get_run(run_id)
+    async def get_run(self, run_id: int, workspace_id: int | None = None) -> PipelineRun | None:
+        row = await self.storage.get_run(run_id, workspace_id=workspace_id)
         if row is None:
             return None
         return PipelineRun.from_row(row)
 
-    async def restart_run(self, run_id: int, from_stage: str) -> PipelineRun:
-        run = await self.get_run(run_id)
+    async def restart_run(
+        self, run_id: int, from_stage: str, workspace_id: int | None = None
+    ) -> PipelineRun:
+        run = await self.get_run(run_id, workspace_id=workspace_id)
         if run is None:
             raise ValueError(f"Run {run_id} not found")
 
@@ -257,18 +259,21 @@ class RunService:
                 "restart_from": target_stage.value,
                 "current_stage": target_stage.value,
             },
+            workspace_id=workspace_id,
             expected_version=int(getattr(run, "version", 0) or 0),
         )
         if row is None:
             raise ConflictError(f"Run {run_id} has stale version")
         return PipelineRun.from_row(row)
 
-    async def advance_stage(self, run_id: int, target_stage: str) -> PipelineRun:
+    async def advance_stage(
+        self, run_id: int, target_stage: str, workspace_id: int | None = None
+    ) -> PipelineRun:
         """Advance a run to the next stage (approval/forward progression).
 
         Unlike restart_run, this does NOT set restart_from.
         """
-        run = await self.get_run(run_id)
+        run = await self.get_run(run_id, workspace_id=workspace_id)
         if run is None:
             raise ValueError(f"Run {run_id} not found")
 
@@ -293,6 +298,7 @@ class RunService:
         row = await self.storage.update_run(
             run_id,
             {"current_stage": target.value},
+            workspace_id=workspace_id,
             expected_version=int(getattr(run, "version", 0) or 0),
         )
         if row is None:
@@ -308,13 +314,13 @@ class RunService:
         rows = await self.storage.list_runs_by_workspace(workspace_id)
         return [PipelineRun.from_row(r) for r in rows]
 
-    async def stop_run(self, run_id: int) -> PipelineRun:
+    async def stop_run(self, run_id: int, workspace_id: int | None = None) -> PipelineRun:
         """Stop a running pipeline. Only allowed during GENERATING stages.
 
         Moves current_stage back to the pre-generating actionable stage so
         any surviving worker task's CAS will fail (stage no longer in _SAFE_STAGES).
         """
-        run = await self.get_run(run_id)
+        run = await self.get_run(run_id, workspace_id=workspace_id)
         if run is None:
             raise ValueError(f"Run {run_id} not found")
 
@@ -339,19 +345,20 @@ class RunService:
                 "status": "cancelled",
                 "current_stage": rollback_stage.value,
             },
+            workspace_id=workspace_id,
             expected_version=int(getattr(run, "version", 0) or 0),
         )
         if row is None:
             raise ConflictError(f"Run {run_id} has stale version")
         return PipelineRun.from_row(row)
 
-    async def resume_run(self, run_id: int) -> PipelineRun:
+    async def resume_run(self, run_id: int, workspace_id: int | None = None) -> PipelineRun:
         """Resume a stopped/cancelled or failed run.
 
         After stop, current_stage is already at an actionable stage.
         Just resets status to 'running' so the user can re-trigger generation.
         """
-        run = await self.get_run(run_id)
+        run = await self.get_run(run_id, workspace_id=workspace_id)
         if run is None:
             raise ValueError(f"Run {run_id} not found")
 
@@ -363,6 +370,7 @@ class RunService:
         row = await self.storage.update_run(
             run_id,
             {"status": "running"},
+            workspace_id=workspace_id,
             expected_version=int(getattr(run, "version", 0) or 0),
         )
         if row is None:

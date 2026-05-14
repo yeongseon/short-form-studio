@@ -82,7 +82,9 @@ class StubProjectService:
         self.next_id += 1
         return project
 
-    async def get_project(self, project_id: int) -> StubProject | None:
+    async def get_project(
+        self, project_id: int, workspace_id: int | None = None
+    ) -> StubProject | None:
         return self.projects.get(project_id)
 
 

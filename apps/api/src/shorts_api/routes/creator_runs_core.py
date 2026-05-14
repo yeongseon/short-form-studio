@@ -147,8 +147,13 @@ async def restart_run(
     request: RestartRunRequest,
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
+    user, _ = access
     try:
-        run = await run_service.restart_run(run_id=run_id, from_stage=request.stage)
+        run = await run_service.restart_run(
+            run_id=run_id,
+            from_stage=request.stage,
+            workspace_id=user.workspace_id,
+        )
     except ValueError as exc:
         detail = str(exc)
         if "not found" in detail.lower():

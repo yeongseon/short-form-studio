@@ -153,13 +153,20 @@ class PostgresProjectStorage:
         """
         return await fetch_one(query, *params)
 
-    async def delete_project(self, project_id: int) -> bool:
+    async def delete_project(self, project_id: int, *, workspace_id: int | None = None) -> bool:
         """Delete a project by id. Returns True if deleted.
 
         Runs are cascade-deleted by FK constraint.
         """
-        result = await fetch_one(
-            "DELETE FROM creator_projects WHERE id = $1 RETURNING id",
-            project_id,
-        )
+        if workspace_id is None:
+            result = await fetch_one(
+                "DELETE FROM creator_projects WHERE id = $1 RETURNING id",
+                project_id,
+            )
+        else:
+            result = await fetch_one(
+                "DELETE FROM creator_projects WHERE id = $1 AND workspace_id = $2 RETURNING id",
+                project_id,
+                workspace_id,
+            )
         return result is not None

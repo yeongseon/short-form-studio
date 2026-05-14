@@ -41,7 +41,9 @@ class StubProject:
 
 
 class StubProjectService:
-    async def get_project(self, project_id: int) -> StubProject | None:
+    async def get_project(
+        self, project_id: int, workspace_id: int | None = None
+    ) -> StubProject | None:
         if project_id != 1:
             return None
         return StubProject()
@@ -49,6 +51,7 @@ class StubProjectService:
 
 def _iter_api_routes() -> list[APIRoute]:
     return [route for route in app.routes if isinstance(route, APIRoute)]
+
 
 async def _stub_check_access(workspace_id: int, user_id: int) -> bool:
     return workspace_id == 1 and user_id == 101

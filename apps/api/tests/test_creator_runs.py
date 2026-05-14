@@ -90,7 +90,9 @@ class StubRunService:
         self.get_run_calls.append(run_id)
         return self.runs.get(run_id)
 
-    async def restart_run(self, run_id: int, from_stage: str) -> StubPipelineRun:
+    async def restart_run(
+        self, run_id: int, from_stage: str, workspace_id: int | None = None
+    ) -> StubPipelineRun:
         self.restart_run_calls.append({"run_id": run_id, "from_stage": from_stage})
 
         run = self.runs.get(run_id)
@@ -209,7 +211,7 @@ class StubProjectLookupService:
         self.existing_project_ids = existing_project_ids or {7, 8}
         self.get_project_calls: list[int] = []
 
-    async def get_project(self, project_id: int) -> object | None:
+    async def get_project(self, project_id: int, workspace_id: int | None = None) -> object | None:
         self.get_project_calls.append(project_id)
         if project_id in self.existing_project_ids:
             return {"id": project_id}
@@ -779,7 +781,9 @@ class StubProjectService:
     def __init__(self) -> None:
         self.projects: dict[int, StubProject] = {}
 
-    async def get_project(self, project_id: int) -> StubProject | None:
+    async def get_project(
+        self, project_id: int, workspace_id: int | None = None
+    ) -> StubProject | None:
         return self.projects.get(project_id)
 
 

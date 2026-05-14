@@ -170,37 +170,8 @@ def test_restart_run_allows_valid_review_stage_restart() -> None:
     assert restarted.current_stage == RunStage.SCRIPT_GENERATING.value
 
 
-class _CasAwareStorage(InMemoryRunStorage):
-    def __init__(self) -> None:
-        super().__init__()
-        self.force_conflict_next_update = False
-
-    async def update_run(
-        self,
-        run_id: int,
-        updates: dict[str, object],
-        *,
-        workspace_id: int | None = None,
-        expected_version: int | None = None,
-    ) -> dict[str, object] | None:
-        row = await self.get_run(run_id)
-        if row is None:
-            raise ValueError(f"Run {run_id} not found")
-        if workspace_id is not None and row.get("workspace_id") != workspace_id:
-            raise ValueError(f"Run {run_id} not found")
-        current_version = int(row.get("version") or 0)
-        if expected_version is not None and self.force_conflict_next_update:
-            self.force_conflict_next_update = False
-            return None  # type: ignore[return-value]
-        if expected_version is not None and expected_version != current_version:
-            return None  # type: ignore[return-value]
-        updates_with_version = dict(updates)
-        updates_with_version["version"] = current_version + 1
-        return await super().update_run(run_id, updates_with_version)
-
-
 def test_advance_stage_raises_conflict_for_stale_version() -> None:
-    storage = _CasAwareStorage()
+    storage = InMemoryRunStorage()
     service = RunService(storage)
 
     created = asyncio.run(
@@ -213,7 +184,26 @@ def test_advance_stage_raises_conflict_for_stale_version() -> None:
         )
     )
     asyncio.run(storage.update_run(created.id, {"current_stage": RunStage.SCRIPT_GENERATING.value}))
-    storage.force_conflict_next_update = True
+
+    original_update = storage.update_run
+
+    async def conflicting_update_run(
+        run_id: int,
+        updates: dict[str, object],
+        *,
+        workspace_id: int | None = None,
+        expected_version: int | None = None,
+    ):
+        if expected_version is not None:
+            await original_update(run_id, {"status": "running"}, workspace_id=workspace_id)
+        return await original_update(
+            run_id,
+            updates,
+            workspace_id=workspace_id,
+            expected_version=expected_version,
+        )
+
+    storage.update_run = conflicting_update_run  # type: ignore[method-assign]
 
     with pytest.raises(ConflictError, match="stale version"):
-        asyncio.run(service.advance_stage(created.id, RunStage.SCRIPT_REVIEW.value))
+        asyncio.run(service.advance_stage(created.id, RunStage.SCRIPT_REVIEW.value, workspace_id=1))

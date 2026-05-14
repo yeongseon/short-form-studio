@@ -52,7 +52,7 @@ class StubRunService:
         self.get_run_calls.append(run_id)
         return self.runs.get(run_id)
 
-    async def stop_run(self, run_id: int) -> StubPipelineRun:
+    async def stop_run(self, run_id: int, workspace_id: int | None = None) -> StubPipelineRun:
         self.stop_run_calls.append(run_id)
         run = self.runs.get(run_id)
         if run is None:
@@ -61,7 +61,7 @@ class StubRunService:
         self.runs[run_id] = updated
         return updated
 
-    async def resume_run(self, run_id: int) -> StubPipelineRun:
+    async def resume_run(self, run_id: int, workspace_id: int | None = None) -> StubPipelineRun:
         self.resume_run_calls.append(run_id)
         error = self.resume_errors.get(run_id)
         if error is not None:
@@ -118,7 +118,7 @@ class StubProjectService:
         self.projects: dict[int, StubProject] = {}
         self.delete_project_calls: list[int] = []
 
-    async def delete_project(self, project_id: int) -> bool:
+    async def delete_project(self, project_id: int, workspace_id: int | None = None) -> bool:
         self.delete_project_calls.append(project_id)
         return self.projects.pop(project_id, None) is not None
 
@@ -197,6 +197,7 @@ def stub_lifecycle_services(
         project = project_svc.projects.get(project_id)
         if project is None:
             from fastapi import HTTPException
+
             raise HTTPException(status_code=404, detail="Project not found")
         return CurrentUser(user_id=1, workspace_id=1), project
 

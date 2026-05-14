@@ -193,13 +193,15 @@ def _patch_for_cross_workspace(monkeypatch: pytest.MonkeyPatch) -> None:
     """Patch services so require_run_access / require_project_access find workspace-2 objects."""
 
     class CrossWsProjectService:
-        async def get_project(self, project_id: int) -> StubProject | None:
+        async def get_project(
+            self, project_id: int, workspace_id: int | None = None
+        ) -> StubProject | None:
             if project_id == 99:
                 return _WS2_PROJECT
             return None
 
     class CrossWsRunService:
-        async def get_run(self, run_id: int) -> StubRun | None:
+        async def get_run(self, run_id: int, workspace_id: int | None = None) -> StubRun | None:
             if run_id == 99:
                 return _WS2_RUN
             return None
@@ -271,7 +273,9 @@ async def test_artifact_download_denies_cross_workspace(
     from shorts_api.routes import creator_artifact_download
 
     class _StorageStub:
-        async def get_run(self, run_id: int) -> dict[str, object] | None:
+        async def get_run(
+            self, run_id: int, workspace_id: int | None = None
+        ) -> dict[str, object] | None:
             if run_id == 99:
                 return {"id": 99, "project_id": 99, "workspace_id": 2}
             return None
@@ -280,7 +284,9 @@ async def test_artifact_download_denies_cross_workspace(
         storage = _StorageStub()
 
     class CrossWsProjSvc:
-        async def get_project(self, project_id: int) -> StubProject | None:
+        async def get_project(
+            self, project_id: int, workspace_id: int | None = None
+        ) -> StubProject | None:
             if project_id == 99:
                 return _WS2_PROJECT
             return None

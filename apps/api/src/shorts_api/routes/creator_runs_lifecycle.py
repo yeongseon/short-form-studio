@@ -25,12 +25,12 @@ router = APIRouter(tags=["runs"])
 async def stop_run(
     run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
 ) -> dict[str, object]:
-    _, run = access
+    user, run = access
 
     await _revoke_active_tasks_for_run(run.id)
 
     try:
-        updated = await run_service.stop_run(run_id)
+        updated = await run_service.stop_run(run_id, workspace_id=user.workspace_id)
     except ValueError as exc:
         detail = str(exc)
         if "not found" in detail.lower():
@@ -44,8 +44,9 @@ async def stop_run(
 async def resume_run(
     run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
 ) -> dict[str, object]:
+    user, _ = access
     try:
-        updated = await run_service.resume_run(run_id)
+        updated = await run_service.resume_run(run_id, workspace_id=user.workspace_id)
     except ValueError as exc:
         detail = str(exc)
         if "not found" in detail.lower():

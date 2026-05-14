@@ -84,7 +84,7 @@ class PostgresRunStorage:
             raise ValueError(f"Invalid update columns: {invalid_list}")
 
         keys = list(updates.keys())
-        assignments = ", ".join(f"{key} = ${idx}" for idx, key in enumerate(keys, start=2))
+        assignments_parts = [f"{key} = ${idx}" for idx, key in enumerate(keys, start=2)]
         values: list[Any] = [run_id, *[updates[key] for key in keys]]
         where_clauses = ["id = $1"]
         next_index = len(values) + 1
@@ -95,6 +95,8 @@ class PostgresRunStorage:
         if expected_version is not None:
             where_clauses.append(f"version = ${next_index}")
             values.append(expected_version)
+            assignments_parts.append("version = version + 1")
+        assignments = ", ".join(assignments_parts)
         query = (
             f"UPDATE creator_runs SET {assignments} WHERE {' AND '.join(where_clauses)} RETURNING *"
         )
