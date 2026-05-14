@@ -9,7 +9,7 @@ import httpx
 
 from creator_provider.api_keys import resolve_api_key
 from creator_provider.base import ImageProvider, ImageResult
-from creator_provider.exceptions import ProviderError
+from creator_provider.exceptions import ProviderError, map_httpx_error
 
 # Map common width x height to Imagen API aspectRatio values.
 _ASPECT_RATIOS: dict[tuple[int, int], str] = {
@@ -44,7 +44,10 @@ class ImagenProvider(ImageProvider):
     def __init__(self, endpoint: str, model_key: str):
         self.endpoint = endpoint.rstrip("/")
         self.model_key = model_key
-        self.api_key = resolve_api_key("google")
+        api_key = resolve_api_key("google")
+        if api_key is None:
+            raise ValueError("Google API key not configured")
+        self.api_key = api_key
 
     async def generate(self, prompt: str, params: dict[str, Any] | None = None) -> ImageResult:
         merged = dict(params or {})
@@ -61,8 +64,6 @@ class ImagenProvider(ImageProvider):
                 "aspectRatio": aspect_ratio,
             },
         }
-        if self.api_key is None:
-            raise ProviderError("Imagen API key is not configured")
         headers = {
             "Content-Type": "application/json",
             "x-goog-api-key": self.api_key,
@@ -73,16 +74,16 @@ class ImagenProvider(ImageProvider):
                 response = await client.post(url, json=payload, headers=headers)
                 response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise ProviderError("Imagen API request failed") from exc
+            raise map_httpx_error(exc, "Imagen API request failed") from exc
 
         data = response.json()
         images = data.get("generatedImages", [])
         if not images:
-            raise RuntimeError("Imagen API returned no images")
+            raise ProviderError("Imagen API returned no images")
 
         image_b64 = images[0].get("image", {}).get("imageBytes", "")
         if not image_b64:
-            raise RuntimeError("Imagen API returned empty image data")
+            raise ProviderError("Imagen API returned empty image data")
 
         image_bytes = base64.b64decode(image_b64)
 
