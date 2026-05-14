@@ -11,12 +11,12 @@ class VisualAsset(BaseModel):
 
     id: int = Field(ge=1)
     run_id: int = Field(ge=1)
-    scene_id: str = Field(max_length=128)
+    scene_id: str = Field(max_length=100)
     version: int = Field(ge=0, default=1)
     asset_path: str
     prompt_snapshot: str | None = None
-    model_used: str | None = None
-    provider_type: str | None = None
+    model_used: str | None = Field(default=None, max_length=100)
+    provider_type: str | None = Field(default=None, max_length=50)
     storage_provider: str | None = None
     storage_key: str | None = None
     is_active: bool = True

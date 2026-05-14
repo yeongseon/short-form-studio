@@ -17,7 +17,7 @@ class AudioArtifact(BaseModel):
     id: int = Field(ge=1)
     run_id: int = Field(ge=1)
     path: str = Field(max_length=1024)
-    section_id: str | None = Field(default=None, max_length=128)
+    section_id: str | None = Field(default=None, max_length=100)
     model_used: str | None = None
     provider_type: str | None = None
     voice: str | None = None

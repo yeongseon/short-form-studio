@@ -15,7 +15,7 @@ class VisualOverride(BaseModel):
 class ScriptSection(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
-    section_id: str = Field(max_length=128)
+    section_id: str = Field(max_length=100)
     type: str
     text: str
     display_text: str | None = None

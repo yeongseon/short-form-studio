@@ -20,7 +20,7 @@ class RunTask(BaseModel):
     attempt: int = Field(ge=1, default=1)
     started_at: datetime | None = None
     finished_at: datetime | None = None
-    error_code: str | None = None
+    error_code: str | None = Field(default=None, max_length=100)
     error_message: str | None = None
     created_at: datetime
 

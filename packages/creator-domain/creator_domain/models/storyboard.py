@@ -43,7 +43,7 @@ class StoryboardParagraph(BaseModel):
 
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
-    section_id: str = Field(max_length=128)
+    section_id: str = Field(max_length=100)
     order: int = Field(ge=0)
     text: str
     display_text: str | None = None
@@ -57,7 +57,7 @@ class StoryboardParagraph(BaseModel):
     stale_flags: StaleFlags | None = None
 
     # Scene/asset metadata for cross-reference
-    scene_id: str | None = Field(default=None, max_length=128)
+    scene_id: str | None = Field(default=None, max_length=100)
     image_asset_id: int | None = Field(default=None, ge=1)
     audio_artifact_id: int | None = Field(default=None, ge=1)
     subtitle_artifact_id: int | None = Field(default=None, ge=1)

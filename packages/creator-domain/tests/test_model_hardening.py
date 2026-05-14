@@ -437,7 +437,7 @@ def test_negative_ids_are_rejected(factory: Callable[..., Any], payload: dict[st
 
 
 def test_overly_long_scene_and_section_ids_are_rejected() -> None:
-    too_long = "x" * 129
+    too_long = "x" * 101
     with pytest.raises(ValidationError):
         VisualScene(
             scene_id=too_long,

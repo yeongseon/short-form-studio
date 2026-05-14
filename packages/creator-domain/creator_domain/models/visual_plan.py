@@ -8,8 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field
 class VisualScene(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
 
-    scene_id: str = Field(max_length=128)
-    section_id: str = Field(max_length=128)
+    scene_id: str = Field(max_length=100)
+    section_id: str = Field(max_length=100)
     scene_index: int = Field(ge=0)
     section_type: str
     original_text: str

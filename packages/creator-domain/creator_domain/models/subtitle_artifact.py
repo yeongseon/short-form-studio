@@ -18,7 +18,7 @@ class SubtitleArtifact(BaseModel):
     id: int = Field(ge=1)
     run_id: int = Field(ge=1)
     path: str = Field(max_length=1024)
-    section_id: str | None = Field(default=None, max_length=128)
+    section_id: str | None = Field(default=None, max_length=100)
     format: Literal["srt", "vtt"] = "srt"
     created_at: datetime
 
