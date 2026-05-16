@@ -96,7 +96,7 @@ class PostgresTaskTrackingStorage:
                 finished_at = NULL,
                 error_code = NULL,
                 error_message = NULL
-            WHERE id = $1 AND status IN ('queued', 'failed')
+            WHERE id = $1 AND status IN ('pending', 'queued', 'failed')
             RETURNING *
             """,
             task_id,
@@ -127,6 +127,35 @@ class PostgresTaskTrackingStorage:
             ORDER BY started_at ASC
             """,
             threshold_seconds,
+        )
+
+
+    async def list_stale_pending_tasks(self, threshold_seconds: int) -> list[dict[str, Any]]:
+        """Find tasks stuck in 'pending' state longer than threshold_seconds."""
+        return await fetch_all(
+            """
+            SELECT *
+            FROM creator_run_tasks
+            WHERE status = 'pending'
+              AND created_at < (NOW() - make_interval(secs => $1))
+            ORDER BY created_at ASC
+            """,
+            threshold_seconds,
+        )
+
+    async def promote_pending_to_queued(self, celery_task_id: str) -> dict[str, Any] | None:
+        """Atomically promote a task from 'pending' to 'queued'.
+
+        Uses WHERE status = 'pending' to prevent clobbering a concurrent claim_running.
+        """
+        return await fetch_one(
+            """
+            UPDATE creator_run_tasks
+            SET status = 'queued'
+            WHERE celery_task_id = $1 AND status = 'pending'
+            RETURNING *
+            """,
+            celery_task_id,
         )
 
     async def get_active_celery_ids(self, run_id: int) -> list[str]:

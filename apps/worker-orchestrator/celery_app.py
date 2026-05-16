@@ -103,6 +103,7 @@ celery_app = Celery(
         "tasks.render_video",
         "tasks.generate_paragraph_audio",
         "tasks.generate_paragraph_subtitles",
+        "tasks.reconcile_stale_dispatches",
     ],
 )
 celery_app.conf.task_default_queue = "creator"
@@ -117,6 +118,12 @@ celery_app.conf.task_queues = (
 # - task_acks_late=True ensures at-least-once delivery by acknowledging AFTER execution
 # - task_reject_on_worker_lost=True prevents message loss if worker dies
 # This ensures failed tasks are not lost and can be replayed from the DLQ.
+celery_app.conf.beat_schedule = {
+    "reconcile-stale-dispatches": {
+        "task": "reconcile_stale_dispatches",
+        "schedule": 60.0,
+    },
+}
 celery_app.conf.update(
     # Prefetch only 1 task per worker to prevent queue saturation
     worker_prefetch_multiplier=1,

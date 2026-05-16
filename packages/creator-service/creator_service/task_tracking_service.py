@@ -23,6 +23,10 @@ class TaskTrackingStorageBackend(Protocol):
 
     async def list_stuck_tasks(self, threshold_seconds: int) -> list[dict[str, Any]]: ...
 
+    async def list_stale_pending_tasks(self, threshold_seconds: int) -> list[dict[str, Any]]: ...
+
+    async def promote_pending_to_queued(self, celery_task_id: str) -> dict[str, Any] | None: ...
+
     async def get_active_celery_ids(self, run_id: int) -> list[str]: ...
 
 
@@ -99,11 +103,11 @@ class InMemoryTaskTrackingStorage:
         return dict(row)
 
     async def claim_running(self, task_id: int, **kwargs: Any) -> dict[str, Any] | None:
-        """Atomically claim a task: only transition from queued/failed to running."""
+        """Atomically claim a task: only transition from pending/queued/failed to running."""
         row = self._rows.get(task_id)
         if row is None:
             return None
-        if row.get("status") not in ("queued", "failed"):
+        if row.get("status") not in ("pending", "queued", "failed"):
             return None
         row["status"] = "running"
         if "started_at" in kwargs:
@@ -143,6 +147,41 @@ class InMemoryTaskTrackingStorage:
         )
         return stuck
 
+    async def list_stale_pending_tasks(self, threshold_seconds: int) -> list[dict[str, Any]]:
+        """Find tasks stuck in 'pending' state longer than threshold_seconds."""
+        cutoff = datetime.now(timezone.utc).timestamp() - threshold_seconds
+        stale: list[dict[str, Any]] = []
+        for row in self._rows.values():
+            if row.get("status") != "pending":
+                continue
+            created_at = row.get("created_at")
+            if created_at is None:
+                continue
+            if created_at.timestamp() < cutoff:
+                stale.append(dict(row))
+        stale.sort(
+            key=lambda row: row.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)
+        )
+        return stale
+
+    async def promote_pending_to_queued(self, celery_task_id: str) -> dict[str, Any] | None:
+        """Atomically promote a task from 'pending' to 'queued'. Returns None if not pending."""
+        row_id = self._rows_by_celery_task_id.get(celery_task_id)
+        if row_id is None:
+            # Fallback: search by celery_task_id
+            for rid, row in self._rows.items():
+                if row.get("celery_task_id") == celery_task_id:
+                    row_id = rid
+                    break
+        if row_id is None:
+            return None
+        row = self._rows.get(row_id)
+        if row is None or row.get("status") != "pending":
+            return None
+        row["status"] = "queued"
+        self._rows[row_id] = row
+        return dict(row)
+
     async def get_active_celery_ids(self, run_id: int) -> list[str]:
         return [
             row["celery_task_id"]
@@ -156,6 +195,45 @@ class InMemoryTaskTrackingStorage:
 class TaskTrackingService:
     def __init__(self, storage: TaskTrackingStorageBackend):
         self.storage = storage
+
+    async def record_task_pending(
+        self, run_id: int, task_type: str, celery_task_id: str
+    ) -> RunTask:
+        """Record a task as 'pending' before broker enqueue.
+
+        This is the first step of the atomic dispatch pattern:
+        1. Record task as 'pending' (this method)
+        2. Enqueue to broker
+        3. Promote to 'queued' via promote_pending_to_queued()
+
+        Raises ValueError if the task already exists in a non-retriable state
+        (running, success).
+        """
+        row = await self.storage.create_task(
+            {
+                "run_id": run_id,
+                "task_type": task_type,
+                "celery_task_id": celery_task_id,
+                "status": "pending",
+                "attempt": 1,
+            }
+        )
+        if row is None:
+            raise ValueError(
+                f"Failed to record pending task {celery_task_id}: "
+                "task is already running or succeeded"
+            )
+        return RunTask.from_row(row)
+
+    async def promote_pending_to_queued(self, celery_task_id: str) -> RunTask | None:
+        """Atomically promote a pending task to queued after successful broker enqueue.
+
+        Uses a CAS operation in storage to avoid TOCTOU race with claim_running.
+        Returns None if the task is no longer pending (e.g. worker already
+        claimed it via claim_running).
+        """
+        row = await self.storage.promote_pending_to_queued(celery_task_id)
+        return RunTask.from_row(row) if row is not None else None
 
     async def record_task_queued(self, run_id: int, task_type: str, celery_task_id: str) -> RunTask:
         row = await self.storage.create_task(
@@ -291,6 +369,11 @@ class TaskTrackingService:
             error_message=reason,
         )
         return RunTask.from_row(row) if row is not None else None
+
+    async def find_stale_pending_tasks(self, threshold_seconds: int = 120) -> list[RunTask]:
+        """Find tasks stuck in 'pending' state beyond threshold."""
+        rows = await self.storage.list_stale_pending_tasks(threshold_seconds)
+        return [RunTask.from_row(row) for row in rows]
 
     async def list_run_tasks(self, run_id: int) -> list[RunTask]:
         rows = await self.storage.list_by_run(run_id)
