@@ -174,12 +174,17 @@ def test_run_task_rejects_during_shutdown(monkeypatch: pytest.MonkeyPatch) -> No
 def test_run_task_value_error_marks_task_failed_without_run_failed_transition(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    class _InnerStorage:
+        async def get_by_celery_id(self, celery_task_id: str) -> dict[str, object] | None:
+            return None
+
     class _TrackingServiceStub:
         def __init__(self) -> None:
             self.failed_calls: list[tuple[str, str, str]] = []
+            self.storage = _InnerStorage()
 
-        async def record_task_start(self, run_id: int, task_name: str, task_id: str) -> None:
-            return None
+        async def record_task_start(self, run_id: int, task_name: str, task_id: str) -> SimpleNamespace:
+            return SimpleNamespace(status="running")
 
         async def mark_running(self, task_id: str) -> None:
             return None

@@ -118,6 +118,7 @@ def generate_script(
                 cost_usd=COST_SCRIPT_GENERATION,
                 workspace_id=ctx.workspace_id,
                 project_id=ctx.project_id,
+                idempotency_key=ctx.task_id,
             )
         except Exception:
             logger.warning("Failed to record provider usage", exc_info=True)
@@ -126,6 +127,7 @@ def generate_script(
             run_id=run_id,
             source_type="generated_by_model",
             markdown_content=generated,
+            idempotency_key=ctx.task_id,
         )
         return TaskResult(
             status="success",

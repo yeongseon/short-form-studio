@@ -137,12 +137,64 @@ async def _run_task_inner(
     clear_loaded_asset_versions()
     start_time = datetime.now(timezone.utc)
 
-    # 1. Task tracking: start
     try:
-        await _task_tracking_service.record_task_start(run_id, config.task_name, task_id)
-        await _task_tracking_service.mark_running(task_id)
+        existing_task = await _task_tracking_service.storage.get_by_celery_id(task_id)
+        if (
+            existing_task is not None
+            and not task_id.startswith("run-")
+            and existing_task.get("status") == "success"
+            and existing_task.get("run_id") == run_id
+            and existing_task.get("task_type") == config.task_name
+        ):
+            logger.info("Task %s already succeeded (idempotency guard), skipping", task_id)
+            end_time = datetime.now(timezone.utc)
+            return {
+                "task_id": task_id,
+                "run_id": run_id,
+                "status": "success",
+                "idempotent_skip": True,
+                "start_time": start_time.isoformat(),
+                "end_time": end_time.isoformat(),
+                "duration_seconds": 0.0,
+            }
     except Exception:
-        logger.warning("Failed to record task start", exc_info=True)
+        logger.warning("Failed idempotency guard lookup", exc_info=True)
+
+    # 1. Task tracking: exclusive claim (only one worker executes per task)
+    try:
+        start_result = await _task_tracking_service.record_task_start(
+            run_id, config.task_name, task_id
+        )
+        if not task_id.startswith("run-"):
+            if start_result is None:
+                logger.info("Task %s already claimed by another worker, skipping", task_id)
+                end_time = datetime.now(timezone.utc)
+                return {
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "status": "success",
+                    "idempotent_skip": True,
+                    "start_time": start_time.isoformat(),
+                    "end_time": end_time.isoformat(),
+                    "duration_seconds": 0.0,
+                }
+            if start_result.status == "success":
+                logger.info("Task %s already succeeded (atomic start guard), skipping", task_id)
+                end_time = datetime.now(timezone.utc)
+                return {
+                    "task_id": task_id,
+                    "run_id": run_id,
+                    "status": "success",
+                    "idempotent_skip": True,
+                    "start_time": start_time.isoformat(),
+                    "end_time": end_time.isoformat(),
+                    "duration_seconds": 0.0,
+                }
+    except Exception:
+        if not task_id.startswith("run-"):
+            logger.error("Failed to record task start — refusing to execute without claim", exc_info=True)
+            raise
+        logger.warning("Failed to record task start (synthetic task ID, continuing)", exc_info=True)
 
     # 2. Stage guard
     run = await _run_service.storage.get_run(run_id)

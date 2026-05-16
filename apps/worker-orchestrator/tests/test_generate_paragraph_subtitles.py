@@ -54,6 +54,7 @@ class FakeSubtitleService:
         provider_type: str | None = None,
         storage_provider: str | None = None,
         storage_key: str | None = None,
+        idempotency_key: str | None = None,
     ) -> FakeSubtitleArtifact:
         call_data = {
             "run_id": run_id,

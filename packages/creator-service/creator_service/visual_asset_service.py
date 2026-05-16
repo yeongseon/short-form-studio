@@ -75,6 +75,7 @@ class InMemoryVisualAssetStorage:
         self._assets: list[dict[str, Any]] = []
         self._next_id = 1
         self._scene_locks: dict[tuple[int, str], asyncio.Lock] = {}
+        self._by_idempotency_key: dict[str, dict[str, Any]] = {}
 
     async def save_asset(self, row: dict[str, Any]) -> dict[str, Any]:
         run_id = row["run_id"]
@@ -82,6 +83,9 @@ class InMemoryVisualAssetStorage:
         key = (run_id, scene_id)
         lock = self._scene_locks.setdefault(key, asyncio.Lock())
         async with lock:
+            idem_key = row.get("idempotency_key")
+            if isinstance(idem_key, str) and idem_key in self._by_idempotency_key:
+                return dict(self._by_idempotency_key[idem_key])
             # Deactivate previous active if this asset should be active.
             if row.get("is_active", False):
                 for a in self._assets:
@@ -105,6 +109,8 @@ class InMemoryVisualAssetStorage:
             }
             self._next_id += 1
             self._assets.append(saved)
+            if isinstance(idem_key, str):
+                self._by_idempotency_key[idem_key] = saved
         return dict(saved)
 
     async def get_asset(self, asset_id: int) -> dict[str, Any] | None:
@@ -174,6 +180,7 @@ class VisualAssetService:
         storage_provider: str | None = None,
         storage_key: str | None = None,
         is_active: bool = True,
+        idempotency_key: str | None = None,
     ) -> VisualAsset:
         """Create a new asset version for a scene.
 
@@ -193,6 +200,7 @@ class VisualAssetService:
             "storage_provider": storage_provider,
             "storage_key": storage_key,
             "is_active": is_active,
+            "idempotency_key": idempotency_key,
         }
         # save_asset atomically: allocates version, deactivates previous
         # active (when is_active=True), and inserts — all under one lock.

@@ -183,6 +183,7 @@ class FakeRenderService:
         render_profile: str | None = None,
         storage_provider: str | None = None,
         storage_key: str | None = None,
+        idempotency_key: str | None = None,
     ) -> FakeVideoArtifact:
         self.create_calls.append(
             {

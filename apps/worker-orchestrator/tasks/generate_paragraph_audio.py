@@ -147,6 +147,7 @@ def generate_paragraph_audio(
                 cost_usd=COST_PARAGRAPH_AUDIO,
                 workspace_id=ctx.workspace_id,
                 project_id=ctx.project_id,
+                idempotency_key=ctx.task_id,
             )
         except Exception:
             logger.warning("Failed to record provider usage", exc_info=True)
@@ -163,6 +164,7 @@ def generate_paragraph_audio(
             voice=voice,
             storage_provider=uploaded.storage_provider,
             storage_key=uploaded.key,
+            idempotency_key=ctx.task_id,
         )
 
         return TaskResult(

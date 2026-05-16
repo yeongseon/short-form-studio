@@ -105,6 +105,7 @@ class FakeAudioService:
         voice: str | None = None,
         storage_provider: str | None = None,
         storage_key: str | None = None,
+        idempotency_key: str | None = None,
     ) -> FakeAudioArtifact:
         call_data = {
             "run_id": run_id,
@@ -316,10 +317,14 @@ def test_generate_audio_with_gpu_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     lock_calls: list[str] = []
     release_calls: list[str] = []
     monkeypatch.setattr(
-        generate_audio_module, "acquire_gpu_lock", lambda _, task_id: (lock_calls.append(task_id) or f"{task_id}:fake-token")
+        generate_audio_module,
+        "acquire_gpu_lock",
+        lambda _, task_id: (lock_calls.append(task_id) or f"{task_id}:fake-token"),
     )
     monkeypatch.setattr(
-        generate_audio_module, "release_gpu_lock", lambda _, token: release_calls.append(token.split(':')[0]) or True
+        generate_audio_module,
+        "release_gpu_lock",
+        lambda _, token: release_calls.append(token.split(":")[0]) or True,
     )
 
     script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Lock script"))

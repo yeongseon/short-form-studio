@@ -14,7 +14,7 @@ def test_record_task_start_creates_queued_task() -> None:
 
 def test_mark_running_updates_status_and_started_at() -> None:
     service = TaskTrackingService(InMemoryTaskTrackingStorage())
-    asyncio.run(service.record_task_start(7, "generate_script", "celery-1"))
+    asyncio.run(service.record_task_queued(7, "generate_script", "celery-1"))
     task = asyncio.run(service.mark_running("celery-1"))
     assert task is not None
     assert task.status == "running"
@@ -68,13 +68,17 @@ def test_find_stuck_tasks_returns_only_stuck_tasks() -> None:
     assert [task.celery_task_id for task in stuck] == ["celery-old"]
 
 
-def test_record_task_start_reuses_celery_task_id_and_increments_attempt() -> None:
+def test_record_task_start_reuses_celery_task_id_after_failure() -> None:
+    """A failed task can be re-claimed on retry (different from running→running)."""
     service = TaskTrackingService(InMemoryTaskTrackingStorage())
     first = asyncio.run(service.record_task_start(7, "generate_script", "celery-retry-1"))
+    assert first is not None
+    # Mark as failed first
+    asyncio.run(service.mark_failed("celery-retry-1", "Error", "boom"))
+    # Now retry should succeed
     retried = asyncio.run(service.record_task_start(7, "generate_script", "celery-retry-1"))
-
+    assert retried is not None
     assert retried.id == first.id
-    assert retried.attempt == 1
     assert retried.status == "running"
     assert retried.started_at is not None
 
@@ -87,3 +91,56 @@ def test_mark_rejected_transitions_running_to_rejected() -> None:
     assert result is not None
     assert result.status == "rejected"
     assert result.finished_at is not None
+
+
+def test_record_task_start_does_not_overwrite_success_status() -> None:
+    service = TaskTrackingService(InMemoryTaskTrackingStorage())
+    asyncio.run(service.record_task_start(7, "generate_script", "celery-success-1"))
+    asyncio.run(service.mark_success("celery-success-1"))
+
+    task = asyncio.run(service.record_task_start(7, "generate_script", "celery-success-1"))
+
+    assert task.status == "success"
+
+
+def test_record_task_start_returns_none_when_already_running() -> None:
+    """If a task is already 'running', record_task_start returns None (already claimed)."""
+    service = TaskTrackingService(InMemoryTaskTrackingStorage())
+    # First call claims the task
+    first = asyncio.run(service.record_task_start(7, "generate_script", "celery-claim-1"))
+    assert first is not None
+    assert first.status == "running"
+
+    # Second call should return None (already claimed by first worker)
+    second = asyncio.run(service.record_task_start(7, "generate_script", "celery-claim-1"))
+    assert second is None, "Second caller must get None when task is already running"
+
+
+def test_record_task_start_exclusive_claim_from_queued() -> None:
+    """Only one caller should successfully claim a queued task."""
+    storage = InMemoryTaskTrackingStorage()
+    service = TaskTrackingService(storage)
+
+    # Pre-create task in queued state
+    asyncio.run(service.record_task_queued(7, "generate_script", "celery-excl-1"))
+
+    # First claim should succeed
+    first = asyncio.run(service.record_task_start(7, "generate_script", "celery-excl-1"))
+    assert first is not None
+    assert first.status == "running"
+
+    # Second claim should fail (already running)
+    second = asyncio.run(service.record_task_start(7, "generate_script", "celery-excl-1"))
+    assert second is None
+
+
+def test_record_task_start_allows_reclaim_after_failure() -> None:
+    """A failed task can be re-claimed by a retry."""
+    service = TaskTrackingService(InMemoryTaskTrackingStorage())
+    asyncio.run(service.record_task_start(7, "generate_script", "celery-fail-reclaim"))
+    asyncio.run(service.mark_failed("celery-fail-reclaim", "Error", "boom"))
+
+    # Should succeed - task is failed, can be reclaimed
+    result = asyncio.run(service.record_task_start(7, "generate_script", "celery-fail-reclaim"))
+    assert result is not None
+    assert result.status == "running"

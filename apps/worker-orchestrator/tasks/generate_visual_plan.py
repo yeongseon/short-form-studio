@@ -199,12 +199,17 @@ def generate_visual_plan(
                 cost_usd=COST_VISUAL_PLAN,
                 workspace_id=ctx.workspace_id,
                 project_id=ctx.project_id,
+                idempotency_key=ctx.task_id,
             )
         except Exception:
             logger.warning("Failed to record provider usage", exc_info=True)
 
         visual_scenes = _parse_llm_response(raw_response, sections)
-        await _visual_plan_service.save_plan(run_id=run_id, scenes=visual_scenes)
+        await _visual_plan_service.save_plan(
+            run_id=run_id,
+            scenes=visual_scenes,
+            idempotency_key=ctx.task_id,
+        )
         return TaskResult(
             status="success",
             extra={

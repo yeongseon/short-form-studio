@@ -40,11 +40,15 @@ class InMemoryScriptStorage:
         self._drafts: dict[int, list[dict[str, Any]]] = {}
         self._next_id = 1
         self._run_locks: dict[int, asyncio.Lock] = {}
+        self._by_idempotency_key: dict[str, dict[str, Any]] = {}
 
     async def save_draft(self, row: dict[str, Any]) -> dict[str, Any]:
         run_id = row["run_id"]
         lock = self._run_locks.setdefault(run_id, asyncio.Lock())
         async with lock:
+            idem_key = row.get("idempotency_key")
+            if isinstance(idem_key, str) and idem_key in self._by_idempotency_key:
+                return dict(self._by_idempotency_key[idem_key])
             drafts = self._drafts.setdefault(run_id, [])
             next_version = max((d["version"] for d in drafts), default=0) + 1
             now = datetime.now(timezone.utc)
@@ -56,6 +60,8 @@ class InMemoryScriptStorage:
             }
             self._next_id += 1
             drafts.append(saved)
+            if isinstance(idem_key, str):
+                self._by_idempotency_key[idem_key] = saved
         return dict(saved)
 
     async def get_active_draft(self, run_id: int) -> dict[str, Any] | None:
@@ -79,6 +85,8 @@ class ScriptService:
         source_type: str,
         markdown_content: str | None = None,
         structured_script: list[ScriptSection] | None = None,
+        *,
+        idempotency_key: str | None = None,
     ) -> ScriptDraft:
         """Save a new script draft version.
 
@@ -125,6 +133,7 @@ class ScriptService:
                 "source_type": source_type,
                 "markdown_content": markdown_content,
                 "structured_script_json": structured_script_json,
+                "idempotency_key": idempotency_key,
             }
         )
 

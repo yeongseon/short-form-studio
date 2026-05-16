@@ -176,6 +176,7 @@ def generate_scene_image(
                         cost_usd=COST_SCENE_IMAGE,
                         workspace_id=ctx.workspace_id,
                         project_id=ctx.project_id,
+                        idempotency_key=f"{ctx.task_id}:{target_scene.scene_id}",
                     )
                 except Exception:
                     logger.warning("Failed to record provider usage", exc_info=True)
@@ -193,6 +194,7 @@ def generate_scene_image(
                     storage_provider=uploaded.storage_provider,
                     storage_key=uploaded.key,
                     is_active=is_active,
+                    idempotency_key=f"{ctx.task_id}:{target_scene.scene_id}",
                 )
 
                 scene_result.update(

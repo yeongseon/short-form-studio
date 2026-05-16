@@ -9,7 +9,7 @@ from creator_domain.models import RunTask
 
 
 class TaskTrackingStorageBackend(Protocol):
-    async def create_task(self, row: dict[str, Any]) -> dict[str, Any]: ...
+    async def create_task(self, row: dict[str, Any]) -> dict[str, Any] | None: ...
 
     async def update_task_status(
         self, task_id: int, status: str, **kwargs: Any
@@ -18,6 +18,8 @@ class TaskTrackingStorageBackend(Protocol):
     async def get_by_celery_id(self, celery_task_id: str) -> dict[str, Any] | None: ...
 
     async def list_by_run(self, run_id: int) -> list[dict[str, Any]]: ...
+
+    async def claim_running(self, task_id: int, **kwargs: Any) -> dict[str, Any] | None: ...
 
     async def list_stuck_tasks(self, threshold_seconds: int) -> list[dict[str, Any]]: ...
 
@@ -30,18 +32,28 @@ class InMemoryTaskTrackingStorage:
         self._rows_by_celery_task_id: dict[str, int] = {}
         self._next_id = 1
 
-    async def create_task(self, row: dict[str, Any]) -> dict[str, Any]:
+    async def create_task(self, row: dict[str, Any]) -> dict[str, Any] | None:
         celery_task_id = row.get("celery_task_id")
         if isinstance(celery_task_id, str):
             existing_id = self._rows_by_celery_task_id.get(celery_task_id)
             if existing_id is not None:
                 existing = self._rows[existing_id]
-                existing["status"] = "queued"
-                existing["attempt"] = int(existing.get("attempt", 0)) + 1
-                existing["started_at"] = None
-                existing["finished_at"] = None
-                existing["error_code"] = None
-                existing["error_message"] = None
+                current_status = existing.get("status")
+                if current_status in ("success", "running"):
+                    return None
+                incoming_status = row.get("status", "queued")
+                existing["status"] = incoming_status
+                if incoming_status == "queued":
+                    existing["attempt"] = int(existing.get("attempt", 0)) + 1
+                    existing["started_at"] = None
+                    existing["finished_at"] = None
+                    existing["error_code"] = None
+                    existing["error_message"] = None
+                elif incoming_status == "running":
+                    existing["started_at"] = row.get("started_at")
+                    existing["finished_at"] = None
+                    existing["error_code"] = None
+                    existing["error_message"] = None
                 self._rows[existing_id] = existing
                 return dict(existing)
 
@@ -69,6 +81,11 @@ class InMemoryTaskTrackingStorage:
         row = self._rows.get(task_id)
         if row is None:
             return None
+        current_status = row.get("status")
+        if current_status == "success":
+            return None
+        if status == "running" and current_status == "running":
+            return None
         row["status"] = status
         if "started_at" in kwargs:
             row["started_at"] = kwargs["started_at"]
@@ -78,6 +95,24 @@ class InMemoryTaskTrackingStorage:
             row["attempt"] = kwargs["attempt"]
         row["error_code"] = kwargs.get("error_code")
         row["error_message"] = kwargs.get("error_message")
+        self._rows[task_id] = row
+        return dict(row)
+
+    async def claim_running(self, task_id: int, **kwargs: Any) -> dict[str, Any] | None:
+        """Atomically claim a task: only transition from queued/failed to running."""
+        row = self._rows.get(task_id)
+        if row is None:
+            return None
+        if row.get("status") not in ("queued", "failed"):
+            return None
+        row["status"] = "running"
+        if "started_at" in kwargs:
+            row["started_at"] = kwargs["started_at"]
+        row["finished_at"] = None
+        row["error_code"] = None
+        row["error_message"] = None
+        if kwargs.get("attempt") is not None:
+            row["attempt"] = kwargs["attempt"]
         self._rows[task_id] = row
         return dict(row)
 
@@ -132,10 +167,26 @@ class TaskTrackingService:
                 "attempt": 1,
             }
         )
+        if row is None:
+            raise ValueError(f"Failed to queue task {celery_task_id}: task is already running or succeeded")
         return RunTask.from_row(row)
 
-    async def record_task_start(self, run_id: int, task_type: str, celery_task_id: str) -> RunTask:
+    async def record_task_start(self, run_id: int, task_type: str, celery_task_id: str) -> RunTask | None:
+        """Attempt to exclusively claim a task for execution.
+
+        Returns:
+            RunTask with status="running" if claim succeeded.
+            RunTask with status="success" if task already completed (caller should skip).
+            None if task is already claimed by another worker (caller should skip).
+        """
         existing = await self.storage.get_by_celery_id(celery_task_id)
+        if existing is not None:
+            status = existing.get("status")
+            if status == "success":
+                return RunTask.from_row(existing)
+            if status == "running":
+                # Already claimed by another worker — do not execute
+                return None
         started_at = datetime.now(timezone.utc)
         if existing is None:
             row = await self.storage.create_task(
@@ -151,21 +202,21 @@ class TaskTrackingService:
                     "error_message": None,
                 }
             )
+            if row is None:
+                # Concurrent insert claimed it first (Postgres ON CONFLICT returned nothing)
+                return None
             return RunTask.from_row(row)
 
         attempt = int(existing.get("attempt", 1))
 
-        row = await self.storage.update_task_status(
+        row = await self.storage.claim_running(
             existing["id"],
-            "running",
             attempt=attempt,
             started_at=started_at,
-            finished_at=None,
-            error_code=None,
-            error_message=None,
         )
         if row is None:
-            raise ValueError("Failed to mark task as running")
+            # Concurrent claim or task already succeeded — cannot claim
+            return None
         return RunTask.from_row(row)
 
     async def mark_running(self, celery_task_id: str) -> RunTask | None:

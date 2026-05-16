@@ -79,7 +79,12 @@ class FakeScriptService:
         self.calls: list[tuple[int, str, str | None]] = []
 
     async def save_draft(
-        self, run_id: int, source_type: str, markdown_content: str | None
+        self,
+        run_id: int,
+        source_type: str,
+        markdown_content: str | None,
+        *,
+        idempotency_key: str | None = None,
     ) -> dict[str, object]:
         self.calls.append((run_id, source_type, markdown_content))
         if self.error is not None:
@@ -160,7 +165,7 @@ def test_generate_script_happy_path_local_model_with_gpu_lock(
     monkeypatch.setattr(
         generate_script_module,
         "release_gpu_lock",
-        lambda client, token: release_calls.append(token.split(':')[0]) or True,
+        lambda client, token: release_calls.append(token.split(":")[0]) or True,
     )
 
     script_service = FakeScriptService()
@@ -323,7 +328,9 @@ def test_generate_script_releases_gpu_lock_when_llm_fails(monkeypatch: pytest.Mo
     released: list[str] = []
     monkeypatch.setattr(generate_script_module, "acquire_gpu_lock", lambda *_: "run-106:fake-token")
     monkeypatch.setattr(
-        generate_script_module, "release_gpu_lock", lambda _, token: released.append(token.split(':')[0]) or True
+        generate_script_module,
+        "release_gpu_lock",
+        lambda _, token: released.append(token.split(":")[0]) or True,
     )
 
     script_service = FakeScriptService()

@@ -116,7 +116,13 @@ class FakeVisualPlanService:
         self.error = error
         self.calls: list[tuple[int, int]] = []  # (run_id, num_scenes)
 
-    async def save_plan(self, run_id: int, scenes: list[Any]) -> SimpleNamespace:
+    async def save_plan(
+        self,
+        run_id: int,
+        scenes: list[Any],
+        *,
+        idempotency_key: str | None = None,
+    ) -> SimpleNamespace:
         self.calls.append((run_id, len(scenes)))
         if self.error is not None:
             raise self.error
@@ -216,7 +222,7 @@ def test_happy_path_local_model_with_gpu_lock(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(
         generate_visual_plan_module,
         "release_gpu_lock",
-        lambda client, token: release_calls.append(token.split(':')[0]) or True,
+        lambda client, token: release_calls.append(token.split(":")[0]) or True,
     )
 
     script_service = FakeScriptService(draft=FakeScriptDraft(structured_script=sections))
@@ -435,9 +441,13 @@ def test_releases_gpu_lock_when_llm_fails(monkeypatch: pytest.MonkeyPatch) -> No
     _patch_redis(monkeypatch, redis_client)
 
     released: list[str] = []
-    monkeypatch.setattr(generate_visual_plan_module, "acquire_gpu_lock", lambda _, task_id: f"{task_id}:fake-token")
     monkeypatch.setattr(
-        generate_visual_plan_module, "release_gpu_lock", lambda _, token: released.append(token.split(':')[0]) or True
+        generate_visual_plan_module, "acquire_gpu_lock", lambda _, task_id: f"{task_id}:fake-token"
+    )
+    monkeypatch.setattr(
+        generate_visual_plan_module,
+        "release_gpu_lock",
+        lambda _, token: released.append(token.split(":")[0]) or True,
     )
 
     sections = [FakeSection()]
@@ -659,7 +669,9 @@ def test_release_gpu_lock_failure_still_propagates_original_error(
     redis_client = object()
     _patch_redis(monkeypatch, redis_client)
 
-    monkeypatch.setattr(generate_visual_plan_module, "acquire_gpu_lock", lambda _, task_id: f"{task_id}:fake-token")
+    monkeypatch.setattr(
+        generate_visual_plan_module, "acquire_gpu_lock", lambda _, task_id: f"{task_id}:fake-token"
+    )
     monkeypatch.setattr(
         generate_visual_plan_module,
         "release_gpu_lock",
