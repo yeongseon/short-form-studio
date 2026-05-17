@@ -520,7 +520,7 @@ class TestCasDispatchEndToEnd:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """If record_task_pending fails, CAS should roll back and raise 503."""
-        from fastapi import HTTPException as _HTTPException
+        from creator_domain.exceptions import ServiceUnavailableError
         from creator_service.task_dispatch_service import TaskDispatchService
 
         service = TaskDispatchService()
@@ -564,7 +564,7 @@ class TestCasDispatchEndToEnd:
         fake_dispatcher.__name__ = "dispatch_generate_script"
 
         async def _run() -> None:
-            with pytest.raises(_HTTPException) as exc_info:
+            with pytest.raises(ServiceUnavailableError) as exc_info:
                 await service.cas_dispatch_with_rollback(
                     run_id=1,
                     expected_stages=frozenset({"IDEA_REVIEW"}),
@@ -576,7 +576,7 @@ class TestCasDispatchEndToEnd:
                     rollback_restart_from=None,
                     enqueue_error_detail="dispatch failed",
                 )
-            assert exc_info.value.status_code == 503
+            assert exc_info.value.http_status_code == 503
             assert not dispatcher_called, "Dispatcher should not be called after pending failure"
             # First call = CAS set target, second call = rollback
             assert len(rollback_calls) == 2

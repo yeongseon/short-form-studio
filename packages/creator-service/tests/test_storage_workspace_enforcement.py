@@ -4,7 +4,8 @@ import pytest
 from creator_service.postgres_project_storage import PostgresProjectStorage
 from creator_service.postgres_render_storage import PostgresRenderStorage
 from creator_service.postgres_run_storage import PostgresRunStorage
-from creator_service.run_service import ConflictError, InMemoryRunStorage, RunService
+from creator_domain.exceptions import ConflictError
+from creator_service.run_service import InMemoryRunStorage, RunService
 
 
 def run(coro):

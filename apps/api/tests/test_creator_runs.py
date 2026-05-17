@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Literal, cast
 
 import pytest
-from creator_service.run_service import ConflictError
+from creator_domain.exceptions import ConflictError
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ValidationError
 from shorts_api.auth import CurrentUser, require_project_access, require_run_access

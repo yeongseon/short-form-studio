@@ -86,7 +86,7 @@ class StubVisualPlanService:
             raise ValueError(f"No active visual plan for run {run_id}")
 
         if expected_version is not None and active.version != expected_version:
-            from creator_service.visual_plan_service import VersionConflictError
+            from creator_domain.exceptions import VersionConflictError
 
             raise VersionConflictError(run_id, expected_version, active.version)
 

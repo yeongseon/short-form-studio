@@ -3,10 +3,9 @@ from typing import cast
 
 import pytest
 from creator_domain.models.visual_plan import VisualScene
+from creator_domain.exceptions import DataIntegrityError, VersionConflictError
 from creator_service.visual_plan_service import (
-    DataIntegrityError,
     InMemoryVisualPlanStorage,
-    VersionConflictError,
     VisualPlanService,
 )
 
@@ -187,7 +186,7 @@ def test_patch_scene_with_stale_expected_version(service: VisualPlanService) -> 
             )
         )
 
-    assert exc_info.value.run_id == 211
+    assert exc_info.value.resource_id == 211
     assert exc_info.value.expected_version == 1
     assert exc_info.value.actual_version == 2
 

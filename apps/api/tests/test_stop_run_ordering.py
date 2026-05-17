@@ -11,7 +11,7 @@ import pytest
 from unittest.mock import MagicMock
 from httpx import AsyncClient
 
-from creator_service.run_service import ConflictError
+from creator_domain.exceptions import ConflictError
 from shorts_api.auth import CurrentUser, require_run_access, require_project_access
 from shorts_api.main import app
 
@@ -1099,7 +1099,7 @@ async def test_create_run_atomic_guard_catches_stale_snapshot_race(
     """Regression: require_project_access returns status='active', but by the
     time the storage INSERT runs, the project has been flipped to 'deleting'.
     The atomic write-boundary guard must still reject the create."""
-    from creator_service.run_service import ConflictError
+    from creator_domain.exceptions import ConflictError
 
     # Auth returns active project (simulating stale snapshot)
     async def _mock_project_access(project_id: int):

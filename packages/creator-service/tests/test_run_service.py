@@ -3,7 +3,8 @@ import json
 
 import pytest
 from creator_domain.models import ModelSelection, RunStage
-from creator_service.run_service import ConflictError, InMemoryRunStorage, RunService
+from creator_domain.exceptions import ConflictError
+from creator_service.run_service import InMemoryRunStorage, RunService
 import creator_service.run_service as run_service_module
 
 

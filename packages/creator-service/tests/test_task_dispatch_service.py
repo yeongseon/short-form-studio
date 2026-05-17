@@ -2,8 +2,13 @@ import asyncio
 from types import ModuleType, SimpleNamespace
 
 import pytest
-from fastapi import HTTPException
 
+from creator_domain.exceptions import (
+    ConflictError,
+    NotFoundError,
+    ServiceError,
+    ServiceUnavailableError,
+)
 from creator_service.task_dispatch_service import (
     SynchronousTaskExecutionError,
     TaskDispatchService,
@@ -120,7 +125,7 @@ def test_cas_dispatch_with_rollback_enqueue_failure_rolls_back_stage() -> None:
     def failing_dispatcher(**_: object) -> str:
         raise RuntimeError("enqueue failed")
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceUnavailableError) as exc:
         asyncio.run(
             service.cas_dispatch_with_rollback(
                 run_id=42,
@@ -135,7 +140,7 @@ def test_cas_dispatch_with_rollback_enqueue_failure_rolls_back_stage() -> None:
             )
         )
 
-    assert exc.value.status_code == 503
+    assert exc.value.http_status_code == 503
     assert run_service.storage.calls[0][1] == {"current_stage": "SCRIPT_GENERATING"}
     assert run_service.storage.calls[1][1] == {
         "current_stage": "SCRIPT_REVIEW",
@@ -150,7 +155,7 @@ def test_cas_dispatch_with_rollback_sync_execution_failure_does_not_rollback() -
     def failing_dispatcher(**_: object) -> str:
         raise SynchronousTaskExecutionError("task failed")
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceError) as exc:
         asyncio.run(
             service.cas_dispatch_with_rollback(
                 run_id=99,
@@ -165,7 +170,7 @@ def test_cas_dispatch_with_rollback_sync_execution_failure_does_not_rollback() -
             )
         )
 
-    assert exc.value.status_code == 500
+    assert exc.value.http_status_code == 500
     assert exc.value.detail == "Task execution failed"
     assert len(run_service.storage.calls) == 1
     assert run_service.storage.calls[0][1] == {"current_stage": "SCRIPT_GENERATING"}
@@ -208,7 +213,7 @@ def test_cas_dispatch_with_rollback_record_failure_revokes_and_rolls_back(
 
     monkeypatch.setattr("creator_service.task_dispatch_service.import_module", fake_import_module)
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceUnavailableError) as exc:
         asyncio.run(
             service.cas_dispatch_with_rollback(
                 run_id=7,
@@ -223,7 +228,7 @@ def test_cas_dispatch_with_rollback_record_failure_revokes_and_rolls_back(
             )
         )
 
-    assert exc.value.status_code == 503
+    assert exc.value.http_status_code == 503
     assert revoked == [("celery-123", True)]
     assert marked_revoked == ["celery-123"]
     assert run_service.storage.calls[1][1] == {
@@ -370,7 +375,7 @@ def test_cas_dispatch_with_rollback_releases_quota_on_stage_conflict(
     monkeypatch.setitem(sys.modules, "creator_service.project_service", project_service_module)
     monkeypatch.setitem(sys.modules, "creator_service.usage_service", usage_service_module)
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ConflictError) as exc:
         asyncio.run(
             service.cas_dispatch_with_rollback(
                 run_id=123,
@@ -386,7 +391,7 @@ def test_cas_dispatch_with_rollback_releases_quota_on_stage_conflict(
             )
         )
 
-    assert exc.value.status_code == 409
+    assert exc.value.http_status_code == 409
     assert cancel_calls == [(999, "llm")]
 
 
@@ -419,7 +424,7 @@ def test_cas_dispatch_with_rollback_rejects_cancelled_run() -> None:
     def _dispatcher(**_: object) -> str:
         raise AssertionError("Should not dispatch for cancelled run")
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ConflictError) as exc:
         asyncio.run(
             service.cas_dispatch_with_rollback(
                 run_id=42,
@@ -434,7 +439,7 @@ def test_cas_dispatch_with_rollback_rejects_cancelled_run() -> None:
             )
         )
 
-    assert exc.value.status_code == 409
+    assert exc.value.http_status_code == 409
     assert "cancelled" in exc.value.detail.lower()
 
 
@@ -466,7 +471,7 @@ def test_cas_dispatch_rejects_concurrent_cancellation_atomically() -> None:
     def _dispatcher(**_: object) -> str:
         raise AssertionError("Should not dispatch when CAS rejects cancelled run")
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ConflictError) as exc:
         asyncio.run(
             service.cas_dispatch_with_rollback(
                 run_id=42,
@@ -481,7 +486,7 @@ def test_cas_dispatch_rejects_concurrent_cancellation_atomically() -> None:
             )
         )
 
-    assert exc.value.status_code == 409
+    assert exc.value.http_status_code == 409
 
 
 def test_cas_dispatch_with_rollback_allows_non_cancelled_run() -> None:
@@ -489,7 +494,6 @@ def test_cas_dispatch_with_rollback_allows_non_cancelled_run() -> None:
     service = TaskDispatchService()
     run_service = _FakeRunService()
 
-    # Patch get_run onto _FakeRunService so the cancelled-check can fetch status
     async def _get_run(_run_id: int, **_kw: object) -> object:
         return SimpleNamespace(status="running", project_id=1)
 
@@ -584,7 +588,7 @@ def test_cas_dispatch_post_dispatch_revoke_on_concurrent_cancel(
 
     run_service = _RunService()
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ConflictError) as exc:
         asyncio.run(
             service.cas_dispatch_with_rollback(
                 run_id=42,
@@ -599,7 +603,7 @@ def test_cas_dispatch_post_dispatch_revoke_on_concurrent_cancel(
             )
         )
 
-    assert exc.value.status_code == 409
+    assert exc.value.http_status_code == 409
     assert revoked == [("celery-999", True)]
     assert run_service.storage.calls[1]["updates"] == {
         "current_stage": "SCRIPT_REVIEW",
@@ -625,7 +629,7 @@ def test_cas_dispatch_with_rollback_returns_503_when_get_run_raises() -> None:
     def _dispatcher(**_: object) -> str:
         raise AssertionError("Should not dispatch")
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(ServiceUnavailableError) as exc:
         asyncio.run(
             service.cas_dispatch_with_rollback(
                 run_id=42,
@@ -640,7 +644,7 @@ def test_cas_dispatch_with_rollback_returns_503_when_get_run_raises() -> None:
             )
         )
 
-    assert exc.value.status_code == 503
+    assert exc.value.http_status_code == 503
     assert "verify run status" in exc.value.detail.lower()
 
 
@@ -662,7 +666,7 @@ def test_cas_dispatch_with_rollback_returns_404_when_get_run_returns_none() -> N
     def _dispatcher(**_: object) -> str:
         raise AssertionError("Should not dispatch")
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(NotFoundError) as exc:
         asyncio.run(
             service.cas_dispatch_with_rollback(
                 run_id=999,
@@ -677,7 +681,7 @@ def test_cas_dispatch_with_rollback_returns_404_when_get_run_returns_none() -> N
             )
         )
 
-    assert exc.value.status_code == 404
+    assert exc.value.http_status_code == 404
     assert "not found" in exc.value.detail.lower()
 
 
@@ -732,6 +736,5 @@ def test_cas_dispatch_with_rollback_passes_workspace_id_to_preflight() -> None:
     )
 
     assert dispatched
-    # The preflight call MUST have received workspace_id=7
     assert len(received_kwargs) >= 1
     assert received_kwargs[0]["workspace_id"] == 7

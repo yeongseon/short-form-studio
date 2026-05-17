@@ -6,7 +6,7 @@ from typing import Literal
 
 import pytest
 import shorts_api.routes.creator_runs_utils as creator_runs_utils
-from creator_service.run_service import ConflictError
+from creator_domain.exceptions import ConflictError
 from fastapi.routing import APIRoute
 from pydantic import BaseModel
 from shorts_api.main import projects_router, runs_router

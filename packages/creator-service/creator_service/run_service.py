@@ -5,6 +5,7 @@ import inspect
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
+from creator_domain.exceptions import ConflictError
 from creator_domain.models import (
     GENERATING_STAGES,
     STAGE_BACK,
@@ -75,9 +76,6 @@ class RunStorageBackend(Protocol):
         """Atomically merge JSON updates into model_defaults_json."""
         ...
 
-
-class ConflictError(Exception):
-    pass
 
 
 class InMemoryRunStorage:

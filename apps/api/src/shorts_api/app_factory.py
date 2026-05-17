@@ -2,6 +2,7 @@ import logging
 import os
 import time
 
+from creator_domain.exceptions import ServiceError
 from creator_service.logging_config import setup_json_logging
 from creator_service.production_checks import validate_production_config
 from fastapi import APIRouter, FastAPI, Request
@@ -117,6 +118,14 @@ def create_app() -> FastAPI:
                 content={"detail": "Server shutting down"},
             )
         return await call_next(request)
+
+    @app.exception_handler(ServiceError)
+    async def service_error_handler(request: Request, exc: ServiceError) -> JSONResponse:
+        """Central mapping from typed service exceptions to HTTP responses."""
+        return JSONResponse(
+            status_code=exc.http_status_code,
+            content={"detail": exc.detail},
+        )
 
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, _exc: Exception) -> JSONResponse:

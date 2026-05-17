@@ -12,6 +12,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
+from creator_domain.exceptions import DataIntegrityError, VersionConflictError
 from creator_domain.models.visual_plan import VisualPlan, VisualScene
 
 # ---------------------------------------------------------------------------
@@ -31,22 +32,6 @@ _PATCHABLE_SCENE_FIELDS: frozenset[str] = frozenset(
         "composition",
     }
 )
-
-
-class VersionConflictError(Exception):
-    """Raised when a patch targets a stale plan version."""
-
-    def __init__(self, run_id: int, expected: int, actual: int) -> None:
-        self.run_id = run_id
-        self.expected_version = expected
-        self.actual_version = actual
-        super().__init__(
-            f"Version conflict for run {run_id}: expected version {expected}, active is {actual}"
-        )
-
-
-class DataIntegrityError(Exception):
-    """Raised when stored scenes_json is malformed or unparseable."""
 
 
 # ---------------------------------------------------------------------------
