@@ -53,6 +53,7 @@ class FakeStorage:
         run_id: int,
         updates: dict[str, object],
         expected_stages: frozenset[str],
+    rejected_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
         row = self._runs.get(run_id)
         if row is None:
@@ -601,6 +602,7 @@ class RaceConditionStorage(FakeStorage):
         run_id: int,
         updates: dict[str, object],
         expected_stages: frozenset[str],
+    rejected_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
         """Atomic CAS — advance happens before the check, simulating a race."""
         self._maybe_advance(run_id)

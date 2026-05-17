@@ -46,6 +46,7 @@ class FakeStorage:
         run_id: int,
         updates: dict[str, object],
         expected_stages: frozenset[str],
+    rejected_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
         self.cas_calls.append((run_id, updates, expected_stages))
         row = self._runs.get(run_id)
@@ -372,6 +373,7 @@ class _CASSkipStorage(FakeStorage):
         run_id: int,
         updates: dict[str, object],
         expected_stages: frozenset[str],
+    rejected_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
         self.cas_calls.append((run_id, updates, expected_stages))
         row = self._runs.get(run_id)

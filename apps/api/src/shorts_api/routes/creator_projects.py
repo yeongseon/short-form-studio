@@ -107,7 +107,7 @@ async def list_projects(
 
 
 async def _cleanup_project_resources(project_id: int, workspace_id: int) -> list[int]:
-    runs = await run_service.list_runs_by_project(project_id)
+    runs = await run_service.list_runs_by_project(project_id, workspace_id=workspace_id)
     # Mark each run cancelled BEFORE revoking tasks.  This blocks any
     # concurrent dispatch (the same barrier delete_run uses) so no new
     # artifacts can be created while we clean up storage.
@@ -115,8 +115,8 @@ async def _cleanup_project_resources(project_id: int, workspace_id: int) -> list
     # rather than risk orphaning storage objects.
     for r in runs:
         try:
-            await run_service.storage.update_run(
-                r.id, {"status": "cancelled"}, workspace_id=workspace_id
+            await run_service.cancel_run(
+                r.id, workspace_id=workspace_id
             )
         except Exception:
             raise HTTPException(
@@ -152,9 +152,11 @@ async def delete_project(
     # run after list_runs_by_project() but before the final DB delete,
     # leaving the new run's artifacts permanently orphaned.
     try:
-        await project_service.db.update_project(
-            project.id, {"status": "deleting"}, workspace_id=user.workspace_id
+        await project_service.mark_deleting(
+            project.id, workspace_id=user.workspace_id
         )
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Project not found") from None
     except Exception:
         raise HTTPException(
             status_code=503,

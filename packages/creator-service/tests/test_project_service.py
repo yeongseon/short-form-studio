@@ -3,7 +3,6 @@ from typing import Any, cast
 
 import pytest
 from creator_service.project_service import InMemoryProjectStorage, ProjectService
-import creator_service.project_service as project_service_module
 from creator_service.run_service import InMemoryRunStorage, RunService
 
 
@@ -81,35 +80,6 @@ def test_get_project_returns_existing_project(service: ProjectService) -> None:
     assert fetched.source_type == "url"
     assert fetched.url_source == "https://example.com"
     assert fetched.model_dump()["latest_run"] is None
-
-
-def test_get_project_requires_workspace_id_for_api_context(service: ProjectService) -> None:
-    created = run(
-        service.create_project(
-            title="Existing",
-            source_type="url",
-            url_source="https://example.com",
-            workspace_id=1,
-        )
-    )
-
-    original = project_service_module._is_api_context_call
-    project_service_module._is_api_context_call = lambda: True
-    try:
-        with pytest.raises(ValueError, match="workspace_id is required"):
-            run(service.get_project(created.id))
-    finally:
-        project_service_module._is_api_context_call = original
-
-
-def test_list_projects_requires_workspace_id_for_api_context(service: ProjectService) -> None:
-    original = project_service_module._is_api_context_call
-    project_service_module._is_api_context_call = lambda: True
-    try:
-        with pytest.raises(ValueError, match="workspace_id is required"):
-            run(service.list_projects())
-    finally:
-        project_service_module._is_api_context_call = original
 
 
 def test_list_projects_returns_newest_first(service: ProjectService) -> None:
@@ -383,3 +353,47 @@ def test_create_project_idea_with_json_script_raises_value_error(service: Projec
                 json_script='{"scenes": []}',
             )
         )
+
+
+def test_mark_deleting_sets_status(service: ProjectService) -> None:
+    created = run(
+        service.create_project(
+            title="To Delete",
+            source_type="idea",
+            idea_brief="test",
+            workspace_id=1,
+        )
+    )
+
+    marked = run(service.mark_deleting(created.id, workspace_id=1))
+
+    assert marked.status == "deleting"
+    assert marked.id == created.id
+
+
+def test_mark_deleting_wrong_workspace_raises(service: ProjectService) -> None:
+    created = run(
+        service.create_project(
+            title="To Delete",
+            source_type="idea",
+            idea_brief="test",
+            workspace_id=1,
+        )
+    )
+
+    with pytest.raises(ValueError, match="not found"):
+        run(service.mark_deleting(created.id, workspace_id=999))
+
+
+def test_mark_deleting_missing_project_raises(service: ProjectService) -> None:
+    with pytest.raises(ValueError, match="not found"):
+        run(service.mark_deleting(9999, workspace_id=1))
+
+
+def test_no_inspect_stack_in_project_service() -> None:
+    """Verify inspect.stack() brittle enforcement is removed."""
+    import creator_service.project_service as mod
+    assert not hasattr(mod, '_is_api_context_call'), \
+        "_is_api_context_call should be removed from project_service"
+    assert not hasattr(mod, '_require_workspace_id_for_api_calls'), \
+        "_require_workspace_id_for_api_calls should be removed from project_service"

@@ -65,6 +65,9 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+# Statuses that must never be overwritten by worker completion transitions.
+_TERMINAL_STATUSES = frozenset({"cancelled"})
+
 
 @dataclass
 class TaskRunnerConfig:
@@ -258,6 +261,7 @@ async def _run_task_inner(
                 run_id,
                 {"current_stage": config.success_stage, "status": "running"},
                 expected_stages=config.safe_stages,
+                rejected_statuses=_TERMINAL_STATUSES,
             )
             if not applied:
                 logger.info(
@@ -270,6 +274,7 @@ async def _run_task_inner(
                 run_id,
                 {"current_stage": RunStage.FAILED.value, "status": "failed"},
                 expected_stages=safe_failure_stages,
+                rejected_statuses=_TERMINAL_STATUSES,
             )
             if not applied:
                 logger.info(
@@ -319,6 +324,7 @@ async def _handle_general_failure(
             run_id,
             {"current_stage": RunStage.FAILED.value, "status": "failed"},
             expected_stages=safe_failure_stages,
+            rejected_statuses=_TERMINAL_STATUSES,
         )
         if not applied:
             logger.info(
@@ -389,6 +395,7 @@ def run_task(
                     validated_run_id,
                     {"current_stage": RunStage.FAILED.value, "status": "failed"},
                     expected_stages=safe_failure_stages,
+                    rejected_statuses=_TERMINAL_STATUSES,
                 )
             )
         except Exception:

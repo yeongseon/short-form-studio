@@ -36,7 +36,7 @@ class StubRunService:
     def __init__(self) -> None:
         self.runs: dict[int, StubPipelineRun] = {}
 
-    async def get_run(self, run_id: int) -> StubPipelineRun | None:
+    async def get_run(self, run_id: int, workspace_id: int | None = None) -> StubPipelineRun | None:
         return self.runs.get(run_id)
 
 

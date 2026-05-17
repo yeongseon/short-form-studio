@@ -104,6 +104,7 @@ class _FakeStorage:
         run_id: int,
         updates: dict[str, object],
         expected_stages: frozenset[str],
+    rejected_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
         return False, None
 

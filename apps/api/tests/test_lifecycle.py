@@ -46,9 +46,12 @@ class StubRunService:
         self.go_back_workspace_ids: list[int | None] = []
         self.update_model_defaults_calls: list[dict[str, object]] = []
         self.update_model_defaults_workspace_ids: list[int | None] = []
+        self.cancel_run_calls: list[int] = []
+        self.cancel_run_workspace_ids: list[int | None] = []
         self.delete_run_calls: list[int] = []
         self.delete_run_workspace_ids: list[int | None] = []
         self.list_runs_by_project_calls: list[int] = []
+        self.list_runs_by_project_workspace_ids: list[int | None] = []
         self.resume_errors: dict[int, Exception] = {}
         self.stop_errors: dict[int, Exception] = {}
         self.go_back_errors: dict[int, Exception] = {}
@@ -137,6 +140,16 @@ class StubRunService:
         self.runs[run_id] = updated
         return updated
 
+    async def cancel_run(self, run_id: int, workspace_id: int) -> StubPipelineRun:
+        self.cancel_run_calls.append(run_id)
+        self.cancel_run_workspace_ids.append(workspace_id)
+        run = self.runs.get(run_id)
+        if run is None:
+            raise ValueError(f"Run {run_id} not found")
+        if workspace_id is not None and run.workspace_id != workspace_id:
+            raise ValueError(f"Run {run_id} not found")
+        return run
+
     async def delete_run(self, run_id: int, workspace_id: int | None = None) -> bool:
         self.delete_run_calls.append(run_id)
         self.delete_run_workspace_ids.append(workspace_id)
@@ -147,8 +160,9 @@ class StubRunService:
             return False
         return self.runs.pop(run_id, None) is not None
 
-    async def list_runs_by_project(self, project_id: int) -> list[StubPipelineRun]:
+    async def list_runs_by_project(self, project_id: int, workspace_id: int | None = None) -> list[StubPipelineRun]:
         self.list_runs_by_project_calls.append(project_id)
+        self.list_runs_by_project_workspace_ids.append(workspace_id)
         return sorted(
             [run for run in self.runs.values() if run.project_id == project_id],
             key=lambda run: run.id,
@@ -174,6 +188,11 @@ class StubProjectService:
         self.projects: dict[int, StubProject] = {}
         self.delete_project_calls: list[int] = []
         self.db = _StubProjectDb()
+
+    async def mark_deleting(self, project_id: int, workspace_id: int) -> None:
+        project = self.projects.get(project_id)
+        if project is None:
+            raise ValueError(f"Project {project_id} not found")
 
     async def delete_project(self, project_id: int, workspace_id: int | None = None) -> bool:
         self.delete_project_calls.append(project_id)

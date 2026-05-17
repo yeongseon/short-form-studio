@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import inspect
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
@@ -51,7 +50,9 @@ class RunStorageBackend(Protocol):
         """
         ...
 
-    async def list_runs_by_project(self, project_id: int) -> list[dict[str, Any]]:
+    async def list_runs_by_project(
+        self, project_id: int, workspace_id: int | None = None
+    ) -> list[dict[str, Any]]:
         """Return all run rows for a given project, newest first."""
         ...
 
@@ -75,7 +76,6 @@ class RunStorageBackend(Protocol):
     ) -> dict[str, Any]:
         """Atomically merge JSON updates into model_defaults_json."""
         ...
-
 
 
 class InMemoryRunStorage:
@@ -158,8 +158,15 @@ class InMemoryRunStorage:
         self._rows[run_id] = row
         return True, dict(row)
 
-    async def list_runs_by_project(self, project_id: int) -> list[dict[str, Any]]:
-        rows = [dict(r) for r in self._rows.values() if r.get("project_id") == project_id]
+    async def list_runs_by_project(
+        self, project_id: int, workspace_id: int | None = None
+    ) -> list[dict[str, Any]]:
+        rows = [
+            dict(r)
+            for r in self._rows.values()
+            if r.get("project_id") == project_id
+            and (workspace_id is None or r.get("workspace_id") == workspace_id)
+        ]
         rows.sort(key=lambda r: r.get("id", 0), reverse=True)
         return rows
 
@@ -253,7 +260,6 @@ class RunService:
         return PipelineRun.from_row(row)
 
     async def get_run(self, run_id: int, workspace_id: int | None = None) -> PipelineRun | None:
-        _require_workspace_id_for_api_calls("RunService.get_run", workspace_id)
         row = await self.storage.get_run(run_id, workspace_id=workspace_id)
         if row is None:
             return None
@@ -344,10 +350,21 @@ class RunService:
             raise ConflictError(f"Run {run_id} has stale version")
         return PipelineRun.from_row(row)
 
-    async def list_runs_by_project(self, project_id: int) -> list[PipelineRun]:
+    async def list_runs_by_project(
+        self, project_id: int, workspace_id: int | None = None
+    ) -> list[PipelineRun]:
         """Return all runs for a project, newest first."""
-        rows = await self.storage.list_runs_by_project(project_id)
+        rows = await self.storage.list_runs_by_project(project_id, workspace_id=workspace_id)
         return [PipelineRun.from_row(r) for r in rows]
+
+    async def cancel_run(self, run_id: int, workspace_id: int) -> PipelineRun:
+        """Mark a run as cancelled. Used before deletion/cleanup."""
+        row = await self.storage.update_run(
+            run_id, {"status": "cancelled"}, workspace_id=workspace_id
+        )
+        if row is None:
+            raise ValueError(f"Run {run_id} not found")
+        return PipelineRun.from_row(row)
 
     async def list_runs_by_workspace(self, workspace_id: int) -> list[PipelineRun]:
         rows = await self.storage.list_runs_by_workspace(workspace_id)
@@ -476,24 +493,10 @@ class RunService:
 
     async def delete_run(self, run_id: int, workspace_id: int | None = None) -> bool:
         """Delete a run and return True if deleted."""
-        _require_workspace_id_for_api_calls("RunService.delete_run", workspace_id)
         run = await self.get_run(run_id, workspace_id=workspace_id)
         if run is None:
             raise ValueError(f"Run {run_id} not found")
         return await self.storage.delete_run(run_id, workspace_id=workspace_id)
-
-
-def _is_api_context_call() -> bool:
-    for frame in inspect.stack(context=0):
-        module_name = frame.frame.f_globals.get("__name__", "")
-        if isinstance(module_name, str) and module_name.startswith("shorts_api.routes."):
-            return True
-    return False
-
-
-def _require_workspace_id_for_api_calls(method_name: str, workspace_id: int | None) -> None:
-    if workspace_id is None and _is_api_context_call():
-        raise ValueError(f"{method_name}: workspace_id is required for API calls")
 
 
 def _create_storage() -> RunStorageBackend:

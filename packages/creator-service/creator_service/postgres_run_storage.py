@@ -185,10 +185,18 @@ class PostgresRunStorage:
             raise ValueError(f"Run {run_id} not found")
         return row
 
-    async def list_runs_by_project(self, project_id: int) -> list[dict[str, Any]]:
+    async def list_runs_by_project(
+        self, project_id: int, workspace_id: int | None = None
+    ) -> list[dict[str, Any]]:
+        if workspace_id is None:
+            return await fetch_all(
+                "SELECT * FROM creator_runs WHERE project_id = $1 ORDER BY id DESC",
+                project_id,
+            )
         return await fetch_all(
-            "SELECT * FROM creator_runs WHERE project_id = $1 ORDER BY id DESC",
+            "SELECT * FROM creator_runs WHERE project_id = $1 AND workspace_id = $2 ORDER BY id DESC",
             project_id,
+            workspace_id,
         )
 
     async def list_runs_by_workspace(self, workspace_id: int) -> list[dict[str, Any]]:

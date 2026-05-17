@@ -112,9 +112,7 @@ async def delete_run(
     # works from any stage (including review stages where storyboard
     # dispatch is allowed).
     try:
-        await run_service.storage.update_run(
-            run_id, {"status": "cancelled"}, workspace_id=user.workspace_id
-        )
+        await run_service.cancel_run(run_id, workspace_id=user.workspace_id)
     except ValueError:
         raise HTTPException(status_code=404, detail="Run not found") from None
     except Exception:

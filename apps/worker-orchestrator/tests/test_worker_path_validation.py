@@ -67,7 +67,8 @@ class _Storage:
         return self.run if self.run["id"] == run_id else None
 
     async def conditional_update_run(
-        self, run_id: int, updates: dict[str, object], expected_stages: frozenset[str]
+        self, run_id: int, updates: dict[str, object], expected_stages: frozenset[str],
+    rejected_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
         if self.run["id"] != run_id or self.run["current_stage"] not in expected_stages:
             return False, self.run

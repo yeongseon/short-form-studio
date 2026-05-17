@@ -5,7 +5,6 @@ import pytest
 from creator_domain.models import ModelSelection, RunStage
 from creator_domain.exceptions import ConflictError
 from creator_service.run_service import InMemoryRunStorage, RunService
-import creator_service.run_service as run_service_module
 
 
 def test_create_run_with_model_defaults_and_style_preset() -> None:
@@ -89,26 +88,6 @@ def test_get_run_returns_existing_run() -> None:
     assert fetched.project_id == 9
 
 
-def test_get_run_requires_workspace_id_for_api_context() -> None:
-    service = RunService(InMemoryRunStorage())
-    created = asyncio.run(
-        service.create_run(
-            project_id=9,
-            model_defaults={"script_model": "qwen3-4b"},
-            style_preset="default",
-            workspace_id=3,
-        )
-    )
-
-    original = run_service_module._is_api_context_call
-    run_service_module._is_api_context_call = lambda: True
-    try:
-        with pytest.raises(ValueError, match="workspace_id is required"):
-            asyncio.run(service.get_run(created.id))
-    finally:
-        run_service_module._is_api_context_call = original
-
-
 def test_get_run_allows_missing_workspace_id_for_worker_context() -> None:
     service = RunService(InMemoryRunStorage())
     created = asyncio.run(
@@ -124,26 +103,6 @@ def test_get_run_allows_missing_workspace_id_for_worker_context() -> None:
 
     assert fetched is not None
     assert fetched.id == created.id
-
-
-def test_delete_run_requires_workspace_id_for_api_context() -> None:
-    service = RunService(InMemoryRunStorage())
-    created = asyncio.run(
-        service.create_run(
-            project_id=9,
-            model_defaults={"script_model": "qwen3-4b"},
-            style_preset="default",
-            workspace_id=3,
-        )
-    )
-
-    original = run_service_module._is_api_context_call
-    run_service_module._is_api_context_call = lambda: True
-    try:
-        with pytest.raises(ValueError, match="workspace_id is required"):
-            asyncio.run(service.delete_run(created.id))
-    finally:
-        run_service_module._is_api_context_call = original
 
 
 def test_restart_run_transitions_correctly() -> None:
@@ -456,3 +415,115 @@ def test_postgres_create_run_query_includes_workspace_id_and_row_lock():
 
     # Must be a CTE (WITH ... AS)
     assert "with " in sql_found and " as" in sql_found, "Query must use a CTE (WITH ... AS)"
+
+
+def test_cancel_run_sets_status_cancelled() -> None:
+    service = RunService(InMemoryRunStorage())
+    created = asyncio.run(
+        service.create_run(
+            project_id=40,
+            model_defaults=None,
+            style_preset="default",
+            workspace_id=5,
+        )
+    )
+
+    cancelled = asyncio.run(service.cancel_run(created.id, workspace_id=5))
+
+    assert cancelled.status == "cancelled"
+    assert cancelled.id == created.id
+
+
+def test_cancel_run_wrong_workspace_raises() -> None:
+    service = RunService(InMemoryRunStorage())
+    created = asyncio.run(
+        service.create_run(
+            project_id=41,
+            model_defaults=None,
+            style_preset="default",
+            workspace_id=5,
+        )
+    )
+
+    with pytest.raises(ValueError, match="not found"):
+        asyncio.run(service.cancel_run(created.id, workspace_id=999))
+
+
+def test_cancel_run_missing_run_raises() -> None:
+    service = RunService(InMemoryRunStorage())
+
+    with pytest.raises(ValueError, match="not found"):
+        asyncio.run(service.cancel_run(9999, workspace_id=1))
+
+
+def test_list_runs_by_project_filters_by_workspace_id() -> None:
+    storage = InMemoryRunStorage()
+    service = RunService(storage)
+
+    asyncio.run(
+        service.create_run(
+            project_id=50,
+            model_defaults=None,
+            style_preset="default",
+            workspace_id=1,
+        )
+    )
+    asyncio.run(
+        service.create_run(
+            project_id=50,
+            model_defaults=None,
+            style_preset="default",
+            workspace_id=2,
+        )
+    )
+
+    all_runs = asyncio.run(service.list_runs_by_project(50))
+    assert len(all_runs) == 2
+
+    ws1_runs = asyncio.run(service.list_runs_by_project(50, workspace_id=1))
+    assert len(ws1_runs) == 1
+
+    ws2_runs = asyncio.run(service.list_runs_by_project(50, workspace_id=2))
+    assert len(ws2_runs) == 1
+
+    ws99_runs = asyncio.run(service.list_runs_by_project(50, workspace_id=99))
+    assert len(ws99_runs) == 0
+
+
+def test_no_inspect_stack_in_run_service() -> None:
+    """Verify inspect.stack() brittle enforcement is removed."""
+    import creator_service.run_service as mod
+    assert not hasattr(mod, '_is_api_context_call'), \
+        "_is_api_context_call should be removed from run_service"
+    assert not hasattr(mod, '_require_workspace_id_for_api_calls'), \
+        "_require_workspace_id_for_api_calls should be removed from run_service"
+
+
+def test_conditional_update_rejects_cancelled_status() -> None:
+    """Verify that conditional_update_run with rejected_statuses blocks
+    transitions on cancelled runs (the worker barrier)."""
+    storage = InMemoryRunStorage()
+    service = RunService(storage)
+
+    run = asyncio.run(
+        service.create_run(
+            project_id=60,
+            model_defaults=None,
+            style_preset="default",
+            workspace_id=1,
+        )
+    )
+
+    # Cancel the run
+    asyncio.run(service.cancel_run(run.id, workspace_id=1))
+
+    # Worker tries to transition — should be blocked by rejected_statuses
+    applied, row = asyncio.run(
+        storage.conditional_update_run(
+            run.id,
+            {"current_stage": "SCRIPT_GENERATION", "status": "running"},
+            expected_stages=frozenset({"IDEA_READY"}),
+            rejected_statuses=frozenset({"cancelled"}),
+        )
+    )
+    assert applied is False, "Worker should not overwrite a cancelled run"

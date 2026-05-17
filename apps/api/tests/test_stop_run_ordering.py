@@ -36,6 +36,7 @@ class _CallTracker:
 
 class _FakeProject:
     status: str = "active"
+
     def __init__(self, project_id: int = 99):
         self.id = project_id
         self.workspace_id = 1
@@ -123,9 +124,8 @@ async def test_delete_run_captures_ids_before_delete_revokes_after(
     """Celery IDs must be captured BEFORE delete (CASCADE removes rows), then revoked AFTER."""
     tracker = _CallTracker()
 
-    async def _mock_update_run(run_id, updates, workspace_id):
+    async def _mock_cancel_run(run_id, workspace_id):
         tracker.order.append("mark_cancelled")
-        assert updates == {"status": "cancelled"}
 
     async def _mock_collect(run_id):
         tracker.order.append("collect_ids")
@@ -145,8 +145,8 @@ async def test_delete_run_captures_ids_before_delete_revokes_after(
         return 0
 
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_lifecycle.run_service.storage.update_run",
-        _mock_update_run,
+        "shorts_api.routes.creator_runs_lifecycle.run_service.cancel_run",
+        _mock_cancel_run,
     )
     monkeypatch.setattr(
         "shorts_api.routes.creator_runs_lifecycle._collect_active_celery_ids", _mock_collect
@@ -184,7 +184,7 @@ async def test_delete_run_db_failure_still_revokes_and_cleans(
     """
     revoke_called = False
 
-    async def _mock_update_run(run_id, updates, workspace_id):
+    async def _mock_update_run(run_id, workspace_id):
         return None
 
     async def _mock_collect(run_id):
@@ -201,7 +201,7 @@ async def test_delete_run_db_failure_still_revokes_and_cleans(
         return 0
 
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_lifecycle.run_service.storage.update_run",
+        "shorts_api.routes.creator_runs_lifecycle.run_service.cancel_run",
         _mock_update_run,
     )
     monkeypatch.setattr(
@@ -237,7 +237,7 @@ async def test_delete_run_not_deleted_still_cleans_artifacts(
     revoke_called = False
     artifacts_called = False
 
-    async def _mock_update_run(run_id, updates, workspace_id):
+    async def _mock_update_run(run_id, workspace_id):
         return None
 
     async def _mock_collect(run_id):
@@ -256,7 +256,7 @@ async def test_delete_run_not_deleted_still_cleans_artifacts(
         return 0
 
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_lifecycle.run_service.storage.update_run",
+        "shorts_api.routes.creator_runs_lifecycle.run_service.cancel_run",
         _mock_update_run,
     )
     monkeypatch.setattr(
@@ -284,7 +284,7 @@ async def test_delete_run_not_deleted_still_cleans_artifacts(
 async def test_delete_run_response_includes_revoke_reliable(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    async def _mock_update_run(run_id, updates, workspace_id):
+    async def _mock_update_run(run_id, workspace_id):
         return None
 
     async def _mock_collect(run_id):
@@ -300,7 +300,7 @@ async def test_delete_run_response_includes_revoke_reliable(
         return 0
 
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_lifecycle.run_service.storage.update_run",
+        "shorts_api.routes.creator_runs_lifecycle.run_service.cancel_run",
         _mock_update_run,
     )
     monkeypatch.setattr(
@@ -332,9 +332,8 @@ async def test_delete_run_marks_cancelled_before_collecting_ids(
         user = CurrentUser(user_id=1, workspace_id=1)
         return user, _FakeRun(run_id=run_id, status="running", current_stage="VISUAL_ASSET_REVIEW")
 
-    async def _mock_update_run(run_id, updates, workspace_id):
+    async def _mock_update_run(run_id, workspace_id):
         tracker.order.append("mark_cancelled")
-        assert updates == {"status": "cancelled"}
 
     async def _mock_collect(run_id):
         tracker.order.append("collect_ids")
@@ -354,7 +353,7 @@ async def test_delete_run_marks_cancelled_before_collecting_ids(
 
     app.dependency_overrides[require_run_access] = _mock_run_access
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_lifecycle.run_service.storage.update_run",
+        "shorts_api.routes.creator_runs_lifecycle.run_service.cancel_run",
         _mock_update_run,
     )
     monkeypatch.setattr(
@@ -393,9 +392,8 @@ async def test_delete_run_from_review_stage_blocks_concurrent_dispatch(
         user = CurrentUser(user_id=1, workspace_id=1)
         return user, _FakeRun(run_id=run_id, status="running", current_stage="VISUAL_ASSET_REVIEW")
 
-    async def _mock_update_run(run_id, updates, workspace_id):
+    async def _mock_update_run(run_id, workspace_id):
         tracker.order.append("mark_cancelled")
-        assert updates == {"status": "cancelled"}
 
     async def _mock_collect(run_id):
         tracker.order.append("collect_ids")
@@ -415,7 +413,7 @@ async def test_delete_run_from_review_stage_blocks_concurrent_dispatch(
 
     app.dependency_overrides[require_run_access] = _mock_run_access
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_lifecycle.run_service.storage.update_run",
+        "shorts_api.routes.creator_runs_lifecycle.run_service.cancel_run",
         _mock_update_run,
     )
     monkeypatch.setattr(
@@ -492,8 +490,8 @@ async def test_delete_run_fails_closed_when_cancel_write_fails(
     """If pre-delete cancellation write fails, delete_run must return 503 (fail-closed)."""
     delete_called = False
 
-    async def _mock_update_run(run_id, updates, workspace_id=None, expected_version=None):
-        raise RuntimeError("storage unavailable")
+    async def _mock_update_run(run_id, workspace_id=None):
+        raise Exception("simulated failure")
 
     async def _mock_collect(run_id):
         return ["celery-id-1"], True
@@ -509,11 +507,22 @@ async def test_delete_run_fails_closed_when_cancel_write_fails(
     async def _mock_delete_artifacts(run_id):
         return 0
 
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle.run_service.storage.update_run", _mock_update_run)
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle._collect_active_celery_ids", _mock_collect)
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle.run_service.delete_run", _mock_delete_run)
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle._revoke_celery_ids", _mock_revoke_ids)
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle.artifact_download_service.delete_artifacts_for_run", _mock_delete_artifacts)
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle.run_service.cancel_run", _mock_update_run
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle._collect_active_celery_ids", _mock_collect
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle.run_service.delete_run", _mock_delete_run
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle._revoke_celery_ids", _mock_revoke_ids
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle.artifact_download_service.delete_artifacts_for_run",
+        _mock_delete_artifacts,
+    )
 
     response = await client.delete("/api/creator/runs/1")
     assert response.status_code == 503
@@ -533,7 +542,7 @@ async def test_delete_run_aborts_db_delete_when_artifact_cleanup_fails(
     """
     delete_run_called = False
 
-    async def _mock_update_run(run_id, updates, workspace_id):
+    async def _mock_update_run(run_id, workspace_id):
         return {"id": run_id}
 
     async def _mock_collect(run_id):
@@ -552,7 +561,7 @@ async def test_delete_run_aborts_db_delete_when_artifact_cleanup_fails(
         return 2
 
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_lifecycle.run_service.storage.update_run",
+        "shorts_api.routes.creator_runs_lifecycle.run_service.cancel_run",
         _mock_update_run,
     )
     monkeypatch.setattr(
@@ -594,10 +603,10 @@ async def test_delete_project_aborts_db_delete_when_artifact_cleanup_fails(
     async def _mock_revoke(run_id):
         return True
 
-    async def _mock_list_runs(project_id):
+    async def _mock_list_runs(project_id, workspace_id=None):
         return [StubRun(10), StubRun(11)]
 
-    async def _mock_update_run(run_id, updates, workspace_id):
+    async def _mock_update_run(run_id, workspace_id):
         return {"id": run_id}
 
     async def _mock_delete_artifacts(run_id):
@@ -610,9 +619,16 @@ async def test_delete_project_aborts_db_delete_when_artifact_cleanup_fails(
         delete_project_called = True
         return True
 
+    async def _mock_mark_deleting(project_id, workspace_id=None):
+        return None
+
     monkeypatch.setattr(
-        "shorts_api.routes.creator_projects.run_service.storage.update_run",
+        "shorts_api.routes.creator_projects.run_service.cancel_run",
         _mock_update_run,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_projects.project_service.mark_deleting",
+        _mock_mark_deleting,
     )
     monkeypatch.setattr(
         "shorts_api.routes.creator_projects.run_service.list_runs_by_project",
@@ -652,10 +668,10 @@ async def test_delete_project_removes_artifacts_before_db_delete(
         order.append("revoke")
         return True
 
-    async def _mock_list_runs(project_id):
+    async def _mock_list_runs(project_id, workspace_id=None):
         return [StubRun(10)]
 
-    async def _mock_update_run(run_id, updates, workspace_id):
+    async def _mock_update_run(run_id, workspace_id):
         order.append("cancel")
         return {"id": run_id}
 
@@ -667,9 +683,16 @@ async def test_delete_project_removes_artifacts_before_db_delete(
         order.append("delete_project")
         return True
 
+    async def _mock_mark_deleting(project_id, workspace_id=None):
+        return None
+
     monkeypatch.setattr(
-        "shorts_api.routes.creator_projects.run_service.storage.update_run",
+        "shorts_api.routes.creator_projects.run_service.cancel_run",
         _mock_update_run,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_projects.project_service.mark_deleting",
+        _mock_mark_deleting,
     )
     monkeypatch.setattr(
         "shorts_api.routes.creator_projects.run_service.list_runs_by_project",
@@ -708,12 +731,11 @@ async def test_delete_project_marks_runs_cancelled_before_cleanup(
         def __init__(self, run_id):
             self.id = run_id
 
-    async def _mock_update_run(run_id, updates, workspace_id):
-        if updates.get("status") == "cancelled":
-            order.append(f"cancel_{run_id}")
+    async def _mock_update_run(run_id, workspace_id):
+        order.append(f"cancel_{run_id}")
         return {"id": run_id}
 
-    async def _mock_list_runs(project_id):
+    async def _mock_list_runs(project_id, workspace_id=None):
         return [StubRun(10), StubRun(11)]
 
     async def _mock_revoke(run_id):
@@ -728,9 +750,16 @@ async def test_delete_project_marks_runs_cancelled_before_cleanup(
         order.append("delete_project")
         return True
 
+    async def _mock_mark_deleting(project_id, workspace_id=None):
+        return None
+
     monkeypatch.setattr(
-        "shorts_api.routes.creator_projects.run_service.storage.update_run",
+        "shorts_api.routes.creator_projects.run_service.cancel_run",
         _mock_update_run,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_projects.project_service.mark_deleting",
+        _mock_mark_deleting,
     )
     monkeypatch.setattr(
         "shorts_api.routes.creator_projects.run_service.list_runs_by_project",
@@ -753,9 +782,12 @@ async def test_delete_project_marks_runs_cancelled_before_cleanup(
     assert response.status_code == 200
     # Cancellation must happen BEFORE revoke and artifact cleanup
     assert order == [
-        "cancel_10", "cancel_11",
-        "revoke_10", "revoke_11",
-        "artifacts_10", "artifacts_11",
+        "cancel_10",
+        "cancel_11",
+        "revoke_10",
+        "revoke_11",
+        "artifacts_10",
+        "artifacts_11",
         "delete_project",
     ]
 
@@ -777,10 +809,10 @@ async def test_delete_project_aborts_when_cancel_write_fails(
         def __init__(self, run_id):
             self.id = run_id
 
-    async def _mock_update_run(run_id, updates, workspace_id):
+    async def _mock_update_run(run_id, workspace_id):
         raise RuntimeError("DB write failed")
 
-    async def _mock_list_runs(project_id):
+    async def _mock_list_runs(project_id, workspace_id=None):
         return [StubRun(10)]
 
     async def _mock_revoke(run_id):
@@ -797,9 +829,16 @@ async def test_delete_project_aborts_when_cancel_write_fails(
         delete_called = True
         return True
 
+    async def _mock_mark_deleting(project_id, workspace_id=None):
+        return None
+
     monkeypatch.setattr(
-        "shorts_api.routes.creator_projects.run_service.storage.update_run",
+        "shorts_api.routes.creator_projects.run_service.cancel_run",
         _mock_update_run,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_projects.project_service.mark_deleting",
+        _mock_mark_deleting,
     )
     monkeypatch.setattr(
         "shorts_api.routes.creator_projects.run_service.list_runs_by_project",
@@ -833,7 +872,7 @@ async def test_delete_run_aborts_when_revoke_unreliable(
     """If task revocation is unreliable, delete_run must abort with 503."""
     delete_called = False
 
-    async def _mock_update_run(run_id, updates, workspace_id=None, expected_version=None):
+    async def _mock_update_run(run_id, workspace_id=None):
         return {"id": run_id}
 
     async def _mock_collect(run_id):
@@ -850,11 +889,22 @@ async def test_delete_run_aborts_when_revoke_unreliable(
     async def _mock_delete_artifacts(run_id):
         return 0
 
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle.run_service.storage.update_run", _mock_update_run)
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle._collect_active_celery_ids", _mock_collect)
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle._revoke_celery_ids", _mock_revoke_ids)
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle.run_service.delete_run", _mock_delete_run)
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle.artifact_download_service.delete_artifacts_for_run", _mock_delete_artifacts)
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle.run_service.cancel_run", _mock_update_run
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle._collect_active_celery_ids", _mock_collect
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle._revoke_celery_ids", _mock_revoke_ids
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle.run_service.delete_run", _mock_delete_run
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle.artifact_download_service.delete_artifacts_for_run",
+        _mock_delete_artifacts,
+    )
 
     response = await client.delete("/api/creator/runs/1")
     assert response.status_code == 503
@@ -869,7 +919,7 @@ async def test_delete_run_aborts_when_collect_unreliable(
     """If active task collection fails, delete_run must abort with 503."""
     delete_called = False
 
-    async def _mock_update_run(run_id, updates, workspace_id=None, expected_version=None):
+    async def _mock_update_run(run_id, workspace_id=None):
         return {"id": run_id}
 
     async def _mock_collect(run_id):
@@ -886,11 +936,22 @@ async def test_delete_run_aborts_when_collect_unreliable(
     async def _mock_delete_artifacts(run_id):
         return 0
 
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle.run_service.storage.update_run", _mock_update_run)
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle._collect_active_celery_ids", _mock_collect)
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle._revoke_celery_ids", _mock_revoke_ids)
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle.run_service.delete_run", _mock_delete_run)
-    monkeypatch.setattr("shorts_api.routes.creator_runs_lifecycle.artifact_download_service.delete_artifacts_for_run", _mock_delete_artifacts)
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle.run_service.cancel_run", _mock_update_run
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle._collect_active_celery_ids", _mock_collect
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle._revoke_celery_ids", _mock_revoke_ids
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle.run_service.delete_run", _mock_delete_run
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_lifecycle.artifact_download_service.delete_artifacts_for_run",
+        _mock_delete_artifacts,
+    )
 
     response = await client.delete("/api/creator/runs/1")
     assert response.status_code == 503
@@ -909,10 +970,10 @@ async def test_delete_project_aborts_when_revoke_fails(
         def __init__(self, run_id):
             self.id = run_id
 
-    async def _mock_update_run(run_id, updates, workspace_id):
+    async def _mock_update_run(run_id, workspace_id):
         return {"id": run_id}
 
-    async def _mock_list_runs(project_id):
+    async def _mock_list_runs(project_id, workspace_id=None):
         return [StubRun(10)]
 
     async def _mock_revoke(run_id):
@@ -926,9 +987,16 @@ async def test_delete_project_aborts_when_revoke_fails(
         delete_project_called = True
         return True
 
+    async def _mock_mark_deleting(project_id, workspace_id=None):
+        return None
+
     monkeypatch.setattr(
-        "shorts_api.routes.creator_projects.run_service.storage.update_run",
+        "shorts_api.routes.creator_projects.run_service.cancel_run",
         _mock_update_run,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_projects.project_service.mark_deleting",
+        _mock_mark_deleting,
     )
     monkeypatch.setattr(
         "shorts_api.routes.creator_projects.run_service.list_runs_by_project",
@@ -969,16 +1037,15 @@ async def test_delete_project_marks_deleting_before_enumerating_runs(
         def __init__(self, run_id):
             self.id = run_id
 
-    async def _mock_update_project(project_id, updates, *, workspace_id=None):
-        if updates.get("status") == "deleting":
-            order.append("mark_deleting")
+    async def _mock_update_project(project_id, workspace_id=None):
+        order.append("mark_deleting")
         return {"id": project_id, "status": "deleting"}
 
-    async def _mock_list_runs(project_id):
+    async def _mock_list_runs(project_id, workspace_id=None):
         order.append("list_runs")
         return [StubRun(10)]
 
-    async def _mock_update_run(run_id, updates, workspace_id):
+    async def _mock_update_run(run_id, workspace_id):
         order.append("cancel_run")
         return {"id": run_id}
 
@@ -995,7 +1062,7 @@ async def test_delete_project_marks_deleting_before_enumerating_runs(
         return True
 
     monkeypatch.setattr(
-        "shorts_api.routes.creator_projects.project_service.db.update_project",
+        "shorts_api.routes.creator_projects.project_service.mark_deleting",
         _mock_update_project,
     )
     monkeypatch.setattr(
@@ -1003,7 +1070,7 @@ async def test_delete_project_marks_deleting_before_enumerating_runs(
         _mock_list_runs,
     )
     monkeypatch.setattr(
-        "shorts_api.routes.creator_projects.run_service.storage.update_run",
+        "shorts_api.routes.creator_projects.run_service.cancel_run",
         _mock_update_run,
     )
     monkeypatch.setattr(
@@ -1032,10 +1099,10 @@ async def test_delete_project_aborts_when_mark_deleting_fails(
     """If marking project 'deleting' fails, abort with 503."""
     list_runs_called = False
 
-    async def _mock_update_project(project_id, updates, *, workspace_id=None):
+    async def _mock_update_project(project_id, workspace_id=None):
         raise RuntimeError("DB write failed")
 
-    async def _mock_list_runs(project_id):
+    async def _mock_list_runs(project_id, workspace_id=None):
         nonlocal list_runs_called
         list_runs_called = True
         return []
@@ -1044,7 +1111,7 @@ async def test_delete_project_aborts_when_mark_deleting_fails(
         return True
 
     monkeypatch.setattr(
-        "shorts_api.routes.creator_projects.project_service.db.update_project",
+        "shorts_api.routes.creator_projects.project_service.mark_deleting",
         _mock_update_project,
     )
     monkeypatch.setattr(
@@ -1062,6 +1129,40 @@ async def test_delete_project_aborts_when_mark_deleting_fails(
     assert list_runs_called is False
 
 
+
+@pytest.mark.asyncio
+async def test_delete_project_returns_404_when_mark_deleting_raises_value_error(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ValueError from mark_deleting (concurrent deletion) should map to 404, not 503."""
+
+    async def _mock_mark_deleting(project_id, workspace_id=None):
+        raise ValueError("Project not found")
+
+    async def _mock_list_runs(project_id, workspace_id=None):
+        return []
+
+    async def _mock_delete_project(project_id, workspace_id=None):
+        return True
+
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_projects.project_service.mark_deleting",
+        _mock_mark_deleting,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_projects.run_service.list_runs_by_project",
+        _mock_list_runs,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_projects.project_service.delete_project",
+        _mock_delete_project,
+    )
+
+    response = await client.delete("/api/creator/projects/99")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Project not found"
+
+
 @pytest.mark.asyncio
 async def test_create_run_rejected_when_project_is_deleting(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
@@ -1071,6 +1172,7 @@ async def test_create_run_rejected_when_project_is_deleting(
     async def _mock_project_access(project_id: int):
         from creator_domain.models.project import Project
         from datetime import datetime, timezone
+
         user = CurrentUser(user_id=1, workspace_id=1)
         project = Project(
             id=project_id,
@@ -1261,14 +1363,14 @@ async def test_import_json_catches_conflict_error_from_storage(
 async def test_delete_run_returns_404_when_run_concurrently_deleted(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """If update_run raises ValueError (run gone), delete_run returns 404, not 503."""
+    """If cancel_run raises ValueError (run gone), delete_run returns 404, not 503."""
 
-    async def _exploding_update(*a, **kw):
+    async def _exploding_cancel_run(*a, **kw):
         raise ValueError("Run 99 not found")
 
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_lifecycle.run_service.storage.update_run",
-        _exploding_update,
+        "shorts_api.routes.creator_runs_lifecycle.run_service.cancel_run",
+        _exploding_cancel_run,
     )
     response = await client.delete("/api/creator/runs/99")
     assert response.status_code == 404, f"Expected 404 but got {response.status_code}"
