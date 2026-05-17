@@ -30,6 +30,10 @@ class ProjectStorageBackend(Protocol):
         self, limit: int, offset: int, workspace_id: int | None = None
     ) -> list[dict[str, Any]]: ...
 
+    async def list_projects_with_latest_run(
+        self, limit: int, offset: int, workspace_id: int | None = None
+    ) -> list[dict[str, Any]]: ...
+
     async def fetch_latest_run_summary(self, project_id: int) -> LatestRunSummary | None: ...
 
     async def count_projects(self, workspace_id: int | None = None) -> int: ...
@@ -100,6 +104,16 @@ class InMemoryProjectStorage:
         if workspace_id is not None:
             ordered = [row for row in ordered if row.get("workspace_id") == workspace_id]
         return [dict(row) for row in ordered[offset : offset + limit]]
+
+    async def list_projects_with_latest_run(
+        self, limit: int, offset: int, workspace_id: int | None = None
+    ) -> list[dict[str, Any]]:
+        rows = await self.list_projects(limit=limit, offset=offset, workspace_id=workspace_id)
+        enriched: list[dict[str, Any]] = []
+        for row in rows:
+            latest_run = await self.fetch_latest_run_summary(row["id"])
+            enriched.append({**row, "latest_run": latest_run})
+        return enriched
 
     async def count_projects(self, workspace_id: int | None = None) -> int:
         if workspace_id is None:
@@ -261,12 +275,12 @@ class ProjectService:
         if offset < 0:
             raise ValueError("offset must be >= 0")
 
-        rows = await self.db.list_projects(limit=limit, offset=offset, workspace_id=workspace_id)
-        projects: list[Project] = []
-        for row in rows:
-            latest_run = await self.db.fetch_latest_run_summary(row["id"])
-            projects.append(ProjectWithLatestRun.model_validate({**row, "latest_run": latest_run}))
-        return projects
+        rows = await self.db.list_projects_with_latest_run(
+            limit=limit,
+            offset=offset,
+            workspace_id=workspace_id,
+        )
+        return [ProjectWithLatestRun.model_validate(row) for row in rows]
 
     async def count_projects(self, workspace_id: int | None = None) -> int:
         return await self.db.count_projects(workspace_id=workspace_id)
@@ -297,8 +311,6 @@ class ProjectService:
         if row is None:
             raise ValueError(f"Project {project_id} not found")
         return Project.model_validate(row)
-
-
 
 
 def _create_storage() -> ProjectStorageBackend:

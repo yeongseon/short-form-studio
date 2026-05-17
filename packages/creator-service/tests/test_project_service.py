@@ -107,6 +107,49 @@ def test_list_projects_respects_limit_and_offset(service: ProjectService) -> Non
     assert third.id != projects[0].id
 
 
+def test_list_projects_includes_latest_run(
+    service: ProjectService,
+    storage: InMemoryProjectStorage,
+) -> None:
+    project = run(service.create_project(title="With Run", source_type="idea", idea_brief="idea"))
+    created_run = run(
+        storage.insert_run(project.id, current_stage="script_review", status="paused")
+    )
+
+    projects = run(service.list_projects())
+
+    assert projects[0].model_dump()["latest_run"] == {
+        "run_id": created_run["id"],
+        "current_stage": "script_review",
+        "status": "paused",
+    }
+
+
+def test_list_projects_latest_run_is_none_when_no_runs(service: ProjectService) -> None:
+    run(service.create_project(title="No Runs", source_type="idea", idea_brief="idea"))
+
+    projects = run(service.list_projects())
+
+    assert projects[0].model_dump()["latest_run"] is None
+
+
+def test_list_projects_returns_newest_run_as_latest(
+    service: ProjectService,
+    storage: InMemoryProjectStorage,
+) -> None:
+    project = run(service.create_project(title="Two Runs", source_type="idea", idea_brief="idea"))
+    run(storage.insert_run(project.id, current_stage="script_generating", status="running"))
+    latest = run(storage.insert_run(project.id, current_stage="script_review", status="paused"))
+
+    projects = run(service.list_projects())
+
+    assert projects[0].model_dump()["latest_run"] == {
+        "run_id": latest["id"],
+        "current_stage": "script_review",
+        "status": "paused",
+    }
+
+
 def test_get_and_list_include_latest_run_summary(
     service: ProjectService,
     storage: InMemoryProjectStorage,
@@ -393,7 +436,26 @@ def test_mark_deleting_missing_project_raises(service: ProjectService) -> None:
 def test_no_inspect_stack_in_project_service() -> None:
     """Verify inspect.stack() brittle enforcement is removed."""
     import creator_service.project_service as mod
-    assert not hasattr(mod, '_is_api_context_call'), \
+
+    assert not hasattr(mod, "_is_api_context_call"), (
         "_is_api_context_call should be removed from project_service"
-    assert not hasattr(mod, '_require_workspace_id_for_api_calls'), \
+    )
+    assert not hasattr(mod, "_require_workspace_id_for_api_calls"), (
         "_require_workspace_id_for_api_calls should be removed from project_service"
+    )
+
+
+def test_list_projects_output_has_no_lateral_join_keys(
+    service: ProjectService,
+    storage: InMemoryProjectStorage,
+) -> None:
+    """Ensure storage does not leak lateral join helper columns into the model."""
+    project = run(service.create_project(title="Clean Keys", source_type="idea", idea_brief="idea"))
+    run(storage.insert_run(project.id, current_stage="script_generating", status="running"))
+
+    projects = run(service.list_projects())
+    data = projects[0].model_dump()
+
+    lateral_keys = {"run_id", "latest_run_current_stage", "latest_run_status"}
+    leaked = lateral_keys & set(data.keys())
+    assert not leaked, f"Lateral join columns leaked into model: {leaked}"

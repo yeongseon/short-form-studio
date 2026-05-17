@@ -73,6 +73,69 @@ class PostgresProjectStorage:
             offset,
         )
 
+    async def list_projects_with_latest_run(
+        self, limit: int, offset: int, workspace_id: int | None = None
+    ) -> list[dict[str, Any]]:
+        if workspace_id is None:
+            rows = await fetch_all(
+                """
+                SELECT
+                    p.*, lr.run_id,
+                    lr.current_stage AS latest_run_current_stage,
+                    lr.status AS latest_run_status
+                FROM creator_projects p
+                LEFT JOIN LATERAL (
+                    SELECT id AS run_id, current_stage, status
+                    FROM creator_runs
+                    WHERE project_id = p.id
+                    ORDER BY id DESC
+                    LIMIT 1
+                ) lr ON true
+                ORDER BY p.created_at DESC, p.id DESC
+                LIMIT $1 OFFSET $2
+                """,
+                limit,
+                offset,
+            )
+        else:
+            rows = await fetch_all(
+                """
+                SELECT
+                    p.*, lr.run_id,
+                    lr.current_stage AS latest_run_current_stage,
+                    lr.status AS latest_run_status
+                FROM creator_projects p
+                LEFT JOIN LATERAL (
+                    SELECT id AS run_id, current_stage, status
+                    FROM creator_runs
+                    WHERE project_id = p.id
+                    ORDER BY id DESC
+                    LIMIT 1
+                ) lr ON true
+                WHERE p.workspace_id = $1
+                ORDER BY p.created_at DESC, p.id DESC
+                LIMIT $2 OFFSET $3
+                """,
+                workspace_id,
+                limit,
+                offset,
+            )
+
+        _LATERAL_KEYS = {"run_id", "latest_run_current_stage", "latest_run_status"}
+        projects: list[dict[str, Any]] = []
+        for row in rows:
+            latest_run = None
+            if row["run_id"] is not None:
+                latest_run = {
+                    "run_id": row["run_id"],
+                    "current_stage": row["latest_run_current_stage"],
+                    "status": row["latest_run_status"],
+                }
+            project_data = {k: v for k, v in dict(row).items() if k not in _LATERAL_KEYS}
+            project_data["latest_run"] = latest_run
+            projects.append(project_data)
+        return projects
+
     async def count_projects(self, workspace_id: int | None = None) -> int:
         if workspace_id is None:
             row = await fetch_one("SELECT COUNT(*) AS count FROM creator_projects")
