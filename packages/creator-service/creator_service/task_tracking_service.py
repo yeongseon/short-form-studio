@@ -29,6 +29,10 @@ class TaskTrackingStorageBackend(Protocol):
 
     async def get_active_celery_ids(self, run_id: int) -> list[str]: ...
 
+    async def update_task_status_if_running(
+        self, task_id: int, status: str, **kwargs: Any
+    ) -> dict[str, Any] | None: ...
+
 
 class InMemoryTaskTrackingStorage:
     def __init__(self) -> None:
@@ -102,6 +106,27 @@ class InMemoryTaskTrackingStorage:
         self._rows[task_id] = row
         return dict(row)
 
+
+    async def update_task_status_if_running(
+        self, task_id: int, status: str, **kwargs: Any
+    ) -> dict[str, Any] | None:
+        """Only transition if current status is running (true CAS guard)."""
+        row = self._rows.get(task_id)
+        if row is None:
+            return None
+        if row.get("status") != "running":
+            return None
+        row["status"] = status
+        if "started_at" in kwargs:
+            row["started_at"] = kwargs["started_at"]
+        if "finished_at" in kwargs:
+            row["finished_at"] = kwargs["finished_at"]
+        if kwargs.get("attempt") is not None:
+            row["attempt"] = kwargs["attempt"]
+        row["error_code"] = kwargs.get("error_code")
+        row["error_message"] = kwargs.get("error_message")
+        self._rows[task_id] = row
+        return dict(row)
     async def claim_running(self, task_id: int, **kwargs: Any) -> dict[str, Any] | None:
         """Atomically claim a task: only transition from pending/queued/failed to running."""
         row = self._rows.get(task_id)
@@ -338,6 +363,26 @@ class TaskTrackingService:
         )
         return RunTask.from_row(row) if row is not None else None
 
+    async def mark_failed_if_running(
+        self, celery_task_id: str, error_code: str, error_message: str
+    ) -> RunTask | None:
+        """Mark task as failed ONLY if currently in running state (true CAS guard).
+
+        Unlike mark_failed(), this will NOT overwrite revoked/rejected states.
+        Returns None if the task was not in running state (CAS miss).
+        """
+        task = await self.storage.get_by_celery_id(celery_task_id)
+        if task is None:
+            return None
+        row = await self.storage.update_task_status_if_running(
+            task["id"],
+            "failed",
+            finished_at=datetime.now(timezone.utc),
+            error_code=error_code,
+            error_message=error_message,
+        )
+        return RunTask.from_row(row) if row is not None else None
+
     async def mark_revoked(self, celery_task_id: str) -> RunTask | None:
         """Called externally by admin API or monitoring tools when a task is manually revoked."""
         task = await self.storage.get_by_celery_id(celery_task_id)
@@ -379,7 +424,7 @@ class TaskTrackingService:
         rows = await self.storage.list_by_run(run_id)
         return [RunTask.from_row(row) for row in rows]
 
-    async def find_stuck_tasks(self, threshold_seconds: int = 600) -> list[RunTask]:
+    async def find_stuck_tasks(self, threshold_seconds: int = 900) -> list[RunTask]:
         rows = await self.storage.list_stuck_tasks(threshold_seconds)
         return [RunTask.from_row(row) for row in rows]
 

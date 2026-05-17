@@ -938,7 +938,7 @@ class TestReconcilerDoesNotClobberAdvancedRun:
         asyncio.run(_run())
 
     def test_rollback_succeeds_for_stuck_generating_run(self) -> None:
-        """If run is still in GENERATING_SCRIPT (stuck), reconciler SHOULD roll it back."""
+        """If run is still in SCRIPT_GENERATING (stuck), reconciler SHOULD roll it back."""
         storage = InMemoryTaskTrackingStorage()
         service = TaskTrackingService(storage)
         rollback_applied: list[int] = []
@@ -962,8 +962,8 @@ class TestReconcilerDoesNotClobberAdvancedRun:
                 async def conditional_update_run(
                     self, run_id, updates, *, expected_stages, rejected_statuses=None, workspace_id=None
                 ):
-                    # Run is at GENERATING_SCRIPT — in expected_stages, so accept
-                    assert "GENERATING_SCRIPT" in expected_stages
+                    # Run is at SCRIPT_GENERATING — in expected_stages, so accept
+                    assert "SCRIPT_GENERATING" in expected_stages
                     rollback_applied.append(run_id)
                     return True, {"current_stage": "FAILED", "status": "failed"}
 

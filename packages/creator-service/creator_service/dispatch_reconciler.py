@@ -1,9 +1,14 @@
-"""Dispatch reconciler: recovers tasks stuck in 'pending' state.
+"""Dispatch reconciler: recovers stale pending and stuck running tasks.
 
-When a dispatch crashes between recording the task as 'pending' and
-enqueueing it to the broker, the task is left in 'pending' state with
-no Celery message. The reconciler periodically scans for such stale
-tasks and either re-enqueues them or rolls back the associated run.
+Phase 1 — Stale pending: When a dispatch crashes between recording the
+task as 'pending' and enqueueing it to the broker, the task is left in
+'pending' state with no Celery message.  The reconciler re-enqueues or
+rolls back the associated run.
+
+Phase 2 — Stuck running: Tasks stuck in 'running' state beyond a
+configurable threshold (default 900 s, which exceeds the Celery hard
+time limit of 660 s) are marked as failed via a CAS guard
+(mark_failed_if_running) and their runs are rolled back.
 """
 from __future__ import annotations
 
@@ -21,6 +26,7 @@ class ReconcileResult:
 
     reenqueued: int = 0
     rolled_back: int = 0
+    stuck_failed: int = 0
     errors: list[str] = field(default_factory=list)
 
 
@@ -35,6 +41,9 @@ class DispatchReconciler:
             Called when re-enqueue fails to roll back the run stage.
         threshold_seconds: How long a task must be 'pending' before it's
             considered stale (default 120s).
+        stuck_threshold_seconds: How long a task can be 'running' before
+            it's considered stuck (default 900s = 15 min). Must exceed the
+            maximum Celery task time_limit (currently 660s) plus scheduler jitter.
     """
 
     def __init__(
@@ -44,11 +53,19 @@ class DispatchReconciler:
         enqueue_fn: Callable[..., Awaitable[bool]],
         rollback_fn: Callable[..., Awaitable[None]] | None = None,
         threshold_seconds: int = 120,
+        stuck_threshold_seconds: int = 900,
     ) -> None:
         self._tracking = task_tracking_service
         self._enqueue_fn = enqueue_fn
         self._rollback_fn = rollback_fn
         self._threshold_seconds = threshold_seconds
+        self._stuck_threshold_seconds = stuck_threshold_seconds
+        if stuck_threshold_seconds <= 660:
+            raise ValueError(
+                f"stuck_threshold_seconds ({stuck_threshold_seconds}) must exceed "
+                f"the maximum Celery task time_limit (660s) to avoid "
+                f"false-positive stuck detection"
+            )
 
     async def reconcile(self) -> ReconcileResult:
         """Run one reconciliation pass.
@@ -120,6 +137,61 @@ class DispatchReconciler:
                 result.rolled_back += 1
                 logger.info(
                     "Reconciler: rolled back stale task %s (run %d)",
+                    celery_task_id,
+                    run_id,
+                )
+
+
+        # --- Phase 2: stuck running tasks ---
+        stuck_tasks = await self._tracking.find_stuck_tasks(self._stuck_threshold_seconds)
+
+        for task in stuck_tasks:
+            celery_task_id = task.celery_task_id
+            run_id = task.run_id
+
+            # Mark the task as failed FIRST — this is the CAS guard.
+            # Only if the transition succeeds (task was still running)
+            # do we roll back the run.  This prevents clobbering a run
+            # whose task completed successfully between the scan and now.
+            try:
+                marked = await self._tracking.mark_failed_if_running(
+                    celery_task_id,
+                    error_code="stuck_running_timeout",
+                    error_message=(
+                        f"Task stuck in running state for >{self._stuck_threshold_seconds}s"
+                    ),
+                )
+            except Exception as exc:
+                error_msg = (
+                    f"Reconciler: failed to mark stuck task {celery_task_id} "
+                    f"as failed: {exc}"
+                )
+                logger.warning(error_msg, exc_info=True)
+                result.errors.append(error_msg)
+                marked = None
+
+            if marked is not None:
+                result.stuck_failed += 1
+                logger.info(
+                    "Reconciler: marked stuck running task %s (run %d) as failed",
+                    celery_task_id,
+                    run_id,
+                )
+                # Roll back the run stage only after confirming the task
+                # actually transitioned to failed (CAS succeeded).
+                if self._rollback_fn is not None:
+                    try:
+                        await self._rollback_fn(run_id, celery_task_id)
+                    except Exception as exc:
+                        error_msg = (
+                            f"Reconciler: stuck-task rollback failed for run {run_id} "
+                            f"(task {celery_task_id}): {exc}"
+                        )
+                        logger.error(error_msg)
+                        result.errors.append(error_msg)
+            else:
+                logger.info(
+                    "Reconciler: stuck task %s (run %d) already transitioned, skipped",
                     celery_task_id,
                     run_id,
                 )

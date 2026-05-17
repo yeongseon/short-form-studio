@@ -27,16 +27,19 @@ logger = logging.getLogger(__name__)
 # to execute.  If a user already retried (advancing the run to a new
 # stage), the conditional update will be a no-op.
 _NON_TERMINAL_GENERATING_STAGES = frozenset({
-    "GENERATING_SCRIPT",
-    "GENERATING_AUDIO",
-    "GENERATING_CAPTIONS",
-    "GENERATING_IMAGES",
-    "GENERATING_VIDEO",
-    "COMPOSITING",
-    "UPLOADING",
-    # Pre-generation stages (dispatch just happened)
-    "IDEA_REVIEW",
+    # Active generation stages (task is running or about to run)
+    "SCRIPT_GENERATING",
+    "VISUAL_PLAN_GENERATING",
+    "VISUAL_ASSET_GENERATING",
+    "AUDIO_GENERATING",
+    "SUBTITLE_GENERATING",
+    "RENDER_GENERATING",
+    # Pre-generation / review stages (dispatch just happened or user hasn't retried)
+    "IDEA_READY",
+    "VISUAL_PLAN_SETUP",
     "SCRIPT_REVIEW",
+    "VISUAL_PLAN_REVIEW",
+    "VISUAL_ASSET_REVIEW",
 })
 
 
@@ -95,14 +98,16 @@ async def _reconcile_once() -> dict[str, Any]:
         enqueue_fn=_always_fail_enqueue,
         rollback_fn=_rollback_run,
         threshold_seconds=120,
+        stuck_threshold_seconds=900,
     )
     result = await reconciler.reconcile()
     summary = {
         "reenqueued": result.reenqueued,
         "rolled_back": result.rolled_back,
+        "stuck_failed": result.stuck_failed,
         "errors": result.errors,
     }
-    if result.reenqueued or result.rolled_back or result.errors:
+    if result.reenqueued or result.rolled_back or result.stuck_failed or result.errors:
         logger.info("Reconciler pass complete: %s", summary)
     return summary
 

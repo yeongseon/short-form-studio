@@ -83,6 +83,31 @@ class PostgresTaskTrackingStorage:
         )
         return updated
 
+
+    async def update_task_status_if_running(
+        self, task_id: int, status: str, **kwargs: Any
+    ) -> dict[str, Any] | None:
+        """Atomically transition only if current status is running."""
+        updated = await fetch_one(
+            """
+            UPDATE creator_run_tasks
+            SET status = $2,
+                started_at = COALESCE($3, started_at),
+                finished_at = COALESCE($4, finished_at),
+                error_code = $5,
+                error_message = $6
+            WHERE id = $1 AND status = 'running'
+            RETURNING *
+            """,
+            task_id,
+            status,
+            kwargs.get("started_at"),
+            kwargs.get("finished_at"),
+            kwargs.get("error_code"),
+            kwargs.get("error_message"),
+        )
+        return updated
+
     async def claim_running(self, task_id: int, **kwargs: Any) -> dict[str, Any] | None:
         """Atomically claim: only transition from queued/failed to running.
 
