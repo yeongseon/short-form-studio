@@ -128,9 +128,38 @@ def _handle_sigint(_signum: int, _frame: object | None) -> None:
         prev(_signum, _frame)
 
 
+
+def validate_admin_api_key(
+    environment: str | None = None,
+    admin_key: str | None = None,
+    *,
+    _is_test_runtime: bool | None = None,
+) -> None:
+    """Validate ADMIN_API_KEY at startup. Fail-fast in production."""
+    import os as _os
+
+    # Skip validation only when explicitly requested via parameter
+    if _is_test_runtime:
+        return
+
+    raw_env = environment if environment is not None else _os.getenv("ENVIRONMENT", "development")
+    env = raw_env.strip().lower() if raw_env else "development"
+    if env != "production":
+        return
+
+    key = admin_key if admin_key is not None else _os.environ.get("ADMIN_API_KEY", "")
+    if not key or len(key) < 16:
+        logger.critical(
+            "ADMIN_API_KEY is not set or too short (min 16 chars); "
+            "refusing to start in production"
+        )
+        raise SystemExit(1)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     global _previous_sigterm_handler, _previous_sigint_handler
+    validate_admin_api_key()
     shutdown_state.is_shutting_down = False
     shutdown_state.inflight_requests = 0
     try:
