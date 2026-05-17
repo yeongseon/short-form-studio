@@ -1,7 +1,7 @@
 # pyright: reportMissingImports=false
 
 from creator_service.db import get_pool
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 
 from shorts_api.auth import CurrentUser, require_current_user
 

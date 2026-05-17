@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Annotated, Literal
 
 from creator_domain.models import RunStage
 from creator_domain.models.visual_plan import VisualScene
-from creator_service.run_service import run_service
 from creator_service.visual_plan_service import VersionConflictError, visual_plan_service
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, ValidationError

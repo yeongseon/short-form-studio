@@ -9,7 +9,6 @@ from creator_domain.models import RunStage
 from creator_domain.models.script_draft import ScriptSection
 from creator_service.json_script_parser import parse_json_scenes
 from creator_service.markdown_parser import parse_markdown
-from creator_service.project_service import project_service
 from creator_service.run_service import ConflictError, run_service
 from creator_service.script_service import script_service
 from fastapi import APIRouter, Depends, HTTPException

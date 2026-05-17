@@ -11,7 +11,6 @@ persist dispatch payloads to enable automatic re-enqueue.
 """
 from __future__ import annotations
 
-import asyncio
 
 from worker_loop import run_in_worker_loop
 import logging

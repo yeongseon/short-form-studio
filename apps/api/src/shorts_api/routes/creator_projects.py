@@ -1,7 +1,7 @@
 """Routes for creator project management."""
 
 import logging
-from typing import Any, Awaitable, Callable, Literal, cast
+from typing import Literal
 
 from creator_domain.models.project import Project
 from creator_service.artifact_download_service import artifact_download_service
