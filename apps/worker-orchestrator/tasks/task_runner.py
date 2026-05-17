@@ -52,7 +52,7 @@ from creator_provider.gpu_lock import (
     release_gpu_lock,
     renew_gpu_lock,
 )
-from creator_provider.versioned_assets import clear_loaded_asset_versions
+from creator_provider.versioned_assets import clear_loaded_asset_versions, get_loaded_asset_versions
 from creator_service.run_service import run_service as _run_service
 from creator_service.task_tracking_service import task_tracking_service as _task_tracking_service
 from creator_service.usage_service import resolve_workspace_id_from_run
@@ -155,6 +155,7 @@ async def _run_task_inner(
                 "run_id": run_id,
                 "status": "success",
                 "idempotent_skip": True,
+                "asset_versions": {},
                 "start_time": start_time.isoformat(),
                 "end_time": end_time.isoformat(),
                 "duration_seconds": 0.0,
@@ -176,6 +177,7 @@ async def _run_task_inner(
                     "run_id": run_id,
                     "status": "success",
                     "idempotent_skip": True,
+                    "asset_versions": {},
                     "start_time": start_time.isoformat(),
                     "end_time": end_time.isoformat(),
                     "duration_seconds": 0.0,
@@ -188,6 +190,7 @@ async def _run_task_inner(
                     "run_id": run_id,
                     "status": "success",
                     "idempotent_skip": True,
+                    "asset_versions": {},
                     "start_time": start_time.isoformat(),
                     "end_time": end_time.isoformat(),
                     "duration_seconds": 0.0,
@@ -295,6 +298,7 @@ async def _run_task_inner(
         "duration_seconds": (end_time - start_time).total_seconds(),
         "status": result.status,
         **result.extra,
+        "asset_versions": get_loaded_asset_versions(),
     }
 
 
