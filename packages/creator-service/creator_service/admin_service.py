@@ -321,21 +321,68 @@ class AdminService:
                 "error": "Internal error during unstick operation",
             }
 
+
+    # Unsafe glob metacharacters that could cause Redis SCAN abuse
+    _UNSAFE_PATTERN_CHARS = frozenset("[?\\")
+
+    @staticmethod
+    def _validate_cache_pattern(pattern: str) -> str | None:
+        """Validate a cache clear pattern. Returns error message or None if valid."""
+        # Reject newline/carriage-return (defense-in-depth for log injection)
+        if "\n" in pattern or "\r" in pattern:
+            return "Pattern contains unsafe newline characters"
+
+        # Must start with cache: prefix
+        if not pattern.startswith("cache:"):
+            return "Pattern must start with 'cache:' to prevent accidental data wipe"
+
+        # Reject unsafe glob metacharacters
+        for char in AdminService._UNSAFE_PATTERN_CHARS:
+            if char in pattern:
+                return f"Pattern contains unsafe character '{char}'"
+
+        # Must have a sub-namespace (cache:<sub>:...) — bare cache:* is too broad
+        after_prefix = pattern[len("cache:"):]
+        colon_pos = after_prefix.find(":")
+        if colon_pos < 1:
+            # No sub-namespace found (e.g., "cache:*", "cache:", "cache:x")
+            if "*" in after_prefix or not after_prefix:
+                return (
+                    "Pattern 'cache:*' is too broad; specify a sub-namespace "
+                    "like 'cache:model:*'"
+                )
+            # "cache:something" without colon — reject as ambiguous
+            return (
+                "Pattern must include a sub-namespace separator "
+                "(e.g., 'cache:model:*' not 'cache:model')"
+            )
+
+        # Sub-namespace segment must be alphanumeric (no wildcards in namespace)
+        sub_namespace = after_prefix[:colon_pos]
+        if not sub_namespace.replace("_", "").replace("-", "").isalnum():
+            return (
+                f"Sub-namespace '{sub_namespace}' contains invalid characters; "
+                "only alphanumeric, hyphens, and underscores are allowed"
+            )
+
+        return None
+
     async def clear_cache(
         self, key_pattern: str | None = None, dry_run: bool = False
     ) -> dict[str, Any]:
         protected_keys = {"celery", "gpu_queue"}
         deleted = 0
-        resolved_pattern = key_pattern or os.getenv("ADMIN_CACHE_CLEAR_PREFIX", "cache:*")
-        # Restrict patterns to cache namespace to prevent accidental data wipe
-        if not resolved_pattern.startswith("cache:"):
+        resolved_pattern = key_pattern or os.getenv("ADMIN_CACHE_CLEAR_PREFIX", "cache:app:*")
+        # Validate pattern safety
+        pattern_error = self._validate_cache_pattern(resolved_pattern)
+        if pattern_error is not None:
             return {
                 "ok": False,
                 "deleted_keys": 0,
                 "key_pattern": resolved_pattern,
                 "dry_run": dry_run,
                 "matched_keys": [],
-                "error": "Pattern must start with 'cache:' to prevent accidental data wipe",
+                "error": pattern_error,
             }
         matched_keys: list[str] = []
         client: redis.Redis | None = None

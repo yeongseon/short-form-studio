@@ -98,7 +98,7 @@ def test_admin_clear_cache_logs_sanitized_pattern_without_newlines(caplog) -> No
         return {
             "ok": True,
             "deleted_keys": 0,
-            "key_pattern": key_pattern or "cache:*",
+            "key_pattern": key_pattern or "cache:test:*",
             "dry_run": dry_run,
             "matched_keys": [],
         }
@@ -158,7 +158,7 @@ def test_clear_cache_returns_generic_internal_error(monkeypatch) -> None:
     service = admin_service_module.AdminService(task_broker=_FakeTaskBroker())
     monkeypatch.setattr(service, "_redis_client", lambda: _FailingRedisClient())
 
-    result = asyncio.run(service.clear_cache(key_pattern="cache:*", dry_run=False))
+    result = asyncio.run(service.clear_cache(key_pattern="cache:test:*", dry_run=False))
 
     assert result["ok"] is False
     assert result["error"] == "Internal error during cache operation"

@@ -242,28 +242,28 @@ def test_unstick_run_requires_artifacts_before_advancing(monkeypatch) -> None:
 
 def test_clear_cache_only_deletes_matching_prefix(monkeypatch) -> None:
     service = AdminService()
-    fake_redis = _FakeRedis(keys=["cache:a", "cache:b", "session:1", "gpu_queue"])
+    fake_redis = _FakeRedis(keys=["cache:test:a", "cache:test:b", "session:1", "gpu_queue"])
     monkeypatch.setattr(service, "_redis_client", lambda: fake_redis)
 
-    result = asyncio.run(service.clear_cache(key_pattern="cache:*", dry_run=False))
+    result = asyncio.run(service.clear_cache(key_pattern="cache:test:*", dry_run=False))
 
     assert result["ok"] is True
     assert result["deleted_keys"] == 2
-    assert sorted(result["matched_keys"]) == ["cache:a", "cache:b"]
-    assert sorted(fake_redis.deleted) == ["cache:a", "cache:b"]
+    assert sorted(result["matched_keys"]) == ["cache:test:a", "cache:test:b"]
+    assert sorted(fake_redis.deleted) == ["cache:test:a", "cache:test:b"]
 
 
 def test_clear_cache_dry_run_reports_without_deleting(monkeypatch) -> None:
     service = AdminService()
-    fake_redis = _FakeRedis(keys=["cache:a", "cache:b", "session:1"])
+    fake_redis = _FakeRedis(keys=["cache:test:a", "cache:test:b", "session:1"])
     monkeypatch.setattr(service, "_redis_client", lambda: fake_redis)
 
-    result = asyncio.run(service.clear_cache(key_pattern="cache:*", dry_run=True))
+    result = asyncio.run(service.clear_cache(key_pattern="cache:test:*", dry_run=True))
 
     assert result["ok"] is True
     assert result["deleted_keys"] == 0
     assert result["dry_run"] is True
-    assert sorted(result["matched_keys"]) == ["cache:a", "cache:b"]
+    assert sorted(result["matched_keys"]) == ["cache:test:a", "cache:test:b"]
     assert fake_redis.deleted == []
 
 
@@ -286,3 +286,114 @@ def test_get_system_health_with_mocked_connections(monkeypatch) -> None:
     assert result["db"]["ok"] is True
     assert result["redis"]["ok"] is True
     assert result["uptime_seconds"] >= 0
+
+
+# --- PR 1: Allowlist + unsafe pattern rejection tests ---
+
+
+def test_clear_cache_rejects_bare_cache_wildcard(monkeypatch) -> None:
+    """cache:* is too broad — must specify a sub-namespace."""
+    service = AdminService()
+    fake_redis = _FakeRedis(keys=["cache:a", "cache:b"])
+    monkeypatch.setattr(service, "_redis_client", lambda: fake_redis)
+
+    result = asyncio.run(service.clear_cache(key_pattern="cache:*", dry_run=False))
+
+    assert result["ok"] is False
+    assert "too broad" in result["error"].lower() or "specific" in result["error"].lower()
+    assert fake_redis.deleted == []
+
+
+def test_clear_cache_allows_specific_sub_namespace(monkeypatch) -> None:
+    """cache:model:* should be allowed as it targets a specific sub-namespace."""
+    service = AdminService()
+    fake_redis = _FakeRedis(keys=["cache:model:gpt4", "cache:model:claude", "cache:other:x"])
+    monkeypatch.setattr(service, "_redis_client", lambda: fake_redis)
+
+    result = asyncio.run(service.clear_cache(key_pattern="cache:model:*", dry_run=False))
+
+    assert result["ok"] is True
+    assert result["deleted_keys"] == 2
+    assert sorted(result["matched_keys"]) == ["cache:model:claude", "cache:model:gpt4"]
+
+
+def test_clear_cache_rejects_unsafe_glob_characters(monkeypatch) -> None:
+    """Patterns with [, ?, or \\ should be rejected as unsafe."""
+    service = AdminService()
+    fake_redis = _FakeRedis(keys=[])
+    monkeypatch.setattr(service, "_redis_client", lambda: fake_redis)
+
+    for unsafe_pattern in ["cache:model:[a-z]*", "cache:model:?", "cache:model:\\*"]:
+        result = asyncio.run(service.clear_cache(key_pattern=unsafe_pattern, dry_run=False))
+        assert result["ok"] is False, f"Pattern {unsafe_pattern} should be rejected"
+        assert "unsafe" in result["error"].lower() or "character" in result["error"].lower()
+
+
+def test_clear_cache_rejects_pattern_without_sub_namespace(monkeypatch) -> None:
+    """cache:something without a colon separator after sub-namespace should be rejected."""
+    service = AdminService()
+    fake_redis = _FakeRedis(keys=[])
+    monkeypatch.setattr(service, "_redis_client", lambda: fake_redis)
+
+    # "cache:x" with no trailing colon or wildcard after sub-namespace
+    result = asyncio.run(service.clear_cache(key_pattern="cache:", dry_run=False))
+    assert result["ok"] is False
+
+
+def test_clear_cache_allows_exact_key_in_sub_namespace(monkeypatch) -> None:
+    """cache:model:gpt4 (exact key, no wildcard) should be allowed."""
+    service = AdminService()
+    fake_redis = _FakeRedis(keys=["cache:model:gpt4"])
+    monkeypatch.setattr(service, "_redis_client", lambda: fake_redis)
+
+    result = asyncio.run(service.clear_cache(key_pattern="cache:model:gpt4", dry_run=False))
+
+    assert result["ok"] is True
+    assert result["deleted_keys"] == 1
+
+
+def test_clear_cache_default_pattern_uses_env_with_sub_namespace(monkeypatch) -> None:
+    """Default pattern from env should also pass validation."""
+    monkeypatch.setenv("ADMIN_CACHE_CLEAR_PREFIX", "cache:session:*")
+    service = AdminService()
+    fake_redis = _FakeRedis(keys=["cache:session:abc"])
+    monkeypatch.setattr(service, "_redis_client", lambda: fake_redis)
+
+    result = asyncio.run(service.clear_cache(key_pattern=None, dry_run=False))
+
+    assert result["ok"] is True
+
+
+def test_clear_cache_default_env_bare_wildcard_rejected(monkeypatch) -> None:
+    """Even the env default should be rejected if it's cache:*."""
+    monkeypatch.setenv("ADMIN_CACHE_CLEAR_PREFIX", "cache:*")
+    service = AdminService()
+    fake_redis = _FakeRedis(keys=["cache:a"])
+    monkeypatch.setattr(service, "_redis_client", lambda: fake_redis)
+
+    result = asyncio.run(service.clear_cache(key_pattern=None, dry_run=False))
+
+    assert result["ok"] is False
+
+
+def test_clear_cache_rejects_wildcard_in_namespace_segment(monkeypatch) -> None:
+    """cache:*:* and cache:model*:* should be rejected — wildcard in namespace."""
+    service = AdminService()
+    fake_redis = _FakeRedis(keys=[])
+    monkeypatch.setattr(service, "_redis_client", lambda: fake_redis)
+
+    for bypass_pattern in ["cache:*:*", "cache:model*:*", "cache:*:gpt4"]:
+        result = asyncio.run(service.clear_cache(key_pattern=bypass_pattern, dry_run=False))
+        assert result["ok"] is False, f"Pattern {bypass_pattern} should be rejected"
+        assert fake_redis.deleted == []
+
+
+def test_clear_cache_rejects_newline_in_pattern(monkeypatch) -> None:
+    """Newlines in patterns should be rejected at service level (defense-in-depth)."""
+    service = AdminService()
+    fake_redis = _FakeRedis(keys=[])
+    monkeypatch.setattr(service, "_redis_client", lambda: fake_redis)
+
+    result = asyncio.run(service.clear_cache(key_pattern="cache:test:*\nFORGED", dry_run=False))
+    assert result["ok"] is False
+    assert "newline" in result["error"].lower()
