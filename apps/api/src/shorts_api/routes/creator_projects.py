@@ -106,16 +106,38 @@ async def list_projects(
     }
 
 
-async def _cleanup_project_resources(project_id: int) -> list[int]:
+async def _cleanup_project_resources(project_id: int, workspace_id: int) -> list[int]:
     runs = await run_service.list_runs_by_project(project_id)
+    # Mark each run cancelled BEFORE revoking tasks.  This blocks any
+    # concurrent dispatch (the same barrier delete_run uses) so no new
+    # artifacts can be created while we clean up storage.
+    # Fail-closed: if any cancel write fails, abort the entire deletion
+    # rather than risk orphaning storage objects.
     for r in runs:
-        await creator_runs_utils._revoke_active_tasks_for_run(r.id)
+        try:
+            await run_service.storage.update_run(
+                r.id, {"status": "cancelled"}, workspace_id=workspace_id
+            )
+        except Exception:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Unable to mark run {r.id} as cancelled before project deletion; retry later",
+            ) from None
+    for r in runs:
+        revoke_ok = await creator_runs_utils._revoke_active_tasks_for_run(r.id)
+        if not revoke_ok:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Unable to reliably revoke tasks for run {r.id}; retry later",
+            )
     return [r.id for r in runs]
 
 
-async def _remove_run_artifacts(run_ids: list[int]) -> None:
+async def _remove_run_artifacts(run_ids: list[int]) -> int:
+    total_failures = 0
     for rid in run_ids:
-        await artifact_download_service.delete_artifacts_for_run(rid)
+        total_failures += await artifact_download_service.delete_artifacts_for_run(rid)
+    return total_failures
 
 
 @router.delete("/{project_id}")
@@ -124,10 +146,36 @@ async def delete_project(
     access: tuple[CurrentUser, Project] = Depends(require_project_access),
 ) -> dict[str, object]:
     user, project = access
-    run_ids = await _cleanup_project_resources(project.id)
+
+    # Mark project as "deleting" BEFORE enumerating runs.  This closes
+    # the TOCTOU race where POST /projects/{id}/runs could create a new
+    # run after list_runs_by_project() but before the final DB delete,
+    # leaving the new run's artifacts permanently orphaned.
+    try:
+        await project_service.db.update_project(
+            project.id, {"status": "deleting"}, workspace_id=user.workspace_id
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to mark project as deleting; retry later",
+        ) from None
+
+    run_ids = await _cleanup_project_resources(project.id, workspace_id=user.workspace_id)
+
+    # Delete storage artifacts BEFORE DB rows.  artifact_download_service
+    # queries creator_artifacts by run_id — those rows must still exist.
+    # If we deleted project/runs first (with FK CASCADE), the artifact
+    # query would return nothing and storage objects would be orphaned.
+    artifact_failures = await _remove_run_artifacts(run_ids)
+    if artifact_failures:
+        raise HTTPException(
+            status_code=503,
+            detail=f"{artifact_failures} artifact(s) could not be deleted from storage; retry later",
+        )
+
     deleted = await project_service.delete_project(project_id, workspace_id=user.workspace_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    await _remove_run_artifacts(run_ids)
     return {"deleted": True, "project_id": project_id}

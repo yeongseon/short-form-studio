@@ -56,7 +56,7 @@ class ArtifactDownloadService:
     async def get_artifact_by_id(self, artifact_id: int) -> dict[str, Any] | None:
         return await self.storage.get_artifact_by_id(artifact_id)
 
-    async def delete_artifacts_for_run(self, run_id: int) -> None:
+    async def delete_artifacts_for_run(self, run_id: int) -> int:
         artifacts = await fetch_all(
             "SELECT id, storage_key, storage_provider FROM creator_artifacts WHERE run_id = $1",
             run_id,
@@ -95,7 +95,7 @@ class ArtifactDownloadService:
             )
 
         if failed_count or os.getenv("STORAGE_BACKEND", "local") != "local":
-            return
+            return failed_count
 
         artifact_root = Path(os.getenv("ARTIFACT_ROOT", "data/artifacts"))
         run_dir = artifact_root / str(run_id)
@@ -109,6 +109,7 @@ class ArtifactDownloadService:
                 run_dir.rmdir()
             except Exception:
                 logger.exception("Failed deleting local run directory '%s'", run_dir)
+        return failed_count
 
 
 def _create_storage() -> ArtifactDownloadStorageBackend:

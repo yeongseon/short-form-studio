@@ -397,3 +397,61 @@ def test_restart_run_cas_miss_stale_still_raises_conflict() -> None:
         asyncio.run(
             service.restart_run(created.id, RunStage.SCRIPT_GENERATING.value, workspace_id=8)
         )
+
+
+def test_create_run_raises_conflict_when_project_is_deleting() -> None:
+    """Atomic write-boundary guard: create_run must refuse if the project
+    has been marked 'deleting' between the auth check and the INSERT.
+
+    This tests the service-layer guard (which delegates to storage).
+    In production, PostgresRunStorage enforces this atomically via SQL.
+    For InMemoryRunStorage we simulate by setting a project_status_checker.
+    """
+    storage = InMemoryRunStorage()
+    # Simulate: project 7 is being deleted
+    storage.project_status_checker = lambda pid: "deleting"
+    service = RunService(storage)
+
+    with pytest.raises(ConflictError, match="(?i)delet"):
+        asyncio.run(
+            service.create_run(
+                project_id=7,
+                model_defaults=None,
+                style_preset="default",
+                workspace_id=1,
+            )
+        )
+
+
+def test_postgres_create_run_query_includes_workspace_id_and_row_lock():
+    """The INSERT...SELECT CTE must scope by workspace_id and use FOR UPDATE."""
+    import ast
+    import textwrap
+    from pathlib import Path
+
+    src = Path("packages/creator-service/creator_service/postgres_run_storage.py").read_text()
+    tree = ast.parse(src)
+
+    # Find the create_run method and extract the SQL string
+    sql_found = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            val = node.value.lower()
+            if "insert into creator_runs" in val and "creator_projects" in val:
+                sql_found = val
+                break
+
+    assert sql_found is not None, "Could not find INSERT...SELECT query in postgres_run_storage.py"
+
+    # Must use CTE with FOR UPDATE
+    assert "for update" in sql_found, "Query must use FOR UPDATE to lock the project row"
+
+    # Must scope by workspace_id in the CTE WHERE clause (not just anywhere in the query)
+    import re as _re
+    cte_match = _re.search(r"with\s+\w+\s+as\s*\((.+?)\)", sql_found, _re.DOTALL)
+    assert cte_match is not None, "Could not extract CTE body from query"
+    cte_body = cte_match.group(1)
+    assert "workspace_id" in cte_body, "CTE WHERE clause must scope by workspace_id"
+
+    # Must be a CTE (WITH ... AS)
+    assert "with " in sql_found and " as" in sql_found, "Query must use a CTE (WITH ... AS)"

@@ -156,10 +156,24 @@ class StubRunService:
         )
 
 
+class _StubProjectDb:
+    """Minimal stub for project_service.db used by delete_project route."""
+
+    def __init__(self) -> None:
+        self.update_project_calls: list[tuple[int, dict]] = []
+
+    async def update_project(
+        self, project_id: int, updates: dict, *, workspace_id: int | None = None
+    ) -> dict | None:
+        self.update_project_calls.append((project_id, updates))
+        return {"id": project_id, **updates}
+
+
 class StubProjectService:
     def __init__(self) -> None:
         self.projects: dict[int, StubProject] = {}
         self.delete_project_calls: list[int] = []
+        self.db = _StubProjectDb()
 
     async def delete_project(self, project_id: int, workspace_id: int | None = None) -> bool:
         self.delete_project_calls.append(project_id)
@@ -170,8 +184,9 @@ class StubRevokeTasks:
     def __init__(self) -> None:
         self.calls: list[int] = []
 
-    async def __call__(self, run_id: int) -> None:
+    async def __call__(self, run_id: int) -> bool:
         self.calls.append(run_id)
+        return True
 
 
 class StubCollectCeleryIds:
@@ -199,8 +214,9 @@ class StubArtifactLifecycleService:
     def __init__(self) -> None:
         self.delete_artifacts_for_run_calls: list[int] = []
 
-    async def delete_artifacts_for_run(self, run_id: int) -> None:
+    async def delete_artifacts_for_run(self, run_id: int) -> int:
         self.delete_artifacts_for_run_calls.append(run_id)
+        return 0
 
 
 def _iter_api_routes(routes: Sequence[object]) -> list[APIRoute]:
@@ -256,6 +272,10 @@ def stub_lifecycle_services(
     async def _require_run_access(run_id: int) -> tuple[CurrentUser, StubPipelineRun]:
         run = run_svc.runs.get(run_id)
         if run is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Run not found")
+        if run.workspace_id != 1:
             from fastapi import HTTPException
 
             raise HTTPException(status_code=404, detail="Run not found")
@@ -523,7 +543,7 @@ async def test_go_back_returns_404_for_workspace_mismatch(client, stub_lifecycle
     response = await client.post("/api/creator/runs/130/go-back")
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "Run 130 not found"}
+    assert response.json() == {"detail": "Run not found"}
 
 
 @pytest.mark.asyncio
@@ -539,7 +559,7 @@ async def test_update_model_defaults_returns_404_for_workspace_mismatch(
     )
 
     assert response.status_code == 404
-    assert response.json() == {"detail": "Run 131 not found"}
+    assert response.json() == {"detail": "Run not found"}
 
 
 @pytest.mark.asyncio

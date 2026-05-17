@@ -10,7 +10,7 @@ from creator_domain.models.script_draft import ScriptSection
 from creator_service.json_script_parser import parse_json_scenes
 from creator_service.markdown_parser import parse_markdown
 from creator_service.project_service import project_service
-from creator_service.run_service import run_service
+from creator_service.run_service import ConflictError, run_service
 from creator_service.script_service import script_service
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, ValidationError
@@ -50,6 +50,12 @@ async def import_markdown(
     if not request.markdown.strip():
         raise HTTPException(status_code=400, detail="markdown content must not be empty")
 
+    if getattr(project, "status", None) == "deleting":
+        raise HTTPException(
+            status_code=409,
+            detail="Project is being deleted; cannot create new runs",
+        )
+
     validate_model_defaults(request.model_defaults)
 
     try:
@@ -65,6 +71,11 @@ async def import_markdown(
             run_id=run.id,
             source_type="pasted_markdown",
             markdown_content=request.markdown,
+        )
+    except ConflictError:
+        raise HTTPException(
+            status_code=409,
+            detail="Project is being deleted; cannot create new runs",
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -92,6 +103,12 @@ async def import_json(
     if not request.json_script.strip():
         raise HTTPException(status_code=400, detail="JSON content must not be empty")
 
+    if getattr(project, "status", None) == "deleting":
+        raise HTTPException(
+            status_code=409,
+            detail="Project is being deleted; cannot create new runs",
+        )
+
     validate_model_defaults(request.model_defaults)
 
     try:
@@ -118,6 +135,11 @@ async def import_json(
             source_type="pasted_json",
             markdown_content=rebuilt_markdown,
             structured_script=sections,
+        )
+    except ConflictError:
+        raise HTTPException(
+            status_code=409,
+            detail="Project is being deleted; cannot create new runs",
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

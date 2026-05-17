@@ -110,15 +110,30 @@ async def create_run(
 ) -> dict[str, object]:
     user, project = access
 
+    # Reject if project is being deleted — prevents TOCTOU race where a
+    # new run could be created after delete_project enumerates runs but
+    # before the final DB delete, orphaning the new run's artifacts.
+    if getattr(project, "status", None) == "deleting":
+        raise HTTPException(
+            status_code=409,
+            detail="Project is being deleted; cannot create new runs",
+        )
+
     validate_model_defaults(request.model_defaults)
 
-    run = await run_service.create_run(
-        project_id=project_id,
-        model_defaults=request.model_defaults,
-        style_preset=request.style_preset,
-        metadata=request.metadata,
-        workspace_id=user.workspace_id,
-    )
+    try:
+        run = await run_service.create_run(
+            project_id=project_id,
+            model_defaults=request.model_defaults,
+            style_preset=request.style_preset,
+            metadata=request.metadata,
+            workspace_id=user.workspace_id,
+        )
+    except ConflictError:
+        raise HTTPException(
+            status_code=409,
+            detail="Project is being deleted; cannot create new runs",
+        )
     return run.model_dump(mode="json")
 
 

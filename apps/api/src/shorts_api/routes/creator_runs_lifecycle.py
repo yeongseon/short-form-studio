@@ -115,6 +115,8 @@ async def delete_run(
         await run_service.storage.update_run(
             run_id, {"status": "cancelled"}, workspace_id=user.workspace_id
         )
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Run not found") from None
     except Exception:
         raise HTTPException(
             status_code=503,
@@ -127,16 +129,34 @@ async def delete_run(
         celery_ids = collect_result
         collect_reliable = True
 
+    # Revoke active tasks first to prevent workers from producing new artifacts.
+    # Fail-closed: if revocation is unreliable, abort — in-flight workers
+    # could produce new artifacts between cleanup and DB deletion.
+    revoke_result = await _revoke_celery_ids(celery_ids, run.id)
+    revoke_reliable = bool(revoke_result) if revoke_result is not None else True
+    if not (collect_reliable and revoke_reliable):
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to reliably revoke active tasks for run; retry later",
+        )
+
+    # Delete storage artifacts BEFORE DB rows.  artifact_download_service
+    # queries creator_artifacts by run_id — those rows must still exist.
+    # If we deleted DB rows first (with FK CASCADE), the artifact query
+    # would return nothing and storage objects would be orphaned forever.
+    artifact_failures = await artifact_download_service.delete_artifacts_for_run(run_id)
+    if artifact_failures:
+        raise HTTPException(
+            status_code=503,
+            detail=f"{artifact_failures} artifact(s) could not be deleted from storage; retry later",
+        )
+
     try:
         deleted = await run_service.delete_run(run_id, workspace_id=user.workspace_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     if not deleted:
         raise HTTPException(status_code=404, detail="Run not found")
-
-    revoke_result = await _revoke_celery_ids(celery_ids, run.id)
-    revoke_reliable = bool(revoke_result) if revoke_result is not None else True
-    await artifact_download_service.delete_artifacts_for_run(run_id)
 
     return {
         "deleted": True,

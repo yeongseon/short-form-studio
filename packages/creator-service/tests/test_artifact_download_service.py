@@ -71,8 +71,9 @@ async def test_delete_artifacts_for_run_deletes_storage_and_db_rows(
     )
 
     service = ArtifactDownloadService(InMemoryArtifactDownloadStorage())
-    await service.delete_artifacts_for_run(77)
+    result = await service.delete_artifacts_for_run(77)
 
+    assert result == 0
     assert deleted_keys == ["77/audio.mp3", "77/video.mp4"]
     assert deleted_rows == [[11, 12]]
 
@@ -109,8 +110,9 @@ async def test_delete_artifacts_for_run_only_deletes_successful_rows_when_some_f
     )
 
     service = ArtifactDownloadService(InMemoryArtifactDownloadStorage())
-    await service.delete_artifacts_for_run(88)
+    result = await service.delete_artifacts_for_run(88)
 
+    assert result == 1
     assert deleted_keys == ["88/audio.mp3", "88/video.mp4"]
     assert deleted_rows == [[21]]
 
@@ -143,8 +145,9 @@ async def test_delete_artifacts_for_run_keeps_all_rows_when_all_deletes_fail(
     )
 
     service = ArtifactDownloadService(InMemoryArtifactDownloadStorage())
-    await service.delete_artifacts_for_run(89)
+    result = await service.delete_artifacts_for_run(89)
 
+    assert result == 2
     assert deleted_rows == []
 
 
@@ -176,8 +179,9 @@ async def test_delete_artifacts_for_run_local_backend_cleans_run_directory(
     )
 
     service = ArtifactDownloadService(InMemoryArtifactDownloadStorage())
-    await service.delete_artifacts_for_run(55)
+    result = await service.delete_artifacts_for_run(55)
 
+    assert result == 0
     assert not run_dir.exists()
 
 
@@ -209,6 +213,7 @@ async def test_delete_artifacts_for_run_skips_local_cleanup_when_any_delete_fail
     )
 
     service = ArtifactDownloadService(InMemoryArtifactDownloadStorage())
-    await service.delete_artifacts_for_run(56)
+    result = await service.delete_artifacts_for_run(56)
 
+    assert result == 1
     assert run_dir.exists()

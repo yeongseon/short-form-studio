@@ -84,8 +84,16 @@ class InMemoryRunStorage:
     def __init__(self) -> None:
         self._rows: dict[int, dict[str, Any]] = {}
         self._next_id = 1
+        self.project_status_checker: Any | None = None
 
     async def create_run(self, row: dict[str, Any]) -> dict[str, Any]:
+        if self.project_status_checker is not None:
+            project_id = row.get("project_id")
+            status = self.project_status_checker(project_id)
+            if status == "deleting":
+                raise ConflictError(
+                    f"Project {project_id} is being deleted; cannot create new runs"
+                )
         now = datetime.now(timezone.utc)
         saved = {
             "id": self._next_id,

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .db import fetch_all, fetch_one
+from .run_service import ConflictError
 
 _UPDATABLE_COLUMNS = {
     "project_id",
@@ -23,6 +24,11 @@ class PostgresRunStorage:
     async def create_run(self, row: dict[str, Any]) -> dict[str, Any]:
         saved = await fetch_one(
             """
+            WITH proj AS (
+                SELECT id FROM creator_projects
+                WHERE id = $1 AND workspace_id = $2 AND status <> 'deleting'
+                FOR UPDATE
+            )
             INSERT INTO creator_runs (
                 project_id,
                 workspace_id,
@@ -36,7 +42,8 @@ class PostgresRunStorage:
                 started_at,
                 finished_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+            FROM proj
             RETURNING *
             """,
             row.get("project_id"),
@@ -52,7 +59,9 @@ class PostgresRunStorage:
             row.get("finished_at"),
         )
         if saved is None:
-            raise ValueError("Failed to create run")
+            raise ConflictError(
+                f"Project {row.get('project_id')} is being deleted; cannot create new runs"
+            )
         return saved
 
     async def get_run(self, run_id: int, workspace_id: int | None = None) -> dict[str, Any] | None:

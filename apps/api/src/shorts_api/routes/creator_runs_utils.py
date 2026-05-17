@@ -105,10 +105,14 @@ def validate_model_defaults(model_defaults: Mapping[str, str] | None) -> None:
         validator(value)
 
 
-async def _revoke_active_tasks_for_run(run_id: int) -> None:
-    """Collect and revoke active tasks for a run (use when run still exists)."""
-    celery_ids, _ = await _collect_active_celery_ids(run_id)
-    await _revoke_celery_ids(celery_ids, run_id)
+async def _revoke_active_tasks_for_run(run_id: int) -> bool:
+    """Collect and revoke active tasks for a run (use when run still exists).
+
+    Returns True when all revocations succeeded, False otherwise.
+    """
+    celery_ids, collected = await _collect_active_celery_ids(run_id)
+    revoked = await _revoke_celery_ids(celery_ids, run_id)
+    return collected and revoked
 
 
 async def _has_active_tasks_for_run(run_id: int) -> bool:

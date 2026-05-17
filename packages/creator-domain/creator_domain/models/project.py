@@ -16,7 +16,7 @@ class Project(BaseModel):
     markdown_source: str | None = None
     url_source: str | None = None
     json_script: str | None = None
-    status: Literal["draft", "active", "completed", "archived"] = "draft"
+    status: Literal["draft", "active", "completed", "archived", "deleting"] = "draft"
     created_at: datetime
     updated_at: datetime
 
