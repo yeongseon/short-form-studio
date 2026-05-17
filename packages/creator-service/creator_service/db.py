@@ -91,3 +91,20 @@ async def execute(query: str, *args: Any) -> str:
     pool = await get_pool()
     async with pool.acquire() as connection:
         return await connection.execute(query, *args)
+
+
+@contextlib.asynccontextmanager
+async def transaction():
+    """Yield an asyncpg connection inside an explicit transaction.
+
+    Usage::
+
+        async with transaction() as conn:
+            rows = await conn.fetch("SELECT ... FOR UPDATE SKIP LOCKED")
+            # rows remain locked until the transaction commits
+            await conn.execute("DELETE ...")
+    """
+    pool = await get_pool()
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            yield connection
