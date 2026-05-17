@@ -151,7 +151,7 @@ def _patch_registry(monkeypatch: pytest.MonkeyPatch, registry: FakeRegistry) -> 
 
 def _patch_redis(monkeypatch: pytest.MonkeyPatch, redis_client: object) -> None:
     redis_stub = SimpleNamespace(Redis=SimpleNamespace(from_url=lambda _: redis_client))
-    monkeypatch.setattr(generate_subtitles_module, "redis", redis_stub)
+    monkeypatch.setattr("tasks.task_runner.redis", redis_stub)
 
 
 def _patch_services(
@@ -164,7 +164,7 @@ def _patch_services(
     monkeypatch.setattr(generate_subtitles_module, "_script_service", script_service)
     monkeypatch.setattr(generate_subtitles_module, "_audio_service", audio_service)
     monkeypatch.setattr(generate_subtitles_module, "_subtitle_service", subtitle_service)
-    monkeypatch.setattr(generate_subtitles_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
 
 
 def _invoke_task(**kwargs: Any) -> dict[str, object]:
@@ -184,13 +184,11 @@ def test_generate_subtitles_success(monkeypatch: pytest.MonkeyPatch) -> None:
     lock_calls: list[str] = []
     release_calls: list[str] = []
     monkeypatch.setattr(
-        generate_subtitles_module,
-        "acquire_gpu_lock",
+        "tasks.task_runner.acquire_gpu_lock",
         lambda _, task_id: (lock_calls.append(task_id) or f"{task_id}:fake-token"),
     )
     monkeypatch.setattr(
-        generate_subtitles_module,
-        "release_gpu_lock",
+        "tasks.task_runner.release_gpu_lock",
         lambda _, token: release_calls.append(token.split(":")[0]) or True,
     )
 

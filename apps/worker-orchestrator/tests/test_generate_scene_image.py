@@ -239,7 +239,7 @@ def _patch_registry(monkeypatch: pytest.MonkeyPatch, registry: FakeRegistry) -> 
 
 def _patch_redis(monkeypatch: pytest.MonkeyPatch, redis_client: object) -> None:
     redis_stub = SimpleNamespace(Redis=SimpleNamespace(from_url=lambda _: redis_client))
-    monkeypatch.setattr(generate_scene_image_module, "redis", redis_stub)
+    monkeypatch.setattr("tasks.task_runner.redis", redis_stub)
 
 
 def _patch_services(
@@ -253,6 +253,7 @@ def _patch_services(
     monkeypatch.setattr(
         generate_scene_image_module, "_run_service", SimpleNamespace(storage=storage)
     )
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
 
 
 def _invoke_task(**kwargs: Any) -> dict[str, object]:
@@ -278,13 +279,11 @@ def test_happy_path_single_scene_with_gpu_lock(monkeypatch: pytest.MonkeyPatch) 
     lock_calls: list[str] = []
     release_calls: list[str] = []
     monkeypatch.setattr(
-        generate_scene_image_module,
-        "acquire_gpu_lock",
+        "tasks.task_runner.acquire_gpu_lock",
         lambda client, task_id: (lock_calls.append(task_id) or f"{task_id}:fake-token"),
     )
     monkeypatch.setattr(
-        generate_scene_image_module,
-        "release_gpu_lock",
+        "tasks.task_runner.release_gpu_lock",
         lambda client, token: release_calls.append(token.split(":")[0]) or True,
     )
 
@@ -350,13 +349,11 @@ def test_happy_path_without_gpu_lock(monkeypatch: pytest.MonkeyPatch) -> None:
 
     # GPU lock should NOT be called
     monkeypatch.setattr(
-        generate_scene_image_module,
-        "acquire_gpu_lock",
+        "tasks.task_runner.acquire_gpu_lock",
         lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")),
     )
     monkeypatch.setattr(
-        generate_scene_image_module,
-        "release_gpu_lock",
+        "tasks.task_runner.release_gpu_lock",
         lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")),
     )
 
@@ -682,11 +679,10 @@ def test_gpu_lock_timeout_single_scene(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_redis(monkeypatch, redis_client)
 
     monkeypatch.setattr(
-        generate_scene_image_module,
-        "acquire_gpu_lock",
+        "tasks.task_runner.acquire_gpu_lock",
         lambda *_: (_ for _ in ()).throw(TimeoutError("lock timeout")),
     )
-    monkeypatch.setattr(generate_scene_image_module, "release_gpu_lock", lambda *_: None)
+    monkeypatch.setattr("tasks.task_runner.release_gpu_lock", lambda *_: None)
 
     plan = FakeVisualPlan(run_id=501, scenes=[FakeVisualScene()])
     vp_service = FakeVisualPlanService(plan=plan)
@@ -712,10 +708,9 @@ def test_releases_gpu_lock_when_provider_fails(monkeypatch: pytest.MonkeyPatch) 
     _patch_redis(monkeypatch, redis_client)
 
     released: list[str] = []
-    monkeypatch.setattr(generate_scene_image_module, "acquire_gpu_lock", lambda *_: True)
+    monkeypatch.setattr("tasks.task_runner.acquire_gpu_lock", lambda *_: True)
     monkeypatch.setattr(
-        generate_scene_image_module,
-        "release_gpu_lock",
+        "tasks.task_runner.release_gpu_lock",
         lambda _, task_id: released.append(task_id) or True,
     )
 
@@ -743,10 +738,9 @@ def test_release_gpu_lock_failure_does_not_mask_scene_error(
     redis_client = object()
     _patch_redis(monkeypatch, redis_client)
 
-    monkeypatch.setattr(generate_scene_image_module, "acquire_gpu_lock", lambda *_: True)
+    monkeypatch.setattr("tasks.task_runner.acquire_gpu_lock", lambda *_: True)
     monkeypatch.setattr(
-        generate_scene_image_module,
-        "release_gpu_lock",
+        "tasks.task_runner.release_gpu_lock",
         lambda *_: (_ for _ in ()).throw(ConnectionError("redis gone")),
     )
 

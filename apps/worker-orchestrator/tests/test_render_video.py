@@ -275,7 +275,7 @@ def _patch_services(
     fake_visual_plan: FakeVisualPlanService | None = None,
     fake_script: FakeScriptService | None = None,
 ) -> None:
-    monkeypatch.setattr(render_video_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
     monkeypatch.setattr(render_video_module, "_render_service", fake_render_service)
     monkeypatch.setattr(render_video_module, "_visual_asset_service", fake_vas)
     monkeypatch.setattr(render_video_module, "_audio_service", fake_audio)
@@ -581,7 +581,7 @@ def test_render_video_profile_propagated_to_ffmpeg(monkeypatch: pytest.MonkeyPat
         captured_profiles.append(profile)
         return fake_ffmpeg
 
-    monkeypatch.setattr(render_video_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
     monkeypatch.setattr(render_video_module, "_render_service", fake_render_service)
     monkeypatch.setattr(render_video_module, "_visual_asset_service", fake_vas)
     monkeypatch.setattr(render_video_module, "_audio_service", fake_audio)

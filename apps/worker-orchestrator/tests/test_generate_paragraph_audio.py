@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from tasks import task_runner
 from tasks import generate_paragraph_audio as module
 
 
@@ -133,7 +134,7 @@ def _patch_registry(monkeypatch: pytest.MonkeyPatch, registry: FakeRegistry) -> 
 
 def _patch_redis(monkeypatch: pytest.MonkeyPatch, redis_client: object) -> None:
     redis_stub = SimpleNamespace(Redis=SimpleNamespace(from_url=lambda _: redis_client))
-    monkeypatch.setattr(module, "redis", redis_stub)
+    monkeypatch.setattr("tasks.task_runner.redis", redis_stub)
 
 
 def _invoke_task(**kwargs: Any) -> dict[str, object]:
@@ -149,8 +150,7 @@ def test_generate_paragraph_audio_success(monkeypatch: pytest.MonkeyPatch) -> No
 
     audio_service = FakeAudioService(artifact_id=33)
     monkeypatch.setattr(
-        module,
-        "_run_service",
+        "tasks.task_runner._run_service",
         FakeRunService(
             {
                 "current_stage": "AUDIO_GENERATING",
@@ -216,20 +216,17 @@ def test_generate_paragraph_audio_with_gpu_lock(monkeypatch: pytest.MonkeyPatch)
     lock_calls: list[str] = []
     release_calls: list[str] = []
     monkeypatch.setattr(
-        module,
-        "acquire_gpu_lock",
+        "tasks.task_runner.acquire_gpu_lock",
         lambda _, task_id: (lock_calls.append(task_id) or f"{task_id}:fake-token"),
     )
     monkeypatch.setattr(
-        module,
-        "release_gpu_lock",
+        "tasks.task_runner.release_gpu_lock",
         lambda _, token: release_calls.append(token.split(":")[0]) or True,
     )
 
     audio_service = FakeAudioService(artifact_id=61)
     monkeypatch.setattr(
-        module,
-        "_run_service",
+        "tasks.task_runner._run_service",
         FakeRunService(
             {
                 "current_stage": "AUDIO_GENERATING",
@@ -265,20 +262,17 @@ def test_generate_paragraph_audio_provider_failure(monkeypatch: pytest.MonkeyPat
     lock_calls: list[str] = []
     release_calls: list[str] = []
     monkeypatch.setattr(
-        module,
-        "acquire_gpu_lock",
+        "tasks.task_runner.acquire_gpu_lock",
         lambda _, task_id: (lock_calls.append(task_id) or f"{task_id}:fake-token"),
     )
     monkeypatch.setattr(
-        module,
-        "release_gpu_lock",
+        "tasks.task_runner.release_gpu_lock",
         lambda _, token: release_calls.append(token.split(":")[0]) or True,
     )
 
     audio_service = FakeAudioService()
     monkeypatch.setattr(
-        module,
-        "_run_service",
+        "tasks.task_runner._run_service",
         FakeRunService(
             {
                 "current_stage": "AUDIO_GENERATING",
@@ -311,8 +305,7 @@ def test_generate_paragraph_audio_sanitizes_section_id(monkeypatch: pytest.Monke
 
     audio_service = FakeAudioService(artifact_id=78)
     monkeypatch.setattr(
-        module,
-        "_run_service",
+        "tasks.task_runner._run_service",
         FakeRunService(
             {
                 "current_stage": "AUDIO_GENERATING",
@@ -345,7 +338,7 @@ def test_generate_paragraph_audio_section_not_found(monkeypatch: pytest.MonkeyPa
     _patch_registry(monkeypatch, FakeRegistry(entry=entry, provider=provider))
 
     monkeypatch.setattr(
-        module, "_run_service", FakeRunService({"current_stage": "AUDIO_GENERATING"})
+        "tasks.task_runner._run_service", FakeRunService({"current_stage": "AUDIO_GENERATING"})
     )
     monkeypatch.setattr(
         module, "_script_service", FakeScriptService(FakeDraft(structured_script=[]))
@@ -367,8 +360,7 @@ def test_generate_paragraph_audio_rejects_when_run_stage_is_not_audio(
 
     audio_service = FakeAudioService(artifact_id=79)
     monkeypatch.setattr(
-        module,
-        "_run_service",
+        "tasks.task_runner._run_service",
         FakeRunService(
             {
                 "current_stage": "SCRIPT_REVIEW",
@@ -385,7 +377,7 @@ def test_generate_paragraph_audio_rejects_when_run_stage_is_not_audio(
     monkeypatch.setattr(module, "_audio_service", audio_service)
 
     with pytest.raises(
-        module._task_runner.StageGuardError, match="Run 109 is in stage SCRIPT_REVIEW"
+        task_runner.StageGuardError, match="Run 109 is in stage SCRIPT_REVIEW"
     ):
         _invoke_task(run_id=109, section_id="hook-9")
 
@@ -406,8 +398,7 @@ def test_generate_paragraph_audio_uses_active_draft_not_run_script_data(
     )
     monkeypatch.setattr(module, "_script_service", script_service)
     monkeypatch.setattr(
-        module,
-        "_run_service",
+        "tasks.task_runner._run_service",
         FakeRunService(
             {
                 "current_stage": "AUDIO_GENERATING",

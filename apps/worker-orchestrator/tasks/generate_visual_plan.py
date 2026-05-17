@@ -7,37 +7,21 @@ import json
 import logging
 from typing import Any
 
-redis: Any
-try:
-    import redis
-except ImportError:
-    redis = None
 
 from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
 from creator_domain.models.visual_plan import VisualScene
 from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
-from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.cost_config import COST_VISUAL_PLAN
-from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
 from creator_service.telemetry import trace_task
 from creator_service.usage_service import record_provider_call
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
-from tasks import task_runner as _task_runner
 from tasks.task_runner import GpuLockContext, TaskContext, TaskResult, TaskRunnerConfig, run_task
 
 logger = logging.getLogger(__name__)
-
-
-def _sync_runner_dependencies() -> None:
-    _task_runner._run_service = _run_service
-    _task_runner.redis = redis
-    _task_runner.acquire_gpu_lock = acquire_gpu_lock
-    _task_runner.release_gpu_lock = release_gpu_lock
-
 
 def _build_system_prompt(style_preset: str | None = None) -> str:
     base = (
@@ -56,7 +40,6 @@ def _build_system_prompt(style_preset: str | None = None) -> str:
         base += f"\n\nStyle preset: {style_preset}"
     return base
 
-
 def _build_sections_prompt(sections: list[dict[str, Any]]) -> str:
     lines: list[str] = []
     for section in sections:
@@ -65,7 +48,6 @@ def _build_sections_prompt(sections: list[dict[str, Any]]) -> str:
         text = section.get("text", "")
         lines.append(f"[{section_id}] ({section_type}): {text}")
     return "\n".join(lines)
-
 
 def _parse_llm_response(raw: str, sections: list[dict[str, Any]]) -> list[VisualScene]:
     cleaned = raw.strip()
@@ -113,7 +95,6 @@ def _parse_llm_response(raw: str, sections: list[dict[str, Any]]) -> list[Visual
         scenes.append(scene)
     return scenes
 
-
 @celery_app.task(
     bind=True,
     autoretry_for=(ProviderTimeoutError, RateLimitError),
@@ -131,7 +112,6 @@ def generate_visual_plan(
     model_key: str = "qwen3-4b",
     style_preset: str | None = None,
 ) -> dict[str, object]:
-    _sync_runner_dependencies()
     config = TaskRunnerConfig(
         task_name="generate_visual_plan",
         allowed_stages=frozenset({RunStage.VISUAL_PLAN_SETUP, RunStage.VISUAL_PLAN_GENERATING}),

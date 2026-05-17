@@ -12,7 +12,7 @@ handler (which marks the run FAILED via conditional_update_run).
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, Mock
 
 import pytest
 from celery.exceptions import SoftTimeLimitExceeded
@@ -40,11 +40,11 @@ def test_generate_script_propagates_soft_timeout(monkeypatch: pytest.MonkeyPatch
     mock_run_service = MagicMock()
     mock_run_service.storage = mock_storage
 
-    monkeypatch.setattr(mod, "_run_service", mock_run_service)
+    monkeypatch.setattr("tasks.task_runner._run_service", mock_run_service)
 
     # Mock GPU lock
-    monkeypatch.setattr(mod, "acquire_gpu_lock", AsyncMock(return_value="lock-1"))
-    monkeypatch.setattr(mod, "release_gpu_lock", AsyncMock())
+    monkeypatch.setattr("tasks.task_runner.acquire_gpu_lock", Mock(return_value="lock-1"))
+    monkeypatch.setattr("tasks.task_runner.release_gpu_lock", Mock())
 
     # Mock ProviderRegistry to return a provider that raises SoftTimeLimitExceeded
     mock_provider = AsyncMock()

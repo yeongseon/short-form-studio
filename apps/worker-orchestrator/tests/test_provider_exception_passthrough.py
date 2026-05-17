@@ -183,7 +183,7 @@ def test_generate_audio_preserves_provider_timeout(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(generate_audio_module, "_script_service", script_service)
     monkeypatch.setattr(generate_audio_module, "_audio_service", audio_service)
-    monkeypatch.setattr(generate_audio_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
 
     task = generate_audio_module.generate_audio
     run_callable = getattr(task, "run", task)
@@ -202,7 +202,7 @@ def test_generate_audio_preserves_rate_limit(monkeypatch: pytest.MonkeyPatch) ->
 
     monkeypatch.setattr(generate_audio_module, "_script_service", script_service)
     monkeypatch.setattr(generate_audio_module, "_audio_service", audio_service)
-    monkeypatch.setattr(generate_audio_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
 
     task = generate_audio_module.generate_audio
     run_callable = getattr(task, "run", task)
@@ -262,9 +262,7 @@ def test_generate_paragraph_audio_preserves_provider_timeout(
 
     monkeypatch.setattr(generate_paragraph_audio_module, "_script_service", script_service)
     monkeypatch.setattr(generate_paragraph_audio_module, "_audio_service", audio_service)
-    monkeypatch.setattr(
-        generate_paragraph_audio_module, "_run_service", SimpleNamespace(storage=storage)
-    )
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
 
     task = generate_paragraph_audio_module.generate_paragraph_audio
     run_callable = getattr(task, "run", task)
@@ -289,9 +287,7 @@ def test_generate_paragraph_audio_preserves_rate_limit(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(generate_paragraph_audio_module, "_script_service", script_service)
     monkeypatch.setattr(generate_paragraph_audio_module, "_audio_service", audio_service)
-    monkeypatch.setattr(
-        generate_paragraph_audio_module, "_run_service", SimpleNamespace(storage=storage)
-    )
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
 
     task = generate_paragraph_audio_module.generate_paragraph_audio
     run_callable = getattr(task, "run", task)
@@ -310,7 +306,7 @@ def test_generate_script_preserves_provider_timeout(monkeypatch: pytest.MonkeyPa
     _patch_registry(monkeypatch, generate_script_module, _FakeRegistry(_FakeEntry(), provider))
 
     storage = _make_storage(run_id=1, stage="SCRIPT_GENERATING")
-    monkeypatch.setattr(generate_script_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
     monkeypatch.setattr(generate_script_module, "_script_service", _FakeScriptService())
 
     task = generate_script_module.generate_script
@@ -325,7 +321,7 @@ def test_generate_script_preserves_rate_limit(monkeypatch: pytest.MonkeyPatch) -
     _patch_registry(monkeypatch, generate_script_module, _FakeRegistry(_FakeEntry(), provider))
 
     storage = _make_storage(run_id=1, stage="SCRIPT_GENERATING")
-    monkeypatch.setattr(generate_script_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
     monkeypatch.setattr(generate_script_module, "_script_service", _FakeScriptService())
 
     task = generate_script_module.generate_script
@@ -354,9 +350,7 @@ def test_generate_visual_plan_preserves_provider_timeout(monkeypatch: pytest.Mon
 
     draft = _FakeScriptDraft(markdown_content="Test script content")
     storage = _make_storage(run_id=1, stage="VISUAL_PLAN_GENERATING")
-    monkeypatch.setattr(
-        generate_visual_plan_module, "_run_service", SimpleNamespace(storage=storage)
-    )
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
     monkeypatch.setattr(
         generate_visual_plan_module, "_script_service", _FakeScriptService(draft=draft)
     )
@@ -377,9 +371,7 @@ def test_generate_visual_plan_preserves_rate_limit(monkeypatch: pytest.MonkeyPat
 
     draft = _FakeScriptDraft(markdown_content="Test script content")
     storage = _make_storage(run_id=1, stage="VISUAL_PLAN_GENERATING")
-    monkeypatch.setattr(
-        generate_visual_plan_module, "_run_service", SimpleNamespace(storage=storage)
-    )
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
     monkeypatch.setattr(
         generate_visual_plan_module, "_script_service", _FakeScriptService(draft=draft)
     )
@@ -427,6 +419,7 @@ def test_generate_scene_image_propagates_provider_timeout(monkeypatch: pytest.Mo
     _patch_registry(monkeypatch, generate_scene_image_module, _FakeRegistry(_FakeEntry(), provider))
 
     storage = _make_storage(run_id=1, stage="VISUAL_ASSET_GENERATING")
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
     monkeypatch.setattr(
         generate_scene_image_module, "_run_service", SimpleNamespace(storage=storage)
     )
@@ -447,6 +440,7 @@ def test_generate_scene_image_propagates_rate_limit(monkeypatch: pytest.MonkeyPa
     _patch_registry(monkeypatch, generate_scene_image_module, _FakeRegistry(_FakeEntry(), provider))
 
     storage = _make_storage(run_id=1, stage="VISUAL_ASSET_GENERATING")
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
     monkeypatch.setattr(
         generate_scene_image_module, "_run_service", SimpleNamespace(storage=storage)
     )
@@ -485,7 +479,7 @@ def test_generate_subtitles_preserves_provider_timeout(monkeypatch: pytest.Monke
 
     draft = _FakeScriptDraft(markdown_content="Test script")
     storage = _make_storage(run_id=1, stage="SUBTITLE_GENERATING")
-    monkeypatch.setattr(generate_subtitles_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
     monkeypatch.setattr(
         generate_subtitles_module, "_script_service", _FakeScriptService(draft=draft)
     )
@@ -507,7 +501,7 @@ def test_generate_subtitles_preserves_rate_limit(monkeypatch: pytest.MonkeyPatch
 
     draft = _FakeScriptDraft(markdown_content="Test script")
     storage = _make_storage(run_id=1, stage="SUBTITLE_GENERATING")
-    monkeypatch.setattr(generate_subtitles_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
     monkeypatch.setattr(
         generate_subtitles_module, "_script_service", _FakeScriptService(draft=draft)
     )
@@ -563,9 +557,7 @@ def test_generate_paragraph_subtitles_preserves_provider_timeout(
     )
 
     storage = _make_storage(run_id=1, stage="SUBTITLE_GENERATING")
-    monkeypatch.setattr(
-        generate_paragraph_subtitles_module, "_run_service", SimpleNamespace(storage=storage)
-    )
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
     monkeypatch.setattr(
         generate_paragraph_subtitles_module, "_subtitle_service", _FakeSubtitleService()
     )
@@ -604,9 +596,7 @@ def test_generate_paragraph_subtitles_preserves_rate_limit(
     )
 
     storage = _make_storage(run_id=1, stage="SUBTITLE_GENERATING")
-    monkeypatch.setattr(
-        generate_paragraph_subtitles_module, "_run_service", SimpleNamespace(storage=storage)
-    )
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
     monkeypatch.setattr(
         generate_paragraph_subtitles_module, "_subtitle_service", _FakeSubtitleService()
     )
@@ -642,9 +632,7 @@ def test_generate_paragraph_subtitles_rejects_path_traversal(
     )
 
     storage = _make_storage(run_id=1, stage="SUBTITLE_GENERATING")
-    monkeypatch.setattr(
-        generate_paragraph_subtitles_module, "_run_service", SimpleNamespace(storage=storage)
-    )
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
     monkeypatch.setattr(
         generate_paragraph_subtitles_module, "_subtitle_service", _FakeSubtitleService()
     )
@@ -680,9 +668,7 @@ def test_generate_paragraph_subtitles_rejects_symlink_escape(
     )
 
     storage = _make_storage(run_id=1, stage="SUBTITLE_GENERATING")
-    monkeypatch.setattr(
-        generate_paragraph_subtitles_module, "_run_service", SimpleNamespace(storage=storage)
-    )
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
     monkeypatch.setattr(
         generate_paragraph_subtitles_module, "_subtitle_service", _FakeSubtitleService()
     )

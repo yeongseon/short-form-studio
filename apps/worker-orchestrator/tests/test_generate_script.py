@@ -120,7 +120,7 @@ def _patch_registry(monkeypatch: pytest.MonkeyPatch, registry: FakeRegistry) -> 
 
 def _patch_redis(monkeypatch: pytest.MonkeyPatch, redis_client: object) -> None:
     redis_stub = SimpleNamespace(Redis=SimpleNamespace(from_url=lambda _: redis_client))
-    monkeypatch.setattr(generate_script_module, "redis", redis_stub)
+    monkeypatch.setattr("tasks.task_runner.redis", redis_stub)
 
 
 def _patch_services(
@@ -129,7 +129,7 @@ def _patch_services(
     storage: FakeStorage,
 ) -> None:
     monkeypatch.setattr(generate_script_module, "_script_service", script_service)
-    monkeypatch.setattr(generate_script_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
 
 
 def _invoke_task(**kwargs: Any) -> dict[str, object]:
@@ -158,13 +158,11 @@ def test_generate_script_happy_path_local_model_with_gpu_lock(
     release_calls: list[str] = []
 
     monkeypatch.setattr(
-        generate_script_module,
-        "acquire_gpu_lock",
+        "tasks.task_runner.acquire_gpu_lock",
         lambda client, task_id: (lock_calls.append(task_id) or f"{task_id}:fake-token"),
     )
     monkeypatch.setattr(
-        generate_script_module,
-        "release_gpu_lock",
+        "tasks.task_runner.release_gpu_lock",
         lambda client, token: release_calls.append(token.split(":")[0]) or True,
     )
 
@@ -196,13 +194,11 @@ def test_generate_script_happy_path_external_model_without_gpu_lock(
     _patch_registry(monkeypatch, registry)
 
     monkeypatch.setattr(
-        generate_script_module,
-        "acquire_gpu_lock",
+        "tasks.task_runner.acquire_gpu_lock",
         lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")),
     )
     monkeypatch.setattr(
-        generate_script_module,
-        "release_gpu_lock",
+        "tasks.task_runner.release_gpu_lock",
         lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")),
     )
 
@@ -299,11 +295,10 @@ def test_generate_script_gpu_lock_timeout(monkeypatch: pytest.MonkeyPatch) -> No
     _patch_redis(monkeypatch, redis_client)
 
     monkeypatch.setattr(
-        generate_script_module,
-        "acquire_gpu_lock",
+        "tasks.task_runner.acquire_gpu_lock",
         lambda *_: (_ for _ in ()).throw(TimeoutError("lock timeout")),
     )
-    monkeypatch.setattr(generate_script_module, "release_gpu_lock", lambda *_: None)
+    monkeypatch.setattr("tasks.task_runner.release_gpu_lock", lambda *_: None)
 
     script_service = FakeScriptService()
     storage = _make_storage(run_id=105, stage="IDEA_READY")
@@ -326,10 +321,9 @@ def test_generate_script_releases_gpu_lock_when_llm_fails(monkeypatch: pytest.Mo
     _patch_redis(monkeypatch, redis_client)
 
     released: list[str] = []
-    monkeypatch.setattr(generate_script_module, "acquire_gpu_lock", lambda *_: "run-106:fake-token")
+    monkeypatch.setattr("tasks.task_runner.acquire_gpu_lock", lambda *_: "run-106:fake-token")
     monkeypatch.setattr(
-        generate_script_module,
-        "release_gpu_lock",
+        "tasks.task_runner.release_gpu_lock",
         lambda _, token: released.append(token.split(":")[0]) or True,
     )
 
@@ -466,10 +460,9 @@ def test_release_gpu_lock_failure_still_propagates_original_error(
     redis_client = object()
     _patch_redis(monkeypatch, redis_client)
 
-    monkeypatch.setattr(generate_script_module, "acquire_gpu_lock", lambda *_: "run-400:fake-token")
+    monkeypatch.setattr("tasks.task_runner.acquire_gpu_lock", lambda *_: "run-400:fake-token")
     monkeypatch.setattr(
-        generate_script_module,
-        "release_gpu_lock",
+        "tasks.task_runner.release_gpu_lock",
         lambda *_: (_ for _ in ()).throw(ConnectionError("redis gone")),
     )
 

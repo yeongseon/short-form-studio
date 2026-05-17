@@ -18,14 +18,12 @@ from creator_service.cost_config import COST_RENDER_VIDEO
 from creator_service.ffmpeg_service import FFmpegService, RenderInput
 from creator_service.render_profile import RenderProfile
 from creator_service.render_service import render_service as _render_service
-from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
 from creator_service.telemetry import trace_task
 from creator_service.usage_service import record_provider_call
 from creator_service.visual_asset_service import visual_asset_service as _visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
-from tasks import task_runner as _task_runner
 from tasks.task_runner import TaskContext, TaskResult, TaskRunnerConfig, run_task
 
 logger = logging.getLogger(__name__)
@@ -54,18 +52,12 @@ _PROFILE_REGISTRY: dict[str, Callable[[], RenderProfile]] = {
     "fast_preview": RenderProfile.fast_preview,
 }
 
-
-def _sync_runner_dependencies() -> None:
-    _task_runner._run_service = _run_service
-
-
 def _resolve_profile(name: str) -> RenderProfile:
     factory = _PROFILE_REGISTRY.get(name)
     if factory is None:
         logger.warning("Unknown render profile %r, falling back to default", name)
         return RenderProfile.default()
     return factory()
-
 
 def _validate_manifest_render_profile(raw_profile: Any) -> dict[str, Any]:
     if not isinstance(raw_profile, dict):
@@ -84,10 +76,8 @@ def _validate_manifest_render_profile(raw_profile: Any) -> dict[str, Any]:
 
     return raw_profile
 
-
 def _validate_manifest_path(path: str) -> None:
     validate_artifact_path(path, _ARTIFACT_ROOT)
-
 
 @celery_app.task(
     bind=True,
@@ -101,7 +91,6 @@ def _validate_manifest_path(path: str) -> None:
 )
 @trace_task("render_video")
 def render_video(self, run_id: int, render_profile: str = "shorts_default") -> dict[str, object]:
-    _sync_runner_dependencies()
     config = TaskRunnerConfig(
         task_name="render_video",
         allowed_stages=frozenset({RunStage.RENDER_GENERATING}),

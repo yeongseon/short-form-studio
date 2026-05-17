@@ -6,39 +6,22 @@ from __future__ import annotations
 import logging
 import os
 import wave
-from typing import Any
 
-redis: Any
-try:
-    import redis
-except ImportError:
-    redis = None
 
 from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
 from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
-from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
 from creator_provider.registry import ProviderRegistry
 from creator_service.audio_service import audio_service as _audio_service
 from creator_service.cost_config import COST_AUDIO_GENERATION
-from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
 from creator_service.telemetry import trace_task
 from creator_service.usage_service import record_provider_call
-from tasks import task_runner as _task_runner
 from tasks.task_runner import GpuLockContext, TaskContext, TaskResult, TaskRunnerConfig, run_task
 
 logger = logging.getLogger(__name__)
 _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
-
-
-def _sync_runner_dependencies() -> None:
-    _task_runner._run_service = _run_service
-    _task_runner.redis = redis
-    _task_runner.acquire_gpu_lock = acquire_gpu_lock
-    _task_runner.release_gpu_lock = release_gpu_lock
-
 
 def _get_wav_duration_seconds(path: str) -> float | None:
     try:
@@ -50,7 +33,6 @@ def _get_wav_duration_seconds(path: str) -> float | None:
     except Exception:
         logger.warning("Could not determine audio duration for %s", path, exc_info=True)
         return None
-
 
 @celery_app.task(
     bind=True,
@@ -69,7 +51,6 @@ def generate_audio(
     tts_model: str = "qwen3-tts",
     voice: str = "default",
 ) -> dict[str, object]:
-    _sync_runner_dependencies()
     config = TaskRunnerConfig(
         task_name="generate_audio",
         allowed_stages=frozenset({RunStage.VISUAL_ASSET_REVIEW, RunStage.AUDIO_GENERATING}),

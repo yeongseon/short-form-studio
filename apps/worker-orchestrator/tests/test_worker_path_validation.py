@@ -80,8 +80,7 @@ def test_generate_subtitles_rejects_traversal_audio_artifact_path(
 ) -> None:
     monkeypatch.setattr(generate_subtitles_module, "ProviderRegistry", _Registry)
     monkeypatch.setattr(
-        generate_subtitles_module,
-        "_run_service",
+        "tasks.task_runner._run_service",
         SimpleNamespace(storage=_Storage(run_id=311, stage="AUDIO_GENERATING")),
     )
     monkeypatch.setattr(
@@ -129,8 +128,7 @@ def test_render_video_rejects_traversal_manifest_paths(monkeypatch: pytest.Monke
     }
 
     monkeypatch.setattr(
-        render_video_module,
-        "_run_service",
+        "tasks.task_runner._run_service",
         SimpleNamespace(storage=_Storage(run_id=run_id, stage="RENDER_GENERATING")),
     )
     monkeypatch.setattr(render_video_module, "_render_service", _RenderService(manifest))
@@ -172,8 +170,7 @@ def test_generate_subtitles_rejects_absolute_path_when_artifact_root_unset(
     monkeypatch.setattr(generate_subtitles_module, "_ARTIFACT_ROOT", "data/artifacts")
     monkeypatch.setattr(generate_subtitles_module, "ProviderRegistry", _Registry)
     monkeypatch.setattr(
-        generate_subtitles_module,
-        "_run_service",
+        "tasks.task_runner._run_service",
         SimpleNamespace(storage=_Storage(run_id=500, stage="AUDIO_GENERATING")),
     )
     monkeypatch.setattr(
@@ -218,8 +215,7 @@ def test_render_video_rejects_absolute_path_when_artifact_root_unset(
     }
 
     monkeypatch.setattr(
-        render_video_module,
-        "_run_service",
+        "tasks.task_runner._run_service",
         SimpleNamespace(storage=_Storage(run_id=run_id, stage="RENDER_GENERATING")),
     )
     monkeypatch.setattr(render_video_module, "_render_service", _RenderService(manifest))

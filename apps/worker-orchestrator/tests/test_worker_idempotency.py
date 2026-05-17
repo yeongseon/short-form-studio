@@ -253,7 +253,9 @@ def test_generate_script_passes_idempotency_key(monkeypatch) -> None:
 
         storage = _TrackingStorage()
 
-        async def record_task_start(self, run_id: int, task_name: str, task_id: str) -> SimpleNamespace:
+        async def record_task_start(
+            self, run_id: int, task_name: str, task_id: str
+        ) -> SimpleNamespace:
             return SimpleNamespace(status="running")
 
         async def mark_success(self, task_id: str) -> None:
@@ -268,7 +270,6 @@ def test_generate_script_passes_idempotency_key(monkeypatch) -> None:
     monkeypatch.setattr(
         generate_script_module, "record_provider_call", lambda *args, **kwargs: asyncio.sleep(0)
     )
-    monkeypatch.setattr(generate_script_module, "_run_service", SimpleNamespace(storage=_Storage()))
     monkeypatch.setattr(task_runner, "_run_service", SimpleNamespace(storage=_Storage()))
     monkeypatch.setattr(task_runner, "_task_tracking_service", _Tracking())
 
@@ -296,9 +297,7 @@ class _TrackingServiceRaceStub:
         self.storage = _TrackingStorageStubRace()
         self.started = 0
 
-    async def record_task_start(
-        self, run_id: int, task_name: str, task_id: str
-    ) -> SimpleNamespace:
+    async def record_task_start(self, run_id: int, task_name: str, task_id: str) -> SimpleNamespace:
         self.started += 1
         # Return status="success" to simulate concurrent completion
         return SimpleNamespace(status="success")
@@ -368,7 +367,10 @@ def test_inmemory_update_task_status_refuses_overwrite_success() -> None:
 
 def test_record_task_start_returns_success_when_concurrent_completion() -> None:
     """record_task_start returns success RunTask when update_task_status returns None."""
-    from creator_service.task_tracking_service import TaskTrackingService, InMemoryTaskTrackingStorage
+    from creator_service.task_tracking_service import (
+        TaskTrackingService,
+        InMemoryTaskTrackingStorage,
+    )
 
     storage = InMemoryTaskTrackingStorage()
     service = TaskTrackingService(storage)
@@ -395,7 +397,12 @@ def test_task_runner_skips_when_claim_fails(monkeypatch) -> None:
     class _ClaimFailedTracking:
         class _Storage:
             async def get_by_celery_id(self, task_id: str) -> dict[str, Any] | None:
-                return {"celery_task_id": task_id, "status": "running", "run_id": 1, "task_type": "generate_script"}
+                return {
+                    "celery_task_id": task_id,
+                    "status": "running",
+                    "run_id": 1,
+                    "task_type": "generate_script",
+                }
 
         storage = _Storage()
 
@@ -455,6 +462,7 @@ def test_task_runner_raises_when_claim_errors(monkeypatch) -> None:
         return task_runner.TaskResult(status="success")
 
     import pytest
+
     with pytest.raises(RuntimeError, match="DB connection lost"):
         run(task_runner._run_task_inner(1, "task-err-1", _config(), _execute))
 
