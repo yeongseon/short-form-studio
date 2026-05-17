@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import importlib
 import sys
 
@@ -229,3 +231,69 @@ def test_load_otel_handles_import_error(monkeypatch) -> None:
     monkeypatch.setattr(builtins, "__import__", _mock_import)
 
     assert module._load_otel() is None
+
+
+def test_init_telemetry_graceful_degradation_on_provider_crash(monkeypatch) -> None:
+    """If OTEL provider setup raises, telemetry disables gracefully instead of crashing."""
+    _reset_state()
+    monkeypatch.setenv("OTEL_ENABLED", "true")
+
+    def _exploding_otel():
+        fake = _fake_otel_map()
+        # Make TracerProvider constructor crash
+        orig_tp = fake["TracerProvider"]
+
+        def _bad_tp(*args, **kwargs):
+            raise RuntimeError("OTLP endpoint unreachable")
+
+        fake["TracerProvider"] = _bad_tp
+        return fake
+
+    monkeypatch.setattr(telemetry, "_load_otel", _exploding_otel)
+
+    # Should NOT raise
+    telemetry.init_telemetry("svc")
+
+    assert telemetry._STATE.initialized is True
+    assert telemetry._STATE.enabled is False
+
+    # NoOp fallbacks should still work
+    tracer = telemetry.get_tracer("svc")
+    assert hasattr(tracer, "start_as_current_span")
+    meter = telemetry.get_meter("svc")
+    assert hasattr(meter, "create_counter")
+
+
+def test_init_telemetry_enabled_sets_logging_handler(monkeypatch) -> None:
+    """Happy path: LoggingHandler + set_logger_provider are exercised when available."""
+    _reset_state()
+    monkeypatch.setenv("OTEL_ENABLED", "true")
+    monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
+
+    fake = _fake_otel_map()
+
+    class _FakeLoggingHandler:
+        def __init__(self, level, logger_provider):
+            self.level = level
+            self.logger_provider = logger_provider
+
+    provider_set = {}
+
+    def _fake_set_logger_provider(provider):
+        provider_set["provider"] = provider
+
+    fake["LoggingHandler"] = _FakeLoggingHandler
+    fake["set_logger_provider"] = _fake_set_logger_provider
+
+    monkeypatch.setattr(telemetry, "_load_otel", lambda: fake)
+
+    telemetry.init_telemetry("svc")
+
+    assert telemetry._STATE.enabled is True
+    assert "provider" in provider_set
+
+    # Cleanup: remove fake handlers/filters added to root logger to avoid cross-test pollution
+    root = logging.getLogger()
+    root.handlers = [h for h in root.handlers if not isinstance(h, _FakeLoggingHandler)]
+    root.filters = [f for f in root.filters if not isinstance(f, telemetry.TraceContextFilter)]
+    _reset_state()
