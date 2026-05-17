@@ -21,6 +21,7 @@ from typing import Any
 from celery import Celery
 from celery.signals import after_setup_logger, task_failure, worker_process_init
 from importlib import import_module
+import worker_loop as _worker_loop_module  # noqa: F401 — register signal handlers
 from creator_service.logging_config import setup_json_logging
 from kombu import Exchange, Queue
 

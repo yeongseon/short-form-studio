@@ -12,6 +12,8 @@ persist dispatch payloads to enable automatic re-enqueue.
 from __future__ import annotations
 
 import asyncio
+
+from worker_loop import run_in_worker_loop
 import logging
 from typing import Any
 
@@ -108,4 +110,4 @@ async def _reconcile_once() -> dict[str, Any]:
 @celery_app.task(name="reconcile_stale_dispatches", ignore_result=True)
 def reconcile_stale_dispatches() -> dict[str, Any]:
     """Celery task: reconcile stale pending dispatches."""
-    return asyncio.run(_reconcile_once())
+    return run_in_worker_loop(_reconcile_once())

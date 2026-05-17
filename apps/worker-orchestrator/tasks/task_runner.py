@@ -35,6 +35,8 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+
+from worker_loop import run_in_worker_loop
 import logging
 import os
 from dataclasses import dataclass, field
@@ -332,7 +334,7 @@ def run_task(
 ) -> dict[str, object]:
     """Synchronous entry point for Celery tasks. Handles all error cases.
 
-    This wraps asyncio.run() and provides consistent error handling:
+    This wraps run_in_worker_loop() and provides consistent error handling:
     - StageGuardError → mark_rejected, re-raise (no FAILED transition)
     - SoftTimeLimitExceeded → FAILED transition, re-raise
     - Retryable errors → re-raise for Celery retry
@@ -366,10 +368,10 @@ def run_task(
     safe_failure_stages = config.safe_failure_stages or config.safe_stages
 
     try:
-        return asyncio.run(_run_task_inner(validated_run_id, task_id, config, execute))
+        return run_in_worker_loop(_run_task_inner(validated_run_id, task_id, config, execute))
     except StageGuardError:
         try:
-            asyncio.run(_task_tracking_service.mark_rejected(task_id, "stage_guard"))
+            run_in_worker_loop(_task_tracking_service.mark_rejected(task_id, "stage_guard"))
         except Exception:
             logger.warning("Failed to record task rejection", exc_info=True)
         if config.raise_on_stage_guard:
@@ -378,7 +380,7 @@ def run_task(
     except SoftTimeLimitExceeded:
         logger.error("Task %s timed out for run %s", config.task_name, validated_run_id)
         try:
-            asyncio.run(
+            run_in_worker_loop(
                 _run_service.storage.conditional_update_run(
                     validated_run_id,
                     {"current_stage": RunStage.FAILED.value, "status": "failed"},
@@ -393,7 +395,7 @@ def run_task(
     except Exception as exc:
         if isinstance(exc, config.no_fail_transition_exceptions):
             try:
-                asyncio.run(
+                run_in_worker_loop(
                     _task_tracking_service.mark_failed(task_id, type(exc).__name__, str(exc)[:500])
                 )
             except Exception:
@@ -405,7 +407,7 @@ def run_task(
         ):
             raise
         try:
-            asyncio.run(
+            run_in_worker_loop(
                 _handle_general_failure(
                     task_id,
                     validated_run_id,
