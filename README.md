@@ -180,6 +180,18 @@ docker compose --profile gpu up -d
 docker compose run --rm api alembic upgrade head
 ```
 
+### 3.5. Bootstrap an API key (first time only)
+
+```bash
+docker compose run --rm api python scripts/create_api_key.py \
+  --email local@example.com \
+  --workspace local \
+  --name local-dev
+```
+
+This creates a user, workspace, and API key for local development.
+The generated key is printed to stdout.
+
 ### 4. (Optional) Pull the default LLM model
 
 Only needed when using the `gpu` profile for local AI inference.
@@ -228,10 +240,26 @@ Key settings:
 
 | Variable | Description | Default |
 |---|---|---|
-| `API_KEY` | API authentication key (leave empty for open access) | _(empty)_ |
 | `CORS_ORIGINS` | Allowed CORS origins | `http://localhost:5174` |
 | `ARTIFACT_ROOT` | Path for generated artifacts | `./data/artifacts` |
 | `OLLAMA_DEFAULT_MODEL` | Default LLM model | `qwen3:4b` |
+
+## API Authentication
+
+Creator APIs (`/api/creator/*`) are protected by DB-backed API keys.
+
+Clients must include one of:
+- `X-API-Key: <key>` header
+- `Authorization: Bearer <key>` header
+
+The key must exist in the `api_keys` table (matched via SHA-256 hash) and be
+associated with a user who belongs to at least one workspace.
+
+For multi-workspace users, specify workspace context with:
+- `X-Workspace-Id: <workspace_id>` header
+
+Admin APIs (`/api/admin/*`) use a separate `ADMIN_API_KEY` env var and
+`X-Admin-Key` header.
 
 ## Development
 
