@@ -114,7 +114,7 @@ def _resolve_workspace_id(
 class ApiKeyMiddleware(BaseHTTPMiddleware):
     """Starlette middleware that resolves user context from API keys."""
 
-    def __init__(self, app, *, api_key: str | None = None) -> None:
+    def __init__(self, app) -> None:
         super().__init__(app)
 
     async def _get_pool(self):

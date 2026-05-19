@@ -111,6 +111,8 @@ def contract_services(
     script_svc = StubScriptService()
     audio_svc = StubAudioService()
 
+    monkeypatch.setattr("creator_service.run_service.run_service", run_svc)
+
     task_counter = {"value": 0}
 
     def dispatch_audio(**kwargs: object) -> str:

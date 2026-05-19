@@ -17,7 +17,7 @@ from shorts_api.auth import (
 from starlette.requests import Request
 
 
-def _make_app(api_key: str | None = None) -> FastAPI:
+def _make_app() -> FastAPI:
     """Create a minimal FastAPI app with the auth middleware."""
     test_app = FastAPI()
     test_app.add_middleware(
@@ -27,7 +27,7 @@ def _make_app(api_key: str | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    test_app.add_middleware(ApiKeyMiddleware, api_key=api_key)
+    test_app.add_middleware(ApiKeyMiddleware)
 
     @test_app.get("/health")
     async def health():
@@ -106,7 +106,7 @@ async def authed_client(api_key, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("shorts_api.auth.fetch_one", _fetch_one_stub)
     monkeypatch.setattr("shorts_api.auth.ApiKeyMiddleware._get_pool", _get_pool_stub)
 
-    app = _make_app(api_key=api_key)
+    app = _make_app()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
@@ -189,7 +189,7 @@ async def test_query_param_api_key_rejected(authed_client, api_key):
 
 @pytest.mark.asyncio
 async def test_empty_string_api_key_requires_auth():
-    app = _make_app(api_key="")
+    app = _make_app()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         response = await ac.get("/api/creator/data")
@@ -289,7 +289,7 @@ async def test_middleware_without_workspace_membership_returns_404(api_key, monk
 
     monkeypatch.setattr("shorts_api.auth.ApiKeyMiddleware._get_pool", _get_pool_stub)
 
-    app = _make_app(api_key=api_key)
+    app = _make_app()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         response = await ac.get("/api/creator/data", headers={"X-API-Key": api_key})

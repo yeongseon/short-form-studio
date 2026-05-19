@@ -94,7 +94,7 @@ def _make_auth_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    test_app.add_middleware(ApiKeyMiddleware, api_key=None)
+    test_app.add_middleware(ApiKeyMiddleware)
 
     @test_app.get("/healthz")
     async def healthz():
