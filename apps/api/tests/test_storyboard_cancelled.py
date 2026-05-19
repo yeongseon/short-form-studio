@@ -9,7 +9,7 @@ import pytest
 
 from shorts_api.auth import require_run_access, CurrentUser
 from shorts_api.main import app
-from shorts_api.routes import creator_runs_storyboard
+from shorts_api.routes import creator_runs_storyboard, storyboard_dispatch
 
 
 def _make_cancelled_run() -> Any:
@@ -135,12 +135,7 @@ async def test_dispatch_blocked_on_concurrent_cancellation(
         "shorts_api.routes.creator_runs_storyboard.check_workspace_quota",
         _mock_check_workspace_quota,
     )
-    monkeypatch.setattr(
-        creator_runs_storyboard,
-        "run_service",
-        SimpleNamespace(get_run=_mock_get_run),
-        raising=False,
-    )
+    monkeypatch.setattr("creator_service.run_service.run_service.get_run", _mock_get_run)
 
     try:
         resp = await client.post(
@@ -211,26 +206,21 @@ async def test_record_task_queued_failure_revokes_task(
         "shorts_api.routes.creator_runs_storyboard.check_workspace_quota",
         _mock_check_workspace_quota,
     )
-    monkeypatch.setattr(
-        creator_runs_storyboard,
-        "run_service",
-        SimpleNamespace(get_run=_mock_get_run),
-        raising=False,
-    )
+    monkeypatch.setattr("creator_service.run_service.run_service.get_run", _mock_get_run)
     monkeypatch.setattr(
         "shorts_api.routes.creator_runs_storyboard.dispatch_paragraph_audio",
         lambda **kwargs: "task-123",
     )
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_storyboard.task_tracking_service.record_task_queued",
+        "shorts_api.routes.storyboard_dispatch.task_tracking_service.record_task_queued",
         _mock_record_task_queued,
     )
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_storyboard.task_tracking_service.mark_tasks_revoked",
+        "shorts_api.routes.storyboard_dispatch.task_tracking_service.mark_tasks_revoked",
         _mock_mark_tasks_revoked,
     )
     monkeypatch.setattr(
-        creator_runs_storyboard,
+        storyboard_dispatch,
         "__import__",
         lambda name: SimpleNamespace(celery_app=celery_app)
         if name == "celery_app"
@@ -319,11 +309,11 @@ async def test_post_dispatch_revoke_on_concurrent_cancellation(
         _mock_check_workspace_quota,
     )
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_storyboard.cancel_workspace_quota_reservation",
+        "shorts_api.routes.storyboard_dispatch.cancel_workspace_quota_reservation",
         _mock_cancel_workspace_quota_reservation,
     )
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_storyboard._get_fresh_run_for_dispatch",
+        "shorts_api.routes.storyboard_dispatch._get_fresh_run_for_dispatch",
         _mock_get_fresh_run_for_dispatch,
     )
     monkeypatch.setattr(
@@ -331,15 +321,15 @@ async def test_post_dispatch_revoke_on_concurrent_cancellation(
         lambda **kwargs: "task-123",
     )
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_storyboard.task_tracking_service.record_task_queued",
+        "shorts_api.routes.storyboard_dispatch.task_tracking_service.record_task_queued",
         _mock_record_task_queued,
     )
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_storyboard.task_tracking_service.mark_tasks_revoked",
+        "shorts_api.routes.storyboard_dispatch.task_tracking_service.mark_tasks_revoked",
         _mock_mark_tasks_revoked,
     )
     monkeypatch.setattr(
-        creator_runs_storyboard,
+        storyboard_dispatch,
         "__import__",
         lambda name: SimpleNamespace(celery_app=celery_app)
         if name == "celery_app"
@@ -441,11 +431,11 @@ async def test_bulk_audio_post_dispatch_revoke_on_concurrent_cancellation(
         _mock_check_workspace_quota,
     )
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_storyboard.cancel_workspace_quota_reservation",
+        "shorts_api.routes.storyboard_dispatch.cancel_workspace_quota_reservation",
         _mock_cancel_workspace_quota_reservation,
     )
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_storyboard._get_fresh_run_for_dispatch",
+        "shorts_api.routes.storyboard_dispatch._get_fresh_run_for_dispatch",
         _mock_get_fresh_run_for_dispatch,
     )
     monkeypatch.setattr(
@@ -457,15 +447,15 @@ async def test_bulk_audio_post_dispatch_revoke_on_concurrent_cancellation(
         lambda **kwargs: "bulk-task-1",
     )
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_storyboard.task_tracking_service.record_task_queued",
+        "shorts_api.routes.storyboard_dispatch.task_tracking_service.record_task_queued",
         _mock_record_task_queued,
     )
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_storyboard.task_tracking_service.mark_tasks_revoked",
+        "shorts_api.routes.storyboard_dispatch.task_tracking_service.mark_tasks_revoked",
         _mock_mark_tasks_revoked,
     )
     monkeypatch.setattr(
-        creator_runs_storyboard,
+        storyboard_dispatch,
         "__import__",
         lambda name: SimpleNamespace(celery_app=celery_app)
         if name == "celery_app"
@@ -566,11 +556,11 @@ async def test_bulk_subtitles_record_failure_revokes_task(
         _mock_check_workspace_quota,
     )
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_storyboard.cancel_workspace_quota_reservation",
+        "shorts_api.routes.storyboard_dispatch.cancel_workspace_quota_reservation",
         _mock_cancel_workspace_quota_reservation,
     )
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_storyboard._get_fresh_run_for_dispatch",
+        "shorts_api.routes.storyboard_dispatch._get_fresh_run_for_dispatch",
         _mock_get_fresh_run_for_dispatch,
     )
     monkeypatch.setattr(
@@ -586,15 +576,15 @@ async def test_bulk_subtitles_record_failure_revokes_task(
         lambda **kwargs: "sub-task-1",
     )
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_storyboard.task_tracking_service.record_task_queued",
+        "shorts_api.routes.storyboard_dispatch.task_tracking_service.record_task_queued",
         _mock_record_task_queued,
     )
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_storyboard.task_tracking_service.mark_tasks_revoked",
+        "shorts_api.routes.storyboard_dispatch.task_tracking_service.mark_tasks_revoked",
         _mock_mark_tasks_revoked,
     )
     monkeypatch.setattr(
-        creator_runs_storyboard,
+        storyboard_dispatch,
         "__import__",
         lambda name: SimpleNamespace(celery_app=celery_app)
         if name == "celery_app"
@@ -630,10 +620,10 @@ async def test_get_fresh_run_for_dispatch_returns_none_on_exception(
         raise RuntimeError("DB connection lost")
 
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_storyboard.run_service.get_run",
+        "creator_service.run_service.run_service.get_run",
         _raise,
     )
-    result = await creator_runs_storyboard._get_fresh_run_for_dispatch(1, 1)
+    result = await storyboard_dispatch._get_fresh_run_for_dispatch(1, 1)
     assert result is None
 
 
@@ -685,11 +675,11 @@ async def test_pre_dispatch_reread_exception_fails_closed(
         _mock_check_workspace_quota,
     )
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_storyboard.cancel_workspace_quota_reservation",
+        "shorts_api.routes.storyboard_dispatch.cancel_workspace_quota_reservation",
         _mock_cancel_quota,
     )
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_storyboard.run_service.get_run",
+        "creator_service.run_service.run_service.get_run",
         _raising_get_run,
     )
 
@@ -775,11 +765,11 @@ async def test_post_dispatch_reread_exception_revokes_task(
         _mock_check_workspace_quota,
     )
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_storyboard.cancel_workspace_quota_reservation",
+        "shorts_api.routes.storyboard_dispatch.cancel_workspace_quota_reservation",
         _mock_cancel_quota,
     )
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_storyboard.run_service.get_run",
+        "creator_service.run_service.run_service.get_run",
         _get_run_ok_then_raise,
     )
     monkeypatch.setattr(
@@ -787,15 +777,15 @@ async def test_post_dispatch_reread_exception_revokes_task(
         lambda **kwargs: "task-123",
     )
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_storyboard.task_tracking_service.record_task_queued",
+        "shorts_api.routes.storyboard_dispatch.task_tracking_service.record_task_queued",
         _mock_record_task_queued,
     )
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_storyboard.task_tracking_service.mark_tasks_revoked",
+        "shorts_api.routes.storyboard_dispatch.task_tracking_service.mark_tasks_revoked",
         _mock_mark_tasks_revoked,
     )
     monkeypatch.setattr(
-        creator_runs_storyboard,
+        storyboard_dispatch,
         "__import__",
         lambda name: SimpleNamespace(celery_app=celery_app)
         if name == "celery_app"

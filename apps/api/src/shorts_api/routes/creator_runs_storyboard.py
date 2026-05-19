@@ -6,14 +6,9 @@ import logging
 from typing import TYPE_CHECKING, Any, Literal
 
 from creator_service.audio_service import audio_service
-from creator_service.run_service import run_service
 from creator_service.script_service import script_service
 from creator_service.subtitle_service import subtitle_service
-from creator_service.task_tracking_service import task_tracking_service
-from creator_service.usage_service import (
-    cancel_workspace_quota_reservation,
-    check_workspace_quota,
-)
+from creator_service.usage_service import check_workspace_quota
 from creator_service.visual_asset_service import visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service
 from fastapi import APIRouter, Depends, HTTPException
@@ -23,6 +18,10 @@ if TYPE_CHECKING:
     from creator_domain.models.pipeline_run import PipelineRun
 
 
+from shorts_api.routes.storyboard_dispatch import (
+    dispatch_storyboard_task_bulk,
+    dispatch_storyboard_task_with_tracking,
+)
 from shorts_api.routes.creator_runs_utils import (
     _has_active_tasks_for_run,
     dispatch_paragraph_audio,
@@ -47,12 +46,6 @@ STORYBOARD_ALLOWED_STAGES = frozenset(
 router = APIRouter(tags=["runs"])
 
 
-async def _get_fresh_run_for_dispatch(run_id: int, workspace_id: int) -> PipelineRun | Any | None:
-    try:
-        return await run_service.get_run(run_id, workspace_id=workspace_id)
-    except Exception:
-        logger.warning("Failed to re-read run %s for dispatch check", run_id, exc_info=True)
-        return None
 
 
 class ParagraphAudioRequest(BaseModel):
@@ -258,60 +251,19 @@ async def generate_paragraph_audio_endpoint(
     if not allowed:
         raise HTTPException(status_code=429, detail=reason)
 
-    fresh_run = await _get_fresh_run_for_dispatch(run_id, user.workspace_id)
-    if fresh_run is None or getattr(fresh_run, "status", None) == "cancelled":
-        await cancel_workspace_quota_reservation(user.workspace_id, "tts")
-        raise HTTPException(status_code=409, detail="Run was cancelled before dispatch")
-
-    try:
-        task_id = dispatch_paragraph_audio(
+    task_id = await dispatch_storyboard_task_with_tracking(
+        run_id=run_id,
+        workspace_id=user.workspace_id,
+        operation_type="tts",
+        task_type="generate_paragraph_audio",
+        dispatch=lambda: dispatch_paragraph_audio(
             run_id=run_id,
             section_id=section_id,
             tts_model=effective.tts_model,
             voice=effective.voice,
-        )
-    except Exception:
-        await cancel_workspace_quota_reservation(user.workspace_id, "tts")
-        raise HTTPException(
-            status_code=503,
-            detail="Failed to enqueue paragraph audio task",
-        ) from None
-
-    try:
-        await task_tracking_service.record_task_queued(run_id, "generate_paragraph_audio", task_id)
-    except Exception:
-        try:
-            celery_app = __import__("celery_app").celery_app
-            celery_app.control.revoke(task_id, terminate=True)
-            try:
-                await task_tracking_service.mark_tasks_revoked([task_id])
-            except Exception:
-                logger.warning("Failed to mark task %s as revoked in tracking", task_id)
-        except Exception:
-            logger.warning("Failed to revoke untracked task %s for run %d", task_id, run_id)
-        await cancel_workspace_quota_reservation(user.workspace_id, "tts")
-        raise HTTPException(
-            status_code=503,
-            detail="Failed to enqueue paragraph audio task",
-        ) from None
-
-    # Post-dispatch: close TOCTOU window — if run was cancelled between
-    # pre-check and dispatch, revoke the just-dispatched task immediately.
-    post_run = await _get_fresh_run_for_dispatch(run_id, user.workspace_id)
-    if post_run is None or getattr(post_run, "status", None) == "cancelled":
-        try:
-            celery_app = __import__("celery_app").celery_app
-            celery_app.control.revoke(task_id, terminate=True)
-            try:
-                await task_tracking_service.mark_tasks_revoked([task_id])
-            except Exception:
-                logger.warning("Failed to mark task %s as revoked in tracking", task_id)
-        except Exception:
-            logger.warning(
-                "Failed to revoke task %s after concurrent cancel for run %d", task_id, run_id
-            )
-        await cancel_workspace_quota_reservation(user.workspace_id, "tts")
-        raise HTTPException(status_code=409, detail="Run was cancelled during dispatch")
+        ),
+        error_detail="Failed to enqueue paragraph audio task",
+    )
 
     return {
         "task_id": task_id,
@@ -360,62 +312,19 @@ async def generate_paragraph_subtitles_endpoint(
     if not allowed:
         raise HTTPException(status_code=429, detail=reason)
 
-    fresh_run = await _get_fresh_run_for_dispatch(run_id, user.workspace_id)
-    if fresh_run is None or getattr(fresh_run, "status", None) == "cancelled":
-        await cancel_workspace_quota_reservation(user.workspace_id, "stt")
-        raise HTTPException(status_code=409, detail="Run was cancelled before dispatch")
-
-    try:
-        task_id = dispatch_paragraph_subtitles(
+    task_id = await dispatch_storyboard_task_with_tracking(
+        run_id=run_id,
+        workspace_id=user.workspace_id,
+        operation_type="stt",
+        task_type="generate_paragraph_subtitles",
+        dispatch=lambda: dispatch_paragraph_subtitles(
             run_id=run_id,
             section_id=section_id,
             subtitle_model=effective.subtitle_model,
             subtitle_format=effective.subtitle_format,
-        )
-    except Exception:
-        await cancel_workspace_quota_reservation(user.workspace_id, "stt")
-        raise HTTPException(
-            status_code=503,
-            detail="Failed to enqueue paragraph subtitle task",
-        ) from None
-
-    try:
-        await task_tracking_service.record_task_queued(
-            run_id, "generate_paragraph_subtitles", task_id
-        )
-    except Exception:
-        try:
-            celery_app = __import__("celery_app").celery_app
-            celery_app.control.revoke(task_id, terminate=True)
-            try:
-                await task_tracking_service.mark_tasks_revoked([task_id])
-            except Exception:
-                logger.warning("Failed to mark task %s as revoked in tracking", task_id)
-        except Exception:
-            logger.warning("Failed to revoke untracked task %s for run %d", task_id, run_id)
-        await cancel_workspace_quota_reservation(user.workspace_id, "stt")
-        raise HTTPException(
-            status_code=503,
-            detail="Failed to enqueue paragraph subtitle task",
-        ) from None
-
-    # Post-dispatch: close TOCTOU window — if run was cancelled between
-    # pre-check and dispatch, revoke the just-dispatched task immediately.
-    post_run = await _get_fresh_run_for_dispatch(run_id, user.workspace_id)
-    if post_run is None or getattr(post_run, "status", None) == "cancelled":
-        try:
-            celery_app = __import__("celery_app").celery_app
-            celery_app.control.revoke(task_id, terminate=True)
-            try:
-                await task_tracking_service.mark_tasks_revoked([task_id])
-            except Exception:
-                logger.warning("Failed to mark task %s as revoked in tracking", task_id)
-        except Exception:
-            logger.warning(
-                "Failed to revoke task %s after concurrent cancel for run %d", task_id, run_id
-            )
-        await cancel_workspace_quota_reservation(user.workspace_id, "stt")
-        raise HTTPException(status_code=409, detail="Run was cancelled during dispatch")
+        ),
+        error_detail="Failed to enqueue paragraph subtitle task",
+    )
 
     return {
         "task_id": task_id,
@@ -464,73 +373,21 @@ async def generate_all_paragraph_audio(
     for section in draft.structured_script:
         if section.section_id in sections_with_audio:
             continue
-        allowed, reason = await check_workspace_quota(user.workspace_id, operation_type="tts")
-        if not allowed:
-            raise HTTPException(status_code=429, detail=reason)
-
-        fresh_run = await _get_fresh_run_for_dispatch(run_id, user.workspace_id)
-        if fresh_run is None or getattr(fresh_run, "status", None) == "cancelled":
-            await cancel_workspace_quota_reservation(user.workspace_id, "tts")
-            task_ids.append(
-                {"section_id": section.section_id, "task_id": "", "error": "dispatch_failed"}
-            )
-            continue
-
-        try:
-            tid = dispatch_paragraph_audio(
+        task_ids.append(
+            await dispatch_storyboard_task_bulk(
                 run_id=run_id,
+                workspace_id=user.workspace_id,
+                operation_type="tts",
+                task_type="generate_paragraph_audio",
                 section_id=section.section_id,
-                tts_model=effective.tts_model,
-                voice=effective.voice,
+                dispatch=lambda: dispatch_paragraph_audio(
+                    run_id=run_id,
+                    section_id=section.section_id,
+                    tts_model=effective.tts_model,
+                    voice=effective.voice,
+                ),
             )
-        except Exception:
-            await cancel_workspace_quota_reservation(user.workspace_id, "tts")
-            logger.exception(
-                "Failed to dispatch audio task for section %s of run %s", section.section_id, run_id
-            )
-            task_ids.append(
-                {"section_id": section.section_id, "task_id": "", "error": "dispatch_failed"}
-            )
-            continue
-
-        try:
-            await task_tracking_service.record_task_queued(run_id, "generate_paragraph_audio", tid)
-        except Exception:
-            try:
-                celery_app = __import__("celery_app").celery_app
-                celery_app.control.revoke(tid, terminate=True)
-                try:
-                    await task_tracking_service.mark_tasks_revoked([tid])
-                except Exception:
-                    logger.warning("Failed to mark task %s as revoked in tracking", tid)
-            except Exception:
-                logger.warning("Failed to revoke untracked task %s for run %d", tid, run_id)
-            await cancel_workspace_quota_reservation(user.workspace_id, "tts")
-            logger.exception(
-                "Failed to track audio task for section %s of run %s", section.section_id, run_id
-            )
-            task_ids.append(
-                {"section_id": section.section_id, "task_id": "", "error": "dispatch_failed"}
-            )
-            continue
-
-        post_run = await _get_fresh_run_for_dispatch(run_id, user.workspace_id)
-        if post_run is None or getattr(post_run, "status", None) == "cancelled":
-            try:
-                celery_app = __import__("celery_app").celery_app
-                celery_app.control.revoke(tid, terminate=True)
-                try:
-                    await task_tracking_service.mark_tasks_revoked([tid])
-                except Exception:
-                    logger.warning("Failed to mark task %s as revoked in tracking", tid)
-            except Exception:
-                logger.warning(
-                    "Failed to revoke task %s after concurrent cancel for run %d", tid, run_id
-                )
-            await cancel_workspace_quota_reservation(user.workspace_id, "tts")
-            raise HTTPException(status_code=409, detail="Run was cancelled during dispatch")
-
-        task_ids.append({"section_id": section.section_id, "task_id": tid})
+        )
     failed_count = sum(1 for t in task_ids if "error" in t)
     return {
         "run_id": run_id,
@@ -583,84 +440,27 @@ async def generate_all_paragraph_subtitles(
     seen_sections: set[str] = set()
     task_ids: list[dict[str, str]] = []
     for audio in audio_artifacts:
-        if not audio.section_id or audio.section_id in seen_sections:
+        section_id = audio.section_id
+        if not section_id or section_id in seen_sections:
             continue
-        seen_sections.add(audio.section_id)
-        if audio.section_id in sections_with_subtitles:
+        seen_sections.add(section_id)
+        if section_id in sections_with_subtitles:
             continue
-        allowed, reason = await check_workspace_quota(user.workspace_id, operation_type="stt")
-        if not allowed:
-            raise HTTPException(status_code=429, detail=reason)
-
-        fresh_run = await _get_fresh_run_for_dispatch(run_id, user.workspace_id)
-        if fresh_run is None or getattr(fresh_run, "status", None) == "cancelled":
-            await cancel_workspace_quota_reservation(user.workspace_id, "stt")
-            task_ids.append(
-                {"section_id": audio.section_id, "task_id": "", "error": "dispatch_failed"}
-            )
-            continue
-
-        try:
-            tid = dispatch_paragraph_subtitles(
+        task_ids.append(
+            await dispatch_storyboard_task_bulk(
                 run_id=run_id,
-                section_id=audio.section_id,
-                subtitle_model=effective.subtitle_model,
-                subtitle_format=effective.subtitle_format,
+                workspace_id=user.workspace_id,
+                operation_type="stt",
+                task_type="generate_paragraph_subtitles",
+                section_id=section_id,
+                dispatch=lambda section_id=section_id: dispatch_paragraph_subtitles(
+                    run_id=run_id,
+                    section_id=section_id,
+                    subtitle_model=effective.subtitle_model,
+                    subtitle_format=effective.subtitle_format,
+                ),
             )
-        except Exception:
-            await cancel_workspace_quota_reservation(user.workspace_id, "stt")
-            logger.exception(
-                "Failed to dispatch subtitle task for section %s of run %s",
-                audio.section_id,
-                run_id,
-            )
-            task_ids.append(
-                {"section_id": audio.section_id, "task_id": "", "error": "dispatch_failed"}
-            )
-            continue
-
-        try:
-            await task_tracking_service.record_task_queued(
-                run_id, "generate_paragraph_subtitles", tid
-            )
-        except Exception:
-            try:
-                celery_app = __import__("celery_app").celery_app
-                celery_app.control.revoke(tid, terminate=True)
-                try:
-                    await task_tracking_service.mark_tasks_revoked([tid])
-                except Exception:
-                    logger.warning("Failed to mark task %s as revoked in tracking", tid)
-            except Exception:
-                logger.warning("Failed to revoke untracked task %s for run %d", tid, run_id)
-            await cancel_workspace_quota_reservation(user.workspace_id, "stt")
-            logger.exception(
-                "Failed to track subtitle task for section %s of run %s",
-                audio.section_id,
-                run_id,
-            )
-            task_ids.append(
-                {"section_id": audio.section_id, "task_id": "", "error": "dispatch_failed"}
-            )
-            continue
-
-        post_run = await _get_fresh_run_for_dispatch(run_id, user.workspace_id)
-        if post_run is None or getattr(post_run, "status", None) == "cancelled":
-            try:
-                celery_app = __import__("celery_app").celery_app
-                celery_app.control.revoke(tid, terminate=True)
-                try:
-                    await task_tracking_service.mark_tasks_revoked([tid])
-                except Exception:
-                    logger.warning("Failed to mark task %s as revoked in tracking", tid)
-            except Exception:
-                logger.warning(
-                    "Failed to revoke task %s after concurrent cancel for run %d", tid, run_id
-                )
-            await cancel_workspace_quota_reservation(user.workspace_id, "stt")
-            raise HTTPException(status_code=409, detail="Run was cancelled during dispatch")
-
-        task_ids.append({"section_id": audio.section_id, "task_id": tid})
+        )
     failed_count = sum(1 for t in task_ids if "error" in t)
     return {
         "run_id": run_id,

@@ -135,9 +135,12 @@ def _patch_storyboard_dispatch_and_tracking(
                 "dispatch_paragraph_subtitles",
                 _dispatch_paragraph_subtitles,
             )
-            monkeypatch.setitem(
-                route.endpoint.__globals__, "task_tracking_service", calls["tracking"]
-            )
+    tracking = calls["tracking"]
+    assert isinstance(tracking, StubTaskTrackingService)
+    monkeypatch.setattr(
+        "shorts_api.routes.storyboard_dispatch.task_tracking_service.record_task_queued",
+        tracking.record_task_queued,
+    )
 
     return calls
 
@@ -173,6 +176,15 @@ def _patch_quota_functions(
                 _cancel_workspace_quota_reservation,
             )
 
+    monkeypatch.setattr(
+        "creator_service.usage_service.check_workspace_quota",
+        _check_workspace_quota,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.storyboard_dispatch.cancel_workspace_quota_reservation",
+        _cancel_workspace_quota_reservation,
+    )
+
     return {"quota": quota_calls, "cancel": cancel_calls}
 
 
@@ -181,6 +193,8 @@ def stub_storyboard_services(monkeypatch: pytest.MonkeyPatch):
     run_svc = StubRunService()
     script_svc = StubScriptService()
     audio_svc = StubAudioService()
+
+    monkeypatch.setattr("creator_service.run_service.run_service", run_svc)
 
     def fake_validate_model_key(model_key: str, expected_category: str | None = None) -> None:
         _ = expected_category
@@ -557,8 +571,9 @@ async def test_generate_paragraph_audio_cancels_reservation_when_tracking_fails(
 
     for route in _iter_api_routes(runs_router.routes):
         if route.name == "generate_paragraph_audio_endpoint":
-            monkeypatch.setitem(
-                route.endpoint.__globals__, "task_tracking_service", _FailingTrackingService()
+            monkeypatch.setattr(
+                "shorts_api.routes.storyboard_dispatch.task_tracking_service.record_task_queued",
+                _FailingTrackingService().record_task_queued,
             )
 
     response = await client.post(
@@ -617,8 +632,9 @@ async def test_generate_paragraph_subtitles_cancels_reservation_when_tracking_fa
 
     for route in _iter_api_routes(runs_router.routes):
         if route.name == "generate_paragraph_subtitles_endpoint":
-            monkeypatch.setitem(
-                route.endpoint.__globals__, "task_tracking_service", _FailingTrackingService()
+            monkeypatch.setattr(
+                "shorts_api.routes.storyboard_dispatch.task_tracking_service.record_task_queued",
+                _FailingTrackingService().record_task_queued,
             )
 
     response = await client.post(
@@ -684,8 +700,9 @@ async def test_generate_all_audio_cancels_reservation_when_tracking_fails(
 
     for route in _iter_api_routes(runs_router.routes):
         if route.name == "generate_all_paragraph_audio":
-            monkeypatch.setitem(
-                route.endpoint.__globals__, "task_tracking_service", _FailingTrackingService()
+            monkeypatch.setattr(
+                "shorts_api.routes.storyboard_dispatch.task_tracking_service.record_task_queued",
+                _FailingTrackingService().record_task_queued,
             )
 
     response = await client.post("/api/creator/runs/33/storyboard/generate-all-audio", json={})
@@ -749,8 +766,9 @@ async def test_generate_all_subtitles_cancels_reservation_when_tracking_fails(
 
     for route in _iter_api_routes(runs_router.routes):
         if route.name == "generate_all_paragraph_subtitles":
-            monkeypatch.setitem(
-                route.endpoint.__globals__, "task_tracking_service", _FailingTrackingService()
+            monkeypatch.setattr(
+                "shorts_api.routes.storyboard_dispatch.task_tracking_service.record_task_queued",
+                _FailingTrackingService().record_task_queued,
             )
 
     response = await client.post("/api/creator/runs/35/storyboard/generate-all-subtitles", json={})
