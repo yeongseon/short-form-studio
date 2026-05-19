@@ -85,7 +85,13 @@ def validate_production_config(*, service_kind: str = "api") -> None:
     if not redis_url.strip():
         errors.append("REDIS_URL is required in production.")
 
-    # 5. Warn about local artifact storage (non-fatal but logged)
+    # 5. ADMIN_API_KEY must be set with minimum length in production
+    if environment == "production" and "ADMIN_API_KEY" in os.environ:
+        admin_api_key = os.getenv("ADMIN_API_KEY", "")
+        if len(admin_api_key) < 16:
+            errors.append("ADMIN_API_KEY must be set to at least 16 characters in production.")
+
+    # 6. Warn about local artifact storage (non-fatal but logged)
     artifact_root = os.getenv("ARTIFACT_ROOT", "./data/artifacts")
     if artifact_root.startswith("./") or artifact_root == "data/artifacts":
         logger.warning(

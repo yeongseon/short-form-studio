@@ -27,8 +27,21 @@ from redis import Redis
 from redis.exceptions import RedisError
 
 from creator_service.admin_service import admin_service
+
 logger = logging.getLogger(__name__)
 audit_logger = logging.getLogger("admin.audit")
+
+_ALLOWED_CACHE_CLEAR_PREFIXES = (
+    "cache:creator:",
+    "cache:",
+    "cache:test:",
+    "session:",
+    "model_health:",
+    "rate_limit:",
+    "artifact:",
+)
+
+_DANGEROUS_PATTERNS = frozenset({"*", "*:*", ""})
 
 
 class DestructiveOpRateLimiter:
@@ -307,6 +320,38 @@ async def admin_clear_cache(
             source_ip,
             audit_id,
         )
+
+    # Validate pattern against allowlist (dry_run=True allows any pattern for inspection)
+    if not dry_run:
+        if key_pattern is None or key_pattern.strip() in _DANGEROUS_PATTERNS:
+            audit_logger.warning(
+                "ADMIN_REJECTED: cache_clear | reason=dangerous_pattern | pattern=%s | key=%s | audit_id=%s",
+                safe_pattern,
+                key_fingerprint,
+                audit_id,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Destructive pattern rejected. Use a specific prefix from allowlist: "
+                + ", ".join(_ALLOWED_CACHE_CLEAR_PREFIXES),
+            )
+
+        pattern_allowed = any(
+            key_pattern.startswith(prefix) for prefix in _ALLOWED_CACHE_CLEAR_PREFIXES
+        )
+        if not pattern_allowed:
+            audit_logger.warning(
+                "ADMIN_REJECTED: cache_clear | reason=prefix_not_allowed | pattern=%s | key=%s | audit_id=%s",
+                safe_pattern,
+                key_fingerprint,
+                audit_id,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Pattern prefix not in allowlist. Allowed: "
+                + ", ".join(_ALLOWED_CACHE_CLEAR_PREFIXES),
+            )
+
     result = await admin_service.clear_cache(key_pattern=key_pattern, dry_run=dry_run)
     result["audit_id"] = audit_id
     return result
