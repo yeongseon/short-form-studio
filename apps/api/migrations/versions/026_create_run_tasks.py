@@ -1,7 +1,7 @@
 """Create creator_run_tasks table.
 
-Revision ID: 015
-Revises: 011
+Revision ID: 026
+Revises: 025
 Create Date: 2026-04-29 00:00:00.000000
 """
 
@@ -10,8 +10,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "015"
-down_revision: str | None = "011"
+revision: str = "026"
+down_revision: str | None = "025"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

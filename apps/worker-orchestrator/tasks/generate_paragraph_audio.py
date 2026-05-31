@@ -7,13 +7,12 @@ import logging
 import os
 import wave
 
-
 from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
 from creator_domain.sanitize import sanitize_path_component
 from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
-from creator_provider.registry import ProviderRegistry
+from creator_provider.registry import get_default_registry
 from creator_service.audio_service import audio_service as _audio_service
 from creator_service.cost_config import COST_PARAGRAPH_AUDIO
 from creator_service.script_service import script_service as _script_service
@@ -76,7 +75,7 @@ def generate_paragraph_audio(
         if section_text is None:
             raise ValueError(f"Section '{section_id}' not found for run {run_id}")
 
-        registry = ProviderRegistry.create_default()
+        registry = get_default_registry()
         entry = registry.resolve(tts_model)
         provider = registry.get_provider(tts_model)
         lock_id = f"para-{run_id}-{section_id}"

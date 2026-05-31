@@ -1,7 +1,7 @@
 """Backfill missing workspace IDs for artifact access control.
 
-Revision ID: 015
-Revises: 011
+Revision ID: 025
+Revises: 024
 Create Date: 2026-04-29 00:00:00.000000
 """
 
@@ -9,10 +9,10 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "015"
-down_revision: str | None = "011"
+revision: str = "025"
+down_revision: str | None = "024"
 branch_labels: str | Sequence[str] | None = None
-depends_on: str | Sequence[str] | None = ("012", "013")
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

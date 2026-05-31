@@ -2,7 +2,7 @@
 
 import logging
 
-from creator_provider.registry import ProviderRegistry
+from creator_provider.registry import get_default_registry
 from creator_service.model_catalog_service import ModelCatalogService
 from creator_service.model_health_service import ModelHealthService
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -15,7 +15,7 @@ router = APIRouter(prefix="/models", tags=["models"])
 
 VALID_CATEGORIES = {"script", "image", "tts", "stt"}
 model_catalog_service = ModelCatalogService(
-    registry=ProviderRegistry.create_default(),
+    registry=get_default_registry(),
     health_service=ModelHealthService(),
 )
 

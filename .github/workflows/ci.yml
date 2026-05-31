@@ -53,15 +53,15 @@ jobs:
       - name: Validate Alembic migrations
         run: |
           cd apps/api
-          # Export dummy DATABASE_URL for validation (no real DB connection needed for syntax check)
           export DATABASE_URL="postgresql://user:pass@localhost:5432/db"
-          # Verify no multiple heads (migration branches)
-          # Note: This repository has multiple migration heads (known issue).
-          # The check below is disabled until migrations are consolidated.
-          # alembic heads 2>&1 | grep -E "^[0-9a-f]+ \(head\)" | wc -l | grep -q "^1$" || (echo "ERROR: Multiple migration heads detected" && alembic heads && exit 1)
-          echo "Alembic heads count: $(alembic heads 2>&1 | grep -E '^[0-9a-f]+ \(head\)' | wc -l)"
-          # alembic check requires DB connection, so we skip it in CI
-          echo "Migration validation complete"
+          # Verify single migration head (no branches)
+          HEAD_COUNT=$(alembic heads 2>&1 | grep -E '^[0-9a-f]+' | wc -l)
+          if [ "$HEAD_COUNT" -ne 1 ]; then
+            echo "ERROR: Multiple migration heads detected ($HEAD_COUNT heads)"
+            alembic heads
+            exit 1
+          fi
+          echo "Migration validation complete (1 head)"
       - name: Install Node dependencies
         run: npm --prefix apps/studio-web ci
       - name: Test Packages (with coverage)
@@ -111,4 +111,28 @@ jobs:
           curl -sf http://localhost:5174/
           # Verify worker container is running
           docker compose ps worker --format json | grep -q running
+          # --- Creator API smoke test ---
+          # Run migrations
+          docker compose exec -T api alembic upgrade head
+          # Bootstrap dev auth
+          docker compose exec -T api python scripts/create_api_key.py \
+            --email ci@example.com --workspace ci --name ci-key > /tmp/api_key_output.txt
+          API_KEY=$(grep -oP '  \K[A-Za-z0-9_-]+$' /tmp/api_key_output.txt)
+          # Verify auth: no key = 401
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/api/creator/users/me)
+          [ "$HTTP_CODE" = "401" ] || (echo "Expected 401 without key, got $HTTP_CODE" && exit 1)
+          # Verify auth: valid key = 200
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "X-API-Key: $API_KEY" http://localhost:8000/api/creator/users/me)
+          [ "$HTTP_CODE" = "200" ] || (echo "Expected 200 with valid key, got $HTTP_CODE" && exit 1)
+          # Create project
+          PROJECT_RESPONSE=$(curl -sf -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+            -d '{"title":"Smoke Test","source_type":"idea","idea_brief":"test short video"}' \
+            http://localhost:8000/api/creator/projects)
+          PROJECT_ID=$(echo "$PROJECT_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+          echo "Created project: $PROJECT_ID"
+          # Create run
+          curl -sf -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+            -d '{"style_preset":"default"}' \
+            http://localhost:8000/api/creator/projects/$PROJECT_ID/runs
+          echo "Creator API smoke test passed"
           docker compose down

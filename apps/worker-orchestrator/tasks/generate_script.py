@@ -5,12 +5,11 @@ from __future__ import annotations
 
 import logging
 
-
 from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
 from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
-from creator_provider.registry import ProviderRegistry
+from creator_provider.registry import get_default_registry
 from creator_service.cost_config import COST_SCRIPT_GENERATION
 from creator_service.script_service import script_service as _script_service
 from creator_service.telemetry import trace_task
@@ -57,7 +56,7 @@ def generate_script(
     )
 
     async def execute(ctx: TaskContext) -> TaskResult:
-        registry = ProviderRegistry.create_default()
+        registry = get_default_registry()
         entry = registry.resolve(model_key)
         provider = registry.get_provider(model_key)
 

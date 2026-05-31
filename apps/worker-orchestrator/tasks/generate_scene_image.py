@@ -9,13 +9,12 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-
 from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
 from creator_domain.sanitize import sanitize_path_component
 from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
-from creator_provider.registry import ProviderRegistry
+from creator_provider.registry import get_default_registry
 from creator_service.cost_config import COST_SCENE_IMAGE
 from creator_service.run_service import run_service as _run_service
 from creator_service.telemetry import trace_task
@@ -91,7 +90,7 @@ def generate_scene_image(
         if not target_scenes:
             raise ValueError(f"Visual plan for run {run_id} has no scenes")
 
-        registry = ProviderRegistry.create_default()
+        registry = get_default_registry()
         entry = registry.resolve(model_key)
         provider = registry.get_provider(model_key)
         asset_dir = _asset_dir(run_id)

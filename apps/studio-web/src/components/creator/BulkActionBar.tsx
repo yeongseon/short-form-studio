@@ -86,20 +86,17 @@ export default function BulkActionBar({
     "SUBTITLE_GENERATING",
     "RENDER_GENERATING",
     "FINAL_REVIEW",
-    "PUBLISHED",
   ].includes(currentStage);
   const audioEnabled = [
     "AUDIO_GENERATING",
     "SUBTITLE_GENERATING",
     "RENDER_GENERATING",
     "FINAL_REVIEW",
-    "PUBLISHED",
   ].includes(currentStage);
   const subtitleEnabled = [
     "SUBTITLE_GENERATING",
     "RENDER_GENERATING",
     "FINAL_REVIEW",
-    "PUBLISHED",
   ].includes(currentStage);
 
   return (

@@ -5,13 +5,13 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal
 
 from creator_domain.models import TRIGGER_POLICY
+from creator_service.project_service import project_service
+from creator_service.run_service import ConflictError, run_service
+from creator_service.stage_review_service import stage_review_service
 from creator_service.task_dispatch_service import (
     cas_dispatch_with_rollback,
     dispatch_generate_script,
 )
-from creator_service.project_service import project_service
-from creator_service.run_service import ConflictError, run_service
-from creator_service.stage_review_service import stage_review_service
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
@@ -20,12 +20,12 @@ if TYPE_CHECKING:
     from creator_domain.models.project import Project
 
 
+from shorts_api.auth import CurrentUser, require_project_access, require_run_access
 from shorts_api.routes.creator_runs_utils import (
     _has_active_tasks_for_run,
     validate_model_defaults,
     validate_model_key,
 )
-from shorts_api.auth import CurrentUser, require_project_access, require_run_access
 
 router = APIRouter(tags=["runs"])
 
@@ -141,7 +141,8 @@ async def create_run(
 async def list_runs_for_project(
     project_id: int, access: tuple[CurrentUser, Project] = Depends(require_project_access)
 ) -> dict[str, object]:
-    runs = await run_service.list_runs_by_project(project_id)
+    user, _ = access
+    runs = await run_service.list_runs_by_project(project_id, workspace_id=user.workspace_id)
     return {
         "runs": [r.model_dump(mode="json") for r in runs],
         "total": len(runs),
@@ -263,6 +264,43 @@ async def approve_visual_assets(
 
     return updated_run.model_dump(mode="json")
 
+
+class ApproveFinalRequest(BaseModel):
+    reviewer: str = Field(default="agent", max_length=256)
+    notes: str | None = Field(default=None, max_length=1000)
+
+
+@router.post("/runs/{run_id}/approve-final")
+async def approve_final(
+    run_id: int,
+    request: ApproveFinalRequest,
+    access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
+) -> dict[str, object]:
+    user, _ = access
+    try:
+        updated_run = await stage_review_service.approve_and_advance(
+            run_service=run_service,
+            run_id=run_id,
+            stage_name="FINAL_REVIEW",
+            target_stage="PUBLISHED",
+            reviewer=request.reviewer,
+            notes=request.notes,
+            workspace_id=user.workspace_id,
+        )
+        # Mark run as completed
+        updated_run = await run_service.mark_completed(
+            run_id,
+            workspace_id=user.workspace_id,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        if "not found" in detail.lower():
+            raise HTTPException(status_code=404, detail=detail) from exc
+        if "conflict" in detail.lower():
+            raise HTTPException(status_code=409, detail=detail) from exc
+        raise HTTPException(status_code=400, detail=detail) from exc
+
+    return updated_run.model_dump(mode="json")
 
 @router.post("/runs/{run_id}/generate-script", status_code=202)
 async def generate_script_trigger(

@@ -498,6 +498,33 @@ class RunService:
             raise ValueError(f"Run {run_id} not found")
         return await self.storage.delete_run(run_id, workspace_id=workspace_id)
 
+    async def mark_completed(
+        self, run_id: int, workspace_id: int | None = None
+    ) -> PipelineRun:
+        """Mark a run as completed with finished_at timestamp.
+
+        Idempotent: if the run is already completed, returns it unchanged.
+        Raises ValueError with 'conflict' if a concurrent version mismatch occurs.
+        """
+        run = await self.get_run(run_id, workspace_id=workspace_id)
+        if run is None:
+            raise ValueError(f"Run {run_id} not found")
+        # Idempotent: already completed → return as-is
+        if getattr(run, "status", None) == "completed":
+            return run
+        row = await self.storage.update_run(
+            run_id,
+            {
+                "status": "completed",
+                "finished_at": datetime.now(timezone.utc),
+            },
+            workspace_id=workspace_id,
+            expected_version=int(getattr(run, "version", 0) or 0),
+        )
+        if row is None:
+            raise ValueError(f"Run {run_id} version conflict")
+        return PipelineRun.from_row(row)
+
 
 def _create_storage() -> RunStorageBackend:
     import os

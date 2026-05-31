@@ -1,7 +1,7 @@
 """Add storage metadata columns to artifact tables.
 
-Revision ID: 012
-Revises: 011
+Revision ID: 023
+Revises: 022
 Create Date: 2026-04-29 00:00:00.000000
 """
 
@@ -10,8 +10,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "012"
-down_revision: str | None = "011"
+revision: str = "023"
+down_revision: str | None = "022"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

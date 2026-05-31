@@ -42,9 +42,9 @@ __all__ = [
 
 def validate_model_key(model_key: str, expected_category: str | None = None) -> None:
     try:
-        from creator_provider.registry import ProviderCategory, ProviderRegistry
+        from creator_provider.registry import ProviderCategory, get_default_registry
 
-        registry = ProviderRegistry.create_default()
+        registry = get_default_registry()
         entry = registry.resolve(model_key)
         if expected_category is not None:
             expected = ProviderCategory(expected_category)

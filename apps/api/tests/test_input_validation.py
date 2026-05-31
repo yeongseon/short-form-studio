@@ -275,7 +275,7 @@ def test_validate_model_key_rejects_wrong_expected_category(
     from creator_provider.registry import ProviderRegistry
 
     registry = _stub_registry_with_models()
-    monkeypatch.setattr(ProviderRegistry, "create_default", classmethod(lambda cls: registry))
+    monkeypatch.setattr("creator_provider.registry._default_registry", registry)
 
     with pytest.raises(HTTPException) as exc:
         validate_model_key("some-tts-model", expected_category="llm")
@@ -291,7 +291,7 @@ def test_validate_model_key_accepts_matching_expected_category(
     from creator_provider.registry import ProviderRegistry
 
     registry = _stub_registry_with_models()
-    monkeypatch.setattr(ProviderRegistry, "create_default", classmethod(lambda cls: registry))
+    monkeypatch.setattr("creator_provider.registry._default_registry", registry)
 
     validate_model_key("some-llm-model", expected_category="llm")
 
@@ -302,7 +302,7 @@ def test_validate_model_defaults_rejects_tts_for_script_model(
     from creator_provider.registry import ProviderRegistry
 
     registry = _stub_registry_with_models()
-    monkeypatch.setattr(ProviderRegistry, "create_default", classmethod(lambda cls: registry))
+    monkeypatch.setattr("creator_provider.registry._default_registry", registry)
 
     with pytest.raises(HTTPException) as exc:
         validate_model_defaults({"script_model": "some-tts-model"})
@@ -317,7 +317,7 @@ def test_validate_model_defaults_rejects_llm_for_image_model(
     from creator_provider.registry import ProviderRegistry
 
     registry = _stub_registry_with_models()
-    monkeypatch.setattr(ProviderRegistry, "create_default", classmethod(lambda cls: registry))
+    monkeypatch.setattr("creator_provider.registry._default_registry", registry)
 
     with pytest.raises(HTTPException) as exc:
         validate_model_defaults({"image_model": "some-llm-model"})
@@ -332,7 +332,7 @@ async def test_generate_script_rejects_image_model_key(monkeypatch: pytest.Monke
     import shorts_api.routes.creator_runs_core as creator_runs_core
 
     registry = _stub_registry_with_models()
-    monkeypatch.setattr(ProviderRegistry, "create_default", classmethod(lambda cls: registry))
+    monkeypatch.setattr("creator_provider.registry._default_registry", registry)
 
     async def _no_active_tasks(_: int) -> bool:
         return False
@@ -364,7 +364,7 @@ async def test_generate_audio_rejects_llm_model_key(monkeypatch: pytest.MonkeyPa
     import shorts_api.routes.creator_runs_scene_assets as creator_runs_scene_assets
 
     registry = _stub_registry_with_models()
-    monkeypatch.setattr(ProviderRegistry, "create_default", classmethod(lambda cls: registry))
+    monkeypatch.setattr("creator_provider.registry._default_registry", registry)
 
     async def _no_active_tasks(_: int) -> bool:
         return False
@@ -393,7 +393,7 @@ async def test_generate_scene_image_rejects_llm_model_key(monkeypatch: pytest.Mo
     import shorts_api.routes.creator_runs_scene_assets as creator_runs_scene_assets
 
     registry = _stub_registry_with_models()
-    monkeypatch.setattr(ProviderRegistry, "create_default", classmethod(lambda cls: registry))
+    monkeypatch.setattr("creator_provider.registry._default_registry", registry)
 
     async def _fake_quota(run_id: int, operation_type: str, workspace_id: int) -> int:
         _ = (run_id, operation_type)
@@ -432,7 +432,7 @@ async def test_generate_subtitles_rejects_tts_model_key(monkeypatch: pytest.Monk
     import shorts_api.routes.creator_runs_scene_assets as creator_runs_scene_assets
 
     registry = _stub_registry_with_models()
-    monkeypatch.setattr(ProviderRegistry, "create_default", classmethod(lambda cls: registry))
+    monkeypatch.setattr("creator_provider.registry._default_registry", registry)
 
     async def _fake_dispatch(**_: object) -> dict[str, object]:
         return {"task_id": "t1"}

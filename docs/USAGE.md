@@ -230,6 +230,21 @@ When creating a project, select between local and remote models in the **Model D
 
 If a ⚠️ icon appears next to a remote model, the corresponding provider API key is not configured.
 
+#### Model Key vs Provider Model Name
+
+The Studio uses **model keys** (logical identifiers) that map to provider-specific model names:
+
+| Model Key (API/UI) | Provider | Actual Model Name |
+|---|---|---|
+| `qwen3-4b` | Ollama | `qwen3:4b` |
+| `sd15` | Stable Diffusion | SD 1.5 |
+| `whisper-small` | Whisper | `small` |
+| `gpt-4o-mini` | OpenAI | `gpt-4o-mini` |
+| `claude-sonnet` | Anthropic | `claude-sonnet-4-20250514` |
+| `dalle-3` | OpenAI | `dall-e-3` |
+
+Model keys use hyphens (not colons) and are always lowercase.
+
 ---
 
 ## Generated File Locations

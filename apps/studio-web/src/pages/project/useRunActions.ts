@@ -273,6 +273,28 @@ export function useRunActions({
     }
   }, [run, modelSelection.render_profile, refreshRun]);
 
+  const handleApproveFinal = useCallback(async () => {
+    if (!run) return;
+    setApproving(true);
+    try {
+      const res = await apiFetch(`${API_BASE}/runs/${run.id}/approve-final`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reviewer: "agent" }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        throw new Error(body?.detail ?? `Publish failed (${res.status})`);
+      }
+      showToast("Published", "success");
+      await refreshRun(run.id);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Publish failed", "error");
+    } finally {
+      setApproving(false);
+    }
+  }, [run, refreshRun]);
+
   const handleStop = useCallback(async () => {
     if (!run) return;
     setStopping(true);
@@ -342,6 +364,7 @@ export function useRunActions({
     handleGenerateVisualPlan,
     handleRestartVisualPlan,
     handleRender,
+    handleApproveFinal,
     handleStop,
     handleResume,
     handleDeleteProject,

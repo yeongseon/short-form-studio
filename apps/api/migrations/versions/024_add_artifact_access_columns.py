@@ -1,7 +1,7 @@
 """Add artifact access control metadata columns.
 
-Revision ID: 014
-Revises: 011
+Revision ID: 024
+Revises: 023
 Create Date: 2026-04-29 00:00:00.000000
 """
 
@@ -10,8 +10,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "014"
-down_revision: str | None = "011"
+revision: str = "024"
+down_revision: str | None = "023"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

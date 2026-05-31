@@ -1,7 +1,7 @@
 """Backfill default workspaces for existing users and add membership indexes.
 
-Revision ID: 016
-Revises: 011
+Revision ID: 028
+Revises: 027
 Create Date: 2025-04-01 00:00:00.000000
 """
 
@@ -9,10 +9,10 @@ from collections.abc import Sequence
 
 from alembic import op
 
-revision: str = "016"
-down_revision: str | None = "011"
+revision: str = "028"
+down_revision: str | None = "027"
 branch_labels: str | Sequence[str] | None = None
-depends_on: str | Sequence[str] | None = ("012", "013")
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:

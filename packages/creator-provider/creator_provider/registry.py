@@ -214,3 +214,20 @@ class ProviderRegistry:
             )
         )
         return registry
+
+
+_default_registry: ProviderRegistry | None = None
+
+
+def get_default_registry() -> ProviderRegistry:
+    """Return a cached default ProviderRegistry singleton.
+
+    Thread-safety note: In an async single-threaded event loop (the normal
+    FastAPI/uvicorn deployment), this is safe. If called from multiple OS threads,
+    the worst case is duplicate initialization (benign — both instances are identical
+    and one will be garbage-collected). No lock is added to avoid unnecessary overhead.
+    """
+    global _default_registry
+    if _default_registry is None:
+        _default_registry = ProviderRegistry.create_default()
+    return _default_registry

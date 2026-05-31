@@ -7,13 +7,12 @@ import json
 import logging
 from typing import Any
 
-
 from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
 from creator_domain.models.visual_plan import VisualScene
 from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
-from creator_provider.registry import ProviderRegistry
+from creator_provider.registry import get_default_registry
 from creator_service.cost_config import COST_VISUAL_PLAN
 from creator_service.script_service import script_service as _script_service
 from creator_service.telemetry import trace_task
@@ -132,7 +131,7 @@ def generate_visual_plan(
         if not sections:
             raise ValueError(f"Script draft for run {run_id} has no content")
 
-        registry = ProviderRegistry.create_default()
+        registry = get_default_registry()
         entry = registry.resolve(model_key)
         provider = registry.get_provider(model_key)
 

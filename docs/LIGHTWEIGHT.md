@@ -40,3 +40,15 @@ retry logic, or horizontal scaling. Always use Celery + Redis in production.
 - Tasks execute during the request lifecycle, so requests can take longer.
 - Celery task IDs are replaced with synthetic `sync-...` IDs in lightweight mode.
 - No worker process is required for dispatch execution in this mode.
+
+## API Response Semantics
+
+In normal (Celery) mode, generation trigger endpoints return `202 Accepted` because
+the task is enqueued and runs asynchronously. In lightweight mode, the **same endpoints**
+still return `202` but the task has already completed (or failed) by the time the
+response is sent. The response body contains the updated run state.
+
+This means:
+- Requests may take significantly longer (seconds to minutes) depending on the AI provider.
+- The client receives the final result immediately rather than needing to poll.
+- Timeouts at the HTTP/proxy layer may need adjustment for long-running tasks.

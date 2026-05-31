@@ -35,16 +35,15 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-
-from worker_loop import run_in_worker_loop
 import logging
 import os
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from celery.exceptions import Ignore, SoftTimeLimitExceeded
-from creator_domain.models.stage import RunStage
+from creator_domain.models.stage import REVIEW_STAGES, RunStage
 from creator_provider.exceptions import ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import (
     GPU_LOCK_TIMEOUT_SECONDS,
@@ -56,6 +55,7 @@ from creator_provider.versioned_assets import clear_loaded_asset_versions, get_l
 from creator_service.run_service import run_service as _run_service
 from creator_service.task_tracking_service import task_tracking_service as _task_tracking_service
 from creator_service.usage_service import resolve_workspace_id_from_run
+from worker_loop import run_in_worker_loop
 
 redis: Any
 try:
@@ -257,9 +257,11 @@ async def _run_task_inner(
     if config.success_stage is not None:
         safe_failure_stages = config.safe_failure_stages or config.safe_stages
         if result.status == "success":
+            # Use "paused" for review stages to indicate awaiting human action
+            target_status = "paused" if config.success_stage in {s.value for s in REVIEW_STAGES} else "running"
             applied, _ = await _run_service.storage.conditional_update_run(
                 run_id,
-                {"current_stage": config.success_stage, "status": "running"},
+                {"current_stage": config.success_stage, "status": target_status},
                 expected_stages=config.safe_stages,
                 rejected_statuses=_TERMINAL_STATUSES,
             )
@@ -469,7 +471,6 @@ class GpuLockContext:
         """Start background task to auto-renew the GPU lease at half the timeout interval."""
         if not self.acquired or self._renewal_task is not None:
             return
-        import asyncio
 
         interval = max(timeout // 2, 1)
 

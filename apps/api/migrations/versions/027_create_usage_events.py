@@ -1,7 +1,7 @@
 """Create usage tracking and workspace quota tables.
 
-Revision ID: 016
-Revises: 011
+Revision ID: 027
+Revises: 026
 Create Date: 2026-04-29 00:00:00.000000
 """
 
@@ -10,8 +10,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "016"
-down_revision: str | None = "011"
+revision: str = "027"
+down_revision: str | None = "026"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

@@ -13,6 +13,7 @@ from shorts_api.main import app
 from shorts_api.main import runs_router
 from shorts_api.routes.creator_runs_core import GenerateSubtitlesRequest
 from shorts_api.routes.creator_runs_core import (
+    ApproveFinalRequest,
     ApproveScriptRequest,
     CreateRunRequest,
     GenerateAudioRequest,
@@ -132,12 +133,24 @@ class StubRunService:
         self.runs[run_id] = updated
         return updated
 
-    async def list_runs_by_project(self, project_id: int) -> list[StubPipelineRun]:
+    async def list_runs_by_project(self, project_id: int, workspace_id: int | None = None) -> list[StubPipelineRun]:
         return sorted(
             [r for r in self.runs.values() if r.project_id == project_id],
             key=lambda r: r.id,
             reverse=True,
         )
+
+    async def mark_completed(self, run_id: int, workspace_id: int | None = None) -> StubPipelineRun:
+        run = self.runs.get(run_id)
+        if run is None:
+            raise ValueError(f"Run {run_id} not found")
+        if workspace_id is not None and run.workspace_id != workspace_id:
+            raise ValueError(f"Run {run_id} not found")
+        if run.status == "completed":
+            return run
+        updated = run.model_copy(update={"status": "completed", "finished_at": datetime.now(timezone.utc)})
+        self.runs[run_id] = updated
+        return updated
 
     async def update_model_defaults(
         self, run_id: int, updates: dict[str, str], workspace_id: int | None = None
@@ -3192,3 +3205,202 @@ def test_subtitle_format_validation_rejects_invalid_values() -> None:
 
     assert BulkParagraphSubtitlesRequest(subtitle_format="srt").subtitle_format == "srt"
     assert BulkParagraphSubtitlesRequest(subtitle_format="vtt").subtitle_format == "vtt"
+
+
+# --- approve-final security boundary tests ---
+
+
+@pytest.fixture
+def stub_approve_final_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[tuple[StubRunService, StubStageReviewService]]:
+    run_svc = StubRunService()
+    review_svc = StubStageReviewService(run_svc)
+
+    for route in _iter_api_routes(app.routes):
+        if route.name == "approve_final":
+            monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
+            monkeypatch.setitem(route.endpoint.__globals__, "stage_review_service", review_svc)
+
+    async def _require_run_access(run_id: int) -> tuple[CurrentUser, StubPipelineRun]:
+        run = run_svc.runs.get(run_id)
+        if run is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Run not found")
+        # Cross-workspace check: workspace_id=1 is the authenticated user's workspace
+        if run.workspace_id != 1:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Run not found")
+        return CurrentUser(user_id=1, workspace_id=1), run
+
+    app.dependency_overrides[require_run_access] = _require_run_access
+
+    yield run_svc, review_svc
+
+    app.dependency_overrides.pop(require_run_access, None)
+
+
+def _make_final_review_run(run_id: int, workspace_id: int = 1) -> StubPipelineRun:
+    now = datetime.now(timezone.utc)
+    return StubPipelineRun(
+        id=run_id,
+        project_id=1,
+        current_stage="FINAL_REVIEW",
+        status="running",
+        review_stage="FINAL_REVIEW",
+        restart_from=None,
+        model_defaults=None,
+        metadata=None,
+        style_preset="default",
+        started_at=now,
+        finished_at=None,
+        created_at=now,
+        updated_at=now,
+        workspace_id=workspace_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_approve_final_success(client, stub_approve_final_services):
+    """approve-final transitions FINAL_REVIEW -> PUBLISHED and marks completed."""
+    run_svc, review_svc = stub_approve_final_services
+    run_svc.runs[50] = _make_final_review_run(50)
+
+    response = await client.post(
+        "/api/creator/runs/50/approve-final",
+        json={"reviewer": "human", "notes": "looks good"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["current_stage"] == "PUBLISHED"
+    assert data["status"] == "completed"
+    assert data["finished_at"] is not None
+    # Verify service was called correctly
+    assert len(review_svc.approve_calls) == 1
+    call = review_svc.approve_calls[0]
+    assert call["stage_name"] == "FINAL_REVIEW"
+    assert call["target_stage"] == "PUBLISHED"
+    assert call["reviewer"] == "human"
+    assert call["notes"] == "looks good"
+    assert call["workspace_id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_approve_final_missing_run_returns_404(client, stub_approve_final_services):
+    """approve-final returns 404 for non-existent run (anti-enumeration)."""
+    _run_svc, _review_svc = stub_approve_final_services
+
+    response = await client.post(
+        "/api/creator/runs/9999/approve-final",
+        json={},
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_approve_final_cross_workspace_returns_404(client, stub_approve_final_services):
+    """approve-final returns 404 (not 403) for run in another workspace."""
+    run_svc, _review_svc = stub_approve_final_services
+    # Run belongs to workspace 99, but auth user is workspace 1
+    run_svc.runs[51] = _make_final_review_run(51, workspace_id=99)
+
+    response = await client.post(
+        "/api/creator/runs/51/approve-final",
+        json={},
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_approve_final_duplicate_call_is_idempotent(client, stub_approve_final_services):
+    """Calling approve-final on already-completed run returns success (idempotent)."""
+    run_svc, _review_svc = stub_approve_final_services
+    now = datetime.now(timezone.utc)
+    # Run is already PUBLISHED + completed
+    run_svc.runs[52] = StubPipelineRun(
+        id=52,
+        project_id=1,
+        current_stage="PUBLISHED",
+        status="completed",
+        review_stage=None,
+        restart_from=None,
+        model_defaults=None,
+        metadata=None,
+        style_preset="default",
+        started_at=now,
+        finished_at=now,
+        created_at=now,
+        updated_at=now,
+        workspace_id=1,
+    )
+
+    response = await client.post(
+        "/api/creator/runs/52/approve-final",
+        json={},
+    )
+
+    # The stage_review_service will raise conflict because current_stage != FINAL_REVIEW
+    # This should return 409 (conflict)
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_approve_final_wrong_stage_returns_409(client, stub_approve_final_services):
+    """approve-final on a run not in FINAL_REVIEW returns 409 conflict."""
+    run_svc, _review_svc = stub_approve_final_services
+    now = datetime.now(timezone.utc)
+    run_svc.runs[53] = StubPipelineRun(
+        id=53,
+        project_id=1,
+        current_stage="SCRIPT_REVIEW",
+        status="running",
+        review_stage="SCRIPT_REVIEW",
+        restart_from=None,
+        model_defaults=None,
+        metadata=None,
+        style_preset="default",
+        started_at=now,
+        finished_at=None,
+        created_at=now,
+        updated_at=now,
+        workspace_id=1,
+    )
+
+    response = await client.post(
+        "/api/creator/runs/53/approve-final",
+        json={},
+    )
+
+    # StubStageReviewService raises ValueError with "Stage conflict" text
+    assert response.status_code == 409
+
+
+# --- list_runs_for_project workspace_id test ---
+
+
+@pytest.mark.asyncio
+async def test_list_runs_for_project_passes_workspace_id(client, stub_run_service):
+    """list_runs_for_project passes workspace_id from authenticated user."""
+    run_svc = stub_run_service
+    now = datetime.now(timezone.utc)
+    run_svc.runs[100] = StubPipelineRun(
+        id=100,
+        project_id=7,
+        current_stage="IDEA_READY",
+        status="pending",
+        created_at=now,
+        updated_at=now,
+        workspace_id=1,
+    )
+
+    response = await client.get("/api/creator/projects/7/runs")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 1
+    assert data["runs"][0]["id"] == 100
