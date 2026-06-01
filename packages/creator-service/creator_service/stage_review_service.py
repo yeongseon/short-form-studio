@@ -92,6 +92,7 @@ class StageReviewService:
         reviewer: str = "agent",
         notes: str | None = None,
         workspace_id: int | None = None,
+        extra_updates: dict[str, Any] | None = None,
     ) -> Any:
         """Atomically validate stage, record approval, and advance.
 
@@ -126,9 +127,12 @@ class StageReviewService:
             raise ValueError(f"Cannot transition from {stage.value} to {target.value}")
 
         # 3. Atomically advance stage (CAS — fails if stage changed concurrently)
+        updates: dict[str, Any] = {"current_stage": target.value}
+        if extra_updates:
+            updates.update(extra_updates)
         ok, row = await run_service.storage.conditional_update_run(
             run_id,
-            {"current_stage": target.value},
+            updates,
             frozenset({stage.value}),
             workspace_id=workspace_id,
         )

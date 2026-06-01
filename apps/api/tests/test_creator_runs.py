@@ -134,6 +134,8 @@ class StubRunService:
         return updated
 
     async def list_runs_by_project(self, project_id: int, workspace_id: int | None = None) -> list[StubPipelineRun]:
+        self.list_runs_workspace_ids: list[int | None] = getattr(self, "list_runs_workspace_ids", [])
+        self.list_runs_workspace_ids.append(workspace_id)
         return sorted(
             [r for r in self.runs.values() if r.project_id == project_id],
             key=lambda r: r.id,
@@ -215,6 +217,7 @@ class StubStageReviewService:
         reviewer: str = "agent",
         notes: str | None = None,
         workspace_id: int | None = None,
+        extra_updates: dict[str, object] | None = None,
     ) -> StubPipelineRun:
         self.approve_calls.append(
             {
@@ -237,7 +240,10 @@ class StubStageReviewService:
                 f"Stage conflict: run is now in '{run.current_stage}', expected '{stage_name}'"
             )
 
-        updated = run.model_copy(update={"current_stage": target_stage})
+        update_dict: dict[str, object] = {"current_stage": target_stage}
+        if extra_updates:
+            update_dict.update(extra_updates)
+        updated = run.model_copy(update=update_dict)
         self._run_svc.runs[run_id] = updated
         return updated
 
@@ -3317,8 +3323,8 @@ async def test_approve_final_cross_workspace_returns_404(client, stub_approve_fi
 
 
 @pytest.mark.asyncio
-async def test_approve_final_duplicate_call_is_idempotent(client, stub_approve_final_services):
-    """Calling approve-final on already-completed run returns success (idempotent)."""
+async def test_approve_final_already_published_returns_409(client, stub_approve_final_services):
+    """Calling approve-final on already-published run returns 409 conflict (not in FINAL_REVIEW)."""
     run_svc, _review_svc = stub_approve_final_services
     now = datetime.now(timezone.utc)
     # Run is already PUBLISHED + completed
@@ -3404,3 +3410,6 @@ async def test_list_runs_for_project_passes_workspace_id(client, stub_run_servic
     data = response.json()
     assert data["total"] == 1
     assert data["runs"][0]["id"] == 100
+    # Verify workspace_id was actually forwarded to the service
+    assert hasattr(run_svc, "list_runs_workspace_ids")
+    assert run_svc.list_runs_workspace_ids[-1] == 1

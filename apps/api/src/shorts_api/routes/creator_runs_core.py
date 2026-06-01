@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Literal
 
 from creator_domain.models import TRIGGER_POLICY
@@ -278,6 +279,7 @@ async def approve_final(
 ) -> dict[str, object]:
     user, _ = access
     try:
+        # Atomic: publish + complete in a single CAS operation
         updated_run = await stage_review_service.approve_and_advance(
             run_service=run_service,
             run_id=run_id,
@@ -286,11 +288,10 @@ async def approve_final(
             reviewer=request.reviewer,
             notes=request.notes,
             workspace_id=user.workspace_id,
-        )
-        # Mark run as completed
-        updated_run = await run_service.mark_completed(
-            run_id,
-            workspace_id=user.workspace_id,
+            extra_updates={
+                "status": "completed",
+                "finished_at": datetime.now(timezone.utc),
+            },
         )
     except ValueError as exc:
         detail = str(exc)
