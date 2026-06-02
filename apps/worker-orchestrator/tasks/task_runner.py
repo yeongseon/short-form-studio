@@ -540,3 +540,29 @@ def validate_task_message(message: dict[str, Any]) -> dict[str, Any]:
     if "kwargs" in message and not isinstance(message["kwargs"], dict):
         raise ValueError("kwargs must be dict")
     return {k: message[k] for k in ("run_id", "task_name", "args", "kwargs") if k in message}
+
+
+_MAX_STRING_ARG_LENGTH = 4096
+
+_ALLOWED_MODEL_KEYS: frozenset[str] = frozenset(
+    os.getenv(
+        "ALLOWED_MODEL_KEYS",
+        "qwen3:4b,gpt-4o-mini,claude-sonnet,gemini-2.0-flash,"
+        "sd-1.5,dall-e-3,sd3-medium,imagen-3,"
+        "eleven_multilingual_v2,tts-1,whisper-small,tts-1-hd"
+    ).split(",")
+)
+
+
+def validate_model_key(key: str) -> None:
+    """Validate model_key against the allowed whitelist."""
+    if not isinstance(key, str) or not key.strip():
+        raise ValueError("model_key must be a non-empty string")
+    if key not in _ALLOWED_MODEL_KEYS:
+        raise ValueError(f"model_key {key!r} is not in the allowed list")
+
+
+def validate_string_arg(value: Any, name: str) -> None:
+    """Validate that a string argument doesn't exceed max length."""
+    if isinstance(value, str) and len(value) > _MAX_STRING_ARG_LENGTH:
+        raise ValueError(f"{name} exceeds maximum length of {_MAX_STRING_ARG_LENGTH}")

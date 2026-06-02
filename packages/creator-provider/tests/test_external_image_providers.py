@@ -7,6 +7,7 @@ from unittest import mock
 
 import httpx
 import pytest
+from creator_provider.exceptions import ProviderAuthError
 
 
 class TestDalleProvider:
@@ -23,7 +24,7 @@ class TestDalleProvider:
         with mock.patch.dict(os.environ, {}, clear=True):
             from creator_provider.image.dalle_provider import DalleProvider
 
-            with pytest.raises(ValueError, match="not configured"):
+            with pytest.raises(ProviderAuthError, match="not configured"):
                 DalleProvider(endpoint="https://api.openai.com", model_key="dall-e-3")
 
     @pytest.mark.asyncio
@@ -107,7 +108,7 @@ class TestStabilityProvider:
         with mock.patch.dict(os.environ, {}, clear=True):
             from creator_provider.image.stability_provider import StabilityProvider
 
-            with pytest.raises(ValueError, match="not configured"):
+            with pytest.raises(ProviderAuthError, match="not configured"):
                 StabilityProvider(endpoint="https://api.stability.ai", model_key="sd3-medium")
 
     @pytest.mark.asyncio
@@ -203,7 +204,7 @@ class TestImagenProvider:
         with mock.patch.dict(os.environ, {}, clear=True):
             from creator_provider.image.imagen_provider import ImagenProvider
 
-            with pytest.raises(ValueError, match="not configured"):
+            with pytest.raises(ProviderAuthError, match="not configured"):
                 ImagenProvider(
                     endpoint="https://generativelanguage.googleapis.com",
                     model_key="imagen-3",

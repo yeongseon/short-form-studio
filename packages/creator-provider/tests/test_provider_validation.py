@@ -3,12 +3,13 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from creator_provider.exceptions import ProviderValidationError
 
 from creator_provider.validation import validate_prompt_length
 
 
 def test_validate_prompt_length_raises_on_oversized_prompt() -> None:
-    with pytest.raises(ValueError, match="prompt too long"):
+    with pytest.raises(ProviderValidationError, match="prompt too long"):
         validate_prompt_length("x" * 11, 10, "LLM")
 
 
@@ -27,7 +28,7 @@ def test_all_llm_providers_call_validate_prompt_length() -> None:
     oversized = "x" * (MAX_LLM_PROMPT_CHARS + 1)
     for ProviderCls in [OpenAIProvider, AnthropicProvider, GeminiProvider, OllamaProvider]:
         provider = ProviderCls.__new__(ProviderCls)
-        with pytest.raises(ValueError, match="prompt too long"):
+        with pytest.raises(ProviderValidationError, match="prompt too long"):
             asyncio.run(provider.generate(oversized))
 
 
@@ -42,7 +43,7 @@ def test_all_image_providers_call_validate_prompt_length() -> None:
     oversized = "x" * (MAX_IMAGE_PROMPT_CHARS + 1)
     for ProviderCls in [DalleProvider, SDLocalProvider, StabilityProvider, ImagenProvider]:
         provider = ProviderCls.__new__(ProviderCls)
-        with pytest.raises(ValueError, match="prompt too long"):
+        with pytest.raises(ProviderValidationError, match="prompt too long"):
             asyncio.run(provider.generate(oversized))
 
 
@@ -57,5 +58,5 @@ def test_all_tts_providers_call_validate_prompt_length() -> None:
     oversized = "x" * (MAX_TTS_TEXT_CHARS + 1)
     for ProviderCls in [ElevenLabsProvider, OpenAITTSProvider, PiperTTSProvider, QwenTTSProvider]:
         provider = ProviderCls.__new__(ProviderCls)
-        with pytest.raises(ValueError, match="prompt too long"):
+        with pytest.raises(ProviderValidationError, match="prompt too long"):
             asyncio.run(provider.generate(oversized))

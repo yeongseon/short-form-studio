@@ -297,8 +297,8 @@ async def test_health_contract(client):
     assert response.status_code == 200
     body = response.json()
     assert "status" in body
-    assert "models" in body
-    assert isinstance(body["models"], dict)
+    # models detail only visible with admin key
+    assert "models" not in body
 
 
 @pytest.mark.asyncio

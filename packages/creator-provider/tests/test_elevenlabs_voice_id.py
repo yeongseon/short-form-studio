@@ -20,21 +20,12 @@ def _make_response(url: str) -> httpx.Response:
 
 
 @pytest.mark.asyncio
-async def test_path_traversal_voice_id_is_encoded(provider: ElevenLabsProvider, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A voice_id containing path traversal sequences must be percent-encoded."""
-    captured_urls: list[str] = []
+async def test_path_traversal_voice_id_rejected(provider: ElevenLabsProvider) -> None:
+    """A voice_id containing path traversal sequences must be rejected."""
+    from creator_provider.exceptions import ProviderValidationError
 
-    async def _fake_post(self, url, **kwargs):
-        captured_urls.append(str(url))
-        return _make_response(str(url))
-
-    monkeypatch.setattr(httpx.AsyncClient, "post", _fake_post)
-
-    await provider.generate(text="hello", voice="../v2/admin")
-
-    assert len(captured_urls) == 1
-    assert "/../" not in captured_urls[0]
-    assert "%2F" in captured_urls[0] or "%2f" in captured_urls[0]
+    with pytest.raises(ProviderValidationError, match="Invalid voice_id format"):
+        await provider.generate(text="hello", voice="../v2/admin")
 
 
 @pytest.mark.asyncio
@@ -54,21 +45,12 @@ async def test_normal_voice_id_unchanged(provider: ElevenLabsProvider, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_special_chars_voice_id_encoded(provider: ElevenLabsProvider, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Voice IDs with special characters (spaces, slashes, queries) are encoded."""
-    captured_urls: list[str] = []
+async def test_special_chars_voice_id_rejected(provider: ElevenLabsProvider) -> None:
+    """Voice IDs with special characters must be rejected."""
+    from creator_provider.exceptions import ProviderValidationError
 
-    async def _fake_post(self, url, **kwargs):
-        captured_urls.append(str(url))
-        return _make_response(str(url))
-
-    monkeypatch.setattr(httpx.AsyncClient, "post", _fake_post)
-
-    await provider.generate(text="hello", voice="bad/voice?id=1&x=2")
-
-    url = captured_urls[0]
-    assert "/bad/" not in url
-    assert "?" not in url.split("/v1/text-to-speech/")[1]
+    with pytest.raises(ProviderValidationError, match="Invalid voice_id format"):
+        await provider.generate(text="hello", voice="bad/voice?id=1&x=2")
 
 
 @pytest.mark.asyncio

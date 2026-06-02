@@ -45,6 +45,18 @@ class ProjectAccessContext(NamedTuple):
     project: Project
 
 
+def _extract_api_key(request: Request) -> str | None:
+    """Extract API key from X-API-Key or Authorization: Bearer header."""
+    key = request.headers.get("X-API-Key")
+    if key:
+        return key
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:].strip()
+        return token or None
+    return None
+
+
 class _FetchOneResult:
     def __init__(self, row: tuple[object, ...] | None) -> None:
         self._row = row
@@ -169,12 +181,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         # Docs paths go through normal auth when API_KEY is set
         # (they were removed from _PUBLIC_PATHS so they're not auto-allowed)
 
-        # Check header only (never accept keys via query params to avoid log leakage)
-        provided = request.headers.get("X-API-Key")
-        if not provided:
-            auth_header = request.headers.get("Authorization", "")
-            if auth_header.startswith("Bearer "):
-                provided = auth_header[7:]
+        provided = _extract_api_key(request)
 
         if not provided:
             if request.url.path.startswith("/api/creator"):
@@ -232,10 +239,7 @@ async def get_current_user(request: Request) -> CurrentUser:
     if isinstance(context_user, CurrentUser):
         return context_user
 
-    api_key = (
-        request.headers.get("X-API-Key")
-        or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-    )
+    api_key = _extract_api_key(request)
     if not api_key:
         raise HTTPException(status_code=401, detail="API key required")
 
@@ -301,10 +305,7 @@ async def require_api_key_header(request: Request) -> str:
 
     Returns the raw API key string. Raises 401 if missing.
     """
-    api_key = (
-        request.headers.get("X-API-Key")
-        or request.headers.get("Authorization", "").removeprefix("Bearer ").strip()
-    )
+    api_key = _extract_api_key(request)
     if not api_key:
         raise HTTPException(status_code=401, detail="API key required")
     return api_key

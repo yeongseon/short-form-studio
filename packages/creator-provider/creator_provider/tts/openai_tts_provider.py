@@ -18,10 +18,7 @@ class OpenAITTSProvider(TTSProvider):
     def __init__(self, endpoint: str, model_key: str):
         self.endpoint: str = endpoint.rstrip("/")
         self.model_key: str = model_key
-        api_key = resolve_api_key("openai")
-        if api_key is None:
-            raise ValueError("API key for 'openai' not configured")
-        self.api_key: str = api_key
+        self.api_key: str = resolve_api_key("openai")
 
     async def generate(
         self,

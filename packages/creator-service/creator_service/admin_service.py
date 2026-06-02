@@ -123,6 +123,7 @@ class AdminService:
                 )
             return [dict(row) for row in rows]
         except Exception:
+            logger.exception("Failed to query stuck runs")
             return []
 
     async def get_failed_runs(self, hours: int = 24) -> list[dict[str, Any]]:
@@ -143,6 +144,7 @@ class AdminService:
                 )
             return [dict(row) for row in rows]
         except Exception:
+            logger.exception("Failed to query failed runs")
             return []
 
     async def get_queue_depth(self) -> dict[str, int]:

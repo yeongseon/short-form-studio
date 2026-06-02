@@ -7,6 +7,8 @@ from unittest import mock
 
 import httpx
 import pytest
+from creator_provider.exceptions import ProviderAuthError
+from creator_provider.exceptions import ProviderAuthError
 
 
 class TestElevenLabsProvider:
@@ -26,7 +28,7 @@ class TestElevenLabsProvider:
         with mock.patch.dict(os.environ, {}, clear=True):
             from creator_provider.tts.elevenlabs_provider import ElevenLabsProvider
 
-            with pytest.raises(ValueError, match="not configured"):
+            with pytest.raises(ProviderAuthError, match="not configured"):
                 ElevenLabsProvider(
                     endpoint="https://api.elevenlabs.io",
                     model_key="elevenlabs-multilingual-v2",
@@ -153,7 +155,7 @@ class TestOpenAITTSProvider:
         with mock.patch.dict(os.environ, {}, clear=True):
             from creator_provider.tts.openai_tts_provider import OpenAITTSProvider
 
-            with pytest.raises(ValueError, match="not configured"):
+            with pytest.raises(ProviderAuthError, match="not configured"):
                 OpenAITTSProvider(endpoint="https://api.openai.com", model_key="openai-tts-1")
 
     @pytest.mark.asyncio

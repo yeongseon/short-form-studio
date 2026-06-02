@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
+from creator_provider.exceptions import ProviderValidationError
 
 from creator_provider.exceptions import (
     ProviderError,
@@ -95,7 +96,7 @@ class TestOllamaFailurePaths:
     @pytest.mark.asyncio
     async def test_prompt_too_long(self, provider: OllamaProvider):
         long_prompt = "x" * 40_000
-        with pytest.raises(ValueError, match="too long"):
+        with pytest.raises(ProviderValidationError, match="too long"):
             await provider.generate(long_prompt)
 
 
@@ -145,7 +146,7 @@ class TestSDLocalFailurePaths:
     @pytest.mark.asyncio
     async def test_prompt_too_long(self, provider: SDLocalProvider):
         long_prompt = "x" * 3000
-        with pytest.raises(ValueError, match="too long"):
+        with pytest.raises(ProviderValidationError, match="too long"):
             await provider.generate(long_prompt)
 
     @pytest.mark.asyncio
@@ -218,7 +219,7 @@ class TestPiperTTSFailurePaths:
     @pytest.mark.asyncio
     async def test_prompt_too_long(self, provider: PiperTTSProvider):
         long_text = "x" * 6000
-        with pytest.raises(ValueError, match="too long"):
+        with pytest.raises(ProviderValidationError, match="too long"):
             await provider.generate(long_text)
 
     @pytest.mark.asyncio

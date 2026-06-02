@@ -14,10 +14,7 @@ class GeminiProvider(LLMProvider):
     def __init__(self, endpoint: str, model_key: str):
         self.endpoint: str = endpoint.rstrip("/")
         self.model_key: str = model_key
-        api_key = resolve_api_key("google")
-        if api_key is None:
-            raise ValueError("API key for 'google' not configured")
-        self.api_key: str = api_key
+        self.api_key: str = resolve_api_key("google")
 
     async def generate(self, prompt: str, params: dict[str, Any] | None = None) -> str:
         validate_prompt_length(prompt, MAX_LLM_PROMPT_CHARS, "LLM")

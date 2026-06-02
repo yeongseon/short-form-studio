@@ -130,10 +130,8 @@ class TestModelCatalogService:
         assert len(result["providers"]) == len(unique_providers)
 
         provider = result["providers"][0]
-        assert set(provider.keys()) == {"name", "provider_type", "healthy", "loaded_model", "gpu_locked"}
+        assert set(provider.keys()) == {"name", "healthy"}
         assert "endpoint" not in provider, "endpoint must not be exposed in status response"
-        assert provider["loaded_model"] is None
-        assert provider["gpu_locked"] is False
 
         # Verify local providers are present
         provider_names = {p["name"] for p in result["providers"]}
@@ -142,11 +140,7 @@ class TestModelCatalogService:
         assert "tts-qwen3" in provider_names
         assert "stt-whisper" in provider_names
 
-        assert result["gpu_lock"] == {
-            "active": False,
-            "holder": None,
-            "ttl_remaining": None,
-        }
+        assert result["gpu_lock"] == {"active": False}
 
     @pytest.mark.asyncio
     async def test_model_entries_have_required_fields(self, registry, health_service: AsyncMock):

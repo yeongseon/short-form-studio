@@ -167,6 +167,28 @@ def setup_worker_process_telemetry(**kwargs: object) -> None:
     telemetry_module.init_telemetry(service_name="worker")
 
 
+
+_DLQ_MAX_STRING_LEN = 1024
+_SENSITIVE_KEY_PATTERNS = frozenset({"key", "secret", "token", "password", "credential"})
+
+
+def _sanitize_for_dlq(data: Any, depth: int = 0) -> Any:
+    """Sanitize data before writing to DLQ: truncate strings, redact secrets."""
+    if depth > 10:
+        return "<nested>"
+    if isinstance(data, str):
+        return data[:_DLQ_MAX_STRING_LEN] if len(data) > _DLQ_MAX_STRING_LEN else data
+    if isinstance(data, dict):
+        result = {}
+        for k, v in data.items():
+            if any(p in str(k).lower() for p in _SENSITIVE_KEY_PATTERNS):
+                result[k] = "<redacted>"
+            else:
+                result[k] = _sanitize_for_dlq(v, depth + 1)
+        return result
+    if isinstance(data, (list, tuple)):
+        return [_sanitize_for_dlq(item, depth + 1) for item in data[:50]]
+    return data
 def _record_failed_task_to_dlq(
     task_id: str | None,
     task_name: str,
@@ -174,14 +196,14 @@ def _record_failed_task_to_dlq(
     kwargs: dict[str, Any],
     exception: BaseException,
 ) -> None:
-    payload = {
+    payload = _sanitize_for_dlq({
         "task_id": task_id,
         "task_name": task_name,
         "args": args,
         "kwargs": kwargs,
         "exception": repr(exception),
         "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
+    })
 
     def _write_dlq_fallback(entry: dict[str, Any], error: BaseException | None = None) -> None:
         logger = logging.getLogger(__name__)

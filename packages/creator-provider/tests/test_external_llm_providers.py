@@ -5,6 +5,7 @@ from unittest import mock
 
 import httpx
 import pytest
+from creator_provider.exceptions import ProviderAuthError
 
 from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
 
@@ -23,7 +24,7 @@ class TestOpenAIProvider:
         with mock.patch.dict(os.environ, {}, clear=True):
             from creator_provider.llm.openai_provider import OpenAIProvider
 
-            with pytest.raises(ValueError, match="not configured"):
+            with pytest.raises(ProviderAuthError, match="not configured"):
                 OpenAIProvider(endpoint="https://api.openai.com", model_key="gpt-4o-mini")
 
     @pytest.mark.asyncio
@@ -150,7 +151,7 @@ class TestAnthropicProvider:
         with mock.patch.dict(os.environ, {}, clear=True):
             from creator_provider.llm.anthropic_provider import AnthropicProvider
 
-            with pytest.raises(ValueError, match="not configured"):
+            with pytest.raises(ProviderAuthError, match="not configured"):
                 AnthropicProvider(
                     endpoint="https://api.anthropic.com",
                     model_key="claude-sonnet-4-20250514",
@@ -297,7 +298,7 @@ class TestGeminiProvider:
         with mock.patch.dict(os.environ, {}, clear=True):
             from creator_provider.llm.gemini_provider import GeminiProvider
 
-            with pytest.raises(ValueError, match="not configured"):
+            with pytest.raises(ProviderAuthError, match="not configured"):
                 GeminiProvider(
                     endpoint="https://generativelanguage.googleapis.com",
                     model_key="gemini-2.0-flash",

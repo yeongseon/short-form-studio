@@ -109,12 +109,11 @@ class ModelCatalogService:
             )
 
         return {
-            "providers": providers,
-            "gpu_lock": {
-                "active": False,
-                "holder": None,
-                "ttl_remaining": None,
-            },
+            "providers": [
+                {"name": p["name"], "healthy": p["healthy"]}
+                for p in providers
+            ],
+            "gpu_lock": {"active": False},
         }
 
     async def _catalog_entry(self, entry: Any) -> dict[str, object]:

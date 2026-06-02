@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import urllib.parse
+import re
 import tempfile
 from importlib import import_module
 from pathlib import Path
@@ -11,7 +12,7 @@ import httpx
 
 from creator_provider.api_keys import resolve_api_key
 from creator_provider.base import AudioResult, TTSProvider
-from creator_provider.exceptions import ProviderError, map_httpx_error
+from creator_provider.exceptions import ProviderError, ProviderValidationError, map_httpx_error
 from creator_provider.validation import MAX_TTS_TEXT_CHARS, validate_prompt_length
 
 
@@ -19,10 +20,7 @@ class ElevenLabsProvider(TTSProvider):
     def __init__(self, endpoint: str, model_key: str):
         self.endpoint: str = endpoint.rstrip("/")
         self.model_key: str = model_key
-        api_key = resolve_api_key("elevenlabs")
-        if api_key is None:
-            raise ValueError("API key for 'elevenlabs' not configured")
-        self.api_key: str = api_key
+        self.api_key: str = resolve_api_key("elevenlabs")
 
     async def generate(
         self,
@@ -46,8 +44,10 @@ class ElevenLabsProvider(TTSProvider):
         output_format = merged_params.get("output_format", "mp3_44100_128")
 
         if not voice_id or not voice_id.strip():
-            raise ProviderError("voice_id must not be empty")
+            raise ProviderValidationError("voice_id must not be empty")
 
+        if not re.match(r'^[a-zA-Z0-9]{10,30}$', voice_id):
+            raise ProviderValidationError(f"Invalid voice_id format: {voice_id!r}")
         url = f"{self.endpoint}/v1/text-to-speech/{urllib.parse.quote(voice_id, safe='')}"
         headers = {
             "xi-api-key": self.api_key,
