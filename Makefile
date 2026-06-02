@@ -37,3 +37,23 @@ docker-up-all:
 
 docker-logs:
 	docker compose logs -f
+
+# --- Local Server (LAN-accessible) ---
+
+docker-local-up:
+	docker compose -f docker-compose.yml -f docker-compose.local-server.yml up -d postgres redis api worker studio-web
+
+docker-local-build:
+	docker compose -f docker-compose.yml -f docker-compose.local-server.yml up -d --build postgres redis api worker studio-web
+
+docker-local-migrate:
+	docker compose run --rm api alembic upgrade head
+
+docker-local-bootstrap:
+	docker compose run --rm api python scripts/create_api_key.py --email local@example.com --workspace local --name local-server
+
+docker-local-logs:
+	docker compose logs -f api worker studio-web
+
+docker-local-down:
+	docker compose -f docker-compose.yml -f docker-compose.local-server.yml down

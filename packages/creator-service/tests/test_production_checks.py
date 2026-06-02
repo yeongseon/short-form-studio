@@ -20,6 +20,7 @@ def _prod_env(**overrides: str) -> dict[str, str]:
         "CORS_ORIGINS": "https://studio.example.com",
         "REDIS_URL": "redis://redis:6379/0",
         "ARTIFACT_ROOT": "/mnt/data/artifacts",
+        "ADMIN_API_KEY": "a-secure-admin-key-at-least-16",
     }
     base.update(overrides)
     return base
@@ -71,8 +72,13 @@ class TestProductionMode:
         with patch.dict(os.environ, _prod_env(), clear=True):
             validate_production_config()
 
-    def test_valid_config_passes_without_api_key(self) -> None:
-        with patch.dict(os.environ, _prod_env(), clear=True):
+    def test_missing_admin_api_key_fails_in_production(self) -> None:
+        env = _prod_env()
+        del env["ADMIN_API_KEY"]
+        with (
+            patch.dict(os.environ, env, clear=True),
+            pytest.raises(ProductionConfigError, match="ADMIN_API_KEY"),
+        ):
             validate_production_config()
 
     def test_database_url_with_default_password(self) -> None:

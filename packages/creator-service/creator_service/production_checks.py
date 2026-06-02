@@ -86,7 +86,7 @@ def validate_production_config(*, service_kind: str = "api") -> None:
         errors.append("REDIS_URL is required in production.")
 
     # 5. ADMIN_API_KEY must be set with minimum length in production
-    if environment == "production" and "ADMIN_API_KEY" in os.environ:
+    if environment == "production":
         admin_api_key = os.getenv("ADMIN_API_KEY", "")
         if len(admin_api_key) < 16:
             errors.append("ADMIN_API_KEY must be set to at least 16 characters in production.")
