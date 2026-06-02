@@ -157,10 +157,15 @@ class StageReviewService:
                 }
             )
         except Exception as exc:
-            # Roll back stage on review insert failure.
+            # Roll back ALL fields changed by the CAS (stage + extra_updates).
+            rollback_updates: dict[str, Any] = {"current_stage": stage.value}
+            if extra_updates:
+                # Restore extra fields to None (their pre-update state)
+                for key in extra_updates:
+                    rollback_updates[key] = None
             rollback_ok, _ = await run_service.storage.conditional_update_run(
                 run_id,
-                {"current_stage": stage.value},
+                rollback_updates,
                 frozenset({target.value}),
                 workspace_id=workspace_id,
             )

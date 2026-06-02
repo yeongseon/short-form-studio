@@ -119,3 +119,48 @@ def test_approve_raises_inconsistency_when_rollback_also_fails() -> None:
                 workspace_id=1,
             )
         )
+
+
+def test_approve_and_advance_rolls_back_extra_updates_on_review_failure() -> None:
+    """When create_review fails, extra_updates (status, finished_at) must also be rolled back."""
+    from datetime import datetime, timezone
+
+    run_storage = InMemoryRunStorage()
+    run_row = run(
+        run_storage.create_run(
+            {
+                "project_id": 1,
+                "workspace_id": 1,
+                "current_stage": "FINAL_REVIEW",
+                "status": "paused",
+            }
+        )
+    )
+    run_id = int(run_row["id"])
+
+    storage = _FailingReviewStorage()
+    service = StageReviewService(storage)
+    run_svc = _RunServiceStub(run_storage)
+
+    with pytest.raises(RuntimeError, match="review insert failed"):
+        run(
+            service.approve_and_advance(
+                run_service=run_svc,
+                run_id=run_id,
+                stage_name="FINAL_REVIEW",
+                target_stage="PUBLISHED",
+                workspace_id=1,
+                extra_updates={
+                    "status": "completed",
+                    "finished_at": datetime.now(timezone.utc),
+                },
+            )
+        )
+
+    latest = run(run_storage.get_run(run_id, workspace_id=1))
+    assert latest is not None
+    # Stage must be rolled back
+    assert latest["current_stage"] == "FINAL_REVIEW"
+    # Extra updates must also be rolled back
+    assert latest["status"] is None or latest["status"] != "completed"
+    assert latest.get("finished_at") is None
