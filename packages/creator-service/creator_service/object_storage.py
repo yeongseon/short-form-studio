@@ -122,11 +122,20 @@ class LocalStorageBackend:
             md5.update(data)
             size = len(data)
         else:
-            with open(path, "wb") as file_obj:
+            # Check if source file is the same as destination to avoid self-truncation
+            source_path = Path(data.name).resolve() if hasattr(data, 'name') else None
+            if source_path and source_path == path.resolve():
+                # Source and destination are the same file — just compute checksum
+                data.seek(0)
                 while chunk := data.read(8192):
-                    file_obj.write(chunk)
                     md5.update(chunk)
-            size = path.stat().st_size
+                size = path.stat().st_size
+            else:
+                with open(path, "wb") as file_obj:
+                    while chunk := data.read(8192):
+                        file_obj.write(chunk)
+                        md5.update(chunk)
+                size = path.stat().st_size
 
         return StorageResult(
             key=key,

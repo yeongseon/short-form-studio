@@ -65,6 +65,11 @@ class ProviderRegistry:
         from creator_provider.tts.elevenlabs_provider import ElevenLabsProvider
         from creator_provider.tts.openai_tts_provider import OpenAITTSProvider
         from creator_provider.tts.qwen_tts_provider import QwenTTSProvider
+        from creator_provider.llm.groq_provider import GroqLLMProvider
+        from creator_provider.stt.groq_stt_provider import GroqSTTProvider
+        from creator_provider.image.pollinations_provider import PollinationsProvider
+        from creator_provider.tts.edge_tts_provider import EdgeTTSProvider
+        from creator_provider.image.placeholder_provider import PlaceholderImageProvider
 
         registry = cls()
         registry.register_provider("ollama", OllamaProvider)
@@ -79,6 +84,11 @@ class ProviderRegistry:
         registry.register_provider("openai_image", DalleProvider)
         registry.register_provider("stability_image", StabilityProvider)
         registry.register_provider("google_image", ImagenProvider)
+        registry.register_provider("groq_llm", GroqLLMProvider)
+        registry.register_provider("groq_stt", GroqSTTProvider)
+        registry.register_provider("pollinations_image", PollinationsProvider)
+        registry.register_provider("edge_tts", EdgeTTSProvider)
+        registry.register_provider("placeholder_image", PlaceholderImageProvider)
         registry.register_model(
             ModelCatalogEntry(
                 model_key="qwen3-4b",
@@ -211,6 +221,58 @@ class ProviderRegistry:
                 requires_gpu=False,
                 is_local=False,
                 default_params={"width": 1024, "height": 1792},
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="llama-3.3-70b-versatile",
+                provider_type="groq_llm",
+                endpoint="https://api.groq.com/openai/v1",
+                category=ProviderCategory.LLM,
+                requires_gpu=False,
+                is_local=False,
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="groq-whisper-large-v3-turbo",
+                provider_type="groq_stt",
+                endpoint="https://api.groq.com/openai/v1",
+                category=ProviderCategory.STT,
+                requires_gpu=False,
+                is_local=False,
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="pollinations",
+                provider_type="pollinations_image",
+                endpoint="https://image.pollinations.ai",
+                category=ProviderCategory.IMAGE,
+                requires_gpu=False,
+                is_local=False,
+                default_params={"width": 1024, "height": 1792},
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="placeholder",
+                provider_type="placeholder_image",
+                endpoint="local",
+                category=ProviderCategory.IMAGE,
+                requires_gpu=False,
+                is_local=True,
+                default_params={"width": 1024, "height": 1792},
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="edge-tts",
+                provider_type="edge_tts",
+                endpoint="local",
+                category=ProviderCategory.TTS,
+                requires_gpu=False,
+                is_local=True,
             )
         )
         return registry

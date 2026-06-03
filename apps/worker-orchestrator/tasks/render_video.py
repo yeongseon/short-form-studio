@@ -28,6 +28,26 @@ from tasks.task_runner import TaskContext, TaskResult, TaskRunnerConfig, run_tas
 
 logger = logging.getLogger(__name__)
 _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
+
+
+def compute_scene_durations(
+    ffmpeg: FFmpegService,
+    audio_path: Path | None,
+    scene_count: int,
+    max_duration_seconds: float,
+) -> list[float]:
+    """Compute per-scene durations from audio length or max_duration fallback.
+
+    Production logic extracted for testability.
+    """
+    if audio_path:
+        try:
+            total_dur = ffmpeg.get_audio_duration(str(audio_path))
+        except Exception:
+            total_dur = max_duration_seconds
+        return [total_dur / scene_count] * scene_count
+    return [max_duration_seconds / scene_count] * scene_count
+
 _ALLOWED_RENDER_PROFILE_KEYS: dict[str, type[Any] | tuple[type[Any], ...]] = {
     "name": str,
     "width": int,
@@ -231,14 +251,22 @@ def render_video(self, run_id: int, render_profile: str = "shorts_default") -> d
             else:
                 audio_path = Path(run_audio_path) if run_audio_path else None
                 subtitle_path = Path(run_sub_path) if run_sub_path else None
-                scene_durations = [profile_data["max_duration_seconds"] / scene_count] * scene_count
+                scene_durations = compute_scene_durations(
+                    ffmpeg, audio_path, scene_count, profile_data["max_duration_seconds"]
+                )
         else:
             audio_path = Path(run_audio_path) if run_audio_path else None
             subtitle_path = Path(run_sub_path) if run_sub_path else None
-            scene_durations = [profile_data["max_duration_seconds"] / scene_count] * scene_count
+            scene_durations = compute_scene_durations(
+                ffmpeg, audio_path, scene_count, profile_data["max_duration_seconds"]
+            )
 
         output_path = f"{_ARTIFACT_ROOT}/{run_id}/render/output.mp4"
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        logger.debug(
+            "Render inputs for run %d: images=%s audio=%s subs=%s durations=%s",
+            run_id, image_paths, audio_path, subtitle_path, scene_durations,
+        )
         try:
             ffmpeg.render(
                 RenderInput(
@@ -256,8 +284,9 @@ def render_video(self, run_id: int, render_profile: str = "shorts_default") -> d
         except SoftTimeLimitExceeded:
             raise
         except Exception as exc:
+            logger.error("FFmpeg render exception for run %d: %s: %s", run_id, type(exc).__name__, exc)
             message = str(exc).lower()
-            if "429" in message or "rate" in message:
+            if "429" in message or "rate limit" in message:
                 raise RateLimitError(
                     f"Provider rate limited video render for run {run_id}"
                 ) from exc

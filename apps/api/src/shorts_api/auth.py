@@ -70,7 +70,7 @@ class _AsyncpgSessionAdapter:
         self._connection = connection
 
     async def execute(self, query, params: dict[str, object]):
-        row = await self._connection.fetchrow(str(query), params["h"])
+        row = await self._connection.fetchrow("SELECT user_id FROM api_keys WHERE key_hash = $1", params["h"])
         if row is None:
             return _FetchOneResult(None)
         return _FetchOneResult((row.get("user_id"),))

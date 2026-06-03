@@ -21,6 +21,7 @@ _KEY_MAP: dict[str, str] = {
     "google": "GOOGLE_API_KEY",
     "stability": "STABILITY_API_KEY",
     "elevenlabs": "ELEVENLABS_API_KEY",
+    "groq": "GROQ_API_KEY",
 }
 
 

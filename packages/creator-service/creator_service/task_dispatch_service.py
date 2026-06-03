@@ -255,7 +255,8 @@ class TaskDispatchService:
                     _pre_run = await run_service_obj.get_run(run_id)
             else:
                 _pre_run = await run_service_obj.get_run(run_id)
-        except Exception:
+        except Exception as _exc:
+            logger.error("Pre-dispatch run check failed: %s", _exc, exc_info=True)
             raise ServiceUnavailableError(
                 "Unable to verify run status; dispatch blocked",
             ) from None
@@ -305,7 +306,8 @@ class TaskDispatchService:
                     raise QuotaExceededError(reason)
             except (NotFoundError, ValidationError, QuotaExceededError):
                 raise
-            except Exception:
+            except Exception as _exc:
+                logger.error("Quota check failed: %s", _exc, exc_info=True)
                 raise ServiceUnavailableError(
                     "Unable to check quota; dispatch blocked",
                 ) from None

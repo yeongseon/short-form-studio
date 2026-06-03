@@ -52,6 +52,7 @@ services:
     build:
       context: .
       dockerfile: apps/worker-orchestrator/Dockerfile
+      target: runtime
     volumes:
       - ./data/artifacts:/app/data/artifacts
     env_file:

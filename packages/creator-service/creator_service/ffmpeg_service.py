@@ -1,10 +1,11 @@
+import logging
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 from .render_profile import RenderProfile
 
-
+logger = logging.getLogger(__name__)
 @dataclass
 class RenderInput:
     image_paths: list[Path]  # ordered scene images
@@ -44,7 +45,7 @@ class FFmpegService:
         FFmpeg never receives conflicting ``-filter_complex`` and ``-vf``
         flags.
         """
-        cmd = ["ffmpeg", "-y"]  # overwrite output
+        cmd = ["ffmpeg", "-y", "-threads", "1", "-filter_threads", "1"]
 
         if len(input_data.image_paths) != len(input_data.scene_durations):
             raise ValueError(
@@ -103,6 +104,8 @@ class FFmpegService:
         # --- codec settings ------------------------------------------------
         cmd.extend(
             [
+                "-pix_fmt",
+                "yuv420p",
                 "-c:v",
                 self.profile.video_codec.value,
                 "-crf",
@@ -115,7 +118,7 @@ class FFmpegService:
         )
 
         if input_data.audio_path:
-            cmd.extend(["-c:a", self.profile.audio_codec.value])
+            cmd.extend(["-c:a", self.profile.audio_codec.value, "-shortest"])
 
         cmd.append(str(output_path))
         return cmd
@@ -124,8 +127,10 @@ class FFmpegService:
         """Execute FFmpeg render. Returns output path on success."""
         cmd = self.build_command(input_data, output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        logger.debug("FFmpeg command: %s", ' '.join(str(c) for c in cmd))
+        result = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=300, start_new_session=True)
         if result.returncode != 0:
+            logger.error("FFmpeg stderr: %s", result.stderr[-2000:] if result.stderr else 'empty')
             raise RuntimeError(f"FFmpeg render failed: {result.stderr}")
         return output_path
 

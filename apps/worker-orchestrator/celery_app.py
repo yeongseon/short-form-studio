@@ -21,7 +21,12 @@ from typing import Any
 from celery import Celery
 from celery.signals import after_setup_logger, task_failure, worker_process_init
 from importlib import import_module
-import worker_loop as _worker_loop_module  # noqa: F401 — register signal handlers
+# Only import worker_loop (signal handlers) when running as a worker process,
+# not when imported by the API for task dispatch.
+try:
+    import worker_loop as _worker_loop_module  # noqa: F401 — register signal handlers
+except ImportError:
+    _worker_loop_module = None  # API context — worker_loop not available
 from creator_service.logging_config import setup_json_logging
 from kombu import Exchange, Queue
 
@@ -46,7 +51,7 @@ def _parse_int_env(name: str, default: int) -> int:
     return parsed
 
 
-MAX_MEMORY_MB = _parse_int_env("MAX_MEMORY_MB", 1024)
+MAX_MEMORY_MB = _parse_int_env("MAX_MEMORY_MB", 4096)
 _SHUTDOWN_REQUESTED = False
 _previous_sigterm_handler: object | None = None
 _previous_sigint_handler: object | None = None
@@ -81,11 +86,10 @@ def is_shutting_down() -> bool:
     return _SHUTDOWN_REQUESTED
 
 def _apply_resource_limits() -> None:
+    """Apply memory limits. Only call from worker process startup."""
     memory_limit_bytes = MAX_MEMORY_MB * 1024 * 1024
     resource.setrlimit(resource.RLIMIT_AS, (memory_limit_bytes, memory_limit_bytes))
 
-
-_apply_resource_limits()
 
 redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
 dlq_max_size = max(1, int(os.getenv("DLQ_MAX_SIZE", "10000")))
@@ -137,13 +141,16 @@ celery_app.conf.update(
 )
 
 validate_production_config(service_kind="worker")
-try:
-    _previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
-    signal.signal(signal.SIGTERM, _handle_sigterm)
-    _previous_sigint_handler = signal.getsignal(signal.SIGINT)
-    signal.signal(signal.SIGINT, _handle_sigint)
-except ValueError:
-    logging.getLogger(__name__).debug("Skipping signal handler registration: not in main thread")
+def _register_signal_handlers() -> None:
+    """Register shutdown signal handlers. Only safe in main thread of worker process."""
+    global _previous_sigterm_handler, _previous_sigint_handler
+    try:
+        _previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
+        signal.signal(signal.SIGTERM, _handle_sigterm)
+        _previous_sigint_handler = signal.getsignal(signal.SIGINT)
+        signal.signal(signal.SIGINT, _handle_sigint)
+    except ValueError:
+        logging.getLogger(__name__).debug("Skipping signal handler registration: not in main thread")
 
 
 @after_setup_logger.connect
@@ -163,6 +170,8 @@ def setup_worker_process_telemetry(**kwargs: object) -> None:
     multiple calls within the same process are no-ops.
     """
     _ = kwargs
+    _register_signal_handlers()
+    _apply_resource_limits()
     telemetry_module = import_module("telemetry")
     telemetry_module.init_telemetry(service_name="worker")
 

@@ -46,10 +46,6 @@ def upgrade() -> None:
     )
     op.add_column(
         "creator_artifacts",
-        sa.Column("content_type", sa.String(length=100), nullable=True),
-    )
-    op.add_column(
-        "creator_artifacts",
         sa.Column("checksum", sa.String(length=128), nullable=True),
     )
     op.add_column(
@@ -68,7 +64,6 @@ def downgrade() -> None:
     op.drop_index("ix_creator_artifacts_workspace_run", "creator_artifacts")
     op.drop_column("creator_artifacts", "expires_at")
     op.drop_column("creator_artifacts", "checksum")
-    op.drop_column("creator_artifacts", "content_type")
     op.drop_column("creator_artifacts", "storage_provider")
     op.drop_column("creator_artifacts", "project_id")
     op.drop_column("creator_artifacts", "workspace_id")

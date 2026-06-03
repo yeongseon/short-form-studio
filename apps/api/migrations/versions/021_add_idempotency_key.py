@@ -22,7 +22,6 @@ def upgrade() -> None:
         "creator_script_drafts",
         "creator_visual_plans",
         "creator_scene_assets",
-        "usage_events",
     )
     for table in tables:
         op.add_column(table, sa.Column("idempotency_key", sa.String(length=255), nullable=True))
@@ -35,7 +34,6 @@ def downgrade() -> None:
         "creator_script_drafts",
         "creator_visual_plans",
         "creator_scene_assets",
-        "usage_events",
     )
     for table in tables:
         op.drop_index(f"ix_{table}_idempotency_key", table_name=table)

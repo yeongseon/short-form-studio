@@ -55,13 +55,20 @@ from creator_provider.versioned_assets import clear_loaded_asset_versions, get_l
 from creator_service.run_service import run_service as _run_service
 from creator_service.task_tracking_service import task_tracking_service as _task_tracking_service
 from creator_service.usage_service import resolve_workspace_id_from_run
-from worker_loop import run_in_worker_loop
+
 
 redis: Any
 try:
     import redis
 except ImportError:
     redis = None
+
+
+def run_in_worker_loop(coro):
+    """Lazy-import wrapper to avoid import errors in non-worker contexts (e.g. API)."""
+    from worker_loop import run_in_worker_loop as _run
+    return _run(coro)
+
 
 logger = logging.getLogger(__name__)
 
@@ -548,8 +555,10 @@ _ALLOWED_MODEL_KEYS: frozenset[str] = frozenset(
     os.getenv(
         "ALLOWED_MODEL_KEYS",
         "qwen3:4b,gpt-4o-mini,claude-sonnet,gemini-2.0-flash,"
-        "sd-1.5,dall-e-3,sd3-medium,imagen-3,"
-        "eleven_multilingual_v2,tts-1,whisper-small,tts-1-hd"
+        "llama-3.3-70b-versatile,"
+        "sd-1.5,dall-e-3,sd3-medium,imagen-3,pollinations,placeholder,"
+        "eleven_multilingual_v2,tts-1,whisper-small,tts-1-hd,edge-tts,"
+        "groq-whisper-large-v3-turbo"
     ).split(",")
 )
 

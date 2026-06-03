@@ -38,6 +38,7 @@ def upgrade() -> None:
             server_default=sa.func.now(),
             nullable=False,
         ),
+        sa.Column("idempotency_key", sa.String(length=255), nullable=True),
     )
 
     op.create_check_constraint(
@@ -47,6 +48,7 @@ def upgrade() -> None:
     )
     op.create_index("ix_usage_workspace", "usage_events", ["workspace_id", "created_at"])
     op.create_index("ix_usage_run", "usage_events", ["run_id"])
+    op.create_index("ix_usage_events_idempotency_key", "usage_events", ["idempotency_key"], unique=True)
 
     op.create_table(
         "workspace_quotas",
