@@ -161,9 +161,11 @@ def test_sigterm_handler_marks_shutdown_flag() -> None:
     import shorts_api.lifecycle as lifecycle_module
 
     lifecycle_module.shutdown_state.is_shutting_down = False
+    lifecycle_module._previous_sigterm_handler = None  # Avoid chaining to stale handlers
     lifecycle_module._handle_sigterm(15, None)
 
     assert lifecycle_module.shutdown_state.is_shutting_down is True
+    lifecycle_module.shutdown_state.is_shutting_down = False  # cleanup
 
 
 @pytest.mark.asyncio

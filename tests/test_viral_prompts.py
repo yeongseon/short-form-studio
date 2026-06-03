@@ -6,7 +6,13 @@ from pathlib import Path
 # Add worker tasks to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "apps" / "worker-orchestrator"))
 
-from tasks.viral_prompts import NICHE_PRESETS, SUPPORTED_LANGUAGES, build_viral_system_prompt
+from tasks.viral_prompts import (
+    LANGUAGE_INSTRUCTIONS,
+    NICHE_PRESETS,
+    SUPPORTED_LANGUAGES,
+    build_viral_system_prompt,
+    build_viral_visual_prompt,
+)
 
 
 class TestBuildViralSystemPrompt:
@@ -54,3 +60,42 @@ class TestBuildViralSystemPrompt:
             result = build_viral_system_prompt("facts", lang)
             assert isinstance(result, str)
             assert len(result) > 100
+
+
+class TestBuildViralVisualPrompt:
+    def test_returns_string_without_niche(self):
+        result = build_viral_visual_prompt()
+        assert isinstance(result, str)
+        assert "visual" in result.lower()
+
+    def test_known_niche_includes_style(self):
+        result = build_viral_visual_prompt("horror")
+        assert NICHE_PRESETS["horror"]["visual_style"] in result
+
+    def test_unknown_niche_uses_default_style(self):
+        result = build_viral_visual_prompt("nonexistent")
+        assert "cinematic" in result
+
+    def test_all_presets_produce_output(self):
+        for niche in NICHE_PRESETS:
+            result = build_viral_visual_prompt(niche)
+            assert len(result) > 50
+
+
+class TestLanguageConfigInvariant:
+    def test_supported_languages_matches_instructions_keys(self):
+        assert set(SUPPORTED_LANGUAGES) == set(LANGUAGE_INSTRUCTIONS.keys())
+
+    def test_all_instructions_are_nonempty_strings(self):
+        for lang, instruction in LANGUAGE_INSTRUCTIONS.items():
+            assert isinstance(instruction, str)
+            assert len(instruction) > 0, f"Empty instruction for {lang}"
+
+
+class TestInvalidLanguageWarning:
+    def test_invalid_language_logs_warning(self, caplog):
+        import logging
+        with caplog.at_level(logging.WARNING):
+            result = build_viral_system_prompt(language="xx")
+        assert "Unsupported language" in caplog.text
+        assert "한국어" in result  # fell back to Korean

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from creator_domain.models.stage import RunStage
 from tasks import generate_scene_image as generate_scene_image_module
 
 
@@ -230,12 +231,7 @@ class FakeRegistry:
 
 
 def _patch_registry(monkeypatch: pytest.MonkeyPatch, registry: FakeRegistry) -> None:
-    class _ProviderRegistry:
-        @staticmethod
-        def create_default() -> FakeRegistry:
-            return registry
-
-    monkeypatch.setattr(generate_scene_image_module, "ProviderRegistry", _ProviderRegistry)
+    monkeypatch.setattr(generate_scene_image_module, "get_default_registry", lambda: registry)
 
 
 def _patch_redis(monkeypatch: pytest.MonkeyPatch, redis_client: object) -> None:
@@ -306,7 +302,7 @@ def test_happy_path_single_scene_with_gpu_lock(monkeypatch: pytest.MonkeyPatch) 
     assert len(release_calls) == 1
     assert va_service.calls[0]["scene_id"] == "scene-sec-0"
     assert va_service.calls[0]["prompt_snapshot"] == "A hook shot"
-    assert storage.calls == [(101, {"current_stage": "VISUAL_ASSET_REVIEW", "status": "running"})]
+    assert storage.calls == [(101, {"current_stage": RunStage.VISUAL_ASSET_REVIEW, "status": "running"})]
     assert va_service.calls[0]["storage_provider"] == "local"
     assert va_service.calls[0]["storage_key"] is not None
 
@@ -337,7 +333,7 @@ def test_happy_path_all_scenes(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result["scene_id"] is None  # All scenes mode
     assert len(va_service.calls) == 3
     assert len(provider.calls) == 3
-    assert storage.calls == [(102, {"current_stage": "VISUAL_ASSET_REVIEW", "status": "running"})]
+    assert storage.calls == [(102, {"current_stage": RunStage.VISUAL_ASSET_REVIEW, "status": "running"})]
 
 
 def test_happy_path_without_gpu_lock(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -462,7 +458,7 @@ def test_partial_failure_advances_to_review(monkeypatch: pytest.MonkeyPatch) -> 
     assert result["succeeded"] == 2
     assert result["failed"] == 1
     # Should still advance to review
-    assert storage.calls == [(201, {"current_stage": "VISUAL_ASSET_REVIEW", "status": "running"})]
+    assert storage.calls == [(201, {"current_stage": RunStage.VISUAL_ASSET_REVIEW, "status": "running"})]
     # Only 2 assets saved (the successful ones)
     assert len(va_service.calls) == 2
 

@@ -50,10 +50,10 @@ class TestModelCatalogService:
         result = await service.list_models()
 
         assert set(result.keys()) == {"script_models", "image_models", "tts_models", "stt_models"}
-        assert len(result["script_models"]) == 4  # qwen3-4b, gpt-4o-mini, claude-sonnet, gemini-flash
-        assert len(result["image_models"]) == 4  # sd15, dall-e-3, sd3-medium, imagen-3
-        assert len(result["tts_models"]) == 3  # qwen3-tts, elevenlabs, openai-tts
-        assert len(result["stt_models"]) == 1  # whisper-small
+        assert len(result["script_models"]) == 5  # qwen3-4b, gpt-4o-mini, claude-sonnet, gemini-flash, llama-3.3-70b
+        assert len(result["image_models"]) == 6  # sd15, dall-e-3, sd3-medium, imagen-3, pollinations, placeholder
+        assert len(result["tts_models"]) == 4  # qwen3-tts, elevenlabs, openai-tts, edge-tts
+        assert len(result["stt_models"]) == 2  # whisper-small, groq-whisper-large-v3-turbo
 
         # Verify local models are still present and correctly labeled
         script_keys = {m["key"] for m in result["script_models"]}
@@ -93,7 +93,7 @@ class TestModelCatalogService:
 
         result = await service.list_models(category="script")
 
-        assert len(result["script_models"]) == 4
+        assert len(result["script_models"]) == 5
         script_keys = {m["key"] for m in result["script_models"]}
         assert "qwen3-4b" in script_keys
         assert result["image_models"] == []
@@ -106,7 +106,7 @@ class TestModelCatalogService:
 
         result = await service.list_models(category="image")
 
-        assert len(result["image_models"]) == 4
+        assert len(result["image_models"]) == 6
         image_keys = {m["key"] for m in result["image_models"]}
         assert "sd15" in image_keys
         assert "dall-e-3" in image_keys
@@ -183,6 +183,8 @@ class TestModelCatalogService:
             "api.openai.com", "api.anthropic.com",
             "generativelanguage.googleapis.com",
             "api.stability.ai", "api.elevenlabs.io",
+            "api.groq.com", "edge_tts", "placeholder_image",
+            "image.pollinations.ai",
         }
         assert called_keys == expected_keys
 

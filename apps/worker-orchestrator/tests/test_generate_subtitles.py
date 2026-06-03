@@ -142,12 +142,7 @@ class FakeRegistry:
 
 
 def _patch_registry(monkeypatch: pytest.MonkeyPatch, registry: FakeRegistry) -> None:
-    class _ProviderRegistry:
-        @staticmethod
-        def create_default() -> FakeRegistry:
-            return registry
-
-    monkeypatch.setattr(generate_subtitles_module, "ProviderRegistry", _ProviderRegistry)
+    monkeypatch.setattr(generate_subtitles_module, "get_default_registry", lambda: registry)
 
 
 def _patch_redis(monkeypatch: pytest.MonkeyPatch, redis_client: object) -> None:

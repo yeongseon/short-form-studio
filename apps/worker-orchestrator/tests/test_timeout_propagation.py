@@ -56,10 +56,7 @@ def test_generate_script_propagates_soft_timeout(monkeypatch: pytest.MonkeyPatch
     mock_registry.resolve.return_value = mock_entry
     mock_registry.get_provider.return_value = mock_provider
 
-    monkeypatch.setattr(
-        mod.ProviderRegistry, "create_default",
-        staticmethod(lambda: mock_registry),
-    )
+    monkeypatch.setattr(mod, "get_default_registry", lambda: mock_registry)
 
     # Mock script service
     mock_script_service = MagicMock()

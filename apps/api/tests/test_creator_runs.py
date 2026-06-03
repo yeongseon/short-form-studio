@@ -880,17 +880,8 @@ class StubDispatcher:
         self.calls: list[dict[str, object]] = []
         self.task_id = "test-task-id-123"
 
-    def __call__(
-        self, run_id: int, idea_brief: str, model_key: str, instructions: str | None
-    ) -> str:
-        self.calls.append(
-            {
-                "run_id": run_id,
-                "idea_brief": idea_brief,
-                "model_key": model_key,
-                "instructions": instructions,
-            }
-        )
+    def __call__(self, **kwargs: object) -> str:
+        self.calls.append(kwargs)
         return self.task_id
 
 
@@ -968,6 +959,8 @@ async def test_generate_script_from_idea_ready(client, stub_generate_services):
             "idea_brief": "Create a cooking tutorial",
             "model_key": "qwen3-4b",
             "instructions": "Focus on pasta",
+            "niche": None,
+            "language": "ko",
         }
     ]
     assert project_svc.get_project_workspace_ids
@@ -1203,14 +1196,8 @@ class StubVisualPlanDispatcher:
         self.calls: list[dict[str, object]] = []
         self.task_id = "test-vp-task-id-456"
 
-    def __call__(self, run_id: int, model_key: str, style_preset: str | None) -> str:
-        self.calls.append(
-            {
-                "run_id": run_id,
-                "model_key": model_key,
-                "style_preset": style_preset,
-            }
-        )
+    def __call__(self, **kwargs: object) -> str:
+        self.calls.append(kwargs)
         return self.task_id
 
 
@@ -1284,6 +1271,7 @@ async def test_generate_visual_plan_from_visual_plan_setup(
             "run_id": 30,
             "model_key": "qwen3-4b",
             "style_preset": "cinematic",
+            "niche": None,
         }
     ]
 

@@ -348,7 +348,7 @@ def test_render_video_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert render_input.subtitle_path == Path("data/artifacts/201/subtitles/subtitles.srt")
     assert render_input.scene_durations == [15.0, 15.0]
 
-    assert storage.calls == [(201, {"current_stage": "FINAL_REVIEW", "status": "running"})]
+    assert storage.calls == [(201, {"current_stage": "FINAL_REVIEW", "status": "paused"})]
     assert storage.cas_calls[0][2] == frozenset({"RENDER_GENERATING"})
 
 
@@ -531,7 +531,7 @@ def test_render_video_cas_skip_on_stage_change(monkeypatch: pytest.MonkeyPatch) 
     assert len(fake_ffmpeg.calls) == 1
     assert len(fake_render_service.create_calls) == 1
     assert len(storage.cas_calls) == 1
-    assert storage.cas_calls[0][1] == {"current_stage": "FINAL_REVIEW", "status": "running"}
+    assert storage.cas_calls[0][1] == {"current_stage": "FINAL_REVIEW", "status": "paused"}
     assert storage.calls == []
 
 

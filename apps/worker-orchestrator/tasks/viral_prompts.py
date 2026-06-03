@@ -17,7 +17,24 @@ Key findings encoded:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal, get_args
+
+
+# --- Language configuration (single source of truth) ---
+
+SupportedLanguage = Literal["ko", "en", "ja", "zh", "es", "pt", "fr", "de"]
+SUPPORTED_LANGUAGES: tuple[str, ...] = get_args(SupportedLanguage)
+
+LANGUAGE_INSTRUCTIONS: dict[SupportedLanguage, str] = {
+    "ko": "한국어로 스크립트를 작성하세요.",
+    "en": "Write the script in English.",
+    "ja": "日本語でスクリプトを作成してください。",
+    "zh": "用中文写脚本。",
+    "es": "Escribe el guión en español.",
+    "pt": "Escreva o roteiro em português.",
+    "fr": "Écrivez le script en français.",
+    "de": "Schreiben Sie das Skript auf Deutsch.",
+}
 
 
 # --- Niche presets ---
@@ -144,12 +161,10 @@ HOOK_TEMPLATES: dict[str, str] = {
 # --- System prompt builder ---
 
 
-SUPPORTED_LANGUAGES = ("ko", "en", "ja", "zh", "es", "pt", "fr", "de")
-
 
 def build_viral_system_prompt(
     niche: str | None = None,
-    language: str = "ko",
+    language: SupportedLanguage = "ko",
 ) -> str:
     """Build a system prompt that instructs the LLM to write viral short-form scripts.
 
@@ -157,22 +172,17 @@ def build_viral_system_prompt(
         niche: One of NICHE_PRESETS keys, or None for general.
         language: Target language code.
     """
-    # Validate language
-    if language not in SUPPORTED_LANGUAGES:
+    # Validate language against single source of truth
+    if language not in LANGUAGE_INSTRUCTIONS:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Unsupported language %r, falling back to 'ko'", language
+        )
         language = "ko"
 
     preset = NICHE_PRESETS.get(niche or "", None)
 
-    lang_instruction = {
-        "ko": "한국어로 스크립트를 작성하세요.",
-        "en": "Write the script in English.",
-        "ja": "日本語でスクリプトを作成してください。",
-        "zh": "用中文写脚本。",
-        "es": "Escribe el guión en español.",
-        "pt": "Escreva o roteiro em português.",
-        "fr": "Écrivez le script en français.",
-        "de": "Schreiben Sie das Skript auf Deutsch.",
-    }.get(language, f"Write the script in {language}.")
+    lang_instruction = LANGUAGE_INSTRUCTIONS.get(language, f"Write the script in {language}.")
     # Core viral formula (data-backed)
     base = f"""You are an expert YouTube Shorts scriptwriter who consistently produces videos with 1M+ views.
 

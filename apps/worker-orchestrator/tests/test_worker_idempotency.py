@@ -206,10 +206,6 @@ def test_generate_script_passes_idempotency_key(monkeypatch) -> None:
         def get_provider(self, model_key: str) -> _FakeProvider:
             return _FakeProvider()
 
-    class _ProviderRegistry:
-        @staticmethod
-        def create_default() -> _FakeRegistry:
-            return _FakeRegistry()
 
     class _ScriptService:
         def __init__(self) -> None:
@@ -265,7 +261,7 @@ def test_generate_script_passes_idempotency_key(monkeypatch) -> None:
             return None
 
     script_service = _ScriptService()
-    monkeypatch.setattr(generate_script_module, "ProviderRegistry", _ProviderRegistry)
+    monkeypatch.setattr(generate_script_module, "get_default_registry", lambda: _FakeRegistry())
     monkeypatch.setattr(generate_script_module, "_script_service", script_service)
     monkeypatch.setattr(
         generate_script_module, "record_provider_call", lambda *args, **kwargs: asyncio.sleep(0)

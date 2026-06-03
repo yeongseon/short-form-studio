@@ -79,7 +79,7 @@ class _Storage:
 def test_generate_subtitles_rejects_traversal_audio_artifact_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(generate_subtitles_module, "ProviderRegistry", _Registry)
+    monkeypatch.setattr(generate_subtitles_module, "get_default_registry", _Registry.create_default)
     monkeypatch.setattr(
         "tasks.task_runner._run_service",
         SimpleNamespace(storage=_Storage(run_id=311, stage="AUDIO_GENERATING")),
@@ -169,7 +169,7 @@ def test_generate_subtitles_rejects_absolute_path_when_artifact_root_unset(
     monkeypatch.delenv("ARTIFACT_ROOT", raising=False)
     # Force module to re-evaluate _ARTIFACT_ROOT default
     monkeypatch.setattr(generate_subtitles_module, "_ARTIFACT_ROOT", "data/artifacts")
-    monkeypatch.setattr(generate_subtitles_module, "ProviderRegistry", _Registry)
+    monkeypatch.setattr(generate_subtitles_module, "get_default_registry", _Registry.create_default)
     monkeypatch.setattr(
         "tasks.task_runner._run_service",
         SimpleNamespace(storage=_Storage(run_id=500, stage="AUDIO_GENERATING")),

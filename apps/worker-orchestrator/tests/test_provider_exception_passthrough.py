@@ -119,14 +119,8 @@ def _make_storage(
 
 
 def _patch_registry(monkeypatch: pytest.MonkeyPatch, module: Any, registry: _FakeRegistry) -> None:
-    """Patch the ProviderRegistry for a module."""
-
-    class _ProviderRegistry:
-        @staticmethod
-        def create_default() -> _FakeRegistry:
-            return registry
-
-    monkeypatch.setattr(module, "ProviderRegistry", _ProviderRegistry)
+    """Patch get_default_registry for a module."""
+    monkeypatch.setattr(module, "get_default_registry", lambda: registry)
 
 
 # ============================================================================

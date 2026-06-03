@@ -33,7 +33,7 @@ def test_is_shutting_down_returns_flag_state() -> None:
 
 def test_sigterm_registration_skips_when_signal_raises_value_error() -> None:
     with patch("signal.signal", side_effect=ValueError), patch("logging.getLogger") as get_logger:
-        importlib.reload(celery_module)
+        celery_module._register_signal_handlers()
 
     get_logger.return_value.debug.assert_called_once_with(
         "Skipping signal handler registration: not in main thread"

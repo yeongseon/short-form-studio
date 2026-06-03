@@ -111,12 +111,7 @@ class FakeRegistry:
 
 
 def _patch_registry(monkeypatch: pytest.MonkeyPatch, registry: FakeRegistry) -> None:
-    class _ProviderRegistry:
-        @staticmethod
-        def create_default() -> FakeRegistry:
-            return registry
-
-    monkeypatch.setattr(generate_script_module, "ProviderRegistry", _ProviderRegistry)
+    monkeypatch.setattr(generate_script_module, "get_default_registry", lambda: registry)
 
 
 def _patch_redis(monkeypatch: pytest.MonkeyPatch, redis_client: object) -> None:
@@ -182,7 +177,7 @@ def test_generate_script_happy_path_local_model_with_gpu_lock(
     assert release_calls == ["run-101"]
     assert script_service.calls == [(101, "generated_by_model", "# Draft")]
     # get_run (stage guard) + update_run (advance to SCRIPT_REVIEW)
-    assert storage.calls == [(101, {"current_stage": "SCRIPT_REVIEW", "status": "running"})]
+    assert storage.calls == [(101, {"current_stage": "SCRIPT_REVIEW", "status": "paused"})]
     assert provider.calls[0][1] == {"temperature": 0.2}
 
 
@@ -213,7 +208,7 @@ def test_generate_script_happy_path_external_model_without_gpu_lock(
     assert result["provider_type"] == "openai"
     assert result["gpu_lock_acquired_at"] is None
     assert result["gpu_lock_released_at"] is None
-    assert storage.calls == [(102, {"current_stage": "SCRIPT_REVIEW", "status": "running"})]
+    assert storage.calls == [(102, {"current_stage": "SCRIPT_REVIEW", "status": "paused"})]
 
 
 def test_generate_script_appends_custom_instructions_to_prompt(
