@@ -160,7 +160,7 @@ class TestGroqSTTProvider:
                     if call_kwargs.kwargs
                     else call_kwargs[1].get("data", {})
                 )
-                assert form_data["model"] == "groq-whisper-large-v3-turbo"
+                assert form_data["model"] == "whisper-large-v3-turbo"  # prefix stripped for Groq API
 
     @pytest.mark.asyncio
     async def test_format_param_writes_vtt(self, provider, tmp_path):

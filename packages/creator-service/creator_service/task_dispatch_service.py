@@ -104,25 +104,27 @@ class TaskDispatchService:
 
     def dispatch_generate_script(
         self, run_id: int, idea_brief: str, model_key: str, instructions: str | None,
+        niche: str | None = None, language: str = "ko",
         task_id: str | None = None,
     ) -> str:
         return self._dispatch_task(
             module_name="tasks.generate_script",
             task_attr="generate_script",
             run_id=run_id,
-            args=[run_id, idea_brief, model_key, instructions],
+            kwargs={"run_id": run_id, "idea_brief": idea_brief, "model_key": model_key, "instructions": instructions, "niche": niche, "language": language},
             task_id=task_id,
         )
 
     def dispatch_generate_visual_plan(
         self, run_id: int, model_key: str, style_preset: str | None,
+        niche: str | None = None,
         task_id: str | None = None,
     ) -> str:
         return self._dispatch_task(
             module_name="tasks.generate_visual_plan",
             task_attr="generate_visual_plan",
             run_id=run_id,
-            args=[run_id, model_key, style_preset],
+            kwargs={"run_id": run_id, "model_key": model_key, "style_preset": style_preset, "niche": niche},
             task_id=task_id,
         )
 
@@ -583,18 +585,20 @@ task_dispatch_service = TaskDispatchService()
 
 def dispatch_generate_script(
     run_id: int, idea_brief: str, model_key: str, instructions: str | None,
+    niche: str | None = None, language: str = "ko",
     task_id: str | None = None,
 ) -> str:
     return task_dispatch_service.dispatch_generate_script(
-        run_id, idea_brief, model_key, instructions, task_id=task_id
+        run_id, idea_brief, model_key, instructions, niche=niche, language=language, task_id=task_id
     )
 
 
 def dispatch_generate_visual_plan(
-    run_id: int, model_key: str, style_preset: str | None, task_id: str | None = None,
+    run_id: int, model_key: str, style_preset: str | None,
+    niche: str | None = None, task_id: str | None = None,
 ) -> str:
     return task_dispatch_service.dispatch_generate_visual_plan(
-        run_id, model_key, style_preset, task_id=task_id
+        run_id, model_key, style_preset, niche=niche, task_id=task_id
     )
 
 

@@ -100,6 +100,7 @@ async def generate_visual_plan_trigger(
             "run_id": run_id,
             "model_key": request.model_key,
             "style_preset": request.style_preset,
+            "niche": request.niche,
         },
         run_service=run_service,
         rollback_stage=run.current_stage,

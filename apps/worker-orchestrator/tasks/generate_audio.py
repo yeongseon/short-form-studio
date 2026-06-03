@@ -22,13 +22,19 @@ from tasks.task_runner import GpuLockContext, TaskContext, TaskResult, TaskRunne
 logger = logging.getLogger(__name__)
 _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
 
-def _get_wav_duration_seconds(path: str) -> float | None:
+def _get_audio_duration_seconds(path: str) -> float | None:
+    """Get audio duration. Supports WAV natively; estimates MP3 from file size."""
     try:
-        with wave.open(path, "rb") as wav_file:
-            frame_rate = wav_file.getframerate()
-            if frame_rate <= 0:
-                return None
-            return wav_file.getnframes() / float(frame_rate)
+        if path.endswith(".wav"):
+            with wave.open(path, "rb") as wav_file:
+                frame_rate = wav_file.getframerate()
+                if frame_rate <= 0:
+                    return None
+                return wav_file.getnframes() / float(frame_rate)
+        else:
+            # Estimate MP3 duration from file size (~128kbps)
+            file_size = os.path.getsize(path)
+            return float(file_size) / (128 * 1000 / 8)
     except Exception:
         logger.warning("Could not determine audio duration for %s", path, exc_info=True)
         return None
@@ -82,7 +88,9 @@ def generate_audio(
         if entry.requires_gpu:
             gpu_lock.acquire()
 
-        audio_path = f"{_ARTIFACT_ROOT}/{run_id}/audio/audio.wav"
+        # Use .mp3 for edge-tts, .wav for others
+        ext = ".mp3" if entry.provider_type == "edge_tts" else ".wav"
+        audio_path = f"{_ARTIFACT_ROOT}/{run_id}/audio/audio{ext}"
         try:
             os.makedirs(os.path.dirname(audio_path), exist_ok=True)
             params = dict(entry.default_params or {})
@@ -116,7 +124,7 @@ def generate_audio(
                 entry.provider_type,
                 tts_model,
                 "tts",
-                audio_seconds=_get_wav_duration_seconds(audio_path),
+                audio_seconds=_get_audio_duration_seconds(audio_path),
                 cost_usd=COST_AUDIO_GENERATION,
                 workspace_id=ctx.workspace_id,
                 project_id=ctx.project_id,
@@ -127,7 +135,8 @@ def generate_audio(
 
         from creator_service.artifact_storage_integration import store_artifact_file
 
-        uploaded = store_artifact_file(run_id, audio_path, "audio/wav")
+        mime_type = "audio/mpeg" if audio_path.endswith(".mp3") else "audio/wav"
+        uploaded = store_artifact_file(run_id, audio_path, mime_type)
         artifact = await _audio_service.create_artifact(
             run_id=run_id,
             path=audio_path,

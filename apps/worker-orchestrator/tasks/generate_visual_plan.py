@@ -22,19 +22,24 @@ from tasks.task_runner import GpuLockContext, TaskContext, TaskResult, TaskRunne
 
 logger = logging.getLogger(__name__)
 
-def _build_system_prompt(style_preset: str | None = None) -> str:
-    base = (
-        "You are a visual planning assistant for short-form video production. "
-        "Given a script with sections, generate one visual scene per section. "
-        "For each scene, produce:\n"
-        "- A detailed image-generation prompt (describe the visual, not the narration)\n"
-        "- Style tags (e.g., cinematic, cartoon, minimalist)\n"
-        "- Mood (e.g., tense, upbeat, mysterious)\n"
-        "- Composition notes (e.g., close-up, wide shot, overhead)\n\n"
-        "Return a JSON array of objects with keys: "
-        "section_id, prompt, style_tags (array), mood, composition.\n"
-        "Only return the JSON array, no markdown fencing or extra text."
-    )
+def _build_system_prompt(style_preset: str | None = None, niche: str | None = None) -> str:
+    # Use viral visual prompt if niche provided
+    if niche:
+        from tasks.viral_prompts import build_viral_visual_prompt
+        base = build_viral_visual_prompt(niche=niche)
+    else:
+        base = (
+            "You are a visual planning assistant for short-form video production. "
+            "Given a script with sections, generate one visual scene per section. "
+            "For each scene, produce:\n"
+            "- A detailed image-generation prompt (describe the visual, not the narration)\n"
+            "- Style tags (e.g., cinematic, cartoon, minimalist)\n"
+            "- Mood (e.g., tense, upbeat, mysterious)\n"
+            "- Composition notes (e.g., close-up, wide shot, overhead)\n\n"
+            "Return a JSON array of objects with keys: "
+            "section_id, prompt, style_tags (array), mood, composition.\n"
+            "Only return the JSON array, no markdown fencing or extra text."
+        )
     if style_preset:
         base += f"\n\nStyle preset: {style_preset}"
     return base
@@ -110,6 +115,7 @@ def generate_visual_plan(
     run_id: int,
     model_key: str = "qwen3-4b",
     style_preset: str | None = None,
+    niche: str | None = None,
 ) -> dict[str, object]:
     config = TaskRunnerConfig(
         task_name="generate_visual_plan",
@@ -140,7 +146,7 @@ def generate_visual_plan(
             gpu_lock.acquire()
 
         try:
-            system_prompt = _build_system_prompt(style_preset)
+            system_prompt = _build_system_prompt(style_preset, niche=niche)
             sections_prompt = _build_sections_prompt(sections)
             full_prompt = f"{system_prompt}\n\n---\nScript sections:\n{sections_prompt}"
             params = dict(entry.default_params or {})

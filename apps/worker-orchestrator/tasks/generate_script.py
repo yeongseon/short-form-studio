@@ -16,18 +16,27 @@ from creator_service.telemetry import trace_task
 from creator_service.usage_service import record_provider_call
 from tasks.task_runner import GpuLockContext, TaskContext, TaskResult, TaskRunnerConfig, run_task
 
+from tasks.viral_prompts import build_viral_system_prompt
+
 logger = logging.getLogger(__name__)
 
-def _build_prompt(idea_brief: str, instructions: str | None) -> str:
+
+def _build_prompt(
+    idea_brief: str,
+    instructions: str | None,
+    niche: str | None = None,
+    language: str = "ko",
+) -> str:
+    """Build script generation prompt with viral YouTube Shorts formula."""
+    system_prompt = build_viral_system_prompt(niche=niche, language=language)
     idea = idea_brief.strip()
-    if not instructions:
-        return idea
 
-    extra = instructions.strip()
-    if not extra:
-        return idea
+    parts = [system_prompt, "\n---\n", f"VIDEO IDEA: {idea}"]
 
-    return f"{idea}\n\nAdditional instructions:\n{extra}"
+    if instructions and instructions.strip():
+        parts.append(f"\nAdditional instructions:\n{instructions.strip()}")
+
+    return "\n".join(parts)
 
 @celery_app.task(
     bind=True,
@@ -46,8 +55,10 @@ def generate_script(
     idea_brief: str,
     model_key: str = "qwen3-4b",
     instructions: str | None = None,
+    niche: str | None = None,
+    language: str = "ko",
 ) -> dict[str, object]:
-    prompt = _build_prompt(idea_brief, instructions)
+    prompt = _build_prompt(idea_brief, instructions, niche=niche, language=language)
     config = TaskRunnerConfig(
         task_name="generate_script",
         allowed_stages=frozenset({RunStage.IDEA_READY, RunStage.SCRIPT_GENERATING}),

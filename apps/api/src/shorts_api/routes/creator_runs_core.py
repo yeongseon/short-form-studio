@@ -74,12 +74,13 @@ class ApproveVisualAssetsRequest(BaseModel):
 class GenerateScriptRequest(BaseModel):
     model_key: str = Field(default="qwen3-4b", max_length=256)
     instructions: str | None = Field(default=None, max_length=32_000)
-
+    niche: Literal["facts", "horror", "motivation", "psychology", "science", "food", "tech"] | None = None
+    language: Literal["ko", "en", "ja", "zh", "es", "pt", "fr", "de"] = "ko"
 
 class GenerateVisualPlanRequest(BaseModel):
     model_key: str = Field(default="qwen3-4b", max_length=256)
     style_preset: str | None = Field(default=None, max_length=200)
-
+    niche: Literal["facts", "horror", "motivation", "psychology", "science", "food", "tech"] | None = None
 
 class GenerateAudioRequest(BaseModel):
     tts_model: str = Field(default="qwen3-tts", max_length=256)
@@ -338,6 +339,8 @@ async def generate_script_trigger(
             "idea_brief": idea_brief,
             "model_key": request.model_key,
             "instructions": request.instructions,
+            "niche": request.niche,
+            "language": request.language,
         },
         run_service=run_service,
         rollback_stage=run.current_stage,

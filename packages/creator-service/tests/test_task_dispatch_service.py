@@ -72,11 +72,10 @@ def test_dispatch_generate_script_uses_sync_runner_when_redis_missing(
     assert task_id.startswith("sync-generate_script-123-")
     assert len(run_calls) == 1
     _, args, kwargs = run_calls[0]
-    assert kwargs == {}
-    assert len(args) == 5
+    assert len(args) == 1  # sync_self
     sync_self = args[0]
     assert getattr(getattr(sync_self, "request"), "id") == task_id
-    assert args[1:] == (123, "idea", "qwen3-4b", "extra")
+    assert kwargs == {"run_id": 123, "idea_brief": "idea", "model_key": "qwen3-4b", "instructions": "extra", "niche": None, "language": "ko"}
 
 
 def test_dispatch_generate_script_uses_celery_when_redis_set(
@@ -115,7 +114,7 @@ def test_dispatch_generate_script_uses_celery_when_redis_set(
     )
 
     assert task_id == "celery-789"
-    assert apply_async_calls == [([11, "idea", "qwen3-4b", None], {}, {"traceparent": "abc"})]
+    assert apply_async_calls == [([], {"run_id": 11, "idea_brief": "idea", "model_key": "qwen3-4b", "instructions": None, "niche": None, "language": "ko"}, {"traceparent": "abc"})]
 
 
 def test_cas_dispatch_with_rollback_enqueue_failure_rolls_back_stage() -> None:

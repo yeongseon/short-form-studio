@@ -222,6 +222,9 @@ def script_generation_flow_services(monkeypatch: pytest.MonkeyPatch) -> Iterator
         idea_brief: str,
         model_key: str,
         instructions: str | None,
+        niche: str | None = None,
+        language: str = "ko",
+        task_id: str | None = None,
     ) -> str:
         _ = model_key
         prompt = idea_brief.strip()
@@ -332,3 +335,49 @@ async def test_script_generation_vertical_slice(client, script_generation_flow_s
     )
     assert approve_response.status_code == 200
     assert approve_response.json()["current_stage"] == "VISUAL_PLAN_SETUP"
+
+
+@pytest.mark.asyncio
+async def test_generate_script_rejects_invalid_niche(
+    client, script_generation_flow_services: None,
+) -> None:
+    """Pydantic validation should reject unknown niche values with 422."""
+    _ = script_generation_flow_services
+    project_resp = await client.post(
+        "/api/creator/projects",
+        json={"title": "Test", "source_type": "idea", "idea_brief": "test brief"},
+    )
+    assert project_resp.status_code == 201
+    project_id = project_resp.json()["id"]
+    run_resp = await client.post(f"/api/creator/projects/{project_id}/runs", json={})
+    assert run_resp.status_code == 201
+    run_id = run_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/creator/runs/{run_id}/generate-script",
+        json={"model_key": "qwen3-4b", "niche": "invalid_niche_xyz"},
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_generate_script_rejects_invalid_language(
+    client, script_generation_flow_services: None,
+) -> None:
+    """Pydantic validation should reject unknown language values with 422."""
+    _ = script_generation_flow_services
+    project_resp = await client.post(
+        "/api/creator/projects",
+        json={"title": "Test", "source_type": "idea", "idea_brief": "test brief"},
+    )
+    assert project_resp.status_code == 201
+    project_id = project_resp.json()["id"]
+    run_resp = await client.post(f"/api/creator/projects/{project_id}/runs", json={})
+    assert run_resp.status_code == 201
+    run_id = run_resp.json()["id"]
+
+    resp = await client.post(
+        f"/api/creator/runs/{run_id}/generate-script",
+        json={"model_key": "qwen3-4b", "language": "xx_invalid"},
+    )
+    assert resp.status_code == 422

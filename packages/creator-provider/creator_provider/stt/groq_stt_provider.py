@@ -40,7 +40,7 @@ class GroqSTTProvider(STTProvider):
         }
 
         form_data = {
-            "model": self.model_key,
+            "model": self.model_key.removeprefix("groq-"),
             "language": language,
             "response_format": response_format,
             "timestamp_granularities[]": "segment",

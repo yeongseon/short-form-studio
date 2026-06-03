@@ -97,5 +97,5 @@ def test_dispatch_uses_celery_path_when_redis_set(monkeypatch: pytest.MonkeyPatc
 
     assert task_id == "celery-456"
     assert apply_async_calls == [
-        ([9, "idea", "model", "instructions"], {}, {"traceparent": "trace"})
+        ([], {"run_id": 9, "idea_brief": "idea", "model_key": "model", "instructions": "instructions", "niche": None, "language": "ko"}, {"traceparent": "trace"})
     ]

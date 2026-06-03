@@ -209,7 +209,8 @@ def visual_plan_flow_services(monkeypatch: pytest.MonkeyPatch) -> Iterator[StubR
     monkeypatch.setattr("creator_service.usage_service.check_workspace_quota", _check_quota)
 
     def fake_dispatch_generate_visual_plan(
-        run_id: int, model_key: str, style_preset: str | None
+        run_id: int, model_key: str, style_preset: str | None,
+        niche: str | None = None, task_id: str | None = None,
     ) -> str:
         _ = model_key, style_preset
         scene = {
