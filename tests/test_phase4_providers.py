@@ -308,3 +308,67 @@ class TestRenderDurationFallback:
         result = compute_scene_durations(ffmpeg, None, 3, profile.max_duration_seconds)
 
         assert result == [profile.max_duration_seconds / 3] * 3
+
+
+# --- PollinationsProvider Tests ---
+
+
+class TestPollinationsProvider:
+    """Tests for packages/creator-provider/creator_provider/image/pollinations_provider.py"""
+
+    @pytest.mark.asyncio
+    async def test_generate_writes_image_to_output_path(self, tmp_path, monkeypatch):
+        from creator_provider.image.pollinations_provider import PollinationsProvider
+
+        monkeypatch.setenv("ARTIFACT_ROOT", str(tmp_path))
+        provider = PollinationsProvider(endpoint="https://image.pollinations.ai", model_key="pollinations")
+        output_file = tmp_path / "test_image.png"
+
+        # Mock httpx to return fake image bytes
+        fake_image = b"\x89PNG" + b"\x00" * 200  # fake PNG-like data
+        mock_response = MagicMock()
+        mock_response.content = fake_image
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("creator_provider.image.pollinations_provider.httpx.AsyncClient") as mock_client:
+            mock_instance = AsyncMock()
+            mock_instance.get = AsyncMock(return_value=mock_response)
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            mock_client.return_value = mock_instance
+
+            result = await provider.generate("a cat in space", {"output_path": str(output_file)})
+
+        assert Path(result.image_path).exists()
+        assert result.width == 1024
+        assert result.height == 1792
+        assert result.model_key == "pollinations"
+
+    @pytest.mark.asyncio
+    async def test_generate_raises_on_empty_response(self):
+        from creator_provider.exceptions import ProviderError
+        from creator_provider.image.pollinations_provider import PollinationsProvider
+
+        provider = PollinationsProvider(endpoint="https://image.pollinations.ai", model_key="pollinations")
+
+        mock_response = MagicMock()
+        mock_response.content = b""  # empty
+        mock_response.raise_for_status = MagicMock()
+
+        with patch("creator_provider.image.pollinations_provider.httpx.AsyncClient") as mock_client:
+            mock_instance = AsyncMock()
+            mock_instance.get = AsyncMock(return_value=mock_response)
+            mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
+            mock_instance.__aexit__ = AsyncMock(return_value=False)
+            mock_client.return_value = mock_instance
+
+            with pytest.raises(ProviderError, match="empty or invalid"):
+                await provider.generate("test prompt")
+
+    def test_registry_resolves_pollinations(self):
+        from creator_provider.registry import get_default_registry
+
+        registry = get_default_registry()
+        entry = registry.resolve("pollinations")
+        assert entry.provider_type == "pollinations_image"
+        assert "pollinations" in entry.endpoint
