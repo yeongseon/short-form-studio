@@ -425,6 +425,14 @@ def run_task(
             isinstance(exc, (ProviderTimeoutError, RateLimitError))
             and celery_self.request.retries < celery_self.max_retries
         ):
+            # Mark task as failed before Celery retry so idempotent guard
+            # allows the retried delivery to re-claim the task.
+            try:
+                run_in_worker_loop(
+                    _task_tracking_service.mark_failed(task_id, type(exc).__name__, str(exc)[:500])
+                )
+            except Exception:
+                logger.warning("Failed to mark task as failed before retry", exc_info=True)
             raise
         try:
             run_in_worker_loop(
@@ -564,8 +572,8 @@ _ALLOWED_MODEL_KEYS: frozenset[str] = frozenset(
     os.getenv(
         "ALLOWED_MODEL_KEYS",
         "qwen3:4b,gpt-4o-mini,claude-sonnet,gemini-2.0-flash,"
-        "llama-3.3-70b-versatile,"
-        "sd-1.5,dall-e-3,sd3-medium,imagen-3,pollinations,placeholder,"
+        "llama-3.3-70b-versatile,meta-llama/llama-4-scout-17b-16e-instruct,"
+        "sd-1.5,dall-e-3,sd3-medium,imagen-3,pollinations,placeholder,hf-flux-schnell,groq-svg,"
         "eleven_multilingual_v2,tts-1,whisper-small,tts-1-hd,edge-tts,"
         "groq-whisper-large-v3-turbo"
     ).split(",")

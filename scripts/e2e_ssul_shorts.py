@@ -43,12 +43,12 @@ SSUL_CONFIG = {
     ),
     "niche": "family_story",
     "language": "ko",
-    "script_model": "llama-3.3-70b-versatile",
-    "image_model": "placeholder",
+    "script_model": "meta-llama/llama-4-scout-17b-16e-instruct",
+    "image_model": os.getenv("E2E_IMAGE_MODEL", "groq-svg"),  # groq-svg (free), hf-flux-schnell, or placeholder
     "tts_model": "edge-tts",
     "tts_voice": "male",  # ko-KR-InJoonNeural for male narration
     "subtitle_model": "groq-whisper-large-v3-turbo",
-    "render_profile": "fast_preview",
+    "render_profile": "shorts_default",
 }
 
 
@@ -178,10 +178,12 @@ def run_ssul_pipeline() -> None:
 
     # Step 4: Wait for script
     print("⏳ [4/11] 스크립트 생성 대기...")
-    if not _wait_for_stage(client, run_id, "SCRIPT_REVIEW", timeout=180):
+    if not _wait_for_stage(client, run_id, "SCRIPT_REVIEW", timeout=600):
         _fail(client, run_id, "Script generation failed")
     print("  ✓ 스크립트 생성 완료!")
     _print_script_preview(client, run_id)
+    print("  ⏳ Rate limit cooldown (10s)...")
+    time.sleep(10)
 
     # Step 5: Approve script
     print("✅ [5/11] 스크립트 승인 → 비주얼 플랜 생성...")
@@ -196,9 +198,11 @@ def run_ssul_pipeline() -> None:
 
     # Step 6: Wait for visual plan
     print("⏳ [6/11] 비주얼 플랜 생성 대기...")
-    if not _wait_for_stage(client, run_id, "VISUAL_PLAN_REVIEW", timeout=180):
+    if not _wait_for_stage(client, run_id, "VISUAL_PLAN_REVIEW", timeout=600):
         _fail(client, run_id, "Visual plan generation failed")
     print("  ✓ 비주얼 플랜 완료!")
+    print("  ⏳ Rate limit cooldown (10s)...")
+    time.sleep(10)
 
     # Step 7: Approve visual plan → Generate images
     print("🎨 [7/11] 비주얼 플랜 승인 → 이미지 생성...")
@@ -213,9 +217,11 @@ def run_ssul_pipeline() -> None:
 
     # Step 8: Wait for images
     print("⏳ [8/11] 이미지 생성 대기 (Pollinations)...")
-    if not _wait_for_stage(client, run_id, "VISUAL_ASSET_REVIEW", timeout=300):
+    if not _wait_for_stage(client, run_id, "VISUAL_ASSET_REVIEW", timeout=600):
         _fail(client, run_id, "Image generation failed")
     print("  ✓ 이미지 생성 완료!")
+    print("  ⏳ Rate limit cooldown (10s)...")
+    time.sleep(10)
 
     # Step 9: Approve images → Generate audio (Korean TTS)
     print("🔊 [9/11] 이미지 승인 → 한국어 TTS 나레이션...")
@@ -230,7 +236,7 @@ def run_ssul_pipeline() -> None:
 
     # Wait for audio → auto-continues to subtitles
     print("⏳     오디오 생성 대기 (Edge-TTS)...")
-    if not _wait_for_stage(client, run_id, "SUBTITLE_GENERATING", timeout=120):
+    if not _wait_for_stage(client, run_id, "SUBTITLE_GENERATING", timeout=600):
         # Audio done, check if already at subtitle
         run_data = client.get(f"/api/creator/runs/{run_id}").json()
         if run_data.get("current_stage") not in (
@@ -249,7 +255,7 @@ def run_ssul_pipeline() -> None:
     )
     if r.status_code == 202:
         print("  ✓ 자막 생성 디스패치됨")
-        if not _wait_for_stage(client, run_id, "RENDER_GENERATING", timeout=120):
+        if not _wait_for_stage(client, run_id, "RENDER_GENERATING", timeout=600):
             run_data = client.get(f"/api/creator/runs/{run_id}").json()
             if run_data.get("current_stage") != "RENDER_GENERATING":
                 _fail(client, run_id, "Subtitle generation failed")
@@ -264,7 +270,7 @@ def run_ssul_pipeline() -> None:
     )
     if r.status_code == 202:
         print("  ✓ 렌더링 시작됨")
-        if not _wait_for_stage(client, run_id, "FINAL_REVIEW", timeout=300):
+        if not _wait_for_stage(client, run_id, "FINAL_REVIEW", timeout=600):
             _fail(client, run_id, "Render failed")
     else:
         print(f"  ⚠ Render dispatch returned {r.status_code}: {r.text}")

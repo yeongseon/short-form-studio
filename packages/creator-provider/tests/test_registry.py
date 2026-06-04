@@ -71,7 +71,7 @@ class ProviderRegistryTests(unittest.TestCase):
     def test_create_default_returns_registry_with_default_entries(self) -> None:
         registry = ProviderRegistry.create_default()
 
-        self.assertEqual(len(registry.list_models()), 17)
+        self.assertEqual(len(registry.list_models()), 18)
         self.assertEqual(registry.resolve("qwen3-4b").category, ProviderCategory.LLM)
         self.assertEqual(registry.resolve("sd15").category, ProviderCategory.IMAGE)
         self.assertEqual(registry.resolve("qwen3-tts").category, ProviderCategory.TTS)

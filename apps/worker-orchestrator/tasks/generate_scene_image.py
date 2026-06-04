@@ -45,9 +45,9 @@ def _asset_dir(run_id: int) -> Path:
 @celery_app.task(
     bind=True,
     autoretry_for=(ProviderTimeoutError, RateLimitError),
-    retry_backoff=True,
+    retry_backoff=30,
     retry_jitter=True,
-    max_retries=3,
+    max_retries=5,
     soft_time_limit=600,
     time_limit=660,
     name="generate_scene_image",
@@ -99,7 +99,12 @@ def generate_scene_image(
         results: list[dict[str, object]] = []
         failed_scenes: list[dict[str, object]] = []
 
-        for target_scene in target_scenes:
+        for idx, target_scene in enumerate(target_scenes):
+            # Rate limit protection: add delay between scenes for API-based providers
+            if idx > 0 and model_key in ("groq-svg",):
+                import asyncio
+                logger.info("Inter-scene delay (8s) for rate limit protection")
+                await asyncio.sleep(8)
             scene_result: dict[str, object] = {
                 "scene_id": target_scene.scene_id,
                 "status": "pending",
@@ -135,6 +140,11 @@ def generate_scene_image(
                     except SoftTimeLimitExceeded:
                         raise
                     except Exception as exc:
+                        logger.error(
+                            "Image generation exception for run %d scene %s: %s: %s",
+                            run_id, target_scene.scene_id, type(exc).__name__, exc,
+                            exc_info=True,
+                        )
                         message = str(exc).lower()
                         if "429" in message or "rate" in message:
                             raise RateLimitError(

@@ -51,7 +51,7 @@ class TestModelCatalogService:
 
         assert set(result.keys()) == {"script_models", "image_models", "tts_models", "stt_models"}
         assert len(result["script_models"]) == 5  # qwen3-4b, gpt-4o-mini, claude-sonnet, gemini-flash, llama-3.3-70b
-        assert len(result["image_models"]) == 6  # sd15, dall-e-3, sd3-medium, imagen-3, pollinations, placeholder
+        assert len(result["image_models"]) == 7  # sd15, dall-e-3, sd3-medium, imagen-3, pollinations, placeholder, hf-flux-schnell
         assert len(result["tts_models"]) == 4  # qwen3-tts, elevenlabs, openai-tts, edge-tts
         assert len(result["stt_models"]) == 2  # whisper-small, groq-whisper-large-v3-turbo
 
@@ -106,7 +106,7 @@ class TestModelCatalogService:
 
         result = await service.list_models(category="image")
 
-        assert len(result["image_models"]) == 6
+        assert len(result["image_models"]) == 7
         image_keys = {m["key"] for m in result["image_models"]}
         assert "sd15" in image_keys
         assert "dall-e-3" in image_keys
@@ -184,7 +184,7 @@ class TestModelCatalogService:
             "generativelanguage.googleapis.com",
             "api.stability.ai", "api.elevenlabs.io",
             "api.groq.com", "edge_tts", "placeholder_image",
-            "image.pollinations.ai",
+            "image.pollinations.ai", "api-inference.huggingface.co",
         }
         assert called_keys == expected_keys
 

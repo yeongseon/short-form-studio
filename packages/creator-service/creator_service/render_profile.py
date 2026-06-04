@@ -30,9 +30,9 @@ class RenderProfile:
     min_duration_seconds: int = 15
     max_duration_seconds: int = 60
     crf: int = 23  # quality (lower = better, 18-28 typical)
-    preset: str = "medium"  # encoding speed
+    preset: str = "ultrafast"  # use ultrafast to reduce encoder memory in containers
     burn_subtitles: bool = True
-    subtitle_font_size: int = 24
+    subtitle_font_size: int = 48  # scaled for 1080p mobile readability
 
     @classmethod
     def default(cls) -> "RenderProfile":

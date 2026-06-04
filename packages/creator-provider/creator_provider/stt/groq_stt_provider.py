@@ -46,14 +46,43 @@ class GroqSTTProvider(STTProvider):
             "timestamp_granularities[]": "segment",
         }
 
-        try:
-            with source_path.open("rb") as audio_file:
-                files = {"file": (source_path.name, audio_file, "audio/wav" if source_path.suffix == ".wav" else "audio/mpeg")}
-                async with httpx.AsyncClient(timeout=180.0) as client:
-                    response = await client.post(url, headers=headers, data=form_data, files=files)
-                    response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise map_httpx_error(exc, "Groq Whisper API") from exc
+        import asyncio
+
+        max_retries = 5
+        last_exc: Exception | None = None
+
+        for attempt in range(max_retries):
+            try:
+                with source_path.open("rb") as audio_file:
+                    files = {"file": (source_path.name, audio_file, "audio/wav" if source_path.suffix == ".wav" else "audio/mpeg")}
+                    async with httpx.AsyncClient(timeout=180.0) as client:
+                        response = await client.post(url, headers=headers, data=form_data, files=files)
+                        if response.status_code == 429:
+                            wait_time = min(10 * (2 ** attempt), 60)
+                            logger.warning(
+                                "Groq STT rate limited, waiting %ds (attempt %d/%d)",
+                                wait_time, attempt + 1, max_retries,
+                            )
+                            await asyncio.sleep(wait_time)
+                            continue
+                        response.raise_for_status()
+            except httpx.HTTPError as exc:
+                last_exc = exc
+                err_msg = str(exc).lower()
+                if "429" in err_msg or "rate" in err_msg:
+                    wait_time = min(10 * (2 ** attempt), 60)
+                    logger.warning(
+                        "Groq STT rate limited (exception), waiting %ds (attempt %d/%d)",
+                        wait_time, attempt + 1, max_retries,
+                    )
+                    await asyncio.sleep(wait_time)
+                    continue
+                raise map_httpx_error(exc, "Groq Whisper API") from exc
+            break
+        else:
+            if last_exc:
+                raise map_httpx_error(last_exc, "Groq Whisper API") from last_exc
+            raise ProviderError("Groq STT rate limited after max retries")
 
         body = response.json()
         full_text = str(body.get("text", ""))

@@ -23,7 +23,7 @@ class TestRenderProfile(unittest.TestCase):
         self.assertEqual(profile.crf, 23)
         self.assertEqual(profile.preset, "medium")
         self.assertTrue(profile.burn_subtitles)
-        self.assertEqual(profile.subtitle_font_size, 24)
+        self.assertEqual(profile.subtitle_font_size, 48)
 
     def test_high_quality_preset(self):
         """Test high_quality preset."""

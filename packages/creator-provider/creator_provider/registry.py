@@ -70,6 +70,8 @@ class ProviderRegistry:
         from creator_provider.image.pollinations_provider import PollinationsProvider
         from creator_provider.tts.edge_tts_provider import EdgeTTSProvider
         from creator_provider.image.placeholder_provider import PlaceholderImageProvider
+        from creator_provider.image.huggingface_provider import HuggingFaceImageProvider
+        from creator_provider.image.groq_svg_provider import GroqSvgImageProvider
 
         registry = cls()
         registry.register_provider("ollama", OllamaProvider)
@@ -89,6 +91,8 @@ class ProviderRegistry:
         registry.register_provider("pollinations_image", PollinationsProvider)
         registry.register_provider("edge_tts", EdgeTTSProvider)
         registry.register_provider("placeholder_image", PlaceholderImageProvider)
+        registry.register_provider("huggingface_image", HuggingFaceImageProvider)
+        registry.register_provider("groq_svg_image", GroqSvgImageProvider)
         registry.register_model(
             ModelCatalogEntry(
                 model_key="qwen3-4b",
@@ -235,6 +239,16 @@ class ProviderRegistry:
         )
         registry.register_model(
             ModelCatalogEntry(
+                model_key="meta-llama/llama-4-scout-17b-16e-instruct",
+                provider_type="groq_llm",
+                endpoint="https://api.groq.com/openai/v1",
+                category=ProviderCategory.LLM,
+                requires_gpu=False,
+                is_local=False,
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
                 model_key="groq-whisper-large-v3-turbo",
                 provider_type="groq_stt",
                 endpoint="https://api.groq.com/openai/v1",
@@ -273,6 +287,28 @@ class ProviderRegistry:
                 category=ProviderCategory.TTS,
                 requires_gpu=False,
                 is_local=True,
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="hf-flux-schnell",
+                provider_type="huggingface_image",
+                endpoint="https://api-inference.huggingface.co",
+                category=ProviderCategory.IMAGE,
+                requires_gpu=False,
+                is_local=False,
+                default_params={"width": 768, "height": 1344},
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="groq-svg",
+                provider_type="groq_svg_image",
+                endpoint="https://api.groq.com",
+                category=ProviderCategory.IMAGE,
+                requires_gpu=False,
+                is_local=False,
+                default_params={"width": 1080, "height": 1920},
             )
         )
         return registry

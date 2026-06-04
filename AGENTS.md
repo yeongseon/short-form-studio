@@ -64,3 +64,21 @@ app.dependency_overrides[require_run_access] = _require_run_access
 yield ...
 app.dependency_overrides.pop(require_run_access, None)
 ```
+
+## External Access (File Serving)
+
+When user needs to view generated artifacts (videos, images, audio):
+
+1. Start HTTP server: `python3 -m http.server <port> --bind 0.0.0.0 --directory <artifact_dir>`
+2. Expose externally using ONE of these (in priority order):
+   - **localtunnel** (PREFERRED, no auth): `npx -y localtunnel --port <port>`
+   - **ngrok** (needs authtoken): `ngrok http <port>` — only if authtoken is configured in ~/.config/ngrok/ngrok.yml
+   - **serveo.net** (unreliable): `ssh -R 80:localhost:<port> serveo.net`
+3. Verify the URL works: `curl -s -H "Bypass-Tunnel-Reminder: true" <url> -o /dev/null -w "%{http_code}"`
+4. Provide the public URL to the user
+
+**IMPORTANT RULES:**
+- NEVER ask how to expose — always use localtunnel by default
+- ALWAYS verify the URL returns 200 before giving it to the user
+- localtunnel requires header `Bypass-Tunnel-Reminder: true` for programmatic access
+- If one method fails, immediately try the next one — do NOT ask the user

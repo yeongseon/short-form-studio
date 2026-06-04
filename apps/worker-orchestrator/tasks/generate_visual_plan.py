@@ -102,9 +102,9 @@ def _parse_llm_response(raw: str, sections: list[dict[str, Any]]) -> list[Visual
 @celery_app.task(
     bind=True,
     autoretry_for=(ProviderTimeoutError, RateLimitError),
-    retry_backoff=True,
+    retry_backoff=30,
     retry_jitter=True,
-    max_retries=3,
+    max_retries=5,
     soft_time_limit=300,
     time_limit=360,
     name="generate_visual_plan",

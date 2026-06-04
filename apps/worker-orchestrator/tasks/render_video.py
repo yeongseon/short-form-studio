@@ -261,6 +261,31 @@ def render_video(self, run_id: int, render_profile: str = "shorts_default") -> d
                 ffmpeg, audio_path, scene_count, profile_data["max_duration_seconds"]
             )
 
+        # --- BGM: generate ambient background music and mix with narration ---
+        if audio_path:
+            try:
+                from creator_service.bgm_service import bgm_service
+                total_duration = sum(scene_durations)
+                bgm_path = f"{_ARTIFACT_ROOT}/{run_id}/render/bgm.mp3"
+                Path(bgm_path).parent.mkdir(parents=True, exist_ok=True)
+                bgm_service.generate_ambient_bgm(total_duration, bgm_path, mood="emotional")
+                mixed_path = f"{_ARTIFACT_ROOT}/{run_id}/render/audio_mixed.mp3"
+                bgm_service.mix_audio_with_bgm(str(audio_path), bgm_path, mixed_path)
+                audio_path = Path(mixed_path)
+                logger.info("BGM mixed for run %d", run_id)
+            except Exception as exc:
+                logger.warning("BGM mixing failed for run %d, using original audio: %s", run_id, exc)
+
+        # --- Convert SRT to ASS for styled subtitles ---
+        if subtitle_path and str(subtitle_path).endswith(".srt"):
+            try:
+                ass_path = str(subtitle_path).replace(".srt", ".ass")
+                ffmpeg.convert_srt_to_ass(str(subtitle_path), ass_path)
+                subtitle_path = Path(ass_path)
+                logger.info("Converted subtitles to ASS for run %d", run_id)
+            except Exception as exc:
+                logger.warning("ASS conversion failed for run %d, using SRT: %s", run_id, exc)
+
         output_path = f"{_ARTIFACT_ROOT}/{run_id}/render/output.mp4"
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
         logger.debug(

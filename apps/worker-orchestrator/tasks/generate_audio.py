@@ -70,9 +70,9 @@ def _get_audio_duration_seconds(path: str) -> float | None:
 @celery_app.task(
     bind=True,
     autoretry_for=(ProviderTimeoutError, RateLimitError),
-    retry_backoff=True,
+    retry_backoff=30,
     retry_jitter=True,
-    max_retries=3,
+    max_retries=5,
     soft_time_limit=300,
     time_limit=360,
     name="generate_audio",
