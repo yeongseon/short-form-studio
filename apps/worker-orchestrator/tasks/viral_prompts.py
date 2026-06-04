@@ -145,6 +145,21 @@ NICHE_PRESETS: dict[str, dict[str, Any]] = {
         ],
         "visual_style": "sleek product shots, neon accents, futuristic UI, clean backgrounds",
     },
+    "family_story": {
+        "name": "가족 썰/감동",
+        "name_en": "Family Story & Emotion",
+        "description": "Emotional storytelling about family moments, parent-child bonds, tears and laughter",
+        "target_duration_seconds": 50,
+        "target_word_count": (130, 170),
+        "hook_style": "micro_story",
+        "tone": "warm, emotional, nostalgic, heartfelt",
+        "example_hooks": [
+            "아빠가 마지막으로 한 말이 지금도 잊히지 않습니다",
+            "엄마의 문자를 다시 읽었을 때, 눈물이 멈추지 않았습니다",
+            "그날 아빠는 처음으로 울었습니다",
+        ],
+        "visual_style": "warm lighting, soft focus, family silhouettes, golden hour, emotional portraits, nostalgic color grading",
+    },
 }
 
 # --- Hook templates by style ---

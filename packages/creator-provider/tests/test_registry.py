@@ -71,7 +71,7 @@ class ProviderRegistryTests(unittest.TestCase):
     def test_create_default_returns_registry_with_default_entries(self) -> None:
         registry = ProviderRegistry.create_default()
 
-        self.assertEqual(len(registry.list_models()), 12)
+        self.assertEqual(len(registry.list_models()), 17)
         self.assertEqual(registry.resolve("qwen3-4b").category, ProviderCategory.LLM)
         self.assertEqual(registry.resolve("sd15").category, ProviderCategory.IMAGE)
         self.assertEqual(registry.resolve("qwen3-tts").category, ProviderCategory.TTS)
@@ -84,6 +84,11 @@ class ProviderRegistryTests(unittest.TestCase):
         self.assertEqual(registry.resolve("dall-e-3").category, ProviderCategory.IMAGE)
         self.assertEqual(registry.resolve("sd3-medium").category, ProviderCategory.IMAGE)
         self.assertEqual(registry.resolve("imagen-3").category, ProviderCategory.IMAGE)
+        self.assertEqual(registry.resolve("llama-3.3-70b-versatile").category, ProviderCategory.LLM)
+        self.assertEqual(registry.resolve("groq-whisper-large-v3-turbo").category, ProviderCategory.STT)
+        self.assertEqual(registry.resolve("pollinations").category, ProviderCategory.IMAGE)
+        self.assertEqual(registry.resolve("placeholder").category, ProviderCategory.IMAGE)
+        self.assertEqual(registry.resolve("edge-tts").category, ProviderCategory.TTS)
 
     def test_get_provider_raises_key_error_for_unregistered_provider_type(self) -> None:
         registry = ProviderRegistry()

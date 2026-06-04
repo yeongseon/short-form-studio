@@ -546,7 +546,16 @@ def validate_task_message(message: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("args must be list")
     if "kwargs" in message and not isinstance(message["kwargs"], dict):
         raise ValueError("kwargs must be dict")
-    return {k: message[k] for k in ("run_id", "task_name", "args", "kwargs") if k in message}
+    validated = {k: message[k] for k in ("run_id", "task_name", "args", "kwargs") if k in message}
+
+    # Semantic validation of kwargs
+    kwargs = validated.get("kwargs", {})
+    if "model_key" in kwargs:
+        validate_model_key(kwargs["model_key"])
+    for key, value in kwargs.items():
+        validate_string_arg(value, key)
+
+    return validated
 
 
 _MAX_STRING_ARG_LENGTH = 4096

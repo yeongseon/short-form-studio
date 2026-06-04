@@ -223,3 +223,22 @@ def test_run_task_value_error_marks_task_failed_without_run_failed_transition(
 
     assert tracking.failed_calls == [("task-1", "ValueError", "bad payload")]
     assert storage.failed_transition_calls == 0
+
+
+def test_validate_task_message_rejects_invalid_model_key() -> None:
+    """Broker messages with an unknown model_key must be rejected."""
+    from tasks.task_runner import validate_task_message
+
+    msg = {"run_id": 1, "task_name": "generate_script", "args": [], "kwargs": {"model_key": "evil-model"}}
+    with pytest.raises(ValueError, match="not in the allowed list"):
+        validate_task_message(msg)
+
+
+def test_validate_task_message_rejects_oversized_string_kwarg() -> None:
+    """Broker messages with kwargs exceeding max string length must be rejected."""
+    from tasks.task_runner import validate_task_message
+
+    oversized = "x" * 5000
+    msg = {"run_id": 1, "task_name": "generate_script", "args": [], "kwargs": {"prompt": oversized}}
+    with pytest.raises(ValueError, match="exceeds maximum length"):
+        validate_task_message(msg)

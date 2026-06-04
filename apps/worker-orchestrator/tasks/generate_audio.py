@@ -7,6 +7,8 @@ import logging
 import os
 import wave
 
+import re
+
 from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
@@ -21,6 +23,32 @@ from tasks.task_runner import GpuLockContext, TaskContext, TaskResult, TaskRunne
 
 logger = logging.getLogger(__name__)
 _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
+
+
+def _strip_markdown_for_tts(text: str) -> str:
+    """Remove markdown formatting markers that should not be read aloud by TTS.
+
+    Strips:
+    - Lines starting with ## (heading markers)
+    - Lines starting with > (blockquote / display_text annotations)
+    - Emoji-only lines or emoji prefixes used as visual markers
+    - Empty lines collapse to single newline
+    """
+    lines = []
+    for line in text.split("\n"):
+        stripped = line.strip()
+        # Skip heading markers (## Hook, ## Body, ## Conclusion)
+        if stripped.startswith("##"):
+            continue
+        # Skip blockquote display_text markers (> 🤯 text)
+        if stripped.startswith(">"):
+            continue
+        # Skip lines that are only emojis/symbols
+        if stripped and all(c in '🤯📝🙏❤️💔👆👉✨⭐🔥💡🎯' or ord(c) > 0x1F000 for c in stripped.replace(' ', '')):
+            continue
+        if stripped:
+            lines.append(stripped)
+    return "\n".join(lines)
 
 def _get_audio_duration_seconds(path: str) -> float | None:
     """Get audio duration. Supports WAV natively; estimates MP3 from file size."""
@@ -79,6 +107,11 @@ def generate_audio(
             )
         if not script_text:
             raise ValueError(f"Script draft for run {run_id} has no content")
+
+        # Strip markdown formatting that should not be read aloud
+        script_text = _strip_markdown_for_tts(script_text)
+        if not script_text:
+            raise ValueError(f"Script for run {run_id} has no speakable content after stripping markdown")
 
         registry = get_default_registry()
         entry = registry.resolve(tts_model)
