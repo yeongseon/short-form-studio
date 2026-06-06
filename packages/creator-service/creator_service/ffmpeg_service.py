@@ -1,4 +1,7 @@
 import logging
+import math
+import os
+import signal
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -6,6 +9,8 @@ from pathlib import Path
 from .render_profile import RenderProfile
 
 logger = logging.getLogger(__name__)
+
+
 @dataclass
 class RenderInput:
     image_paths: list[Path]  # ordered scene images
@@ -33,6 +38,49 @@ def _escape_subtitle_path(path: Path) -> str:
     return s
 
 
+
+
+def _validate_durations(durations: list[float]) -> None:
+    """Reject non-positive, NaN, or infinite durations."""
+    for i, d in enumerate(durations):
+        if not isinstance(d, (int, float)):
+            raise ValueError(f"scene_durations[{i}] must be numeric, got {type(d).__name__}")
+        if math.isnan(d) or math.isinf(d):
+            raise ValueError(f"scene_durations[{i}] must be finite, got {d}")
+        if d <= 0:
+            raise ValueError(f"scene_durations[{i}] must be positive, got {d}")
+
+
+def _run_ffmpeg(cmd: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
+    """Run FFmpeg with proper process-group isolation and timeout cleanup.
+
+    Uses start_new_session=True to isolate from Celery's signal handling,
+    and os.killpg() on timeout to ensure all child processes are cleaned up.
+    """
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # Kill the entire process group to clean up any children
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        proc.kill()  # fallback
+        proc.wait()
+        raise
+    return subprocess.CompletedProcess(
+        args=cmd, returncode=proc.returncode, stdout=stdout, stderr=stderr
+    )
+
+
 class FFmpegService:
     def __init__(self, profile: RenderProfile | None = None):
         self.profile = profile or RenderProfile.default()
@@ -40,12 +88,12 @@ class FFmpegService:
     def build_command(self, input_data: RenderInput, output_path: Path) -> list[str]:
         """Build FFmpeg command for rendering video from scenes.
 
-        All video filtering — scale/pad, concat, and optional subtitle
-        burn-in — is merged into a single ``-filter_complex`` graph so that
-        FFmpeg never receives conflicting ``-filter_complex`` and ``-vf``
-        flags.
+        NOTE: This builds the legacy single-pass filter_complex command.
+        The actual render() method now uses a two-pass concat demuxer approach
+        for stability in containerized environments (FFmpeg 7.x).
+        This method is retained for backward compatibility and testing.
         """
-        cmd = ["ffmpeg", "-y", "-threads", "1", "-filter_threads", "1"]
+        cmd = ["ffmpeg", "-y", "-nostdin"]
 
         if len(input_data.image_paths) != len(input_data.scene_durations):
             raise ValueError(
@@ -61,9 +109,9 @@ class FFmpegService:
             zip(input_data.image_paths, input_data.scene_durations, strict=False),
         ):
             cmd.extend(["-loop", "1", "-t", str(dur), "-i", str(img)])
-            # Scale + pad each input to target resolution
             filter_parts.append(
-                f"[{i}:v]scale={self.profile.width}:{self.profile.height}"
+                f"[{i}:v]format=yuv420p,"
+                f"scale={self.profile.width}:{self.profile.height}"
                 f":force_original_aspect_ratio=decrease,"
                 f"pad={self.profile.width}:{self.profile.height}"
                 f":(ow-iw)/2:(oh-ih)/2,"
@@ -73,21 +121,17 @@ class FFmpegService:
         # --- concat --------------------------------------------------------
         concat_inputs = "".join(f"[v{i}]" for i in range(len(input_data.image_paths)))
 
-        # Determine whether we need a subtitle stage after concat.
         need_subs = self.profile.burn_subtitles and input_data.subtitle_path is not None
 
         if need_subs:
-            # Concat → [vcat], then subtitle burn-in → [vout]
             filter_parts.append(
                 f"{concat_inputs}concat=n={len(input_data.image_paths)}:v=1:a=0[vcat]"
             )
-            assert input_data.subtitle_path is not None  # guaranteed by need_subs check
+            assert input_data.subtitle_path is not None
             escaped = _escape_subtitle_path(input_data.subtitle_path)
             if str(input_data.subtitle_path).endswith(".ass"):
-                # ASS format with embedded styling
                 filter_parts.append(f"[vcat]ass={escaped}[vout]")
             else:
-                # SRT with inline force_style
                 filter_parts.append(
                     f"[vcat]subtitles={escaped}"
                     f":force_style='FontSize={self.profile.subtitle_font_size}'[vout]"
@@ -117,6 +161,8 @@ class FFmpegService:
                 str(self.profile.crf),
                 "-preset",
                 self.profile.preset,
+                "-threads",
+                "2",
                 "-r",
                 str(self.profile.fps),
             ]
@@ -135,14 +181,16 @@ class FFmpegService:
         """Validate output file with ffprobe. Returns True if it's a playable video."""
         try:
             probe_cmd = [
-                "ffprobe", "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1",
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
                 str(output_path),
             ]
-            probe = subprocess.run(
-                probe_cmd, capture_output=True, text=True, timeout=15
-            )
+            probe = subprocess.run(probe_cmd, capture_output=True, text=True, timeout=15)
             if probe.returncode != 0:
                 logger.warning("ffprobe failed on %s: %s", output_path, probe.stderr[:200])
                 return False
@@ -156,58 +204,217 @@ class FFmpegService:
             logger.warning("ffprobe validation error for %s: %s", output_path, exc)
             return False
 
-    def render(self, input_data: RenderInput, output_path: Path) -> Path:
-        """Execute FFmpeg render. Returns output path on success.
+    def _render_segment(self, image_path: Path, duration: float, output_path: Path) -> None:
+        """Render a single scene image into a video segment (.ts).
 
-        Renders to a unique temporary file, then atomically renames on
-        success. If FFmpeg exits with a non-zero code but the temp file is a
-        valid video (verified by ffprobe with duration > 0 and size >= 10KB),
-        we accept the result. This handles the known case where FFmpeg
-        encounters ENOMEM during filter graph teardown in memory-constrained
-        containers but has already flushed a valid file.
+        Each segment is a self-contained H.264 MPEG-TS clip with the correct
+        resolution, pixel format, and frame rate. These segments can be
+        concatenated losslessly via the concat demuxer.
+        """
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-nostdin",
+            "-loop",
+            "1",
+            "-t",
+            str(duration),
+            "-i",
+            str(image_path),
+            "-vf",
+            (
+                f"format=yuv420p,"
+                f"scale={self.profile.width}:{self.profile.height}"
+                f":force_original_aspect_ratio=decrease,"
+                f"pad={self.profile.width}:{self.profile.height}"
+                f":(ow-iw)/2:(oh-ih)/2,"
+                f"setsar=1"
+            ),
+            "-c:v",
+            self.profile.video_codec.value,
+            "-crf",
+            str(self.profile.crf),
+            "-preset",
+            self.profile.preset,
+            "-pix_fmt",
+            "yuv420p",
+            "-r",
+            str(self.profile.fps),
+            # Force keyframe at start for clean concat
+            "-force_key_frames",
+            "expr:eq(n,0)",
+            str(output_path),
+        ]
+        result = _run_ffmpeg(cmd, timeout=120)
+        if result.returncode != 0:
+            logger.error("Segment render failed for %s: %s", image_path, result.stderr[-500:])
+            raise RuntimeError(
+                f"Segment render failed for {image_path.name} "
+                f"(rc={result.returncode}): {result.stderr[-200:]}"
+            )
+
+    def render(self, input_data: RenderInput, output_path: Path) -> Path:
+        """Execute FFmpeg render using two-pass concat demuxer approach.
+
+        Pass 1: Render each scene image into an individual .ts video segment.
+        Pass 2: Concatenate segments via concat demuxer, add audio + subtitles.
+
+        This avoids the multi-input filter_complex graph that causes
+        'Error reinitializing filters!' in FFmpeg 7.x under Celery workers.
+
+        Renders to a unique temporary file, then atomically renames on success.
+        If FFmpeg exits with a non-zero code but the temp file is a valid video
+        (verified by ffprobe), we accept the result.
         """
         import gc
-        import os
+        import shutil
+
+        if len(input_data.image_paths) != len(input_data.scene_durations):
+            raise ValueError(
+                f"image_paths ({len(input_data.image_paths)}) and "
+                f"scene_durations ({len(input_data.scene_durations)}) must have equal length"
+            )
+        if not input_data.image_paths:
+            raise ValueError("image_paths must not be empty")
+        _validate_durations(input_data.scene_durations)
+
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        # Use a unique temp filename (PID + random) to prevent collision on
-        # concurrent renders or Celery retries targeting the same output_path.
-        unique_suffix = f".tmp.{os.getpid()}.{os.urandom(4).hex()}.mp4"
-        tmp_path = output_path.with_suffix(unique_suffix)
-        cmd = self.build_command(input_data, tmp_path)
-        logger.debug("FFmpeg command: %s", ' '.join(str(c) for c in cmd))
-        # Force GC to reduce virtual memory before fork (prevents ENOMEM in containers)
-        gc.collect()
+
+        # Create temp directory for intermediate segments
+        tmp_dir = output_path.parent / f".render_tmp_{os.getpid()}_{os.urandom(4).hex()}"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+
         try:
-            result = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=300)
-        except subprocess.TimeoutExpired:
-            # Clean up temp file on timeout before propagating
-            if tmp_path.exists():
-                tmp_path.unlink()
-            raise
-        if result.returncode != 0:
-            # Check if temp output is a valid video despite non-zero exit
-            try:
-                file_size = tmp_path.stat().st_size
-            except FileNotFoundError:
-                file_size = 0
-            if file_size >= self._MIN_VALID_SIZE and self._probe_output_valid(tmp_path):
-                logger.warning(
-                    "FFmpeg returned %d but output is valid (%d bytes), accepting",
-                    result.returncode,
-                    file_size,
+            # --- Pass 1: Render each scene as individual .ts segment ---
+            segment_paths: list[Path] = []
+            gc.collect()
+
+            for i, (img, dur) in enumerate(
+                zip(input_data.image_paths, input_data.scene_durations, strict=False),
+            ):
+                seg_path = tmp_dir / f"seg_{i:04d}.ts"
+                self._render_segment(img, dur, seg_path)
+                segment_paths.append(seg_path)
+
+            # --- Pass 2: Concatenate segments + audio + subtitles ---
+            concat_list_path = tmp_dir / "concat.txt"
+            with open(concat_list_path, "w") as f:
+                for seg in segment_paths:
+                    f.write(f"file '{seg.name}'\n")
+
+            unique_suffix = f".tmp.{os.getpid()}.{os.urandom(4).hex()}.mp4"
+            tmp_output = output_path.with_suffix(unique_suffix)
+
+            need_subs = self.profile.burn_subtitles and input_data.subtitle_path is not None
+
+            cmd: list[str] = [
+                "ffmpeg",
+                "-y",
+                "-nostdin",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(concat_list_path),
+            ]
+
+            if input_data.audio_path:
+                cmd.extend(["-i", str(input_data.audio_path)])
+
+            if need_subs:
+                assert input_data.subtitle_path is not None
+                escaped = _escape_subtitle_path(input_data.subtitle_path)
+                if str(input_data.subtitle_path).endswith(".ass"):
+                    cmd.extend(["-vf", f"ass={escaped}"])
+                else:
+                    cmd.extend(
+                        [
+                            "-vf",
+                            f"subtitles={escaped}"
+                            f":force_style='FontSize={self.profile.subtitle_font_size}'",
+                        ]
+                    )
+                # Must re-encode video when burning subtitles
+                cmd.extend(
+                    [
+                        "-c:v",
+                        self.profile.video_codec.value,
+                        "-crf",
+                        str(self.profile.crf),
+                        "-preset",
+                        self.profile.preset,
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-r",
+                        str(self.profile.fps),
+                    ]
                 )
-                if result.stderr:
-                    logger.debug("FFmpeg stderr (accepted): %s", result.stderr[-500:])
-                tmp_path.rename(output_path)
-                return output_path
-            # Truly failed — clean up temp file
-            if tmp_path.exists():
-                tmp_path.unlink()
-            logger.error("FFmpeg stderr: %s", result.stderr[-2000:] if result.stderr else 'empty')
-            raise RuntimeError(f"FFmpeg render failed (rc={result.returncode}): {result.stderr}")
-        # Success — atomic rename from temp to final
-        tmp_path.rename(output_path)
-        return output_path
+            else:
+                # No subtitles — copy video stream (lossless concat)
+                cmd.extend(["-c:v", "copy"])
+
+            if input_data.audio_path:
+                cmd.extend(
+                    [
+                        "-c:a",
+                        self.profile.audio_codec.value,
+                        "-map",
+                        "0:v",
+                        "-map",
+                        "1:a",
+                        "-shortest",
+                    ]
+                )
+            else:
+                cmd.extend(["-map", "0:v"])
+
+            cmd.append(str(tmp_output))
+            logger.debug("FFmpeg concat command: %s", " ".join(str(c) for c in cmd))
+
+            gc.collect()
+            try:
+                result = _run_ffmpeg(cmd, timeout=300)
+            except subprocess.TimeoutExpired:
+                if tmp_output.exists():
+                    tmp_output.unlink()
+                raise
+
+            if result.returncode != 0:
+                # Check if temp output is a valid video despite non-zero exit
+                try:
+                    file_size = tmp_output.stat().st_size
+                except FileNotFoundError:
+                    file_size = 0
+                if file_size >= self._MIN_VALID_SIZE and self._probe_output_valid(tmp_output):
+                    logger.warning(
+                        "FFmpeg concat returned %d but output is valid (%d bytes), accepting",
+                        result.returncode,
+                        file_size,
+                    )
+                    if result.stderr:
+                        logger.debug("FFmpeg stderr (accepted): %s", result.stderr[-500:])
+                    tmp_output.rename(output_path)
+                    return output_path
+                # Truly failed — clean up temp file
+                if tmp_output.exists():
+                    tmp_output.unlink()
+                logger.error(
+                    "FFmpeg concat stderr: %s",
+                    result.stderr[-2000:] if result.stderr else "empty",
+                )
+                raise RuntimeError(
+                    f"FFmpeg render failed (rc={result.returncode}): {result.stderr}"
+                )
+
+            # Success — atomic rename from temp to final
+            tmp_output.rename(output_path)
+            return output_path
+
+        finally:
+            # Clean up intermediate segments
+            if tmp_dir.exists():
+                shutil.rmtree(tmp_dir, ignore_errors=True)
 
     # -- Per-paragraph helper methods -----------------------------------------
 
@@ -261,7 +468,7 @@ class FFmpegService:
                 "copy",
                 str(out),
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            result = _run_ffmpeg(cmd, timeout=120)
             if result.returncode != 0:
                 raise RuntimeError(f"FFmpeg concat failed: {result.stderr}")
         finally:
@@ -377,9 +584,7 @@ class FFmpegService:
             text = "\\N".join(lines[2:])  # ASS newline
             # Escape braces to prevent ASS override injection
             text = text.replace("{", "\uff5b").replace("}", "\uff5d")
-            ass_lines.append(
-                f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}"
-            )
+            ass_lines.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
 
         out.write_text("\n".join(ass_lines) + "\n", encoding="utf-8")
         return out

@@ -126,35 +126,58 @@ def generate_scene_image(
                     safe_scene_id = sanitize_path_component(target_scene.scene_id, label="scene_id")
                     target_path = str(asset_dir / f"{safe_scene_id}-{uuid4().hex}.png")
                     params["output_path"] = target_path
-                    try:
-                        await provider.generate(effective_prompt, params)
-                    except (TimeoutError, ConnectionError) as exc:
-                        raise ProviderTimeoutError(
-                            "Provider timed out during scene image generation "
-                            f"for run {run_id} scene {target_scene.scene_id}"
-                        ) from exc
-                    except ProviderTimeoutError:
-                        raise
-                    except RateLimitError:
-                        raise
-                    except SoftTimeLimitExceeded:
-                        raise
-                    except Exception as exc:
-                        logger.error(
-                            "Image generation exception for run %d scene %s: %s: %s",
-                            run_id, target_scene.scene_id, type(exc).__name__, exc,
-                            exc_info=True,
-                        )
-                        message = str(exc).lower()
-                        if "429" in message or "rate" in message:
-                            raise RateLimitError(
-                                "Provider rate limited scene image generation "
+                    # Per-scene retry for SVG/XML parse errors (up to 3 attempts for groq-svg)
+                    _scene_max_attempts = 3 if model_key == "groq-svg" else 1
+                    for _scene_attempt in range(_scene_max_attempts):
+                        try:
+                            await provider.generate(effective_prompt, params)
+                            break  # Success — exit retry loop
+                        except (TimeoutError, ConnectionError) as exc:
+                            raise ProviderTimeoutError(
+                                "Provider timed out during scene image generation "
                                 f"for run {run_id} scene {target_scene.scene_id}"
                             ) from exc
-                        raise ProviderError(
-                            "Provider failed scene image generation "
-                            f"for run {run_id} scene {target_scene.scene_id}"
-                        ) from exc
+                        except ProviderTimeoutError:
+                            raise
+                        except RateLimitError:
+                            raise
+                        except SoftTimeLimitExceeded:
+                            raise
+                        except Exception as exc:
+                            logger.error(
+                                "Image generation exception for run %d scene %s (attempt %d/%d): %s: %s",
+                                run_id, target_scene.scene_id,
+                                _scene_attempt + 1, _scene_max_attempts,
+                                type(exc).__name__, exc,
+                                exc_info=True,
+                            )
+                            message = str(exc).lower()
+                            if "429" in message or "rate" in message:
+                                raise RateLimitError(
+                                    "Provider rate limited scene image generation "
+                                    f"for run {run_id} scene {target_scene.scene_id}"
+                                ) from exc
+                            # Retry on parse/SVG/XML errors
+                            is_parse_error = any(
+                                kw in message for kw in ("parse", "xml", "svg", "valid")
+                            )
+                            if _scene_attempt < _scene_max_attempts - 1 and is_parse_error:
+                                import asyncio
+                                logger.warning(
+                                    "Scene %s SVG error on attempt %d, retrying in 5s...",
+                                    target_scene.scene_id, _scene_attempt + 1,
+                                )
+                                await asyncio.sleep(5)
+                                # Regenerate output path for retry
+                                target_path = str(
+                                    asset_dir / f"{safe_scene_id}-{uuid4().hex}.png"
+                                )
+                                params["output_path"] = target_path
+                                continue
+                            raise ProviderError(
+                                "Provider failed scene image generation "
+                                f"for run {run_id} scene {target_scene.scene_id}"
+                            ) from exc
                 finally:
                     if entry.requires_gpu:
                         gpu_lock.release()

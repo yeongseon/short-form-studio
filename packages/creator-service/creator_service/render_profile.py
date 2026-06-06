@@ -29,8 +29,8 @@ class RenderProfile:
     transition_style: TransitionStyle = TransitionStyle.KEN_BURNS
     min_duration_seconds: int = 15
     max_duration_seconds: int = 60
-    crf: int = 23  # quality (lower = better, 18-28 typical)
-    preset: str = "ultrafast"  # use ultrafast to reduce encoder memory in containers
+    crf: int = 20  # quality (lower = better, 18-28 typical)
+    preset: str = "fast"  # fast: good quality/memory balance for containers (medium OOMs with 5+ scenes)
     burn_subtitles: bool = True
     subtitle_font_size: int = 48  # scaled for 1080p mobile readability
 

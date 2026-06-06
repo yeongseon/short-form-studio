@@ -17,7 +17,7 @@ _MOOD_FILTERS: dict[str, str] = {
     "warm": "anoisesrc=d={duration}:c=pink:r=44100,lowpass=f=300,volume=0.4",
     "tense": "anoisesrc=d={duration}:c=brown:r=44100,lowpass=f=200,highpass=f=60,volume=0.5",
     "calm": "sine=frequency=174:duration={duration},lowpass=f=200,volume=0.3",
-    "emotional": "anoisesrc=d={duration}:c=pink:r=44100,lowpass=f=250,highpass=f=80,volume=0.35",
+    "emotional": "anoisesrc=d={duration}:c=pink:r=44100,lowpass=f=250,highpass=f=80,volume=0.6",
 }
 
 
@@ -79,7 +79,7 @@ class BgmService:
         narration_path: str,
         bgm_path: str,
         output_path: str,
-        bgm_volume: float = 0.15,
+        bgm_volume: float = 0.35,
     ) -> str:
         """Mix narration audio with BGM.
 
