@@ -1,7 +1,7 @@
-"""BGM generation and audio mixing service.
+"""BGM generation, SFX, and audio mixing service.
 
-Generates ambient background music using FFmpeg's built-in audio generators
-and mixes it with narration audio for YouTube Shorts.
+Generates ambient background music and sound effects using FFmpeg's built-in
+audio generators and mixes them with narration audio for YouTube Shorts.
 """
 
 from __future__ import annotations
@@ -12,6 +12,15 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# FFmpeg lavfi SFX presets (short audio stingers for transitions)
+_SFX_FILTERS: dict[str, str] = {
+    "whoosh": "anoisesrc=d=0.5:c=white:r=44100,bandpass=f=2000:w=1000,afade=t=in:d=0.05,afade=t=out:st=0.25:d=0.25,volume=0.7",
+    "sting": "sine=frequency=220:duration=0.4,afade=t=out:st=0.15:d=0.25,volume=1.5",
+    "rise": "anoisesrc=d=1.0:c=pink:r=44100,lowpass=f=600,volume=0.6,afade=t=in:d=1.0",
+    "drop": "sine=frequency=400:duration=0.6,asetrate=44100*0.5,afade=t=out:st=0.2:d=0.4,volume=1.0",
+    "ping": "sine=frequency=1200:duration=0.3,afade=t=out:st=0.1:d=0.2,volume=0.5",
+    "heartbeat": "sine=frequency=60:duration=0.8,asetpts=PTS-STARTPTS,volume=2.0,afade=t=out:st=0.4:d=0.4",
+}
 # FFmpeg lavfi filter presets for different moods
 _MOOD_FILTERS: dict[str, str] = {
     "warm": "anoisesrc=d={duration}:c=pink:r=44100,lowpass=f=300,volume=0.4",
@@ -161,6 +170,131 @@ class BgmService:
                 raise RuntimeError(f"Audio mixing failed: {result.stderr}")
 
         return str(out)
+
+    def generate_sfx(self, sfx_type: str, output_path: str) -> str:
+        """Generate a short SFX audio clip using FFmpeg lavfi filters.
+
+        Args:
+            sfx_type: One of 'whoosh', 'sting', 'rise', 'drop', 'ping', 'heartbeat'.
+            output_path: Where to save the generated SFX audio file.
+
+        Returns:
+            The output path.
+        """
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+
+        audio_filter = _SFX_FILTERS.get(sfx_type, _SFX_FILTERS["whoosh"])
+
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            audio_filter,
+            "-c:a",
+            "libmp3lame",
+            "-b:a",
+            "128k",
+            str(out),
+        ]
+
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=30, start_new_session=True
+        )
+        if result.returncode != 0:
+            logger.error("SFX generation failed (%s): %s", sfx_type, result.stderr[-300:])
+            raise RuntimeError(f"SFX generation failed ({sfx_type}): {result.stderr}")
+
+        return str(out)
+
+    def mix_sfx_at_timestamps(
+        self,
+        base_audio_path: str,
+        sfx_timestamps: list[tuple[float, str]],
+        output_path: str,
+        sfx_volume: float = 0.6,
+    ) -> str:
+        """Overlay SFX clips at specific timestamps on the base audio.
+
+        Args:
+            base_audio_path: Path to the main audio (narration+BGM mix).
+            sfx_timestamps: List of (timestamp_seconds, sfx_type) pairs.
+            output_path: Where to save the final mixed audio.
+            sfx_volume: Volume of SFX overlay (0.0-1.0).
+
+        Returns:
+            The output path.
+        """
+        if not sfx_timestamps:
+            return base_audio_path
+
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        sfx_volume = max(0.0, min(1.0, float(sfx_volume)))
+
+        # Generate SFX clips to temp files
+        import tempfile
+        tmp_dir = Path(tempfile.mkdtemp(prefix="sfx_"))
+        sfx_paths: list[tuple[float, str]] = []
+
+        try:
+            for i, (ts, sfx_type) in enumerate(sfx_timestamps):
+                sfx_path = str(tmp_dir / f"sfx_{i}.mp3")
+                try:
+                    self.generate_sfx(sfx_type, sfx_path)
+                    sfx_paths.append((ts, sfx_path))
+                except RuntimeError:
+                    logger.warning("Skipping SFX %s at %.1fs", sfx_type, ts)
+                    continue
+
+            if not sfx_paths:
+                return base_audio_path
+
+            # Build FFmpeg filter: overlay each SFX at its timestamp
+            inputs = ["-i", base_audio_path]
+            for _, sfx_path in sfx_paths:
+                inputs.extend(["-i", sfx_path])
+
+            # Filter: delay each SFX to its timestamp, mix all together
+            filter_parts: list[str] = []
+            mix_inputs: list[str] = ["[0:a]"]
+            for i, (ts, _) in enumerate(sfx_paths):
+                delay_ms = int(ts * 1000)
+                filter_parts.append(
+                    f"[{i+1}:a]volume={sfx_volume},adelay={delay_ms}|{delay_ms}[sfx{i}]"
+                )
+                mix_inputs.append(f"[sfx{i}]")
+
+            filter_parts.append(
+                f"{''.join(mix_inputs)}amix=inputs={len(mix_inputs)}:duration=first:dropout_transition=2"
+            )
+
+            cmd = [
+                "ffmpeg",
+                "-y",
+                *inputs,
+                "-filter_complex",
+                ";".join(filter_parts),
+                "-c:a",
+                "libmp3lame",
+                "-b:a",
+                "192k",
+                str(out),
+            ]
+
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=120, start_new_session=True
+            )
+            if result.returncode != 0:
+                logger.warning("SFX mixing failed, returning original: %s", result.stderr[-300:])
+                return base_audio_path
+
+            return str(out)
+        finally:
+            import shutil
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 # Module-level singleton

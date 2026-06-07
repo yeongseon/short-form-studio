@@ -48,9 +48,21 @@ class QualityProfile:
     tts_rate: str = "+10%"
     bgm_volume: float = 0.25
     bgm_mood: str = "emotional"
+    # SFX
+    sfx_enabled: bool = False
+    sfx_volume: float = 0.6
+    sfx_transition_type: str = "whoosh"  # SFX at scene transitions
+    sfx_hook_type: str = "sting"  # SFX for hook scene
+    sfx_climax_type: str = "drop"  # SFX for climax moment
     # Pacing
     min_scene_duration: float = 4.0
     max_scene_duration: float = 12.0
+    # Per-beat TTS variation
+    tts_rate_hook: str = "+20%"
+    tts_rate_body: str = "+12%"
+    tts_rate_climax: str = "+5%"  # slow down for dramatic effect
+    tts_rate_conclusion: str = "+10%"
+    tts_pause_before_climax_ms: int = 400  # silence before key reveal
 
     def to_render_kwargs(self) -> dict[str, Any]:
         """Convert to kwargs for RenderProfile/FFmpegService."""
@@ -104,8 +116,18 @@ QUALITY_PROFILES: dict[str, QualityProfile] = {
         tts_rate="+15%",  # slightly faster for urgency
         bgm_volume=0.20,
         bgm_mood="suspense",
+        sfx_enabled=True,
+        sfx_volume=0.55,
+        sfx_transition_type="whoosh",
+        sfx_hook_type="sting",
+        sfx_climax_type="drop",
         min_scene_duration=3.0,
         max_scene_duration=10.0,
+        tts_rate_hook="+20%",
+        tts_rate_body="+12%",
+        tts_rate_climax="+5%",
+        tts_rate_conclusion="+10%",
+        tts_pause_before_climax_ms=400,
     ),
     "default": QualityProfile(
         name="default",

@@ -161,7 +161,7 @@ NICHE_PRESETS: dict[str, dict[str, Any]] = {
         "visual_style": "warm lighting, soft focus, family silhouettes, golden hour, emotional portraits, nostalgic color grading",
     },
     "ssul_dc": {
-        "name": "DC/커뮤니티 썸",
+        "name": "DC/커뮤니티 썬",
         "name_en": "Community Story (DC style)",
         "description": "Real-life anecdote storytelling from Korean online communities",
         "target_duration_seconds": 45,
@@ -169,10 +169,11 @@ NICHE_PRESETS: dict[str, dict[str, Any]] = {
         "hook_style": "micro_story",
         "tone": "conversational, raw, dramatic, first-person",
         "example_hooks": [
-            "어제 중고거래하다가 진짜 소름끼치는 일을 겪었습니다",
-            "회사에서 잘리고 나서 첣 날, 생각지도 못한 일이 벌어졌습니다",
-            "새벽 3시에 배달 온 택배를 열었는데...",
+            "오토바이 테스트해본다더니 그대로 도망갔습니다",
+            "회사에서 쟘린 날, 퇴직금 통장에 0원이 있었습니다",
+            "새벽 3시에 배달 온 택배를 열었는데 안에 사람 머리카락이 들어있었습니다",
         ],
+        "hook_rule": "훅은 반드시 결과/행동으로 시작하세요. '어제 X했는데...' 대신 'X가 일어났습니다'로. 설명 전에 결과를 먼저 보여주세요.",
         "visual_style": "realistic photography, Korean urban setting, moody cinematic lighting, shallow depth of field, film grain",
     },
 }
@@ -256,6 +257,12 @@ def build_viral_system_prompt(
 - 총 나레이션이 45초 이내가 되도록 간결하게 작성하세요.
 - 5개 이하의 장면으로 구성하세요 (Hook 1개 + Body 3개 + Conclusion 1개가 이상적)
 - ⚠️ 관련 지시사항, 메타데이터, 수치 제한 문구를 절대 출력에 포함하지 마세요. 오직 나레이션만 출력하세요.
+
+## WRITING QUALITY (필수 준수!):
+- **단어 반복 금지**: 같은 감탄사/키워드를 2회 이상 반복하지 마세요 ('충격', '소름', '반전' 등).
+- **구체적 디테일**: 추상적 단어 대신 구체적인 상황/수치/대화를 사용하세요.
+- **점증적 긴장감**: 각 단락이 전 단락보다 긴장감이 높아져야 합니다 (escalation).
+- **다양한 감정 어휘**: 매번 '충격'이 아닌 '얼어붙다', '멍해지다', '심장이 떨리다' 등 다양하게.
 ## OUTPUT FORMAT:
 마크다운으로 출력. 각 섹션을 ## 헤딩으로 구분:
 
@@ -292,6 +299,10 @@ def build_viral_system_prompt(
   - "{preset["example_hooks"][1]}"
   - "{preset["example_hooks"][2]}"
 """
+        # Add hook_rule if present (niche-specific hook constraint)
+        hook_rule = preset.get("hook_rule")
+        if hook_rule:
+            base += f"\n- ⚠️ 훅 규칙: {hook_rule}\n"
     else:
         base += """
 

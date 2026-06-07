@@ -114,6 +114,13 @@ def generate_script(
         except Exception:
             logger.warning("Failed to record provider usage", exc_info=True)
 
+        # Post-process: fix keyword repetition
+        try:
+            from tasks.script_qc import fix_keyword_repetition
+            generated = fix_keyword_repetition(generated, max_repeats=2)
+        except Exception:
+            pass  # Non-critical — proceed with original
+
         await _script_service.save_draft(
             run_id=run_id,
             source_type="generated_by_model",

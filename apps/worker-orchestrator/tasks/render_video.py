@@ -155,8 +155,24 @@ def render_video(self, run_id: int, render_profile: str = "shorts_default") -> d
                 raise RuntimeError(
                     f"Unsafe manifest path for run {run_id}: scene asset_path {asset_path!r}"
                 ) from exc
-        ffmpeg = FFmpegService(profile=_resolve_profile(render_profile))
-
+        # Resolve render profile and apply quality profile overrides
+        resolved_profile = _resolve_profile(render_profile)
+        try:
+            from creator_service.quality_profile import get_quality_profile
+            from creator_service.render_profile import TransitionStyle
+            _qp = get_quality_profile(render_profile if render_profile != "shorts_default" else "ssul_v2")
+            # Override transition style from quality profile
+            transition_map = {
+                "ken_burns": TransitionStyle.KEN_BURNS,
+                "ken_burns_lite": TransitionStyle.KEN_BURNS_LITE,
+                "fade": TransitionStyle.FADE,
+                "cut": TransitionStyle.CUT,
+            }
+            if _qp.transition in transition_map:
+                resolved_profile.transition_style = transition_map[_qp.transition]
+        except Exception:
+            pass
+        ffmpeg = FFmpegService(profile=resolved_profile)
         paragraph_audio = await _audio_service.list_paragraph_audio(run_id)
         paragraph_subtitles = await _subtitle_service.list_paragraph_subtitles(run_id)
         run_audio_path = manifest["audio_path"]
@@ -275,6 +291,34 @@ def render_video(self, run_id: int, render_profile: str = "shorts_default") -> d
                 bgm_service.mix_audio_with_bgm(str(audio_path), bgm_path, mixed_path, bgm_volume=qp.bgm_volume)
                 audio_path = Path(mixed_path)
                 logger.info("BGM mixed for run %d (mood=%s, vol=%.2f)", run_id, qp.bgm_mood, qp.bgm_volume)
+
+                # --- SFX: overlay sound effects at scene transitions ---
+                if qp.sfx_enabled:
+                    try:
+                        cumulative = 0.0
+                        sfx_timestamps: list[tuple[float, str]] = []
+                        for i, dur in enumerate(scene_durations):
+                            if i == 0:
+                                # Hook scene — use hook SFX at start
+                                sfx_timestamps.append((0.3, qp.sfx_hook_type))
+                            elif i == len(scene_durations) - 1:
+                                # Last scene — no transition SFX
+                                pass
+                            else:
+                                # Transition SFX at scene boundary
+                                sfx_timestamps.append((cumulative - 0.1, qp.sfx_transition_type))
+                            # Detect climax (scene 3 or 4 in typical 5-scene structure)
+                            if i == min(3, len(scene_durations) - 2) and len(scene_durations) >= 4:
+                                sfx_timestamps.append((cumulative + dur * 0.5, qp.sfx_climax_type))
+                            cumulative += dur
+                        sfx_output = f"{_ARTIFACT_ROOT}/{run_id}/render/audio_sfx.mp3"
+                        result_path = bgm_service.mix_sfx_at_timestamps(
+                            str(audio_path), sfx_timestamps, sfx_output, sfx_volume=qp.sfx_volume
+                        )
+                        audio_path = Path(result_path)
+                        logger.info("SFX mixed for run %d (%d effects)", run_id, len(sfx_timestamps))
+                    except Exception as sfx_exc:
+                        logger.warning("SFX mixing failed for run %d: %s", run_id, sfx_exc)
             except Exception as exc:
                 logger.warning("BGM mixing failed for run %d, using original audio: %s", run_id, exc)
         # --- Convert SRT to ASS for styled subtitles with keyword emphasis ---

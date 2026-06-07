@@ -216,7 +216,7 @@ class FFmpegService:
         """
         # Build video filter based on transition style
         if self.profile.transition_style.value == "ken_burns":
-            # Ken Burns: zoom from 1.0 to 1.10 with subtle pan + fade in/out
+            # Full Ken Burns: zoom from 1.0 to 1.10 with subtle pan + fade in/out
             # Use 2x target resolution as input for zoom headroom (not 8000px — too slow)
             zoom_input_w = self.profile.width * 2
             total_frames = max(1, int(duration * self.profile.fps))
@@ -225,6 +225,25 @@ class FFmpegService:
             vf = (
                 f"scale={zoom_input_w}:-1,"
                 f"zoompan=z='1+0.10*on/{total_frames}':"
+                f"x='iw/2-(iw/zoom/2)':"
+                f"y='ih/2-(ih/zoom/2)':"
+                f"d={total_frames}:s={self.profile.width}x{self.profile.height}:fps={self.profile.fps},"
+                f"fade=t=in:st=0:d={fade_d},"
+                f"fade=t=out:st={fade_out_start:.3f}:d={fade_d},"
+                f"format=yuv420p,setsar=1"
+            )
+        elif self.profile.transition_style.value == "ken_burns_lite":
+            # Lightweight Ken Burns: native resolution, subtle 5% zoom, no upscale
+            # Much faster than full ken_burns — safe for containerized workers
+            total_frames = max(1, int(duration * self.profile.fps))
+            fade_d = 0.25
+            fade_out_start = max(0, duration - fade_d)
+            vf = (
+                f"scale={self.profile.width}:{self.profile.height}"
+                f":force_original_aspect_ratio=decrease,"
+                f"pad={self.profile.width}:{self.profile.height}"
+                f":(ow-iw)/2:(oh-ih)/2,"
+                f"zoompan=z='1+0.05*on/{total_frames}':"
                 f"x='iw/2-(iw/zoom/2)':"
                 f"y='ih/2-(ih/zoom/2)':"
                 f"d={total_frames}:s={self.profile.width}x{self.profile.height}:fps={self.profile.fps},"
@@ -488,8 +507,9 @@ class FFmpegService:
         # Build concat list file
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             for p in audio_paths:
-                # FFmpeg concat requires single-quoted paths with inner quotes escaped
-                escaped = p.replace("'", "'\\''")
+                # FFmpeg concat requires absolute paths and single-quoted with inner quotes escaped
+                abs_p = str(Path(p).resolve())
+                escaped = abs_p.replace("'", "'\\''") 
                 f.write(f"file '{escaped}'\n")
             concat_list = f.name
 

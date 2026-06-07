@@ -16,6 +16,7 @@ class TransitionStyle(Enum):
     CUT = "cut"
     FADE = "fade"
     KEN_BURNS = "ken_burns"
+    KEN_BURNS_LITE = "ken_burns_lite"
 
 
 @dataclass
@@ -29,7 +30,7 @@ class RenderProfile:
     transition_style: TransitionStyle = TransitionStyle.FADE  # FADE default: KEN_BURNS too slow for single-CPU containers
     min_duration_seconds: int = 15
     max_duration_seconds: int = 60
-    crf: int = 20  # quality (lower = better, 18-28 typical)
+    crf: int = 18  # quality (lower = better, 18=high quality for mobile)
     preset: str = "fast"  # fast: good quality/memory balance for containers (medium OOMs with 5+ scenes)
     burn_subtitles: bool = True
     subtitle_font_size: int = 48  # scaled for 1080p mobile readability

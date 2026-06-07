@@ -8,6 +8,7 @@ import os
 import wave
 
 import re
+from pathlib import Path
 
 from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
@@ -154,37 +155,108 @@ def generate_audio(
         audio_path = f"{_ARTIFACT_ROOT}/{run_id}/audio/audio{ext}"
         try:
             os.makedirs(os.path.dirname(audio_path), exist_ok=True)
-            params = dict(entry.default_params or {})
-            params["output_path"] = audio_path
-            # Apply quality profile TTS rate if using edge-tts
-            if entry.provider_type == "edge_tts":
+
+            # --- Per-section TTS with beat-aware rate variation ---
+            per_section_generated = False
+            if entry.provider_type == "edge_tts" and draft.structured_script:
                 try:
                     from creator_service.quality_profile import get_quality_profile
                     qp = get_quality_profile("ssul_v2")
-                    tts_params = qp.to_tts_params()
-                    params.update(tts_params)
-                    logger.info("Applied TTS rate=%s for run %d", tts_params.get('rate'), run_id)
-                except Exception:
-                    pass  # Fall back to defaults if quality profile unavailable
-            try:
-                await provider.generate(script_text, voice=voice, params=params)
-            except (TimeoutError, ConnectionError) as exc:
-                raise ProviderTimeoutError(
-                    f"Provider timed out during audio generation for run {run_id}"
-                ) from exc
-            except ProviderTimeoutError:
-                raise
-            except RateLimitError:
-                raise
-            except SoftTimeLimitExceeded:
-                raise
-            except Exception as exc:
-                message = str(exc).lower()
-                if "429" in message or "rate" in message:
-                    raise RateLimitError(
-                        f"Provider rate limited audio generation for run {run_id}"
+                    sections = draft.structured_script
+                    section_audio_paths: list[str] = []
+                    section_ids: list[str] = []
+
+                    # Map section position to beat-appropriate rate
+                    for idx, section in enumerate(sections):
+                        section_text = (section.display_text or section.text or "").strip()
+                        section_text = _strip_markdown_for_tts(section_text)
+                        if not section_text:
+                            continue
+
+                        # Determine TTS rate based on section position/beat
+                        if idx == 0:
+                            rate = qp.tts_rate_hook
+                        elif idx == len(sections) - 1:
+                            rate = qp.tts_rate_conclusion
+                        elif idx == len(sections) - 2 and len(sections) >= 4:
+                            # Penultimate section = climax
+                            rate = qp.tts_rate_climax
+                        else:
+                            rate = qp.tts_rate_body
+
+                        # Add dramatic pause before climax
+                        if idx == len(sections) - 2 and len(sections) >= 4:
+                            section_text = "..." + section_text
+
+                        section_path = f"{_ARTIFACT_ROOT}/{run_id}/audio/section_{idx}{ext}"
+                        section_params = dict(entry.default_params or {})
+                        section_params["output_path"] = section_path
+                        section_params["rate"] = rate
+
+                        await provider.generate(section_text, voice=voice, params=section_params)
+                        section_audio_paths.append(section_path)
+                        section_ids.append(section.section_id or f"section_{idx}")
+                        logger.debug("Section %d TTS: rate=%s len=%d", idx, rate, len(section_text))
+
+                    if section_audio_paths:
+                        # Store paragraph audio for render pipeline consumption
+                        for sid, spath in zip(section_ids, section_audio_paths):
+                            await _audio_service.create_paragraph_artifact(
+                                run_id=run_id,
+                                section_id=sid,
+                                path=spath,
+                                model_used=tts_model,
+                                provider_type=entry.provider_type,
+                                voice=voice,
+                                idempotency_key=f"{ctx.task_id}_{sid}",
+                            )
+                        # Also create concatenated full audio as fallback
+                        from creator_service.ffmpeg_service import FFmpegService
+                        _ffmpeg = FFmpegService()
+                        _ffmpeg.concatenate_audio(section_audio_paths, audio_path)
+                        per_section_generated = True
+                        logger.info(
+                            "Per-section TTS generated for run %d (%d sections)",
+                            run_id, len(section_audio_paths)
+                        )
+                except Exception as sec_exc:
+                    logger.warning(
+                        "Per-section TTS failed for run %d, falling back to single-pass: %s",
+                        run_id, sec_exc
+                    )
+                    per_section_generated = False
+
+            # --- Fallback: single-pass TTS generation ---
+            if not per_section_generated:
+                params = dict(entry.default_params or {})
+                params["output_path"] = audio_path
+                if entry.provider_type == "edge_tts":
+                    try:
+                        from creator_service.quality_profile import get_quality_profile
+                        qp = get_quality_profile("ssul_v2")
+                        params.update(qp.to_tts_params())
+                        logger.info("Applied TTS rate=%s for run %d", params.get('rate'), run_id)
+                    except Exception:
+                        pass
+                try:
+                    await provider.generate(script_text, voice=voice, params=params)
+                except (TimeoutError, ConnectionError) as exc:
+                    raise ProviderTimeoutError(
+                        f"Provider timed out during audio generation for run {run_id}"
                     ) from exc
-                raise ProviderError(f"Provider failed audio generation for run {run_id}") from exc
+                except ProviderTimeoutError:
+                    raise
+                except RateLimitError:
+                    raise
+                except SoftTimeLimitExceeded:
+                    raise
+                except Exception as exc:
+                    message = str(exc).lower()
+                    if "429" in message or "rate" in message:
+                        raise RateLimitError(
+                            f"Provider rate limited audio generation for run {run_id}"
+                        ) from exc
+                    raise ProviderError(f"Provider failed audio generation for run {run_id}") from exc
         finally:
             if entry.requires_gpu:
                 gpu_lock.release()

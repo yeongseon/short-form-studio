@@ -174,3 +174,78 @@ def _parse_sections(content: str) -> dict[str, str]:
         sections[current_key] = "\n".join(current_lines)
 
     return sections
+
+
+def fix_keyword_repetition(markdown_content: str, max_repeats: int = 2) -> str:
+    """Post-process script to reduce excessive keyword repetition.
+
+    Detects dramatic keywords that appear more than max_repeats times
+    (as substrings) and removes excess occurrences.
+
+    This addresses the common LLM failure mode of repeating emphasis
+    keywords (e.g., '충격', '소름') multiple times per script.
+    """
+    if not markdown_content:
+        return markdown_content
+
+    # Dramatic stems to check for over-use (common LLM repetitions)
+    _DRAMATIC_STEMS = [
+        '충격', '소름', '반전', '경악', '전율', '불안',
+        '공포', '무서운', '위험', '놀라', '기적', '수상',
+        '어이없', '말도 안', '상상도', '믿을 수',
+        '이상', '이상한', '이상했',  # Very common LLM repetition
+    ]
+
+    # Also find full Korean words that repeat excessively
+    korean_words = re.findall(r'[가-힣]{2,}', markdown_content)
+    word_counts: dict[str, int] = {}
+    for w in korean_words:
+        word_counts[w] = word_counts.get(w, 0) + 1
+
+    _EXEMPT_WORDS = {
+        '그런데', '그래서', '그리고', '하지만', '때문에', '이것', '그것',
+        '사람', '우리', '정말', '진짜', '정도', '시간', '이유',
+        '생각', '하나', '나는', '제가', '있는', '없는', '이런',
+    }
+
+    # Collect all stems/words that are repeated excessively
+    over_repeated: list[str] = []
+
+    # Check dramatic stems as substrings
+    for stem in _DRAMATIC_STEMS:
+        count = markdown_content.count(stem)
+        if count > max_repeats:
+            over_repeated.append(stem)
+
+    # Check full words
+    for w, count in word_counts.items():
+        if count > max_repeats and w not in _EXEMPT_WORDS and len(w) >= 2:
+            over_repeated.append(w)
+
+    if not over_repeated:
+        return markdown_content
+
+    logger.info("Fixing repeated keywords: %s", over_repeated)
+
+    result = markdown_content
+    for word in over_repeated:
+        count = 0
+        positions: list[tuple[int, int]] = []
+        for match in re.finditer(re.escape(word), result):
+            count += 1
+            if count > max_repeats:
+                positions.append((match.start(), match.end()))
+
+        # Remove excess occurrences (from end to start to preserve positions)
+        for start, end in reversed(positions):
+            before = result[:start]
+            after = result[end:]
+            if before.endswith(' ') and after.startswith(' '):
+                result = before + after[1:]
+            else:
+                result = before + after
+
+    # Clean up any resulting double spaces or empty lines
+    result = re.sub(r'  +', ' ', result)
+    result = re.sub(r'\n\s*\n\s*\n', '\n\n', result)
+    return result
