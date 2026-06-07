@@ -16,7 +16,7 @@ from creator_provider.validation import MAX_IMAGE_PROMPT_CHARS, validate_prompt_
 # Free models (no HF token needed for serverless inference)
 _DEFAULT_MODEL = "black-forest-labs/FLUX.1-schnell"
 _FALLBACK_MODEL = "stabilityai/stable-diffusion-xl-base-1.0"
-_API_URL = "https://api-inference.huggingface.co/models"
+_API_URL = "https://router.huggingface.co/hf-inference/models"
 
 # Maximum image dimensions to prevent resource exhaustion
 _MAX_WIDTH = 1536

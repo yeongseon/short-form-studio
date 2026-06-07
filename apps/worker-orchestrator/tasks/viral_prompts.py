@@ -165,7 +165,7 @@ NICHE_PRESETS: dict[str, dict[str, Any]] = {
         "name_en": "Community Story (DC style)",
         "description": "Real-life anecdote storytelling from Korean online communities",
         "target_duration_seconds": 45,
-        "target_word_count": (100, 140),
+        "target_word_count": (130, 170),
         "hook_style": "micro_story",
         "tone": "conversational, raw, dramatic, first-person",
         "example_hooks": [
@@ -173,7 +173,7 @@ NICHE_PRESETS: dict[str, dict[str, Any]] = {
             "회사에서 쟘린 날, 퇴직금 통장에 0원이 있었습니다",
             "새벽 3시에 배달 온 택배를 열었는데 안에 사람 머리카락이 들어있었습니다",
         ],
-        "hook_rule": "훅은 반드시 결과/행동으로 시작하세요. '어제 X했는데...' 대신 'X가 일어났습니다'로. 설명 전에 결과를 먼저 보여주세요.",
+        "hook_rule": "훅은 반드시 결과/행동으로 시작하세요. '어제 X했는데...' 대신 'X가 일어났습니다'로. 설명 전에 결과를 먼저 보여주세요. 반전은 예고만 하지 말고 구체적으로 서술하세요. '감사합니다'로 끝내지 마세요.",
         "visual_style": "realistic photography, Korean urban setting, moody cinematic lighting, shallow depth of field, film grain",
     },
 }
@@ -253,9 +253,10 @@ def build_viral_system_prompt(
 [beat: tension] [emotion: curiosity]
 > 중고거래 앱에서 오토바이를 올렸는데...
 
-## DURATION CONSTRAINT (절대 규칙 - 출력에 포함하지 마세요!):
+## DURATION & STRUCTURE CONSTRAINT (절대 규칙 - 출력에 포함하지 마세요!):
 - 총 나레이션이 45초 이내가 되도록 간결하게 작성하세요.
-- 5개 이하의 장면으로 구성하세요 (Hook 1개 + Body 3개 + Conclusion 1개가 이상적)
+- **정확히 5개의 섹션**으로 구성하세요: Hook 1개 + Body1 + Body2 + Body3 + Conclusion 1개
+- 각 섹션은 별도의 ## 헤딩으로 분리해야 합니다 (하나의 ## Body에 다 넣지 마세요!)
 - ⚠️ 관련 지시사항, 메타데이터, 수치 제한 문구를 절대 출력에 포함하지 마세요. 오직 나레이션만 출력하세요.
 
 ## WRITING QUALITY (필수 준수!):
@@ -263,23 +264,28 @@ def build_viral_system_prompt(
 - **구체적 디테일**: 추상적 단어 대신 구체적인 상황/수치/대화를 사용하세요.
 - **점증적 긴장감**: 각 단락이 전 단락보다 긴장감이 높아져야 합니다 (escalation).
 - **다양한 감정 어휘**: 매번 '충격'이 아닌 '얼어붙다', '멍해지다', '심장이 떨리다' 등 다양하게.
-## OUTPUT FORMAT:
-마크다운으로 출력. 각 섹션을 ## 헤딩으로 구분:
+마크다운으로 출력. **반드시 5개 섹션** — 각각 별도 ## 헤딩으로 구분:
 
 ## Hook
-(1-2문장, 스크롤 멈추는 충격적 오프닝)
+(1-2문장, 결과/사건으로 시작하는 충격적 오프닝)
 
-## Body
-(핵심 내용 3-4단락 — 각 단락은 하나의 장면. 총 45초를 넘지 않도록 간결하게)
+## Body1
+(상황 설정 — 의심이 생기기 시작한 순간. 2-3문장으로 구체적 디테일.)
+
+## Body2
+(긴장 고조 — 위기/갈등의 핵심 장면. 대화체 또는 행동 묘사 포함. 2-3문장.)
+
+## Body3
+(클라이맥스 + 반전 — 이야기의 핵심 반전을 **구체적으로** 서술. 반전을 예고만 하지 말고 실제로 풀어주세요! 2-3문장.)
 
 ## Conclusion
-(약속 이행 + CTA)
+(여운 + 교훈. '감사합니다' 절대 금지. '구독/좋아요' CTA 금지. 한 문장 임팩트.)
 
 중요: display_text(화면 자막)을 각 단락 아래에 > 인용 형태로 포함하세요.
 예시:
 ## Hook
-놀라운 사실 하나 알려드릴게요.
-> 🤯 놀라운 사실"""
+오토바이 테스트해본다더니 그대로 도망갔습니다.
+> 🏍️ 그대로 도망"""
 
     # Add niche-specific instructions
     if preset:

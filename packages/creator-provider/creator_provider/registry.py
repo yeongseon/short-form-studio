@@ -293,7 +293,7 @@ class ProviderRegistry:
             ModelCatalogEntry(
                 model_key="hf-flux-schnell",
                 provider_type="huggingface_image",
-                endpoint="https://api-inference.huggingface.co",
+                endpoint="https://router.huggingface.co",
                 category=ProviderCategory.IMAGE,
                 requires_gpu=False,
                 is_local=False,

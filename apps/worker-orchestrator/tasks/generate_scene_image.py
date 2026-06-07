@@ -101,7 +101,7 @@ def generate_scene_image(
 
         for idx, target_scene in enumerate(target_scenes):
             # Rate limit protection: add delay between scenes for API-based providers
-            if idx > 0 and model_key in ("groq-svg", "pollinations"):
+            if idx > 0 and model_key in ("groq-svg", "pollinations", "hf-flux-schnell"):
                 import asyncio
                 logger.info("Inter-scene delay (16s) for rate limit protection")
                 await asyncio.sleep(16)
@@ -114,8 +114,8 @@ def generate_scene_image(
                 if prompt_override is not None and scene_id is not None
                 else target_scene.prompt
             )
-            # Apply quality profile image style prefix for Pollinations/photo providers
-            if model_key in ("pollinations",):
+            # Apply quality profile image style prefix for photo-quality providers
+            if model_key in ("pollinations", "hf-flux-schnell"):
                 try:
                     from creator_service.quality_profile import get_quality_profile
                     qp = get_quality_profile("ssul_v2")
