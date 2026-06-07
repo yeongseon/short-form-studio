@@ -101,10 +101,10 @@ def generate_scene_image(
 
         for idx, target_scene in enumerate(target_scenes):
             # Rate limit protection: add delay between scenes for API-based providers
-            if idx > 0 and model_key in ("groq-svg",):
+            if idx > 0 and model_key in ("groq-svg", "pollinations"):
                 import asyncio
-                logger.info("Inter-scene delay (8s) for rate limit protection")
-                await asyncio.sleep(8)
+                logger.info("Inter-scene delay (16s) for rate limit protection")
+                await asyncio.sleep(16)
             scene_result: dict[str, object] = {
                 "scene_id": target_scene.scene_id,
                 "status": "pending",
@@ -114,6 +114,15 @@ def generate_scene_image(
                 if prompt_override is not None and scene_id is not None
                 else target_scene.prompt
             )
+            # Apply quality profile image style prefix for Pollinations/photo providers
+            if model_key in ("pollinations",):
+                try:
+                    from creator_service.quality_profile import get_quality_profile
+                    qp = get_quality_profile("ssul_v2")
+                    if qp.image_style_prefix and not effective_prompt.startswith(qp.image_style_prefix):
+                        effective_prompt = qp.image_style_prefix + effective_prompt
+                except Exception:
+                    pass  # Non-critical enhancement
             gpu_lock = GpuLockContext(f"{ctx.task_id}:{target_scene.scene_id}")
 
             try:

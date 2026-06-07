@@ -18,6 +18,8 @@ _MOOD_FILTERS: dict[str, str] = {
     "tense": "anoisesrc=d={duration}:c=brown:r=44100,lowpass=f=200,highpass=f=60,volume=0.5",
     "calm": "sine=frequency=174:duration={duration},lowpass=f=200,volume=0.3",
     "emotional": "anoisesrc=d={duration}:c=pink:r=44100,lowpass=f=250,highpass=f=80,volume=0.6",
+    "dramatic": "anoisesrc=d={duration}:c=pink:r=44100,lowpass=f=400,highpass=f=100,volume=0.7,aecho=0.8:0.88:60:0.4",
+    "suspense": "anoisesrc=d={duration}:c=brown:r=44100,lowpass=f=150,highpass=f=40,volume=0.5,aecho=0.8:0.9:1000:0.3",
 }
 
 
@@ -79,18 +81,19 @@ class BgmService:
         narration_path: str,
         bgm_path: str,
         output_path: str,
-        bgm_volume: float = 0.35,
+        bgm_volume: float = 0.25,
     ) -> str:
-        """Mix narration audio with BGM.
+        """Mix narration audio with BGM using sidechain-style ducking.
 
-        BGM plays at reduced volume underneath the narration.
-        Output duration matches narration (BGM is trimmed/looped).
+        BGM volume ducks when narration is present (dynamic mixing).
+        This creates a more professional sound where BGM fills pauses
+        but stays quiet during speech.
 
         Args:
             narration_path: Path to narration audio file.
             bgm_path: Path to BGM audio file.
             output_path: Where to save mixed audio.
-            bgm_volume: Volume of BGM relative to narration (0.0-1.0).
+            bgm_volume: Base volume of BGM (0.0-1.0). BGM will duck below this during speech.
 
         Returns:
             The output path.
@@ -101,10 +104,12 @@ class BgmService:
         # Validate bgm_volume to prevent filter injection
         bgm_volume = max(0.0, min(1.0, float(bgm_volume)))
 
-        # Use amix filter: BGM at reduced volume, duration matches first input (narration)
+        # Sidechain ducking: use sidechaincompress to duck BGM when narration is present
+        # This gives a professional "radio" feel where BGM fills pauses naturally
         filter_complex = (
             f"[1:a]volume={bgm_volume}[bgm];"
-            f"[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=2"
+            f"[bgm][0:a]sidechaincompress=threshold=0.02:ratio=6:attack=200:release=1000[ducked];"
+            f"[0:a][ducked]amix=inputs=2:duration=first:dropout_transition=2"
         )
 
         cmd = [
@@ -127,8 +132,33 @@ class BgmService:
             cmd, capture_output=True, text=True, timeout=120, start_new_session=True
         )
         if result.returncode != 0:
-            logger.error("Audio mixing failed: %s", result.stderr[-500:])
-            raise RuntimeError(f"Audio mixing failed: {result.stderr}")
+            # Fallback: try simpler mix without sidechain (older FFmpeg may lack it)
+            logger.warning("Sidechain ducking failed, falling back to simple mix: %s", result.stderr[-200:])
+            filter_complex_simple = (
+                f"[1:a]volume={bgm_volume}[bgm];"
+                f"[0:a][bgm]amix=inputs=2:duration=first:dropout_transition=2"
+            )
+            cmd_simple = [
+                "ffmpeg",
+                "-y",
+                "-i",
+                narration_path,
+                "-i",
+                bgm_path,
+                "-filter_complex",
+                filter_complex_simple,
+                "-c:a",
+                "libmp3lame",
+                "-b:a",
+                "192k",
+                str(out),
+            ]
+            result = subprocess.run(
+                cmd_simple, capture_output=True, text=True, timeout=120, start_new_session=True
+            )
+            if result.returncode != 0:
+                logger.error("Audio mixing failed: %s", result.stderr[-500:])
+                raise RuntimeError(f"Audio mixing failed: {result.stderr}")
 
         return str(out)
 

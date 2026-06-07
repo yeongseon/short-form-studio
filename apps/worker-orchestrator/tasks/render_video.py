@@ -265,24 +265,38 @@ def render_video(self, run_id: int, render_profile: str = "shorts_default") -> d
         if audio_path:
             try:
                 from creator_service.bgm_service import bgm_service
+                from creator_service.quality_profile import get_quality_profile
+                qp = get_quality_profile(render_profile if render_profile != "shorts_default" else "ssul_v2")
                 total_duration = sum(scene_durations)
                 bgm_path = f"{_ARTIFACT_ROOT}/{run_id}/render/bgm.mp3"
                 Path(bgm_path).parent.mkdir(parents=True, exist_ok=True)
-                bgm_service.generate_ambient_bgm(total_duration, bgm_path, mood="emotional")
+                bgm_service.generate_ambient_bgm(total_duration, bgm_path, mood=qp.bgm_mood)
                 mixed_path = f"{_ARTIFACT_ROOT}/{run_id}/render/audio_mixed.mp3"
-                bgm_service.mix_audio_with_bgm(str(audio_path), bgm_path, mixed_path)
+                bgm_service.mix_audio_with_bgm(str(audio_path), bgm_path, mixed_path, bgm_volume=qp.bgm_volume)
                 audio_path = Path(mixed_path)
-                logger.info("BGM mixed for run %d", run_id)
+                logger.info("BGM mixed for run %d (mood=%s, vol=%.2f)", run_id, qp.bgm_mood, qp.bgm_volume)
             except Exception as exc:
                 logger.warning("BGM mixing failed for run %d, using original audio: %s", run_id, exc)
-
-        # --- Convert SRT to ASS for styled subtitles ---
+        # --- Convert SRT to ASS for styled subtitles with keyword emphasis ---
         if subtitle_path and str(subtitle_path).endswith(".srt"):
             try:
+                from tasks.script_qc import extract_emphasis_words
+                from creator_service.quality_profile import get_quality_profile
+                qp = get_quality_profile(render_profile if render_profile != "shorts_default" else "ssul_v2")
+                # Extract emphasis words from script if available
+                emphasis_words: list[str] | None = None
+                if qp.subtitle_emphasis:
+                    draft = await _script_service.get_active_draft(run_id)
+                    if draft and draft.markdown_content:
+                        emphasis_words = extract_emphasis_words(draft.markdown_content)
                 ass_path = str(subtitle_path).replace(".srt", ".ass")
-                ffmpeg.convert_srt_to_ass(str(subtitle_path), ass_path)
+                ffmpeg.convert_srt_to_ass(
+                    str(subtitle_path), ass_path,
+                    emphasis_words=emphasis_words,
+                    emphasis_color=qp.emphasis_color,
+                )
                 subtitle_path = Path(ass_path)
-                logger.info("Converted subtitles to ASS for run %d", run_id)
+                logger.info("Converted subtitles to ASS for run %d (emphasis_words=%d)", run_id, len(emphasis_words or []))
             except Exception as exc:
                 logger.warning("ASS conversion failed for run %d, using SRT: %s", run_id, exc)
 

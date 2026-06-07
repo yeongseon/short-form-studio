@@ -210,7 +210,53 @@ class FFmpegService:
         Each segment is a self-contained H.264 MPEG-TS clip with the correct
         resolution, pixel format, and frame rate. These segments can be
         concatenated losslessly via the concat demuxer.
+
+        When transition_style is KEN_BURNS, applies a subtle zoom-pan effect
+        with fade in/out for professional-looking scene transitions.
         """
+        # Build video filter based on transition style
+        if self.profile.transition_style.value == "ken_burns":
+            # Ken Burns: zoom from 1.0 to 1.10 with subtle pan + fade in/out
+            # Use 2x target resolution as input for zoom headroom (not 8000px — too slow)
+            zoom_input_w = self.profile.width * 2
+            total_frames = max(1, int(duration * self.profile.fps))
+            fade_d = 0.3
+            fade_out_start = max(0, duration - fade_d)
+            vf = (
+                f"scale={zoom_input_w}:-1,"
+                f"zoompan=z='1+0.10*on/{total_frames}':"
+                f"x='iw/2-(iw/zoom/2)':"
+                f"y='ih/2-(ih/zoom/2)':"
+                f"d={total_frames}:s={self.profile.width}x{self.profile.height}:fps={self.profile.fps},"
+                f"fade=t=in:st=0:d={fade_d},"
+                f"fade=t=out:st={fade_out_start:.3f}:d={fade_d},"
+                f"format=yuv420p,setsar=1"
+            )
+        elif self.profile.transition_style.value == "fade":
+            # Fade only: static image with fade in/out
+            fade_d = 0.3
+            fade_out_start = max(0, duration - fade_d)
+            vf = (
+                f"format=yuv420p,"
+                f"scale={self.profile.width}:{self.profile.height}"
+                f":force_original_aspect_ratio=decrease,"
+                f"pad={self.profile.width}:{self.profile.height}"
+                f":(ow-iw)/2:(oh-ih)/2,"
+                f"fade=t=in:st=0:d={fade_d},"
+                f"fade=t=out:st={fade_out_start:.3f}:d={fade_d},"
+                f"setsar=1"
+            )
+        else:
+            # Cut: no motion, no fade — just scale and pad
+            vf = (
+                f"format=yuv420p,"
+                f"scale={self.profile.width}:{self.profile.height}"
+                f":force_original_aspect_ratio=decrease,"
+                f"pad={self.profile.width}:{self.profile.height}"
+                f":(ow-iw)/2:(oh-ih)/2,"
+                f"setsar=1"
+            )
+
         cmd = [
             "ffmpeg",
             "-y",
@@ -222,14 +268,7 @@ class FFmpegService:
             "-i",
             str(image_path),
             "-vf",
-            (
-                f"format=yuv420p,"
-                f"scale={self.profile.width}:{self.profile.height}"
-                f":force_original_aspect_ratio=decrease,"
-                f"pad={self.profile.width}:{self.profile.height}"
-                f":(ow-iw)/2:(oh-ih)/2,"
-                f"setsar=1"
-            ),
+            vf,
             "-c:v",
             self.profile.video_codec.value,
             "-crf",
@@ -245,7 +284,7 @@ class FFmpegService:
             "expr:eq(n,0)",
             str(output_path),
         ]
-        result = _run_ffmpeg(cmd, timeout=120)
+        result = _run_ffmpeg(cmd, timeout=180)  # zoompan needs more time
         if result.returncode != 0:
             logger.error("Segment render failed for %s: %s", image_path, result.stderr[-500:])
             raise RuntimeError(
@@ -536,6 +575,8 @@ class FFmpegService:
         width: int | None = None,
         height: int | None = None,
         font_size: int | None = None,
+        emphasis_words: list[str] | None = None,
+        emphasis_color: str = "&H0000FFFF",
     ) -> Path:
         """Convert SRT subtitle to ASS format with styled rendering.
 
@@ -544,7 +585,10 @@ class FFmpegService:
         - Black outline (2px)
         - Semi-transparent black background box (BorderStyle=3)
         - Large font for mobile readability
+        - Optional keyword emphasis (yellow highlighted words)
         """
+        import re
+
         w = width or self.profile.width
         h = height or self.profile.height
         fs = font_size or self.profile.subtitle_font_size
@@ -555,7 +599,10 @@ class FFmpegService:
         srt_content = Path(srt_path).read_text(encoding="utf-8")
         blocks = srt_content.strip().split("\n\n")
 
-        # ASS header
+        # Emphasis font size (30% larger)
+        efs = int(fs * 1.3)
+
+        # ASS header with Default + Emphasis styles
         ass_lines = [
             "[Script Info]",
             "ScriptType: v4.00+",
@@ -566,6 +613,7 @@ class FFmpegService:
             "[V4+ Styles]",
             "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
             f"Style: Default,NanumGothic,{fs},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,2,0,2,10,10,30,1",
+            f"Style: Emphasis,NanumGothic,{efs},{emphasis_color},&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,3,2,0,2,10,10,30,1",
             "",
             "[Events]",
             "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -582,8 +630,21 @@ class FFmpegService:
             start = _srt_ts_to_ass(parts[0].strip())
             end = _srt_ts_to_ass(parts[1].strip())
             text = "\\N".join(lines[2:])  # ASS newline
-            # Escape braces to prevent ASS override injection
-            text = text.replace("{", "\uff5b").replace("}", "\uff5d")
+
+            # Apply keyword emphasis before escaping
+            if emphasis_words:
+                for word in emphasis_words:
+                    pattern = re.escape(word)
+                    text = re.sub(
+                        pattern,
+                        lambda m: f"{{\\c{emphasis_color}\\fs{efs}\\b1}}{m.group(0)}{{\\r}}",
+                        text,
+                        flags=re.IGNORECASE,
+                    )
+            else:
+                # No emphasis — escape braces to prevent ASS override injection
+                text = text.replace("{", "\uff5b").replace("}", "\uff5d")
+
             ass_lines.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
 
         out.write_text("\n".join(ass_lines) + "\n", encoding="utf-8")

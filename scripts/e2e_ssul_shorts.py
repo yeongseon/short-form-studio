@@ -34,17 +34,19 @@ E2E_API_KEY = "e2e-test-key-auto-12345"
 E2E_API_KEY_HASH = hashlib.sha256(E2E_API_KEY.encode()).hexdigest()
 
 # 썰쇼츠 configuration
+# 썰쇼츠 configuration  — ssul_v2 quality profile
 SSUL_CONFIG = {
-    "title": "아빠의 마지막 한마디 - 감동 썰",
+    "title": "DC썰 - 중고거래 실화",
     "idea_brief": (
-        "아버지가 돌아가시기 전 마지막으로 남긴 한마디가 있었습니다. "
-        "그 말의 의미를 20년이 지나서야 깨달은 아들의 이야기. "
-        "가족의 사랑과 후회, 그리고 감사에 대한 감동적인 실화 기반 썰."
+        "어제 중고거래 앱에서 오토바이를 팔려고 올렸는데 연락 온 사람이 진짜 이상했습니다. "
+        "시세보다 너무 싸게 사겠다고 하길래 의심이 들었고, "
+        "만나자마자 느끼는 이상한 분위기. "
+        "결국 사기였는데, 마지막에 반전이 있었던 실화."
     ),
-    "niche": "family_story",
+    "niche": "ssul_dc",
     "language": "ko",
     "script_model": "meta-llama/llama-4-scout-17b-16e-instruct",
-    "image_model": os.getenv("E2E_IMAGE_MODEL", "groq-svg"),  # groq-svg (free), hf-flux-schnell, or placeholder
+    "image_model": os.getenv("E2E_IMAGE_MODEL", "groq-svg"),  # groq-svg (reliable), pollinations (free when not rate-limited)
     "tts_model": "edge-tts",
     "tts_voice": "male",  # ko-KR-InJoonNeural for male narration
     "subtitle_model": "groq-whisper-large-v3-turbo",

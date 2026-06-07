@@ -62,7 +62,13 @@ class EdgeTTSProvider(TTSProvider):
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         try:
-            communicate = edge_tts.Communicate(text=text, voice=voice_name)
+            # Support rate/pitch/volume parameters for quality control
+            rate = merged_params.get("rate", "+0%")  # e.g. "+10%", "-5%"
+            pitch = merged_params.get("pitch", "+0Hz")  # e.g. "+5Hz", "-2Hz"
+            volume = merged_params.get("volume", "+0%")  # e.g. "+10%", "-20%"
+            communicate = edge_tts.Communicate(
+                text=text, voice=voice_name, rate=rate, pitch=pitch, volume=volume
+            )
             await communicate.save(str(output_path))
         except ConnectionError as exc:
             from creator_provider.exceptions import ProviderTimeoutError

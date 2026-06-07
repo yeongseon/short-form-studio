@@ -29,7 +29,7 @@ class PollinationsProvider(ImageProvider):
         timeout = float(merged.get("timeout", 120.0))
 
         encoded_prompt = urllib.parse.quote(prompt, safe="")
-        url = f"{self.endpoint}/prompt/{encoded_prompt}?width={width}&height={height}&nologo=true"
+        url = f"{self.endpoint}/prompt/{encoded_prompt}?width={width}&height={height}&seed=42&nofeed=true"
 
         try:
             async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:

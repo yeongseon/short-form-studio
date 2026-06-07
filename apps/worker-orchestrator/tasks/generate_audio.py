@@ -31,9 +31,25 @@ def _strip_markdown_for_tts(text: str) -> str:
     Strips:
     - Lines starting with ## (heading markers)
     - Lines starting with > (blockquote / display_text annotations)
+    - Lines starting with ※ (note markers)
     - Emoji-only lines or emoji prefixes used as visual markers
+    - [beat: ...] [emotion: ...] metadata annotations
+    - Parenthetical stage directions like (마지막 5초 여운을 남기는 마무리)
+    - Lines containing meta-instructions (어절, 나레이션, 이내여야)
     - Empty lines collapse to single newline
     """
+    # First, remove inline [beat: X] [emotion: Y] markers
+    text = re.sub(r'\[beat:\s*[^\]]*\]', '', text)
+    text = re.sub(r'\[emotion:\s*[^\]]*\]', '', text)
+    # Remove parenthetical stage directions (Korean or English)
+    text = re.sub(r'\([^)]*(?:마지막|여운|마무리|beat|pause|silence|direction)[^)]*\)', '', text)
+    # If LLM self-corrected (e.g. "수정된 버전"), only keep content BEFORE the revision marker
+    revision_markers = ['수정된 버전', '다시 작성', '수정:', 'revised version', 'corrected version']
+    for marker in revision_markers:
+        idx = text.lower().find(marker.lower())
+        if idx > 50:  # Only cut if we have substantial content before the marker
+            text = text[:idx]
+            break
     lines = []
     for line in text.split("\n"):
         stripped = line.strip()
@@ -43,8 +59,20 @@ def _strip_markdown_for_tts(text: str) -> str:
         # Skip blockquote display_text markers (> 🤯 text)
         if stripped.startswith(">"):
             continue
+        # Skip note markers (※ instructions)
+        if stripped.startswith("※"):
+            continue
         # Skip lines that are only emojis/symbols
         if stripped and all(c in '🤯📝🙏❤️💔👆👉✨⭐🔥💡🎯' or ord(c) > 0x1F000 for c in stripped.replace(' ', '')):
+            continue
+        # Skip meta-instruction lines the LLM may have regurgitated
+        if any(kw in stripped for kw in ('어절', '나레이션 텍스트', '이내여야', '띄어쓰기 기준', '단어 수', '이내', '단어')):
+            continue
+        # Skip lines matching instruction patterns (N초 이내, N-N 단어, etc.)
+        if re.search(r'\d+초\s*이내|\d+-\d+\s*단어|\d+~\d+어절', stripped):
+            continue
+        # Skip lines that are purely metadata after stripping
+        if stripped and re.match(r'^[\s,]*$', stripped):
             continue
         if stripped:
             lines.append(stripped)
@@ -128,6 +156,16 @@ def generate_audio(
             os.makedirs(os.path.dirname(audio_path), exist_ok=True)
             params = dict(entry.default_params or {})
             params["output_path"] = audio_path
+            # Apply quality profile TTS rate if using edge-tts
+            if entry.provider_type == "edge_tts":
+                try:
+                    from creator_service.quality_profile import get_quality_profile
+                    qp = get_quality_profile("ssul_v2")
+                    tts_params = qp.to_tts_params()
+                    params.update(tts_params)
+                    logger.info("Applied TTS rate=%s for run %d", tts_params.get('rate'), run_id)
+                except Exception:
+                    pass  # Fall back to defaults if quality profile unavailable
             try:
                 await provider.generate(script_text, voice=voice, params=params)
             except (TimeoutError, ConnectionError) as exc:

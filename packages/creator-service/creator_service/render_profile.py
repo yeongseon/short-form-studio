@@ -26,7 +26,7 @@ class RenderProfile:
     fps: int = 30
     video_codec: Codec = Codec.H264
     audio_codec: AudioCodec = AudioCodec.AAC
-    transition_style: TransitionStyle = TransitionStyle.KEN_BURNS
+    transition_style: TransitionStyle = TransitionStyle.FADE  # FADE default: KEN_BURNS too slow for single-CPU containers
     min_duration_seconds: int = 15
     max_duration_seconds: int = 60
     crf: int = 20  # quality (lower = better, 18-28 typical)

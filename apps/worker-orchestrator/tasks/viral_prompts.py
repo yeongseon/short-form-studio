@@ -160,6 +160,21 @@ NICHE_PRESETS: dict[str, dict[str, Any]] = {
         ],
         "visual_style": "warm lighting, soft focus, family silhouettes, golden hour, emotional portraits, nostalgic color grading",
     },
+    "ssul_dc": {
+        "name": "DC/커뮤니티 썸",
+        "name_en": "Community Story (DC style)",
+        "description": "Real-life anecdote storytelling from Korean online communities",
+        "target_duration_seconds": 45,
+        "target_word_count": (100, 140),
+        "hook_style": "micro_story",
+        "tone": "conversational, raw, dramatic, first-person",
+        "example_hooks": [
+            "어제 중고거래하다가 진짜 소름끼치는 일을 겪었습니다",
+            "회사에서 잘리고 나서 첣 날, 생각지도 못한 일이 벌어졌습니다",
+            "새벽 3시에 배달 온 택배를 열었는데...",
+        ],
+        "visual_style": "realistic photography, Korean urban setting, moody cinematic lighting, shallow depth of field, film grain",
+    },
 }
 
 # --- Hook templates by style ---
@@ -222,8 +237,25 @@ def build_viral_system_prompt(
 
 4. **PAYOFF (마지막 5-10초)**: 훅에서 한 약속 이행. 결론.
 
-5. **CTA (마지막 2-3초)**: 짧은 행동 유도.
+5. **ENDING (마지막 5초)**: 여운을 남기는 마무리. CTA 금지 — 구독/좋아요 언급하면 알고리즘에 불이익.
 
+## SCENE BEATS (각 단락에 감정 비트 태깅 — 매우 중요!):
+각 단락은 반드시 하나의 감정 비트를 가져야 합니다.
+본문에 각 단락 뒤에 별도 줄로 비트를 표기하세요 (절대 나레이션 본문에 섞지 마세요):
+[beat: hook/tension/climax/resolution] [emotion: surprise/fear/empathy/curiosity/relief]
+
+⚠️ 중요: [beat: ...] [emotion: ...] 태그는 반드시 독립된 줄에만 작성하세요.
+나레이션 문장 안에 섞으면 TTS가 그대로 읽습니다.
+
+예시:
+어제 중고거래 앱에서 오토바이를 올렸는데...
+[beat: tension] [emotion: curiosity]
+> 중고거래 앱에서 오토바이를 올렸는데...
+
+## DURATION CONSTRAINT (절대 규칙 - 출력에 포함하지 마세요!):
+- 총 나레이션이 45초 이내가 되도록 간결하게 작성하세요.
+- 5개 이하의 장면으로 구성하세요 (Hook 1개 + Body 3개 + Conclusion 1개가 이상적)
+- ⚠️ 관련 지시사항, 메타데이터, 수치 제한 문구를 절대 출력에 포함하지 마세요. 오직 나레이션만 출력하세요.
 ## OUTPUT FORMAT:
 마크다운으로 출력. 각 섹션을 ## 헤딩으로 구분:
 
@@ -231,7 +263,7 @@ def build_viral_system_prompt(
 (1-2문장, 스크롤 멈추는 충격적 오프닝)
 
 ## Body
-(핵심 내용 5-7단락 — 최소 5단락, 각 단락은 하나의 장면. 반드시 5개 이상의 장면을 작성하세요)
+(핵심 내용 3-4단락 — 각 단락은 하나의 장면. 총 45초를 넘지 않도록 간결하게)
 
 ## Conclusion
 (약속 이행 + CTA)
