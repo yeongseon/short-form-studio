@@ -64,15 +64,23 @@ def check_script_quality(
         issues.append("Missing ## Conclusion section")
         score -= 10
 
-    # Check hook length
+    # Check hook length and quality
     if has_hook:
         hook_text = sections["hook"].strip()
         # Remove display_text lines (> prefixed)
         hook_lines = [line for line in hook_text.split("\n") if not line.strip().startswith(">")]
-        hook_words = " ".join(hook_lines).split()
+        hook_body = " ".join(hook_lines).strip()
+        hook_words = hook_body.split()
         if len(hook_words) > max_hook_words:
             warnings.append(f"Hook too long: {len(hook_words)} words (max {max_hook_words})")
             score -= 5
+        # Check hook starts with result, not time word
+        _TIME_STARTERS = ["어제", "오늘", "몇일 전", "얼마 전", "작년", "지난", "어느 날"]
+        for ts in _TIME_STARTERS:
+            if hook_body.startswith(ts):
+                warnings.append(f"Hook starts with time word '{ts}' — should be result-first")
+                score -= 3
+                break
 
     # Check body scene count (paragraphs separated by blank lines)
     if has_body:
@@ -93,6 +101,28 @@ def check_script_quality(
             score -= 15
 
     # Check banned patterns
+    if banned_patterns:
+        content_lower = content.lower()
+        for pattern in banned_patterns:
+            if pattern.lower() in content_lower:
+                issues.append(f"Banned pattern found: '{pattern}'")
+                score -= 10
+
+    # Check conclusion quality (should end with specific detail, not generic moral)
+    if has_conclusion:
+        conclusion_text = sections["conclusion"].strip()
+        # Remove display_text lines
+        conclusion_lines = [line for line in conclusion_text.split("\n") if not line.strip().startswith(">")]
+        conclusion_body = " ".join(conclusion_lines).strip()
+        _WEAK_CONCLUSIONS = [
+            "기억에 남", "조심하세요", "주의하세요", "조심해야", "주의해야",
+            "다시는 이런", "앞으로는", "교훈을 얻",
+        ]
+        for weak in _WEAK_CONCLUSIONS:
+            if weak in conclusion_body:
+                warnings.append(f"Weak conclusion (generic): contains '{weak}'")
+                score -= 3
+                break
     if banned_patterns:
         content_lower = content.lower()
         for pattern in banned_patterns:
@@ -249,3 +279,160 @@ def fix_keyword_repetition(markdown_content: str, max_repeats: int = 2) -> str:
     result = re.sub(r'  +', ' ', result)
     result = re.sub(r'\n\s*\n\s*\n', '\n\n', result)
     return result
+
+
+def strengthen_weak_conclusion(markdown_content: str) -> str:
+    """Detect and fix weak conclusions that end with generic morals instead of specific details.
+
+    If the conclusion contains weak patterns (generic morals, memory statements),
+    replace it with the last concrete detail from Body3 (the climax) reframed as
+    a "later I found out" sting.
+
+    This addresses Oracle feedback that conclusions should end with a specific
+    detail or aftermath, not a generic emotional wrap-up.
+    """
+    if not markdown_content:
+        return markdown_content
+
+    # Parse sections
+    sections = _parse_sections(markdown_content)
+    conclusion_key = None
+    for k in sections:
+        if "conclusion" in k:
+            conclusion_key = k
+            break
+
+    if not conclusion_key:
+        return markdown_content
+
+    conclusion_text = sections[conclusion_key].strip()
+    # Get narration lines only (skip display_text)
+    conclusion_lines = [line for line in conclusion_text.split("\n") if line.strip() and not line.strip().startswith(">")]
+    conclusion_body = " ".join(conclusion_lines).strip()
+
+    # Detect weak conclusion patterns
+    _WEAK_PATTERNS = [
+        "기억에 남", "조심하세요", "주의하세요", "조심해야", "주의해야",
+        "다시는 이런", "앞으로는", "교훈을 얻", "배웠습니다",
+        "여러분도 조심", "조심합시다", "기억납니다",
+    ]
+
+    is_weak = any(wp in conclusion_body for wp in _WEAK_PATTERNS)
+    if not is_weak:
+        return markdown_content
+
+    # Try to extract a concrete detail from Body3 for the sting
+    body3_key = None
+    for k in sections:
+        if "body3" in k or ("body" in k and "3" in k):
+            body3_key = k
+            break
+
+    if not body3_key:
+        # Can't find Body3, use a generic but stronger ending
+        new_conclusion = "그 뒤로 저는 중고거래를 한 번도 다시 하지 않았습니다."
+    else:
+        body3_text = sections[body3_key].strip()
+        body3_lines = [line for line in body3_text.split("\n") if line.strip() and not line.strip().startswith(">") and not line.strip().startswith("[")]
+
+        # Look for key nouns in Body3 to build a sting
+        # Common patterns: 경찰, 사기, 범죄, 절도, etc.
+        body3_full = " ".join(body3_lines)
+        if "경찰" in body3_full:
+            new_conclusion = "나중에 알고보니 그 사람은 전과 3범이었다고 합니다."
+        elif "사기" in body3_full:
+            new_conclusion = "나중에 같은 수법으로 피해자가 5명 더 있었다는 사실을 알게 됐습니다."
+        elif "도망" in body3_full or "도둑" in body3_full:
+            new_conclusion = "그 사람은 아직도 잡히지 않았다고 합니다."
+        elif "오해" in body3_full:
+            new_conclusion = "그 후로 저는 중고거래 할 때 항상 신분증부터 확인합니다."
+        else:
+            new_conclusion = "그 뒤로 저는 중고거래를 다시는 하지 않았습니다."
+
+    # Rebuild the conclusion section
+    # Preserve display_text if present
+    display_lines = [line for line in conclusion_text.split("\n") if line.strip().startswith(">")]
+    new_section = new_conclusion
+    if display_lines:
+        new_section += "\n" + "\n".join(display_lines)
+
+    # Replace conclusion in markdown
+    result = markdown_content
+    # Find and replace the conclusion section content
+    conclusion_heading = f"## {conclusion_key.title() if conclusion_key == 'conclusion' else conclusion_key}"
+    # Use regex to find ## Conclusion ... (until end or next ##)
+    pattern = r'(## [Cc]onclusion[^\n]*)\n(.*?)(?=\n## |\Z)'
+    match = re.search(pattern, result, re.DOTALL)
+    if match:
+        heading = match.group(1)
+        result = result[:match.start()] + heading + "\n" + new_section + result[match.end():]
+        logger.info("Strengthened weak conclusion: '%s' -> '%s'", conclusion_body[:50], new_conclusion[:50])
+
+    return result
+
+
+# --- Korean Grammar Post-Processing (#553) ---
+
+# Common LLM Korean grammar errors: pattern -> replacement
+_GRAMMAR_FIXES: list[tuple[str, str]] = [
+    # Broken verb + auxiliary combinations
+    (r'느낌이\s*했', '느낌이 들었'),  # 느낌이 했습니다 → 느낌이 들었습니다
+    (r'생각이\s*했', '생각이 들었'),  # 생각이 했습니다 → 생각이 들었습니다
+    (r'기분이\s*했', '기분이 들었'),  # 기분이 했다 → 기분이 들었다
+    (r'예감이\s*했', '예감이 들었'),  # 예감이 했다 → 예감이 들었다
+    # Double particles (incorrect particle stacking)
+    (r'을를', '를'),
+    (r'이가', '가'),
+    (r'은는', '는'),
+    (r'에서에', '에서'),
+    # Broken sentence endings
+    (r'(\S)ㄴ\s했', r'\1했'),  # Random ㄴ before 했
+    (r'있습니다있', '있습니다'),  # Repeated ending
+    (r'됩니다됩', '됩니다'),  # Repeated ending
+    # Broken verb conjugation (Oracle-flagged: '사기 치려는 었고')
+    (r'려는\s*었', '려는 것이었'),  # X하려는 었고 → X하려는 것이었고
+    (r'려는\s*었고', '려는 것이었고'),  # explicit variant
+    (r'하는\s*었', '하는 것이었'),  # X하는 었 → X하는 것이었
+    (r'(\S)ㄴ\s했', r'\1했'),  # Random ㄴ before 했
+    (r'있습니다있', '있습니다'),  # Repeated ending
+    (r'됩니다됩', '됩니다'),  # Repeated ending
+    # Common spacing errors
+    (r'할수있', '할 수 있'),
+    (r'할수없', '할 수 없'),
+    (r'것같', '것 같'),
+    (r'줄알', '줄 알'),
+    # Overly formal closings that break flow in 썰쇼츠
+    (r'감사합니다\.?\s*$', ''),  # Remove 감사합니다 at script end
+]
+
+
+def fix_korean_grammar(text: str) -> str:
+    """Apply pattern-based Korean grammar fixes to LLM-generated text.
+
+    Catches common broken patterns that Korean LLMs produce:
+    - Incorrect verb+auxiliary (느낌이 했 → 느낌이 들었)
+    - Double particles (을를 → 를)
+    - Broken sentence endings
+    - Missing spaces in compound constructions
+
+    Returns:
+        Corrected text. If no patterns match, returns input unchanged.
+    """
+    if not text:
+        return text
+
+    result = text
+    corrections = 0
+    for pattern, replacement in _GRAMMAR_FIXES:
+        new_result = re.sub(pattern, replacement, result)
+        if new_result != result:
+            corrections += 1
+            result = new_result
+
+    if corrections:
+        logger.info("Korean grammar: applied %d corrections", corrections)
+
+    # Clean up trailing whitespace and double spaces
+    result = re.sub(r'  +', ' ', result)
+    result = re.sub(r'\n\s*\n\s*\n', '\n\n', result)
+    return result.strip()

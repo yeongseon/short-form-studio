@@ -114,10 +114,12 @@ def generate_script(
         except Exception:
             logger.warning("Failed to record provider usage", exc_info=True)
 
-        # Post-process: fix keyword repetition
+        # Post-process: fix keyword repetition + grammar + weak conclusions
         try:
-            from tasks.script_qc import fix_keyword_repetition
+            from tasks.script_qc import fix_keyword_repetition, fix_korean_grammar, strengthen_weak_conclusion
             generated = fix_keyword_repetition(generated, max_repeats=2)
+            generated = fix_korean_grammar(generated)
+            generated = strengthen_weak_conclusion(generated)
         except Exception:
             pass  # Non-critical — proceed with original
 

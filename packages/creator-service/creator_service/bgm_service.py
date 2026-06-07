@@ -296,6 +296,66 @@ class BgmService:
             import shutil
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
+    def normalize_loudness(
+        self,
+        input_path: str,
+        output_path: str,
+        target_lufs: float = -14.0,
+        true_peak: float = -1.0,
+        lra: float = 11.0,
+    ) -> str:
+        """Apply EBU R128 loudness normalization using FFmpeg loudnorm filter.
+
+        Ensures output audio is at a consistent loudness level suitable for
+        YouTube Shorts (-14 to -16 LUFS). This should be the LAST audio
+        processing step before muxing into video.
+
+        Args:
+            input_path: Path to input audio file.
+            output_path: Where to save normalized audio.
+            target_lufs: Target integrated loudness (default: -14 LUFS).
+            true_peak: Maximum true peak level (default: -1 dBTP).
+            lra: Target loudness range (default: 11 LU).
+
+        Returns:
+            The output path.
+        """
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+
+        # Validate parameters
+        target_lufs = max(-70.0, min(-5.0, float(target_lufs)))
+        true_peak = max(-9.0, min(0.0, float(true_peak)))
+        lra = max(1.0, min(20.0, float(lra)))
+
+        # Single-pass loudnorm (simpler, good enough for Shorts)
+        audio_filter = (
+            f"loudnorm=I={target_lufs}:TP={true_peak}:LRA={lra}"
+        )
+
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            input_path,
+            "-af",
+            audio_filter,
+            "-c:a",
+            "libmp3lame",
+            "-b:a",
+            "192k",
+            str(out),
+        ]
+
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=120, start_new_session=True
+        )
+        if result.returncode != 0:
+            logger.warning("Loudness normalization failed, returning original: %s", result.stderr[-300:])
+            return input_path
+
+        logger.info("Audio normalized to %.1f LUFS: %s", target_lufs, out)
+        return str(out)
 
 # Module-level singleton
 bgm_service = BgmService()

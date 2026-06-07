@@ -319,6 +319,19 @@ def render_video(self, run_id: int, render_profile: str = "shorts_default") -> d
                         logger.info("SFX mixed for run %d (%d effects)", run_id, len(sfx_timestamps))
                     except Exception as sfx_exc:
                         logger.warning("SFX mixing failed for run %d: %s", run_id, sfx_exc)
+                # --- Loudness normalization (final audio processing step) ---
+                if qp.loudnorm_enabled:
+                    try:
+                        norm_path = f"{_ARTIFACT_ROOT}/{run_id}/render/audio_normalized.mp3"
+                        normalized = bgm_service.normalize_loudness(
+                            str(audio_path), norm_path,
+                            target_lufs=qp.loudnorm_target_lufs,
+                            true_peak=qp.loudnorm_true_peak,
+                        )
+                        audio_path = Path(normalized)
+                        logger.info("Audio normalized to %.1f LUFS for run %d", qp.loudnorm_target_lufs, run_id)
+                    except Exception as norm_exc:
+                        logger.warning("Loudness normalization failed for run %d: %s", run_id, norm_exc)
             except Exception as exc:
                 logger.warning("BGM mixing failed for run %d, using original audio: %s", run_id, exc)
         # --- Convert SRT to ASS for styled subtitles with keyword emphasis ---
@@ -346,10 +359,53 @@ def render_video(self, run_id: int, render_profile: str = "shorts_default") -> d
 
         output_path = f"{_ARTIFACT_ROOT}/{run_id}/render/output.mp4"
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+
+        # --- Pacing enforcement: split scenes > max_scene_duration into sub-beats ---
+        try:
+            from creator_service.quality_profile import get_quality_profile
+            _qp_pace = get_quality_profile(render_profile if render_profile != "shorts_default" else "ssul_v2")
+            max_scene_dur = _qp_pace.max_scene_duration
+            new_image_paths: list[Path] = []
+            new_scene_durations: list[float] = []
+            for img, dur in zip(image_paths, scene_durations):
+                if dur > max_scene_dur:
+                    # Split into 2 sub-beats using same image
+                    half = dur / 2.0
+                    new_image_paths.extend([img, img])
+                    new_scene_durations.extend([half, half])
+                else:
+                    new_image_paths.append(img)
+                    new_scene_durations.append(dur)
+            if len(new_image_paths) != len(image_paths):
+                logger.info(
+                    "Pacing: split %d scenes into %d sub-beats for run %d",
+                    len(image_paths), len(new_image_paths), run_id,
+                )
+                image_paths = new_image_paths
+                scene_durations = new_scene_durations
+                scene_count = len(image_paths)
+        except Exception:
+            pass
+
         logger.debug(
-            "Render inputs for run %d: images=%s audio=%s subs=%s durations=%s",
-            run_id, image_paths, audio_path, subtitle_path, scene_durations,
+            "Render inputs for run %d: images=%d audio=%s subs=%s durations=%s",
+            run_id, len(image_paths), audio_path, subtitle_path, scene_durations,
         )
+        # --- Compute per-scene transition overrides (hard cut on climax) ---
+        scene_transitions: list[str] | None = None
+        try:
+            from creator_service.quality_profile import get_quality_profile
+            _qp_trans = get_quality_profile(render_profile if render_profile != "shorts_default" else "ssul_v2")
+            if _qp_trans.hard_cut_on_climax and scene_count >= 4:
+                # In a 5-section structure: [Hook, Body1, Body2, Climax(Body3), Conclusion]
+                # Climax is at index 3 (0-indexed) — use hard cut for urgency
+                climax_idx = min(3, scene_count - 2)  # penultimate scene
+                scene_transitions = ["fade"] * scene_count
+                scene_transitions[climax_idx] = "cut"  # hard cut on climax
+                logger.info("Hard cut on climax scene %d for run %d", climax_idx, run_id)
+        except Exception:
+            pass
+
         try:
             ffmpeg.render(
                 RenderInput(
@@ -357,6 +413,7 @@ def render_video(self, run_id: int, render_profile: str = "shorts_default") -> d
                     audio_path=audio_path,
                     subtitle_path=subtitle_path,
                     scene_durations=scene_durations,
+                    scene_transitions=scene_transitions,
                 ),
                 Path(output_path),
             )

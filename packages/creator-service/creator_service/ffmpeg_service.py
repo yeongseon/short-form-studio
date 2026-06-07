@@ -17,6 +17,7 @@ class RenderInput:
     audio_path: Path | None  # narration audio
     subtitle_path: Path | None  # SRT subtitle file
     scene_durations: list[float]  # duration per scene in seconds
+    scene_transitions: list[str] | None = None  # optional per-scene transition style override
 
 
 def _escape_subtitle_path(path: Path) -> str:
@@ -204,7 +205,7 @@ class FFmpegService:
             logger.warning("ffprobe validation error for %s: %s", output_path, exc)
             return False
 
-    def _render_segment(self, image_path: Path, duration: float, output_path: Path) -> None:
+    def _render_segment(self, image_path: Path, duration: float, output_path: Path, transition_override: str | None = None) -> None:
         """Render a single scene image into a video segment (.ts).
 
         Each segment is a self-contained H.264 MPEG-TS clip with the correct
@@ -213,9 +214,13 @@ class FFmpegService:
 
         When transition_style is KEN_BURNS, applies a subtle zoom-pan effect
         with fade in/out for professional-looking scene transitions.
+
+        Args:
+            transition_override: If provided, use this style instead of profile default.
         """
         # Build video filter based on transition style
-        if self.profile.transition_style.value == "ken_burns":
+        effective_style = transition_override or self.profile.transition_style.value
+        if effective_style == "ken_burns":
             # Full Ken Burns: zoom from 1.0 to 1.10 with subtle pan + fade in/out
             # Use 2x target resolution as input for zoom headroom (not 8000px — too slow)
             zoom_input_w = self.profile.width * 2
@@ -232,7 +237,7 @@ class FFmpegService:
                 f"fade=t=out:st={fade_out_start:.3f}:d={fade_d},"
                 f"format=yuv420p,setsar=1"
             )
-        elif self.profile.transition_style.value == "ken_burns_lite":
+        elif effective_style == "ken_burns_lite":
             # Lightweight Ken Burns: native resolution, subtle 5% zoom, no upscale
             # Much faster than full ken_burns — safe for containerized workers
             total_frames = max(1, int(duration * self.profile.fps))
@@ -251,7 +256,7 @@ class FFmpegService:
                 f"fade=t=out:st={fade_out_start:.3f}:d={fade_d},"
                 f"format=yuv420p,setsar=1"
             )
-        elif self.profile.transition_style.value == "fade":
+        elif effective_style == "fade":
             # Fade only: static image with fade in/out
             fade_d = 0.3
             fade_out_start = max(0, duration - fade_d)
@@ -351,9 +356,12 @@ class FFmpegService:
                 zip(input_data.image_paths, input_data.scene_durations, strict=False),
             ):
                 seg_path = tmp_dir / f"seg_{i:04d}.ts"
-                self._render_segment(img, dur, seg_path)
+                # Use per-scene transition override if provided
+                trans_override = None
+                if input_data.scene_transitions and i < len(input_data.scene_transitions):
+                    trans_override = input_data.scene_transitions[i]
+                self._render_segment(img, dur, seg_path, transition_override=trans_override)
                 segment_paths.append(seg_path)
-
             # --- Pass 2: Concatenate segments + audio + subtitles ---
             concat_list_path = tmp_dir / "concat.txt"
             with open(concat_list_path, "w") as f:

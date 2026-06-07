@@ -63,6 +63,12 @@ class QualityProfile:
     tts_rate_climax: str = "+5%"  # slow down for dramatic effect
     tts_rate_conclusion: str = "+10%"
     tts_pause_before_climax_ms: int = 400  # silence before key reveal
+    # Loudness normalization
+    loudnorm_enabled: bool = True
+    loudnorm_target_lufs: float = -14.0  # YouTube Shorts target
+    loudnorm_true_peak: float = -1.0
+    # Pacing enforcement
+    hard_cut_on_climax: bool = False  # hard cut instead of fade on climax scene
 
     def to_render_kwargs(self) -> dict[str, Any]:
         """Convert to kwargs for RenderProfile/FFmpegService."""
@@ -90,7 +96,7 @@ QUALITY_PROFILES: dict[str, QualityProfile] = {
         name="ssul_v2",
         min_scenes=3,
         max_scenes=6,
-        target_duration_seconds=(30, 50),
+        target_duration_seconds=(35, 45),
         banned_patterns=[
             "구독",
             "좋아요",
@@ -128,6 +134,10 @@ QUALITY_PROFILES: dict[str, QualityProfile] = {
         tts_rate_climax="+5%",
         tts_rate_conclusion="+10%",
         tts_pause_before_climax_ms=400,
+        loudnorm_enabled=True,
+        loudnorm_target_lufs=-14.0,
+        loudnorm_true_peak=-1.0,
+        hard_cut_on_climax=True,
     ),
     "default": QualityProfile(
         name="default",
