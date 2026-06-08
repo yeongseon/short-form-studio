@@ -252,7 +252,7 @@ def generate_audio(
                     raise
                 except Exception as exc:
                     message = str(exc).lower()
-                    if "429" in message or "rate" in message:
+                    if "429" in message or "rate limit" in message or "too many requests" in message:
                         raise RateLimitError(
                             f"Provider rate limited audio generation for run {run_id}"
                         ) from exc

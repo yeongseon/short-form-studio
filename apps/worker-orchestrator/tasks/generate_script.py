@@ -91,7 +91,7 @@ def generate_script(
                 raise
             except Exception as exc:
                 message = str(exc).lower()
-                if "429" in message or "rate" in message:
+                if "429" in message or "rate limit" in message or "too many requests" in message:
                     raise RateLimitError(
                         f"Provider rate limited script generation for run {run_id}"
                     ) from exc
@@ -116,7 +116,8 @@ def generate_script(
 
         # Post-process: fix keyword repetition + grammar + weak conclusions
         try:
-            from tasks.script_qc import fix_keyword_repetition, fix_korean_grammar, strengthen_weak_conclusion
+            from tasks.script_qc import fix_keyword_repetition, fix_korean_grammar, strengthen_weak_conclusion, strip_non_korean_cjk
+            generated = strip_non_korean_cjk(generated)
             generated = fix_keyword_repetition(generated, max_repeats=2)
             generated = fix_korean_grammar(generated)
             generated = strengthen_weak_conclusion(generated)

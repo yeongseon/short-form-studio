@@ -104,7 +104,7 @@ def generate_paragraph_audio(
                 raise
             except Exception as exc:
                 message = str(exc).lower()
-                if "429" in message or "rate" in message:
+                if "429" in message or "rate limit" in message or "too many requests" in message:
                     raise RateLimitError(
                         "Provider rate limited paragraph audio generation "
                         f"for run {run_id} section {section_id}"

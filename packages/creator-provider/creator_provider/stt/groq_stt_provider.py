@@ -69,7 +69,7 @@ class GroqSTTProvider(STTProvider):
             except httpx.HTTPError as exc:
                 last_exc = exc
                 err_msg = str(exc).lower()
-                if "429" in err_msg or "rate" in err_msg:
+                if "429" in err_msg or "rate limit" in err_msg or "too many requests" in err_msg:
                     wait_time = min(10 * (2 ** attempt), 60)
                     logger.warning(
                         "Groq STT rate limited (exception), waiting %ds (attempt %d/%d)",

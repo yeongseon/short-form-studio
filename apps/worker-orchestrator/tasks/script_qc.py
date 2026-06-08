@@ -436,3 +436,37 @@ def fix_korean_grammar(text: str) -> str:
     result = re.sub(r'  +', ' ', result)
     result = re.sub(r'\n\s*\n\s*\n', '\n\n', result)
     return result.strip()
+
+
+# CJK character ranges that should NOT appear in Korean scripts
+# Chinese (CJK Unified Ideographs): U+4E00-U+9FFF
+# We keep Korean Hangul (U+AC00-U+D7AF), Hangul Jamo, and common symbols
+_CJK_STRIP_PATTERN = re.compile(
+    r'[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]+'
+)
+
+
+def strip_non_korean_cjk(text: str) -> str:
+    """Remove stray Chinese/CJK characters from Korean script text.
+
+    Llama-4-Scout and similar models sometimes output Chinese characters
+    (e.g. 最后, 重要) mixed into Korean text. This strips them while
+    preserving Korean Hangul, numbers, punctuation, and Latin characters.
+
+    Returns:
+        Cleaned text with CJK ideographs removed.
+    """
+    if not text:
+        return text
+
+    result = _CJK_STRIP_PATTERN.sub('', text)
+    # Clean up double spaces left by removal
+    result = re.sub(r'  +', ' ', result)
+    # Clean up empty lines left by removal
+    result = re.sub(r'\n\s*\n\s*\n', '\n\n', result)
+
+    removed_count = len(_CJK_STRIP_PATTERN.findall(text))
+    if removed_count:
+        logger.info("CJK cleanup: removed %d Chinese character sequences", removed_count)
+
+    return result.strip()

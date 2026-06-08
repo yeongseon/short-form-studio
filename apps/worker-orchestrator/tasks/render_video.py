@@ -400,7 +400,7 @@ def render_video(self, run_id: int, render_profile: str = "shorts_default") -> d
                 # In a 5-section structure: [Hook, Body1, Body2, Climax(Body3), Conclusion]
                 # Climax is at index 3 (0-indexed) — use hard cut for urgency
                 climax_idx = min(3, scene_count - 2)  # penultimate scene
-                scene_transitions = ["fade"] * scene_count
+                scene_transitions = [_qp_trans.transition] * scene_count
                 scene_transitions[climax_idx] = "cut"  # hard cut on climax
                 logger.info("Hard cut on climax scene %d for run %d", climax_idx, run_id)
         except Exception:

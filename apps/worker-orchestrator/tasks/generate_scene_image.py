@@ -161,7 +161,7 @@ def generate_scene_image(
                                 exc_info=True,
                             )
                             message = str(exc).lower()
-                            if "429" in message or "rate" in message:
+                            if "429" in message or "rate limit" in message or "too many requests" in message:
                                 raise RateLimitError(
                                     "Provider rate limited scene image generation "
                                     f"for run {run_id} scene {target_scene.scene_id}"

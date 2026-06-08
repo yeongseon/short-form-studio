@@ -113,7 +113,7 @@ QUALITY_PROFILES: dict[str, QualityProfile] = {
             "cinematic Korean drama style, moody lighting, shallow depth of field, film grain, "
         ),
         image_negative_prompt="text, watermark, logo, cartoon, anime, low quality, blurry",
-        transition="fade",
+        transition="ken_burns_lite",
         ken_burns_zoom=(1.0, 1.15),
         crossfade_ms=200,
         subtitle_emphasis=True,
