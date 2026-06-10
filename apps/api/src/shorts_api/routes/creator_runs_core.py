@@ -16,6 +16,15 @@ from creator_service.task_dispatch_service import (
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+import os
+
+# --- Env-configurable model defaults ---
+# Override these in .env to change default models without code changes.
+_SCRIPT_DEFAULT_MODEL = os.getenv("SCRIPT_DEFAULT_MODEL", "qwen3-4b")
+_TTS_DEFAULT_MODEL = os.getenv("TTS_DEFAULT_MODEL", "edge-tts")
+_SUBTITLE_DEFAULT_MODEL = os.getenv("SUBTITLE_DEFAULT_MODEL", "whisper-small")
+_RENDER_DEFAULT_PROFILE = os.getenv("RENDER_DEFAULT_PROFILE", "shorts_default")
+
 if TYPE_CHECKING:
     from creator_domain.models.pipeline_run import PipelineRun
     from creator_domain.models.project import Project
@@ -72,28 +81,28 @@ class ApproveVisualAssetsRequest(BaseModel):
 
 
 class GenerateScriptRequest(BaseModel):
-    model_key: str = Field(default="qwen3-4b", max_length=256)
+    model_key: str = Field(default=_SCRIPT_DEFAULT_MODEL, max_length=256)
     instructions: str | None = Field(default=None, max_length=32_000)
     niche: Literal["facts", "horror", "motivation", "psychology", "science", "food", "tech", "family_story", "ssul_dc"] | None = None
     language: Literal["ko", "en", "ja", "zh", "es", "pt", "fr", "de"] = "ko"
 
 class GenerateVisualPlanRequest(BaseModel):
-    model_key: str = Field(default="qwen3-4b", max_length=256)
+    model_key: str = Field(default=_SCRIPT_DEFAULT_MODEL, max_length=256)
     style_preset: str | None = Field(default=None, max_length=200)
     niche: Literal["facts", "horror", "motivation", "psychology", "science", "food", "tech", "family_story", "ssul_dc"] | None = None
 
 class GenerateAudioRequest(BaseModel):
-    tts_model: str = Field(default="qwen3-tts", max_length=256)
+    tts_model: str = Field(default=_TTS_DEFAULT_MODEL, max_length=256)
     voice: str = Field(default="default", max_length=256)
 
 
 class GenerateSubtitlesRequest(BaseModel):
-    subtitle_model: str = Field(default="whisper-small", max_length=256)
+    subtitle_model: str = Field(default=_SUBTITLE_DEFAULT_MODEL, max_length=256)
     subtitle_format: Literal["srt", "vtt"] = "srt"
 
 
 class RenderRequest(BaseModel):
-    render_profile: str = Field(default="shorts_default", max_length=256)
+    render_profile: str = Field(default=_RENDER_DEFAULT_PROFILE, max_length=256)
 
 
 class UpdateModelDefaultsRequest(BaseModel):

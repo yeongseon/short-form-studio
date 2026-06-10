@@ -86,3 +86,36 @@ make docker-local-down
 - API, PostgreSQL, and Redis remain bound to `127.0.0.1` for safety.
 - If you need to access the API directly from another device, add your server IP to `CORS_ORIGINS` in `.env`.
 - For external (internet) access, use a secure reverse proxy or Cloudflare Tunnel.
+
+## Recommended Models for Local Mode
+
+The default model configuration is optimized for local/free execution:
+
+| Category | Default Model | Why |
+|----------|--------------|-----|
+| TTS | `edge-tts` | No GPU, no API key, free, Korean voices included |
+| LLM | `qwen3-4b` (local) or Groq (cloud) | Local Ollama or free Groq tier |
+| STT | `whisper-small` (local) or `groq-whisper-large-v3-turbo` | Local or Groq |
+| Image | `placeholder` or `hf-flux-schnell` | Placeholder for testing, HF FLUX for real images |
+
+To override defaults, set these in `.env`:
+
+```env
+TTS_DEFAULT_MODEL=edge-tts
+SCRIPT_DEFAULT_MODEL=meta-llama/llama-4-scout-17b-16e-instruct
+SUBTITLE_DEFAULT_MODEL=groq-whisper-large-v3-turbo
+```
+
+### Why edge-tts?
+
+Unlike `qwen3-tts` (which requires a GPU-backed TTS container), `edge-tts` runs
+without any local GPU or external API key. It provides high-quality Korean voices
+suitable for 썰쇼츠 and demo purposes.
+
+Available Korean voices:
+
+| Voice key | Edge TTS voice |
+|-----------|---------------|
+| `default` | ko-KR-SunHiNeural |
+| `female` | ko-KR-SunHiNeural |
+| `male` | ko-KR-InJoonNeural |

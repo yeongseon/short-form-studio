@@ -2446,7 +2446,7 @@ async def test_generate_audio_default_model(client, stub_generate_audio_services
     )
 
     assert response.status_code == 202
-    assert dispatcher.calls[0]["tts_model"] == "qwen3-tts"
+    assert dispatcher.calls[0]["tts_model"] == "edge-tts"
     assert dispatcher.calls[0]["voice"] == "default"
 
 
