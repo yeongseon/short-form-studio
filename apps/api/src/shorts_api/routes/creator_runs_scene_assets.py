@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+import logging
 
 from creator_domain.models import TRIGGER_POLICY
 from creator_service.audio_service import audio_service
@@ -42,6 +43,8 @@ from shorts_api.auth import CurrentUser, require_run_access
 
 router = APIRouter(tags=["runs"])
 
+
+logger = logging.getLogger(__name__)
 
 async def _enforce_run_quota(run_id: int, operation_type: str, workspace_id: int) -> int:
     from creator_service.usage_service import check_workspace_quota
@@ -123,7 +126,17 @@ async def generate_scene_image_endpoint(
             detail="Failed to enqueue image generation task",
         ) from None
 
-    await task_tracking_service.record_task_queued(run_id, "generate_scene_image", task_id)
+    try:
+        await task_tracking_service.record_task_queued(run_id, "generate_scene_image", task_id)
+    except Exception:
+        logger.error("Failed to track task %s for run %d — revoking orphan", task_id, run_id, exc_info=True)
+        try:
+            __import__("celery_app").celery_app.control.revoke(task_id, terminate=True)
+        except Exception:
+            logger.error("Failed to revoke orphan task %s", task_id, exc_info=True)
+        from creator_service.usage_service import cancel_workspace_quota_reservation
+        await cancel_workspace_quota_reservation(workspace_id, "image_gen")
+        raise HTTPException(status_code=503, detail="Task tracking failed") from None
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -175,7 +188,17 @@ async def regenerate_scene_image_endpoint(
             detail="Failed to enqueue image generation task",
         ) from None
 
-    await task_tracking_service.record_task_queued(run_id, "generate_scene_image", task_id)
+    try:
+        await task_tracking_service.record_task_queued(run_id, "generate_scene_image", task_id)
+    except Exception:
+        logger.error("Failed to track task %s for run %d — revoking orphan", task_id, run_id, exc_info=True)
+        try:
+            __import__("celery_app").celery_app.control.revoke(task_id, terminate=True)
+        except Exception:
+            logger.error("Failed to revoke orphan task %s", task_id, exc_info=True)
+        from creator_service.usage_service import cancel_workspace_quota_reservation
+        await cancel_workspace_quota_reservation(workspace_id, "image_gen")
+        raise HTTPException(status_code=503, detail="Task tracking failed") from None
     return {
         "task_id": task_id,
         "run_id": run_id,

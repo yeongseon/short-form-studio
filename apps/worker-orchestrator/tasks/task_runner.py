@@ -566,29 +566,32 @@ def validate_task_message(message: dict[str, Any]) -> dict[str, Any]:
     return validated
 
 
-_MAX_STRING_ARG_LENGTH = 4096
-
-_ALLOWED_MODEL_KEYS: frozenset[str] = frozenset(
-    os.getenv(
-        "ALLOWED_MODEL_KEYS",
-        "qwen3:4b,gpt-4o-mini,claude-sonnet,gemini-2.0-flash,"
-        "llama-3.3-70b-versatile,meta-llama/llama-4-scout-17b-16e-instruct,"
-        "sd-1.5,dall-e-3,sd3-medium,imagen-3,pollinations,placeholder,hf-flux-schnell,groq-svg,"
-        "eleven_multilingual_v2,tts-1,whisper-small,tts-1-hd,edge-tts,"
-        "groq-whisper-large-v3-turbo"
-    ).split(",")
-)
+_FIELD_LENGTH_LIMITS: dict[str, int] = {
+    "model_key": 256,
+    "instructions": 32000,
+    "prompt_override": 4096,
+    "language": 16,
+    "style": 256,
+    "voice_id": 256,
+}
+_DEFAULT_MAX_STRING_LENGTH = 4096
 
 
 def validate_model_key(key: str) -> None:
-    """Validate model_key against the allowed whitelist."""
+    """Validate model_key against the provider registry."""
     if not isinstance(key, str) or not key.strip():
         raise ValueError("model_key must be a non-empty string")
-    if key not in _ALLOWED_MODEL_KEYS:
-        raise ValueError(f"model_key {key!r} is not in the allowed list")
-
+    try:
+        from creator_provider.registry import get_default_registry
+        registry = get_default_registry()
+        registry.resolve(key)
+    except KeyError:
+        raise ValueError(f"model_key {key!r} is not in the allowed list") from None
 
 def validate_string_arg(value: Any, name: str) -> None:
-    """Validate that a string argument doesn't exceed max length."""
-    if isinstance(value, str) and len(value) > _MAX_STRING_ARG_LENGTH:
-        raise ValueError(f"{name} exceeds maximum length of {_MAX_STRING_ARG_LENGTH}")
+    """Validate that a string argument doesn't exceed field-specific max length."""
+    if not isinstance(value, str):
+        return
+    max_len = _FIELD_LENGTH_LIMITS.get(name, _DEFAULT_MAX_STRING_LENGTH)
+    if len(value) > max_len:
+        raise ValueError(f"{name} exceeds maximum length of {max_len}")

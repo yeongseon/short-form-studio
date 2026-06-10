@@ -117,9 +117,11 @@ def generate_script(
         # Post-process: fix keyword repetition + grammar + weak conclusions
         try:
             from tasks.script_qc import fix_keyword_repetition, fix_korean_grammar, strengthen_weak_conclusion, strip_non_korean_cjk
-            generated = strip_non_korean_cjk(generated)
+            if language in ("ko", None):
+                generated = strip_non_korean_cjk(generated)
             generated = fix_keyword_repetition(generated, max_repeats=2)
-            generated = fix_korean_grammar(generated)
+            if language in ("ko", None):
+                generated = fix_korean_grammar(generated)
             generated = strengthen_weak_conclusion(generated)
         except Exception:
             pass  # Non-critical — proceed with original

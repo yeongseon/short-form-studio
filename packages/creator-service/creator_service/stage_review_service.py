@@ -128,8 +128,15 @@ class StageReviewService:
 
         # 3. Atomically advance stage (CAS — fails if stage changed concurrently)
         updates: dict[str, Any] = {"current_stage": target.value}
+        # Capture original values of extra fields for rollback
+        original_extra_values: dict[str, Any] = {}
         if extra_updates:
             updates.update(extra_updates)
+            # Read current run to capture pre-update values
+            current_run = await run_service.get_run(run_id, workspace_id=workspace_id)
+            if current_run is not None:
+                for key in extra_updates:
+                    original_extra_values[key] = getattr(current_run, key, None)
         ok, row = await run_service.storage.conditional_update_run(
             run_id,
             updates,
@@ -159,10 +166,10 @@ class StageReviewService:
         except Exception as exc:
             # Roll back ALL fields changed by the CAS (stage + extra_updates).
             rollback_updates: dict[str, Any] = {"current_stage": stage.value}
-            if extra_updates:
-                # Restore extra fields to None (their pre-update state)
-                for key in extra_updates:
-                    rollback_updates[key] = None
+            if original_extra_values:
+                # Restore extra fields to their exact pre-update values
+                for key, original_value in original_extra_values.items():
+                    rollback_updates[key] = original_value
             rollback_ok, _ = await run_service.storage.conditional_update_run(
                 run_id,
                 rollback_updates,
