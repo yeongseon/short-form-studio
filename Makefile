@@ -51,9 +51,15 @@ docker-local-migrate:
 
 docker-local-bootstrap:
 	docker compose run --rm api python scripts/create_api_key.py --email local@example.com --workspace local --name local-server
+	@echo ""
+	@echo "Copy the generated API key into .env as API_KEY, then run:"
+	@echo "  make docker-local-up"
 
 docker-local-logs:
-	docker compose logs -f api worker studio-web
+	docker compose -f docker-compose.yml -f docker-compose.local-server.yml logs -f api worker studio-web
 
 docker-local-down:
 	docker compose -f docker-compose.yml -f docker-compose.local-server.yml down
+
+docker-local-status:
+	docker compose -f docker-compose.yml -f docker-compose.local-server.yml ps

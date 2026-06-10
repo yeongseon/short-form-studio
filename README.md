@@ -325,6 +325,7 @@ See [`docs/LIGHTWEIGHT.md`](docs/LIGHTWEIGHT.md) for setup and tradeoffs.
 - [Usage Guide](docs/USAGE.md) -- Detailed feature walkthrough
 - [Deployment Guide](docs/CUTOVER.md) -- Production deployment checklist
 - [Lightweight Mode](docs/LIGHTWEIGHT.md) -- Run without Celery/Redis
+- [Local Docker Compose Setup](docs/LOCAL_DOCKER.md) -- Run the full stack on a local server with LAN access
 
 ## License
 
