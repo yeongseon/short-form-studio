@@ -72,6 +72,7 @@ class ProviderRegistry:
         from creator_provider.image.placeholder_provider import PlaceholderImageProvider
         from creator_provider.image.huggingface_provider import HuggingFaceImageProvider
         from creator_provider.image.groq_svg_provider import GroqSvgImageProvider
+        from creator_provider.image.codex_provider import CodexProvider
 
         registry = cls()
         registry.register_provider("ollama", OllamaProvider)
@@ -93,6 +94,7 @@ class ProviderRegistry:
         registry.register_provider("placeholder_image", PlaceholderImageProvider)
         registry.register_provider("huggingface_image", HuggingFaceImageProvider)
         registry.register_provider("groq_svg_image", GroqSvgImageProvider)
+        registry.register_provider("codex_image", CodexProvider)
         registry.register_model(
             ModelCatalogEntry(
                 model_key="qwen3-4b",
@@ -309,6 +311,16 @@ class ProviderRegistry:
                 requires_gpu=False,
                 is_local=False,
                 default_params={"width": 1080, "height": 1920},
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="codex-gpt-image",
+                provider_type="codex_image",
+                endpoint="https://chatgpt.com/backend-api/codex",
+                category=ProviderCategory.IMAGE,
+                requires_gpu=False,
+                is_local=False,
             )
         )
         return registry
