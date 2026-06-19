@@ -73,6 +73,7 @@ class ProviderRegistry:
         from creator_provider.image.huggingface_provider import HuggingFaceImageProvider
         from creator_provider.image.groq_svg_provider import GroqSvgImageProvider
         from creator_provider.image.codex_provider import CodexProvider
+        from creator_provider.tts.cosyvoice_provider import CosyVoiceProvider
 
         registry = cls()
         registry.register_provider("ollama", OllamaProvider)
@@ -91,6 +92,7 @@ class ProviderRegistry:
         registry.register_provider("groq_stt", GroqSTTProvider)
         registry.register_provider("pollinations_image", PollinationsProvider)
         registry.register_provider("edge_tts", EdgeTTSProvider)
+        registry.register_provider("cosyvoice_tts", CosyVoiceProvider)
         registry.register_provider("placeholder_image", PlaceholderImageProvider)
         registry.register_provider("huggingface_image", HuggingFaceImageProvider)
         registry.register_provider("groq_svg_image", GroqSvgImageProvider)
@@ -288,6 +290,16 @@ class ProviderRegistry:
                 endpoint="local",
                 category=ProviderCategory.TTS,
                 requires_gpu=False,
+                is_local=True,
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="cosyvoice-0.5b",
+                provider_type="cosyvoice_tts",
+                endpoint=os.getenv("TTS_COSYVOICE_BASE_URL", "http://tts-cosyvoice:50000"),
+                category=ProviderCategory.TTS,
+                requires_gpu=True,
                 is_local=True,
             )
         )

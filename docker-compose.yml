@@ -175,6 +175,34 @@ services:
       - gpu
     restart: unless-stopped
 
+  tts-cosyvoice:
+    image: shorts-automation-tts-cosyvoice:latest
+    # Optional GPU profile service: CosyVoice 3.0 (Fun-CosyVoice3-0.5B-2512).
+    # Dockerfile is expected at docker/tts-cosyvoice/Dockerfile.
+    # Model downloads automatically on first start from ModelScope/HuggingFace.
+    # Example local build/tag: shorts-automation-tts-cosyvoice:1.0.0
+    ports:
+      - "127.0.0.1:50000:50000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      MODEL_DIR: /app/pretrained_models
+      COSYVOICE_MODEL: Fun-CosyVoice3-0.5B-2512
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:50000/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    profiles:
+      - gpu
+    restart: unless-stopped
+
   flower:
     image: mher/flower:2.0.1
     ports:
