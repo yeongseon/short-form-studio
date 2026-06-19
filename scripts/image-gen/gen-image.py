@@ -38,7 +38,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "packages" / "creator-provider"))
 sys.path.insert(0, str(PROJECT_ROOT / "packages" / "creator-domain"))
 
-from creator_provider.registry import get_default_registry
+from creator_provider.registry import get_default_registry  # noqa: E402
 
 # --- Auto-prompt generation (no LLM needed) ---
 
@@ -249,7 +249,7 @@ async def run_experiment_repeat(prompt: str, count: int, output_dir: Path, galle
 async def run_experiment_sizes(prompt: str, output_dir: Path, gallery_path: Path):
     """Same prompt, different size hints — see what the model does."""
     experiment_id = f"exp-sizes-{uuid.uuid4().hex[:8]}"
-    print(f"🧪 EXPERIMENT: Same prompt × different size hints")
+    print("🧪 EXPERIMENT: Same prompt × different size hints")
     print(f"   ID: {experiment_id}")
     print(f"   Prompt: {prompt[:80]}...")
     print(f"   Sizes: {[s or 'default(none)' for s in SIZE_HINTS]}")

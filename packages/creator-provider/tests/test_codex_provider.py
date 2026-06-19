@@ -8,7 +8,6 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
-
 from creator_provider.exceptions import ProviderAuthError, ProviderError, ProviderTimeoutError
 from creator_provider.image.codex_provider import CodexProvider, _read_png_dimensions
 
@@ -84,12 +83,12 @@ class TestCodexProviderGenerate:
             endpoint="https://chatgpt.com/backend-api/codex", model_key="codex-gpt-image"
         )
 
-        with mock.patch.object(CodexProvider, "_generate_sync", side_effect=fake_generate_sync):
-            with mock.patch.dict(os.environ, {"ARTIFACT_ROOT": str(tmp_path)}):
-                result = await provider.generate(
-                    "a blue square icon",
-                    {"output_path": str(output_file)},
-                )
+        with mock.patch.object(CodexProvider, "_generate_sync", side_effect=fake_generate_sync), \
+                mock.patch.dict(os.environ, {"ARTIFACT_ROOT": str(tmp_path)}):
+            result = await provider.generate(
+                "a blue square icon",
+                {"output_path": str(output_file)},
+            )
 
         assert result.image_path == str(output_file)
         assert result.width == 1254
@@ -162,9 +161,8 @@ class TestCodexProviderErrors:
             CodexProvider,
             "_generate_sync",
             side_effect=RuntimeError("UNAUTHORIZED: token expired"),
-        ):
-            with pytest.raises(ProviderAuthError, match="Codex auth expired"):
-                await provider.generate("test prompt")
+        ), pytest.raises(ProviderAuthError, match="Codex auth expired"):
+            await provider.generate("test prompt")
 
     @pytest.mark.asyncio
     async def test_timeout_raises_provider_timeout_error(self):
@@ -174,9 +172,8 @@ class TestCodexProviderErrors:
             CodexProvider,
             "_generate_sync",
             side_effect=RuntimeError("Connect timeout exceeded"),
-        ):
-            with pytest.raises(ProviderTimeoutError, match="Codex backend request failed"):
-                await provider.generate("test prompt")
+        ), pytest.raises(ProviderTimeoutError, match="Codex backend request failed"):
+            await provider.generate("test prompt")
 
     @pytest.mark.asyncio
     async def test_generic_error_raises_provider_error(self):
@@ -186,9 +183,8 @@ class TestCodexProviderErrors:
             CodexProvider,
             "_generate_sync",
             side_effect=RuntimeError("Something unexpected"),
-        ):
-            with pytest.raises(ProviderError, match="unsupported private API"):
-                await provider.generate("test prompt")
+        ), pytest.raises(ProviderError, match="unsupported private API"):
+            await provider.generate("test prompt")
 
     @pytest.mark.asyncio
     async def test_prompt_too_long_raises_validation_error(self):

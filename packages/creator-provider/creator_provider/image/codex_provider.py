@@ -14,7 +14,6 @@ import logging
 import os
 import struct
 import tempfile
-import zlib
 from pathlib import Path
 from typing import Any
 
@@ -77,9 +76,8 @@ class CodexProvider(ImageProvider):
             )
             output_path = str(validated)
         else:
-            tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-            output_path = tmp.name
-            tmp.close()
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                output_path = tmp.name
 
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
 
