@@ -138,14 +138,16 @@ class GroqSvgImageProvider(ImageProvider):
             cleaned_svg = self._clean_svg(raw_svg)
             repaired_svg = self._repair_svg_xml(cleaned_svg)
 
+            sanitized_svg = self._sanitize_svg(repaired_svg)
+
             try:
-                self._validate_svg_xml(repaired_svg)
+                self._validate_svg_xml(sanitized_svg)
                 logger.info(
                     "SVG validation passed on attempt %d/%d",
                     attempt + 1,
                     _SVG_GENERATION_MAX_RETRIES,
                 )
-                return repaired_svg
+                return sanitized_svg
             except Exception as exc:
                 last_error = str(exc)
                 logger.warning(
@@ -313,6 +315,33 @@ class GroqSvgImageProvider(ImageProvider):
         except ET.ParseError as exc:
             raise ValueError(f"SVG XML parse error: {exc}") from exc
 
+    @staticmethod
+    def _sanitize_svg(svg: str) -> str:
+        """Sanitize SVG to prevent XSS vectors.
+
+        Removes:
+        - <script> elements
+        - <foreignObject> elements (can embed arbitrary HTML)
+        - Event handler attributes (on*)
+        - javascript: and data:text/html URIs in href/src attributes
+        """
+        # Remove <script>...</script> elements (case-insensitive)
+        svg = re.sub(r'<script[^>]*>.*?</script>', '', svg, flags=re.DOTALL | re.IGNORECASE)
+        svg = re.sub(r'<script[^>]*/>', '', svg, flags=re.IGNORECASE)
+
+        # Remove <foreignObject>...</foreignObject> elements
+        svg = re.sub(r'<foreignObject[^>]*>.*?</foreignObject>', '', svg, flags=re.DOTALL | re.IGNORECASE)
+        svg = re.sub(r'<foreignObject[^>]*/>', '', svg, flags=re.IGNORECASE)
+
+        # Remove event handler attributes (onload, onclick, onmouseover, etc.)
+        svg = re.sub(r'\s+on\w+\s*=\s*"[^"]*"', '', svg, flags=re.IGNORECASE)
+        svg = re.sub(r"\s+on\w+\s*=\s*'[^']*'", '', svg, flags=re.IGNORECASE)
+
+        # Remove javascript: URIs in href and src attributes
+        svg = re.sub(r'(href|src)\s*=\s*"\s*javascript:[^"]*"', r'\1=""', svg, flags=re.IGNORECASE)
+        svg = re.sub(r'(href|src)\s*=\s*"\s*data:text/html[^"]*"', r'\1=""', svg, flags=re.IGNORECASE)
+
+        return svg
     @staticmethod
     def _force_cleanup_svg(svg: str, width: int, height: int) -> str:
         """Last-resort cleanup: create a minimal valid SVG wrapper if parsing still fails.

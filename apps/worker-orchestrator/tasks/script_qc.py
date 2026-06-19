@@ -123,12 +123,6 @@ def check_script_quality(
                 warnings.append(f"Weak conclusion (generic): contains '{weak}'")
                 score -= 3
                 break
-    if banned_patterns:
-        content_lower = content.lower()
-        for pattern in banned_patterns:
-            if pattern.lower() in content_lower:
-                issues.append(f"Banned pattern found: '{pattern}'")
-                score -= 10
 
     # Cap score at 0
     score = max(0, score)
@@ -321,12 +315,20 @@ def strengthen_weak_conclusion(markdown_content: str) -> str:
     if not is_weak:
         return markdown_content
 
-    # Try to extract a concrete detail from Body3 for the sting
+    # Try to extract a concrete detail from the climax section for the sting.
+    # Priority: 1) section with [beat: climax] metadata, 2) body3/Body3 heading.
     body3_key = None
-    for k in sections:
-        if "body3" in k or ("body" in k and "3" in k):
+    # First pass: look for [beat: climax] marker in section content
+    for k, v in sections.items():
+        if "[beat: climax]" in v.lower() or "[beat:climax]" in v.lower():
             body3_key = k
             break
+    # Fallback: look for body3 in section heading name
+    if not body3_key:
+        for k in sections:
+            if "body3" in k or ("body" in k and "3" in k):
+                body3_key = k
+                break
 
     if not body3_key:
         # Can't find Body3, use a generic but stronger ending
@@ -359,7 +361,6 @@ def strengthen_weak_conclusion(markdown_content: str) -> str:
     # Replace conclusion in markdown
     result = markdown_content
     # Find and replace the conclusion section content
-    conclusion_heading = f"## {conclusion_key.title() if conclusion_key == 'conclusion' else conclusion_key}"
     # Use regex to find ## Conclusion ... (until end or next ##)
     pattern = r'(## [Cc]onclusion[^\n]*)\n(.*?)(?=\n## |\Z)'
     match = re.search(pattern, result, re.DOTALL)

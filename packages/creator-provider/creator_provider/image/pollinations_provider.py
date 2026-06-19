@@ -13,6 +13,9 @@ from creator_provider.base import ImageProvider, ImageResult
 from creator_provider.exceptions import ProviderError, map_httpx_error
 from creator_provider.validation import MAX_IMAGE_PROMPT_CHARS, validate_prompt_length
 
+_MIN_DIM = 64
+_MAX_DIM = 2048
+
 
 class PollinationsProvider(ImageProvider):
     """Free image generation via Pollinations.ai — no API key required."""
@@ -26,6 +29,9 @@ class PollinationsProvider(ImageProvider):
         merged = dict(params or {})
         width = int(merged.get("width", 1024))
         height = int(merged.get("height", 1792))
+        # Enforce dimension bounds
+        width = max(_MIN_DIM, min(width, _MAX_DIM))
+        height = max(_MIN_DIM, min(height, _MAX_DIM))
         timeout = float(merged.get("timeout", 120.0))
 
         encoded_prompt = urllib.parse.quote(prompt, safe="")
@@ -37,6 +43,13 @@ class PollinationsProvider(ImageProvider):
                 response.raise_for_status()
         except httpx.HTTPError as exc:
             raise map_httpx_error(exc, "Pollinations.ai image request failed") from exc
+
+        # Validate content-type (must be an image)
+        content_type = response.headers.get("content-type", "")
+        if content_type and not content_type.startswith("image/"):
+            raise ProviderError(
+                f"Pollinations.ai returned non-image content-type: {content_type}"
+            )
 
         image_bytes = response.content
         if not image_bytes or len(image_bytes) < 100:

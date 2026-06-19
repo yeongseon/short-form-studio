@@ -307,8 +307,15 @@ def render_video(self, run_id: int, render_profile: str = "shorts_default") -> d
                             else:
                                 # Transition SFX at scene boundary
                                 sfx_timestamps.append((cumulative - 0.1, qp.sfx_transition_type))
-                            # Detect climax (scene 3 or 4 in typical 5-scene structure)
-                            if i == min(3, len(scene_durations) - 2) and len(scene_durations) >= 4:
+                            # Detect climax by scene metadata, fallback to index heuristic
+                            sfx_climax_idx = min(3, len(scene_durations) - 2)
+                            if active_plan is not None:
+                                for pi, ps in enumerate(active_plan.scenes):
+                                    if ps.section_type.lower() in ("climax", "body3"):
+                                        if pi < len(scene_durations):
+                                            sfx_climax_idx = pi
+                                        break
+                            if i == sfx_climax_idx and len(scene_durations) >= 4:
                                 sfx_timestamps.append((cumulative + dur * 0.5, qp.sfx_climax_type))
                             cumulative += dur
                         sfx_output = f"{_ARTIFACT_ROOT}/{run_id}/render/audio_sfx.mp3"
@@ -397,9 +404,15 @@ def render_video(self, run_id: int, render_profile: str = "shorts_default") -> d
             from creator_service.quality_profile import get_quality_profile
             _qp_trans = get_quality_profile(render_profile if render_profile != "shorts_default" else "ssul_v2")
             if _qp_trans.hard_cut_on_climax and scene_count >= 4:
-                # In a 5-section structure: [Hook, Body1, Body2, Climax(Body3), Conclusion]
-                # Climax is at index 3 (0-indexed) — use hard cut for urgency
-                climax_idx = min(3, scene_count - 2)  # penultimate scene
+                # Determine climax scene by metadata (section_type) if available,
+                # falling back to index-based heuristic for legacy scripts.
+                climax_idx = min(3, scene_count - 2)  # fallback: penultimate scene
+                if active_plan is not None:
+                    for idx, plan_scene in enumerate(active_plan.scenes):
+                        if plan_scene.section_type.lower() in ("climax", "body3"):
+                            if idx < scene_count:
+                                climax_idx = idx
+                            break
                 scene_transitions = [_qp_trans.transition] * scene_count
                 scene_transitions[climax_idx] = "cut"  # hard cut on climax
                 logger.info("Hard cut on climax scene %d for run %d", climax_idx, run_id)
