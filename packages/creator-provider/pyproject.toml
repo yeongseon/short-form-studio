@@ -20,6 +20,7 @@ google = ["google-generativeai>=0.7.0"]
 stability = ["stability-sdk>=0.8.0"]
 elevenlabs = ["elevenlabs>=1.0.0"]
 all-external = ["openai>=1.0.0", "anthropic>=0.30.0", "google-generativeai>=0.7.0", "stability-sdk>=0.8.0", "elevenlabs>=1.0.0"]
+codex = ["god-tibo-imagen"]
 
 [build-system]
 requires = ["setuptools>=68.0", "wheel"]
