@@ -1,0 +1,236 @@
+# Observability Guide
+
+This document covers the OpenTelemetry integration and structured logging
+setup for Short Form Studio.
+
+---
+
+## Overview
+
+The system supports optional OpenTelemetry (OTEL) instrumentation for:
+- **Distributed tracing** — follow a request across API → worker → provider
+- **Metrics** — task duration histograms, error counters
+- **Structured logging** — JSON logs with trace context correlation
+
+OTEL is disabled by default and degrades gracefully if the collector is
+unreachable.
+
+---
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OTEL_ENABLED` | `false` | Enable OpenTelemetry instrumentation |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | OTLP gRPC collector endpoint |
+| `OTEL_SERVICE_NAME` | `short-form-studio` | Service name in traces |
+| `OTEL_ENVIRONMENT` | `development` | Environment tag |
+
+### Enabling in Docker Compose
+
+```yaml
+# Add to .env
+OTEL_ENABLED=true
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+
+# Add collector service to docker-compose.yml (or use separate override)
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    ports:
+      - "127.0.0.1:4317:4317"   # gRPC
+      - "127.0.0.1:4318:4318"   # HTTP
+    volumes:
+      - ./otel-config.yaml:/etc/otelcol-contrib/config.yaml
+```
+
+---
+
+## Architecture
+
+```
+┌──────────────┐     ┌──────────────┐     ┌──────────────────┐
+│  API Server  │────▶│    Worker    │────▶│   AI Provider    │
+│  (FastAPI)   │     │  (Celery)   │     │ (Ollama/OpenAI)  │
+└──────┬───────┘     └──────┬───────┘     └──────────────────┘
+       │                     │
+       │  OTLP gRPC          │  OTLP gRPC
+       ▼                     ▼
+┌──────────────────────────────────────┐
+│       OpenTelemetry Collector        │
+└──────────────┬───────────────────────┘
+               │
+       ┌───────┴───────┐
+       ▼               ▼
+┌────────────┐  ┌────────────┐
+│   Jaeger   │  │ Prometheus │
+│  (Traces)  │  │ (Metrics)  │
+└────────────┘  └────────────┘
+```
+
+---
+
+## Trace Propagation
+
+### API → Worker
+
+When the API dispatches a Celery task, trace context is propagated via
+task headers. The worker extracts this context to continue the trace span.
+
+```python
+# In task_dispatch_service.py — context is injected into Celery task headers
+from creator_service.telemetry import inject_trace_context
+
+headers = {}
+inject_trace_context(headers)
+task.apply_async(args=[run_id], headers=headers)
+```
+
+### Worker → Provider
+
+Each provider call creates a child span:
+
+```python
+from creator_service.telemetry import get_tracer
+
+tracer = get_tracer()
+with tracer.start_as_current_span("provider.generate_image") as span:
+    span.set_attribute("provider.name", "stable_diffusion")
+    span.set_attribute("provider.model", "sd15")
+    result = await provider.generate(...)
+```
+
+---
+
+## Structured Logging
+
+All services use JSON-formatted logging with trace correlation:
+
+```json
+{
+  "timestamp": "2025-01-15T12:30:45.123Z",
+  "level": "INFO",
+  "logger": "shorts_api.routes.creator_runs_core",
+  "message": "Run created",
+  "trace_id": "abc123def456",
+  "span_id": "789abc",
+  "run_id": 42,
+  "project_id": 7,
+  "workspace_id": 1
+}
+```
+
+### Log Configuration
+
+Structured logging is configured in `creator_service/logging_config.py`:
+- JSON format for production (`ENVIRONMENT=production`)
+- Human-readable format for development
+- Trace context automatically injected via `TraceContextFilter`
+
+### Correlation Fields
+
+| Field | Source | Description |
+|-------|--------|-------------|
+| `trace_id` | OTEL context | Distributed trace identifier |
+| `span_id` | OTEL context | Current span identifier |
+| `run_id` | Application | Pipeline run being processed |
+| `workspace_id` | Auth context | Workspace of the requesting user |
+| `task_name` | Celery | Worker task function name |
+
+---
+
+## Metrics
+
+### Available Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `task.duration` | Histogram | Task execution time by type |
+| `task.errors` | Counter | Task failures by type and error class |
+| `provider.calls` | Counter | External provider API calls |
+| `provider.latency` | Histogram | Provider response time |
+
+### Prometheus Export
+
+With the OTEL collector configured for Prometheus export:
+
+```yaml
+# otel-config.yaml (example)
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      exporters: [prometheus]
+    traces:
+      receivers: [otlp]
+      exporters: [jaeger]
+```
+
+---
+
+## Graceful Degradation
+
+The telemetry system is designed to never crash the application:
+
+1. **OTEL_ENABLED=false** (default): No-op implementations used for tracer/meter.
+   Zero overhead.
+2. **Collector unreachable**: SDK buffers and drops silently. Logs a warning
+   once, then suppresses further connection errors.
+3. **Import failure**: If `opentelemetry` packages are missing, the system
+   falls back to no-op stubs automatically.
+
+```python
+# From telemetry.py — graceful init
+try:
+    _init_provider()
+except Exception:
+    logger.warning("OTEL init failed; telemetry disabled (non-fatal)")
+    _STATE.enabled = False
+```
+
+---
+
+## Development Setup (Quick Start)
+
+For local development with Jaeger:
+
+```bash
+# Start Jaeger all-in-one (UI on port 16686)
+docker run -d --name jaeger \
+  -p 16686:16686 \
+  -p 4317:4317 \
+  jaegertracing/all-in-one:latest
+
+# Enable OTEL in .env
+OTEL_ENABLED=true
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+
+# Restart services
+docker compose restart api worker
+```
+
+Then open http://localhost:16686 to view traces.
+
+---
+
+## Troubleshooting
+
+| Symptom | Likely Cause | Fix |
+|---------|-------------|-----|
+| No traces in Jaeger | `OTEL_ENABLED=false` | Set to `true` and restart |
+| Traces missing worker spans | Context not propagated | Check task dispatch headers |
+| High memory usage | Batch export buffer full | Reduce `OTEL_BSP_MAX_QUEUE_SIZE` |
+| Logs missing trace_id | Filter not attached | Check `TraceContextFilter` in logging config |
+| Startup warning about OTEL | Collector unreachable | Start collector or disable OTEL |

@@ -45,19 +45,24 @@ export interface PipelineStepperProps {
   currentStage: string;
   /** True when the run is in FAILED state. */
   failed?: boolean;
+  /** True when the run is in CANCELLED state. */
+  cancelled?: boolean;
   /** Entry source type for source-aware first-step label. */
   sourceType?: "idea" | "markdown" | "url";
+  /** Error message to display below stepper when failed. */
+  errorMessage?: string | null;
 }
 
 // --------------- styles ---------------
 
-type StepStatus = "completed" | "current" | "pending" | "failed";
+type StepStatus = "completed" | "current" | "pending" | "failed" | "cancelled";
 
 const COLORS: Record<StepStatus, { bg: string; border: string; text: string; label: string }> = {
   completed: { bg: "#d4edda", border: "#28a745", text: "#28a745", label: "#155724" },
   current: { bg: "#cce5ff", border: "#007bff", text: "#007bff", label: "#004085" },
   pending: { bg: "#f8f9fa", border: "#dee2e6", text: "#adb5bd", label: "#6c757d" },
   failed: { bg: "#f8d7da", border: "#dc3545", text: "#dc3545", label: "#721c24" },
+  cancelled: { bg: "#fff3cd", border: "#ffc107", text: "#856404", label: "#856404" },
 };
 
 const CONNECTOR_COMPLETED = "#28a745";
@@ -71,7 +76,8 @@ function resolveStepIndex(stage: string): number {
   return PIPELINE_STEPS.findIndex((s) => s.key === key);
 }
 
-function getStepStatus(stepIdx: number, activeIdx: number, isFailed: boolean): StepStatus {
+function getStepStatus(stepIdx: number, activeIdx: number, isFailed: boolean, isCancelled: boolean): StepStatus {
+  if (isCancelled && stepIdx === activeIdx) return "cancelled";
   if (isFailed && stepIdx === activeIdx) return "failed";
   if (stepIdx < activeIdx) return "completed";
   if (stepIdx === activeIdx) return "current";
@@ -83,7 +89,9 @@ function getStepStatus(stepIdx: number, activeIdx: number, isFailed: boolean): S
 export default function PipelineStepper({
   currentStage,
   failed = false,
+  cancelled = false,
   sourceType = "idea",
+  errorMessage,
 }: PipelineStepperProps) {
   const activeIdx = resolveStepIndex(currentStage);
 
@@ -103,7 +111,7 @@ export default function PipelineStepper({
         }}
       >
         {PIPELINE_STEPS.map((step, idx) => {
-          const status = getStepStatus(idx, effectiveIdx, failed);
+          const status = getStepStatus(idx, effectiveIdx, failed, cancelled);
           const colors = COLORS[status];
           const isLast = idx === PIPELINE_STEPS.length - 1;
           const label =
@@ -147,7 +155,7 @@ export default function PipelineStepper({
                     color: colors.text,
                   }}
                 >
-                  {status === "completed" ? "✓" : status === "failed" ? "✕" : idx + 1}
+                  {status === "completed" ? "✓" : status === "failed" ? "✕" : status === "cancelled" ? "—" : idx + 1}
                 </div>
                 <span
                   style={{
@@ -178,6 +186,22 @@ export default function PipelineStepper({
           );
         })}
       </ol>
+      {errorMessage && (failed || cancelled) && (
+        <p
+          style={{
+            marginTop: 8,
+            fontSize: 12,
+            color: failed ? "#dc3545" : "#856404",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            maxWidth: "100%",
+          }}
+          title={errorMessage}
+        >
+          {failed ? "⚠ " : "ⓘ "}{errorMessage}
+        </p>
+      )}
     </nav>
   );
 }

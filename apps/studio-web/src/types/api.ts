@@ -30,6 +30,8 @@ export interface RunDetail {
   status: string;
   restart_from: string | null;
   model_defaults: ModelDefaults | null;
+  error_message?: string | null;
+  finished_at?: string | null;
 }
 
 export interface SceneData {

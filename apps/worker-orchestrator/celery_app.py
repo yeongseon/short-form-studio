@@ -112,13 +112,40 @@ celery_app = Celery(
     ],
 )
 celery_app.conf.task_default_queue = "creator"
+
+# Queue definitions: separate queues per pipeline stage for independent scaling.
+# Run workers with: celery -A celery_app worker -Q creator,script,image,audio,render
+# Or scale specific stages: celery -A celery_app worker -Q image --concurrency=2
 celery_app.conf.task_queues = (
-    Queue(
-        "creator",
-        Exchange("creator", type="direct"),
-        routing_key="creator",
-    ),
+    Queue("creator", Exchange("creator", type="direct"), routing_key="creator"),
+    Queue("script", Exchange("creator", type="direct"), routing_key="script"),
+    Queue("image", Exchange("creator", type="direct"), routing_key="image"),
+    Queue("audio", Exchange("creator", type="direct"), routing_key="audio"),
+    Queue("render", Exchange("creator", type="direct"), routing_key="render"),
 )
+
+# Route tasks to stage-specific queues.
+# Override with CELERY_TASK_ROUTES env (JSON) for custom routing.
+_default_task_routes = {
+    "tasks.generate_script.*": {"queue": "script"},
+    "tasks.generate_visual_plan.*": {"queue": "script"},
+    "tasks.generate_scene_image.*": {"queue": "image"},
+    "tasks.generate_audio.*": {"queue": "audio"},
+    "tasks.generate_paragraph_audio.*": {"queue": "audio"},
+    "tasks.generate_subtitles.*": {"queue": "audio"},
+    "tasks.generate_paragraph_subtitles.*": {"queue": "audio"},
+    "tasks.render_video.*": {"queue": "render"},
+}
+_custom_routes_raw = os.getenv("CELERY_TASK_ROUTES")
+if _custom_routes_raw:
+    try:
+        _custom_routes = json.loads(_custom_routes_raw)
+        _default_task_routes.update(_custom_routes)
+    except (json.JSONDecodeError, TypeError):
+        logging.getLogger(__name__).warning(
+            "Invalid CELERY_TASK_ROUTES JSON; using defaults"
+        )
+celery_app.conf.task_routes = _default_task_routes
 # DLQ Configuration: Controls message acknowledgment and failure handling
 # - task_acks_late=True ensures at-least-once delivery by acknowledging AFTER execution
 # - task_reject_on_worker_lost=True prevents message loss if worker dies
