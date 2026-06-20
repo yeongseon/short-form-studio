@@ -24,8 +24,10 @@ def mock_admin_service():
 
 
 @pytest.fixture
-def admin_overrides(mock_admin_service):
+def admin_overrides(mock_admin_service, monkeypatch):
     """Setup dependency overrides for admin endpoints."""
+    # Middleware-level auth requires ADMIN_API_KEY to match the header
+    monkeypatch.setenv("ADMIN_API_KEY", "test-admin-key")
 
     async def _require_admin(x_admin_key: str | None = None) -> str:
         return x_admin_key or "test-admin-key"
@@ -40,7 +42,6 @@ def admin_overrides(mock_admin_service):
     yield
     app.dependency_overrides.pop(require_admin, None)
     app.dependency_overrides.pop(require_confirmation_and_rate_limit, None)
-
 
 def test_admin_unstick_run_includes_audit_id(client, mock_admin_service, admin_overrides, caplog):
     """Test that unstick_run response includes audit_id."""

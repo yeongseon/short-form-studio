@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import contextvars
 import hashlib
+import hmac
 import logging
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NamedTuple
 
@@ -176,6 +178,18 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         if request.url.path.startswith(_ADMIN_PATH_PREFIX):
+            admin_key = request.headers.get("x-admin-key")
+            expected_admin_key = os.environ.get("ADMIN_API_KEY", "")
+            if not admin_key or not expected_admin_key:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "Admin access denied"},
+                )
+            if not hmac.compare_digest(admin_key, expected_admin_key):
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "Admin access denied"},
+                )
             return await call_next(request)
 
         # Docs paths go through normal auth when API_KEY is set

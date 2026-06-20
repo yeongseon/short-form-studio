@@ -92,6 +92,22 @@ jobs:
         run: cp .env.example .env
       - name: Validate docker-compose config
         run: docker compose config --quiet
+      - name: Verify API port not exposed on 0.0.0.0
+        run: |
+          # Ensure API, Postgres, and Redis are bound to 127.0.0.1 only
+          if docker compose config | grep -E 'published:.*8000' | grep -v '127.0.0.1'; then
+            echo "ERROR: API port 8000 must be bound to 127.0.0.1, not 0.0.0.0"
+            exit 1
+          fi
+          if docker compose config | grep -E 'published:.*5432' | grep -v '127.0.0.1'; then
+            echo "ERROR: Postgres port 5432 must be bound to 127.0.0.1"
+            exit 1
+          fi
+          if docker compose config | grep -E 'published:.*6379' | grep -v '127.0.0.1'; then
+            echo "ERROR: Redis port 6379 must be bound to 127.0.0.1"
+            exit 1
+          fi
+          echo "Port exposure check passed: all backend services on 127.0.0.1"
       - name: Build API runtime image
         run: docker build --target runtime -f apps/api/Dockerfile .
       - name: Build Studio Web runtime image

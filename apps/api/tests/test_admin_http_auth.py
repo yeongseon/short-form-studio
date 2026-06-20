@@ -61,3 +61,55 @@ def test_global_api_key_alone_does_not_grant_admin_access(monkeypatch) -> None:
 
     assert response.status_code == 401
     assert response.json()["detail"] == "Admin access denied"
+
+
+def test_admin_endpoint_returns_403_with_wrong_admin_key(monkeypatch) -> None:
+    """Middleware rejects invalid admin key with 403 before reaching router."""
+    monkeypatch.setenv("ADMIN_API_KEY", "admin-secret")
+    monkeypatch.setattr(admin.admin_service, "get_system_health", _mock_get_system_health)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/admin/health",
+            headers={"x-admin-key": "wrong-key"},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "Admin access denied"
+
+
+def test_admin_endpoint_returns_401_when_admin_key_not_configured(monkeypatch) -> None:
+    """Middleware rejects when ADMIN_API_KEY env var is empty/unset."""
+    monkeypatch.setenv("ADMIN_API_KEY", "")
+    monkeypatch.setattr(admin.admin_service, "get_system_health", _mock_get_system_health)
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/admin/health",
+            headers={"x-admin-key": "any-key"},
+        )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Admin access denied"
+
+
+def test_admin_middleware_blocks_before_router_dependency(monkeypatch) -> None:
+    """Verify middleware auth runs even for non-existent admin sub-paths.
+
+    This proves defense-in-depth: a new admin sub-path that somehow bypasses
+    the router dependency would still be caught by middleware.
+    """
+    monkeypatch.setenv("ADMIN_API_KEY", "admin-secret")
+
+    with TestClient(app) as client:
+        # No x-admin-key header → 401 from middleware
+        response = client.get("/api/admin/nonexistent-endpoint")
+    assert response.status_code == 401
+
+    with TestClient(app) as client:
+        # Wrong key → 403 from middleware
+        response = client.get(
+            "/api/admin/nonexistent-endpoint",
+            headers={"x-admin-key": "bad"},
+        )
+    assert response.status_code == 403
