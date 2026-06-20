@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING
 
 from creator_domain.models import TRIGGER_POLICY
 from creator_service.run_service import run_service
@@ -12,64 +12,23 @@ from creator_service.task_dispatch_service import (
     dispatch_generate_visual_plan,
 )
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 if TYPE_CHECKING:
     from creator_domain.models.pipeline_run import PipelineRun
 
 
-from shorts_api.routes.creator_runs_core import GenerateVisualPlanRequest
 from shorts_api.routes.creator_runs_utils import (
     _has_active_tasks_for_run,
     validate_model_key,
 )
 from shorts_api.auth import CurrentUser, require_run_access
-
-router = APIRouter(tags=["runs"])
-
-_VALID_SAMPLERS = frozenset(
-    {
-        "Euler a",
-        "Euler",
-        "LMS",
-        "Heun",
-        "DPM2",
-        "DPM2 a",
-        "DPM++ 2S a",
-        "DPM++ 2M",
-        "DPM++ SDE",
-        "DPM++ 2M Karras",
-        "DPM++ SDE Karras",
-        "DPM++ 2M SDE Karras",
-    }
+from shorts_api.schemas.creator_runs import GenerateVisualPlanRequest
+from shorts_api.schemas.creator_visuals import (
+    GenerateVisualAssetsRequest,
+    ImageTuningParams,
 )
 
-
-class ImageTuningParams(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    steps: Annotated[int, Field(ge=10, le=50, description="Denoising steps")] = 25
-    cfg_scale: Annotated[int | float, Field(ge=1, le=20, description="CFG scale")] = 7
-    sampler_name: Annotated[
-        str,
-        Field(max_length=40, description="Sampler algorithm"),
-    ] = "DPM++ 2M Karras"
-    negative_prompt: Annotated[
-        str,
-        Field(max_length=1000, description="Negative prompt"),
-    ] = ""
-
-    @field_validator("sampler_name")
-    @classmethod
-    def validate_sampler(cls, v: str) -> str:
-        if v not in _VALID_SAMPLERS:
-            raise ValueError(f"Invalid sampler '{v}'. Must be one of: {sorted(_VALID_SAMPLERS)}")
-        return v
-
-
-class GenerateVisualAssetsRequest(BaseModel):
-    model_key: str = "sd15"
-    image_params: ImageTuningParams | None = None
+router = APIRouter(tags=["runs"])
 
 
 @router.post("/runs/{run_id}/generate-visual-plan", status_code=202)

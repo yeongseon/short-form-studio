@@ -12,11 +12,17 @@ from creator_service.markdown_parser import parse_markdown
 from creator_service.run_service import ConflictError, run_service
 from creator_service.script_service import script_service
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import ValidationError
 
 from shorts_api.auth import CurrentUser, require_project_access, require_run_access
 from shorts_api.routes.creator_runs_utils import validate_model_defaults
-
+from shorts_api.schemas.creator_script import (
+    ImportJsonRequest,
+    ImportMarkdownRequest,
+    UpdateJsonScriptRequest,
+    UpdateMarkdownRequest,
+    UpdateStructuredRequest,
+)
 if TYPE_CHECKING:
     from creator_domain.models.pipeline_run import PipelineRun
     from creator_domain.models.project import Project
@@ -32,11 +38,6 @@ _SCRIPT_EDIT_STAGES = frozenset(
 router = APIRouter(prefix="/projects/{project_id}/script", tags=["script"])
 run_script_router = APIRouter(prefix="/runs/{run_id}/script", tags=["script"])
 
-
-class ImportMarkdownRequest(BaseModel):
-    markdown: str = Field(..., max_length=500_000)
-    model_defaults: dict[str, str] | None = None
-    style_preset: str = Field(default="default", max_length=200)
 
 
 @router.post("/import-markdown", status_code=201)
@@ -85,11 +86,6 @@ async def import_markdown(
         "draft": draft.model_dump(mode="json"),
     }
 
-
-class ImportJsonRequest(BaseModel):
-    json_script: str = Field(..., max_length=500_000)
-    model_defaults: dict[str, str] | None = None
-    style_preset: str = Field(default="default", max_length=200)
 
 
 @router.post("/import-json", status_code=201)
@@ -148,19 +144,6 @@ async def import_json(
         "run_id": run.id,
         "draft": draft.model_dump(mode="json"),
     }
-
-
-class UpdateMarkdownRequest(BaseModel):
-    markdown: str = Field(..., max_length=500_000)
-
-
-class UpdateStructuredRequest(BaseModel):
-    sections: list[dict[str, object]] = Field(..., max_length=200)
-
-
-class UpdateJsonScriptRequest(BaseModel):
-    json_script: str = Field(..., max_length=500_000)
-
 
 @run_script_router.get("/markdown")
 async def get_script_markdown(

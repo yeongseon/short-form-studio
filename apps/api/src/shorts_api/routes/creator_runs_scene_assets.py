@@ -21,25 +21,28 @@ from creator_service.task_dispatch_service import (
 from creator_service.task_tracking_service import task_tracking_service
 from creator_service.visual_asset_service import visual_asset_service
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from creator_domain.models.pipeline_run import PipelineRun
 
 
-from shorts_api.routes.creator_runs_core import (
-    GenerateAudioRequest,
-    GenerateSubtitlesRequest,
-    RenderRequest,
-)
 from shorts_api.routes.creator_runs_utils import (
     _has_active_tasks_for_run,
     validate_model_key,
     validate_path_id,
     validate_render_profile,
 )
-from shorts_api.routes.creator_runs_visuals import ImageTuningParams
 from shorts_api.auth import CurrentUser, require_run_access
+from shorts_api.schemas.creator_runs import (
+    GenerateAudioRequest,
+    GenerateSubtitlesRequest,
+    RenderRequest,
+)
+from shorts_api.schemas.creator_visuals import (
+    GenerateSceneImageRequest,
+    ImageTuningParams,
+    RegenerateSceneImageRequest,
+)
 
 router = APIRouter(tags=["runs"])
 
@@ -66,16 +69,6 @@ async def _enforce_run_quota(run_id: int, operation_type: str, workspace_id: int
         raise HTTPException(status_code=429, detail=reason)
     return int(project_workspace_id)
 
-
-class RegenerateSceneImageRequest(BaseModel):
-    model_key: str = "sd15"
-    prompt_override: str | None = Field(default=None, max_length=2000)
-    image_params: ImageTuningParams | None = None
-
-
-class GenerateSceneImageRequest(BaseModel):
-    model_key: str = "sd15"
-    image_params: ImageTuningParams | None = None
 
 
 @router.post(

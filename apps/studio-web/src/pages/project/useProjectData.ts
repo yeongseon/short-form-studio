@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { apiFetch, API_BASE } from "../../api/client";
+import { apiFetch, apiJson, apiVoid, API_BASE } from "../../api/client";
 import {
   FINAL_REVIEW_STAGES,
   type ModelDefaults,
@@ -33,18 +33,12 @@ export function useProjectData(projectId: number): UseProjectDataResult {
     setLoading(true);
     setError(null);
     try {
-      const projRes = await apiFetch(`${API_BASE}/projects/${projectId}`);
-      if (!projRes.ok) {
-        if (projRes.status === 404) throw new Error("Project not found");
-        const body = await projRes.json().catch(() => null);
-        throw new Error(body?.detail ?? `Failed to load project (${projRes.status})`);
-      }
-      const projData: ProjectDetail = await projRes.json();
+      const projData = await apiJson<ProjectDetail>(`${API_BASE}/projects/${projectId}`);
       setProject(projData);
 
-      const runsRes = await apiFetch(`${API_BASE}/projects/${projectId}/runs`);
-      if (runsRes.ok) {
-        const runsData: { runs: RunDetail[]; total: number } = await runsRes.json();
+      const res = await apiFetch(`${API_BASE}/projects/${projectId}/runs`);
+      if (res.ok) {
+        const runsData: { runs: RunDetail[]; total: number } = await res.json();
         setRun(runsData.runs.length > 0 ? runsData.runs[0] : null);
       } else {
         setRun(null);
@@ -64,11 +58,8 @@ export function useProjectData(projectId: number): UseProjectDataResult {
 
   const refreshRun = useCallback(async (runId: number) => {
     try {
-      const res = await apiFetch(`${API_BASE}/runs/${runId}`);
-      if (res.ok) {
-        const data: RunDetail = await res.json();
-        setRun(data);
-      }
+      const data = await apiJson<RunDetail>(`${API_BASE}/runs/${runId}`);
+      setRun(data);
     } catch {
       return;
     }
@@ -129,17 +120,11 @@ export function useProjectData(projectId: number): UseProjectDataResult {
       if (run) {
         void (async () => {
           try {
-            const response = await apiFetch(`${API_BASE}/runs/${run.id}/model-defaults`, {
+            await apiVoid(`${API_BASE}/runs/${run.id}/model-defaults`, {
               method: "PATCH",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ [field]: modelKey }),
             });
-
-            if (!response.ok) {
-              const body = await response.json().catch(() => null);
-              const detail = body?.detail ?? `Failed to persist model-default change (${response.status})`;
-              throw new Error(detail);
-            }
           } catch (err) {
             setModelSelection((prev) => {
               if (previousValue === undefined) {

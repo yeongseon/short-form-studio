@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 from creator_domain.models import TRIGGER_POLICY
 from creator_service.project_service import project_service
@@ -14,16 +14,6 @@ from creator_service.task_dispatch_service import (
     dispatch_generate_script,
 )
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
-
-import os
-
-# --- Env-configurable model defaults ---
-# Override these in .env to change default models without code changes.
-_SCRIPT_DEFAULT_MODEL = os.getenv("SCRIPT_DEFAULT_MODEL", "qwen3-4b")
-_TTS_DEFAULT_MODEL = os.getenv("TTS_DEFAULT_MODEL", "edge-tts")
-_SUBTITLE_DEFAULT_MODEL = os.getenv("SUBTITLE_DEFAULT_MODEL", "whisper-small")
-_RENDER_DEFAULT_PROFILE = os.getenv("RENDER_DEFAULT_PROFILE", "shorts_default")
 
 if TYPE_CHECKING:
     from creator_domain.models.pipeline_run import PipelineRun
@@ -36,81 +26,22 @@ from shorts_api.routes.creator_runs_utils import (
     validate_model_defaults,
     validate_model_key,
 )
+from shorts_api.schemas.creator_runs import (  # noqa: E402
+    ApproveFinalRequest,
+    ApproveScriptRequest,
+    ApproveVisualAssetsRequest,
+    ApproveVisualPlanRequest,
+    CreateRunRequest,
+    GenerateAudioRequest,
+    GenerateScriptRequest,
+    GenerateSubtitlesRequest,
+    GenerateVisualPlanRequest,
+    RenderRequest,
+    RestartRunRequest,
+    UpdateModelDefaultsRequest,
+)
 
 router = APIRouter(tags=["runs"])
-
-
-class CreateRunRequest(BaseModel):
-    model_defaults: dict[str, str] | None = None
-    style_preset: str = Field(default="default", max_length=256)
-    metadata: dict[str, object] | None = None
-
-
-class RestartRunRequest(BaseModel):
-    stage: Literal[
-        "IDEA_READY",
-        "SCRIPT_GENERATING",
-        "SCRIPT_REVIEW",
-        "VISUAL_PLAN_SETUP",
-        "VISUAL_PLAN_GENERATING",
-        "VISUAL_PLAN_REVIEW",
-        "VISUAL_ASSET_GENERATING",
-        "VISUAL_ASSET_REVIEW",
-        "AUDIO_GENERATING",
-        "SUBTITLE_GENERATING",
-        "RENDER_GENERATING",
-        "FINAL_REVIEW",
-        "PUBLISHED",
-        "FAILED",
-    ]
-
-
-class ApproveScriptRequest(BaseModel):
-    reviewer: str = Field(default="agent", max_length=256)
-    notes: str | None = Field(default=None, max_length=1000)
-
-
-class ApproveVisualPlanRequest(BaseModel):
-    reviewer: str = Field(default="agent", max_length=256)
-    notes: str | None = Field(default=None, max_length=1000)
-
-
-class ApproveVisualAssetsRequest(BaseModel):
-    reviewer: str = Field(default="agent", max_length=256)
-    notes: str | None = Field(default=None, max_length=1000)
-
-
-class GenerateScriptRequest(BaseModel):
-    model_key: str = Field(default=_SCRIPT_DEFAULT_MODEL, max_length=256)
-    instructions: str | None = Field(default=None, max_length=32_000)
-    niche: Literal["facts", "horror", "motivation", "psychology", "science", "food", "tech", "family_story", "ssul_dc"] | None = None
-    language: Literal["ko", "en", "ja", "zh", "es", "pt", "fr", "de"] = "ko"
-
-class GenerateVisualPlanRequest(BaseModel):
-    model_key: str = Field(default=_SCRIPT_DEFAULT_MODEL, max_length=256)
-    style_preset: str | None = Field(default=None, max_length=200)
-    niche: Literal["facts", "horror", "motivation", "psychology", "science", "food", "tech", "family_story", "ssul_dc"] | None = None
-
-class GenerateAudioRequest(BaseModel):
-    tts_model: str = Field(default=_TTS_DEFAULT_MODEL, max_length=256)
-    voice: str = Field(default="default", max_length=256)
-
-
-class GenerateSubtitlesRequest(BaseModel):
-    subtitle_model: str = Field(default=_SUBTITLE_DEFAULT_MODEL, max_length=256)
-    subtitle_format: Literal["srt", "vtt"] = "srt"
-
-
-class RenderRequest(BaseModel):
-    render_profile: str = Field(default=_RENDER_DEFAULT_PROFILE, max_length=256)
-
-
-class UpdateModelDefaultsRequest(BaseModel):
-    script_model: str | None = Field(default=None, max_length=256)
-    image_model: str | None = Field(default=None, max_length=256)
-    tts_model: str | None = Field(default=None, max_length=256)
-    subtitle_model: str | None = Field(default=None, max_length=256)
-    render_profile: str | None = Field(default=None, max_length=256)
 
 
 @router.post("/projects/{project_id}/runs", status_code=201)
@@ -274,11 +205,6 @@ async def approve_visual_assets(
         raise HTTPException(status_code=400, detail=detail) from exc
 
     return updated_run.model_dump(mode="json")
-
-
-class ApproveFinalRequest(BaseModel):
-    reviewer: str = Field(default="agent", max_length=256)
-    notes: str | None = Field(default=None, max_length=1000)
 
 
 @router.post("/runs/{run_id}/approve-final")

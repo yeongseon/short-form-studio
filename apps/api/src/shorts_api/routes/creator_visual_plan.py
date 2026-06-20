@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, Literal
+from typing import TYPE_CHECKING
 
 from creator_domain.models import RunStage
 from creator_domain.models.visual_plan import VisualScene
 from creator_service.visual_plan_service import VersionConflictError, visual_plan_service
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import ValidationError
 
 from shorts_api.auth import CurrentUser, require_run_access
 from shorts_api.routes.creator_runs_utils import validate_path_id
+from shorts_api.schemas.creator_visuals import PatchSceneRequest, ReplaceVisualPlanRequest
 
 if TYPE_CHECKING:
     from creator_domain.models.pipeline_run import PipelineRun
@@ -25,10 +26,6 @@ _VISUAL_PLAN_EDIT_STAGES = frozenset(
         RunStage.VISUAL_PLAN_GENERATING.value,
     }
 )
-
-
-class ReplaceVisualPlanRequest(BaseModel):
-    scenes: list[dict[str, object]] = Field(min_length=1, max_length=200)
 
 
 @router.get("")
@@ -85,19 +82,6 @@ async def replace_visual_plan(
         "scenes": [s.model_dump(mode="json") for s in plan.scenes],
     }
 
-
-class PatchSceneRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    prompt: str | None = Field(default=None, max_length=2000)
-    prompt_edited: bool | None = None
-    prompt_source: Literal["auto_generated", "user_edited", "model_suggested"] | None = None
-    style_tags: list[Annotated[str, Field(max_length=256)]] | None = Field(
-        default=None, max_length=32
-    )
-    mood: str | None = Field(default=None, max_length=256)
-    composition: str | None = Field(default=None, max_length=256)
-    expected_version: int | None = None
 
 
 @router.patch("/scenes/{scene_id}")

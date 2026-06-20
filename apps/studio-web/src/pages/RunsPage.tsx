@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { apiFetch, API_BASE } from "../api/client";
+import { apiJson, apiVoid, API_BASE } from "../api/client";
 import ConfirmDialog from "../components/creator/ConfirmDialog";
 
 interface ProjectSummary {
@@ -74,12 +74,7 @@ export default function RunsPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await apiFetch(`${API_BASE}/projects?limit=${PAGE_SIZE}&offset=${pageOffset}`);
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.detail ?? `Failed to load projects (${res.status})`);
-      }
-      const data: ProjectListResponse = await res.json();
+      const data = await apiJson<ProjectListResponse>(`${API_BASE}/projects?limit=${PAGE_SIZE}&offset=${pageOffset}`);
       setProjects(data.projects);
       setTotal(data.total);
     } catch (err) {
@@ -93,11 +88,7 @@ export default function RunsPage() {
   const handleDeleteProject = useCallback(async (projectId: number) => {
     setDeletingId(projectId);
     try {
-      const res = await apiFetch(`${API_BASE}/projects/${projectId}`, { method: "DELETE" });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.detail ?? `Delete failed (${res.status})`);
-      }
+      await apiVoid(`${API_BASE}/projects/${projectId}`, { method: "DELETE" });
       fetchProjects(offset);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Delete failed");

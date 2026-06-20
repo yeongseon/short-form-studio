@@ -12,7 +12,6 @@ from creator_service.usage_service import check_workspace_quota
 from creator_service.visual_asset_service import visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
 
 if TYPE_CHECKING:
     from creator_domain.models.pipeline_run import PipelineRun
@@ -30,6 +29,12 @@ from shorts_api.routes.creator_runs_utils import (
     validate_path_id,
 )
 from shorts_api.auth import CurrentUser, require_run_access
+from shorts_api.schemas.creator_storyboard import (
+    BulkParagraphAudioRequest,
+    BulkParagraphSubtitlesRequest,
+    ParagraphAudioRequest,
+    ParagraphSubtitlesRequest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,25 +52,6 @@ router = APIRouter(tags=["runs"])
 
 
 
-
-class ParagraphAudioRequest(BaseModel):
-    tts_model: str = Field(default="qwen3-tts", max_length=256)
-    voice: str = Field(default="default", max_length=256)
-
-
-class ParagraphSubtitlesRequest(BaseModel):
-    subtitle_model: str = Field(default="whisper-small", max_length=256)
-    subtitle_format: Literal["srt", "vtt"] = "srt"
-
-
-class BulkParagraphAudioRequest(BaseModel):
-    tts_model: str = Field(default="qwen3-tts", max_length=256)
-    voice: str = Field(default="default", max_length=256)
-
-
-class BulkParagraphSubtitlesRequest(BaseModel):
-    subtitle_model: str = Field(default="whisper-small", max_length=256)
-    subtitle_format: Literal["srt", "vtt"] = "srt"
 
 
 @router.get("/runs/{run_id}/storyboard")
