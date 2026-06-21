@@ -1,0 +1,84 @@
+# docker-compose.scaled-workers.yml
+#
+# Per-queue worker scaling override.
+# Use with: docker compose -f docker-compose.yml -f docker-compose.scaled-workers.yml up -d
+#
+# This replaces the single "worker" service with stage-specific workers,
+# each consuming only their dedicated queue. Scale independently:
+#   docker compose -f docker-compose.yml -f docker-compose.scaled-workers.yml up -d --scale worker-image=2
+#
+# For local dev, the base docker-compose.yml single worker is sufficient
+# (it consumes all queues by default via celery_app.conf.task_default_queue).
+
+services:
+  # Disable the default single-worker from base compose
+  worker:
+    profiles: ["disabled"]
+
+  worker-script:
+    build:
+      context: .
+      dockerfile: apps/worker-orchestrator/Dockerfile
+      target: runtime
+    command: ["celery", "-A", "celery_app.celery_app", "worker", "--loglevel=info", "--pool=solo", "--concurrency=1", "-Q", "script,creator"]
+    volumes:
+      - ./data/artifacts:/app/data/artifacts
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: /app/src:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker-image:
+    build:
+      context: .
+      dockerfile: apps/worker-orchestrator/Dockerfile
+      target: runtime
+    command: ["celery", "-A", "celery_app.celery_app", "worker", "--loglevel=info", "--pool=solo", "--concurrency=2", "-Q", "image"]
+    volumes:
+      - ./data/artifacts:/app/data/artifacts
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: /app/src:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker-audio:
+    build:
+      context: .
+      dockerfile: apps/worker-orchestrator/Dockerfile
+      target: runtime
+    command: ["celery", "-A", "celery_app.celery_app", "worker", "--loglevel=info", "--pool=solo", "--concurrency=1", "-Q", "audio"]
+    volumes:
+      - ./data/artifacts:/app/data/artifacts
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: /app/src:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker-render:
+    build:
+      context: .
+      dockerfile: apps/worker-orchestrator/Dockerfile
+      target: runtime
+    command: ["celery", "-A", "celery_app.celery_app", "worker", "--loglevel=info", "--pool=solo", "--concurrency=1", "-Q", "render"]
+    volumes:
+      - ./data/artifacts:/app/data/artifacts
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: /app/src:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
