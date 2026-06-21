@@ -34,6 +34,9 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
     ports:
+      # SECURITY: Bound to 127.0.0.1 — NEVER change to 0.0.0.0 in production.
+      # The API has no TLS and relies on a reverse proxy for security.
+      # See docs/SECURITY.md "Network Exposure Policy" for details.
       - "127.0.0.1:8000:8000"
     volumes:
       - ./data/artifacts:/app/data/artifacts
