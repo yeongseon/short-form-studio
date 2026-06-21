@@ -22,7 +22,6 @@ from collections import defaultdict
 from typing import Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from pydantic import BaseModel, Field
 from redis import Redis
 from redis.exceptions import RedisError
 
@@ -176,52 +175,14 @@ router = APIRouter(
     dependencies=[Depends(require_admin)],
 )
 
-
-class HealthResponse(BaseModel):
-    status: str
-    db: dict[str, Any]
-    redis: dict[str, Any]
-    uptime_seconds: int
-
-
-class RunInfo(BaseModel):
-    id: int
-    project_id: int
-    current_stage: str | None = None
-    status: str | None = None
-    updated_at: Any | None = None
-
-
-class QueueDepthResponse(BaseModel):
-    creator: int
-
-
-class StorageStatsResponse(BaseModel):
-    artifact_root: str
-    file_count: int
-    total_size_bytes: int
-    error: str | None = None
-
-
-class UnstickRunResponse(BaseModel):
-    ok: bool
-    run_id: str
-    previous_stage: str | None = None
-    current_stage: str | None = None
-    status: str | None = None
-    audit_id: str | None = None
-    error: str | None = None
-
-
-class CacheClearResponse(BaseModel):
-    ok: bool
-    deleted_keys: int
-    key_pattern: str
-    dry_run: bool
-    matched_keys: list[str] = Field(default_factory=list)
-    audit_id: str | None = None
-    error: str | None = None
-
+from shorts_api.schemas.admin import (
+    CacheClearResponse,
+    HealthResponse,
+    QueueDepthResponse,
+    RunInfo,
+    StorageStatsResponse,
+    UnstickRunResponse,
+)
 
 @router.get("/health", response_model=HealthResponse)
 async def admin_health() -> dict[str, Any]:
