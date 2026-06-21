@@ -320,6 +320,35 @@ See [`docs/LIGHTWEIGHT.md`](docs/LIGHTWEIGHT.md) for setup and tradeoffs.
 | STT (Whisper) | 9000 | HTTP |
 | Flower (monitoring) | 5555 | HTTP |
 
+## Production Deployment
+
+> **The Quick Start section above is for local development only.**
+> Production deployments require additional security and infrastructure steps.
+
+### Required for Production
+
+1. **Reverse proxy** (nginx/Caddy/Traefik) with TLS termination in front of the API
+2. **`ENVIRONMENT=production`** — enables fail-fast startup validation
+3. **Strong `ADMIN_API_KEY`** — minimum 16 characters, enforced at startup
+4. **Port binding** — API must stay on `127.0.0.1` (never `0.0.0.0`)
+5. **Per-user auth** — for multi-user deployments, add OAuth2/OIDC (see Security docs)
+
+### Scaling
+
+- Use `docker-compose.scaled-workers.yml` for per-queue worker scaling
+- Configure `DB_POOL_MIN_SIZE`/`DB_POOL_MAX_SIZE` for connection pool tuning
+- Enable OpenTelemetry (`OTEL_ENABLED=true`) for observability
+
+### Full Guides
+
+| Guide | Description |
+|-------|-------------|
+| [Deployment Checklist](docs/CUTOVER.md) | Step-by-step production cutover |
+| [Security Model](docs/SECURITY.md) | Auth, network policy, trust boundaries |
+| [Observability](docs/OBSERVABILITY.md) | Tracing, metrics, structured logging |
+| [Timeout/Retry Policy](docs/TIMEOUT_RETRY_POLICY.md) | Task timeouts and retry config |
+
+
 ## Documentation
 
 - [Usage Guide](docs/USAGE.md) -- Detailed feature walkthrough
