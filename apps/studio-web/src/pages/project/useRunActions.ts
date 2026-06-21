@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 
-import { apiFetch } from "../../api/client";
+import { apiJson, apiVoid } from "../../api/client";
 import { API_BASE, type ModelDefaults, type ProjectDetail, type RunDetail } from "./types";
 import { useToast } from "../../contexts/ToastContext";
 
@@ -45,16 +45,11 @@ export function useRunActions({
     if (!trimmed || trimmed === project?.title) return;
     setSavingTitle(true);
     try {
-      const res = await apiFetch(`${API_BASE}/projects/${numericProjectId}`, {
+      const data = await apiJson<{ title: string }>(`${API_BASE}/projects/${numericProjectId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: trimmed }),
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.detail ?? `Rename failed (${res.status})`);
-      }
-      const data = await res.json();
       setProject((prev) => (prev ? { ...prev, title: data.title } : prev));
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Rename failed", "error");
@@ -73,13 +68,7 @@ export function useRunActions({
     if (!run) return;
     setGoingBack(true);
     try {
-      const res = await apiFetch(`${API_BASE}/runs/${run.id}/go-back`, {
-        method: "POST",
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.detail ?? `Go back failed (${res.status})`);
-      }
+      await apiVoid(`${API_BASE}/runs/${run.id}/go-back`, { method: "POST" });
       showToast("Navigated back");
       await refreshRun(run.id);
     } catch (err) {
@@ -93,15 +82,11 @@ export function useRunActions({
     if (!run) return;
     setApproving(true);
     try {
-      const res = await apiFetch(`${API_BASE}/runs/${run.id}/approve-script`, {
+      await apiVoid(`${API_BASE}/runs/${run.id}/approve-script`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reviewer: "agent" }),
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.detail ?? `Approve failed (${res.status})`);
-      }
       showToast("Script approved", "success");
       await refreshRun(run.id);
     } catch (err) {
@@ -115,17 +100,13 @@ export function useRunActions({
     if (!run) return;
     setGenerating(true);
     try {
-      const res = await apiFetch(`${API_BASE}/runs/${run.id}/generate-script`, {
+      await apiVoid(`${API_BASE}/runs/${run.id}/generate-script`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model_key: modelSelection.script_model || "qwen3-4b",
         }),
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.detail ?? `Generate failed (${res.status})`);
-      }
       showToast("Script generation started");
       setTimeout(() => refreshRun(run.id), 2000);
     } catch (err) {
@@ -139,27 +120,19 @@ export function useRunActions({
     if (!run) return;
     setRestarting(true);
     try {
-      const restartRes = await apiFetch(`${API_BASE}/runs/${run.id}/restart`, {
+      await apiVoid(`${API_BASE}/runs/${run.id}/restart`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ stage: "SCRIPT_GENERATING" }),
       });
-      if (!restartRes.ok) {
-        const body = await restartRes.json().catch(() => null);
-        throw new Error(body?.detail ?? `Restart failed (${restartRes.status})`);
-      }
       // Dispatch script generation task after stage reset
-      const genRes = await apiFetch(`${API_BASE}/runs/${run.id}/generate-script`, {
+      await apiVoid(`${API_BASE}/runs/${run.id}/generate-script`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model_key: modelSelection.script_model || "qwen3-4b",
         }),
       });
-      if (!genRes.ok) {
-        const body = await genRes.json().catch(() => null);
-        throw new Error(body?.detail ?? `Generate failed (${genRes.status})`);
-      }
       showToast("Restarting script generation\u2026");
       setTimeout(() => refreshRun(run.id), 2000);
     } catch (err) {
@@ -173,15 +146,11 @@ export function useRunActions({
     if (!run) return;
     setApproving(true);
     try {
-      const res = await apiFetch(`${API_BASE}/runs/${run.id}/approve-visual-plan`, {
+      await apiVoid(`${API_BASE}/runs/${run.id}/approve-visual-plan`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reviewer: "agent" }),
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.detail ?? `Approve failed (${res.status})`);
-      }
       showToast("Visual plan approved", "success");
       await refreshRun(run.id);
     } catch (err) {
@@ -195,17 +164,13 @@ export function useRunActions({
     if (!run) return;
     setGenerating(true);
     try {
-      const res = await apiFetch(`${API_BASE}/runs/${run.id}/generate-visual-plan`, {
+      await apiVoid(`${API_BASE}/runs/${run.id}/generate-visual-plan`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model_key: modelSelection.script_model || "qwen3-4b",
         }),
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.detail ?? `Generate failed (${res.status})`);
-      }
       showToast("Visual plan generation started");
       setTimeout(() => refreshRun(run.id), 2000);
     } catch (err) {
@@ -219,27 +184,19 @@ export function useRunActions({
     if (!run) return;
     setRestarting(true);
     try {
-      const restartRes = await apiFetch(`${API_BASE}/runs/${run.id}/restart`, {
+      await apiVoid(`${API_BASE}/runs/${run.id}/restart`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ stage: "VISUAL_PLAN_GENERATING" }),
       });
-      if (!restartRes.ok) {
-        const body = await restartRes.json().catch(() => null);
-        throw new Error(body?.detail ?? `Restart failed (${restartRes.status})`);
-      }
       // Dispatch visual plan generation task after stage reset
-      const genRes = await apiFetch(`${API_BASE}/runs/${run.id}/generate-visual-plan`, {
+      await apiVoid(`${API_BASE}/runs/${run.id}/generate-visual-plan`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model_key: modelSelection.script_model || "qwen3-4b",
         }),
       });
-      if (!genRes.ok) {
-        const body = await genRes.json().catch(() => null);
-        throw new Error(body?.detail ?? `Generate failed (${genRes.status})`);
-      }
       showToast("Restarting visual plan generation\u2026");
       setTimeout(() => refreshRun(run.id), 2000);
     } catch (err) {
@@ -253,17 +210,13 @@ export function useRunActions({
     if (!run) return;
     setGenerating(true);
     try {
-      const res = await apiFetch(`${API_BASE}/runs/${run.id}/render`, {
+      await apiVoid(`${API_BASE}/runs/${run.id}/render`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           render_profile: modelSelection.render_profile || "shorts_default",
         }),
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.detail ?? `Render failed (${res.status})`);
-      }
       showToast("Render started");
       await refreshRun(run.id);
     } catch (err) {
@@ -277,15 +230,11 @@ export function useRunActions({
     if (!run) return;
     setApproving(true);
     try {
-      const res = await apiFetch(`${API_BASE}/runs/${run.id}/approve-final`, {
+      await apiVoid(`${API_BASE}/runs/${run.id}/approve-final`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reviewer: "agent" }),
       });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.detail ?? `Publish failed (${res.status})`);
-      }
       showToast("Published", "success");
       await refreshRun(run.id);
     } catch (err) {
@@ -299,13 +248,7 @@ export function useRunActions({
     if (!run) return;
     setStopping(true);
     try {
-      const res = await apiFetch(`${API_BASE}/runs/${run.id}/stop`, {
-        method: "POST",
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.detail ?? `Stop failed (${res.status})`);
-      }
+      await apiVoid(`${API_BASE}/runs/${run.id}/stop`, { method: "POST" });
       showToast("Run stopped");
       await refreshRun(run.id);
     } catch (err) {
@@ -319,13 +262,7 @@ export function useRunActions({
     if (!run) return;
     setResuming(true);
     try {
-      const res = await apiFetch(`${API_BASE}/runs/${run.id}/resume`, {
-        method: "POST",
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.detail ?? `Resume failed (${res.status})`);
-      }
+      await apiVoid(`${API_BASE}/runs/${run.id}/resume`, { method: "POST" });
       showToast("Run resumed");
       await refreshRun(run.id);
     } catch (err) {
@@ -338,13 +275,7 @@ export function useRunActions({
   const handleDeleteProject = useCallback(async () => {
     setDeleting(true);
     try {
-      const res = await apiFetch(`${API_BASE}/projects/${numericProjectId}`, {
-        method: "DELETE",
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.detail ?? `Delete failed (${res.status})`);
-      }
+      await apiVoid(`${API_BASE}/projects/${numericProjectId}`, { method: "DELETE" });
       navigate("/runs");
     } catch (err) {
       showToast(err instanceof Error ? err.message : "Delete failed", "error");
