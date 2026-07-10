@@ -47,14 +47,14 @@ Operator-facing guide for deploying and verifying the short-form-studio system.
 | `STABILITY_API_KEY` | No | External image provider |
 | `ELEVENLABS_API_KEY` | No | External TTS fallback |
 
-3. **Ensure AI model images exist** (pre-built from shorts-automation project)
+3. **Ensure AI model images exist** (pre-built locally; not shipped in this repo)
 
    ```bash
-   docker images | grep shorts-automation
+   docker images | grep short-form-studio
    # Expected:
-   #   shorts-automation-stable-diffusion
-#   shorts-automation-tts-qwen3
-   #   shorts-automation-stt-whisper
+   #   short-form-studio-stable-diffusion
+#   short-form-studio-tts-qwen3
+   #   short-form-studio-stt-whisper
    ```
 
 ---

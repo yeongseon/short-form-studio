@@ -63,3 +63,15 @@ docker-local-down:
 
 docker-local-status:
 	docker compose -f docker-compose.yml -f docker-compose.local-server.yml ps
+
+# --- Dependency locking ---
+# Regenerate constraints.txt from the uv lockfile (deterministic, no environment pollution).
+lock:
+	uv export --no-hashes -o constraints.txt
+	@echo "constraints.txt regenerated from uv.lock"
+
+# Bump version in pyproject.toml. Usage: make release VERSION=0.5.0
+release:
+	@test -n "$(VERSION)" || { echo "Usage: make release VERSION=0.5.0"; exit 1; }
+	sed -i 's/^version = \".*/version = \"$(VERSION)\"/' pyproject.toml
+	@echo "Bumped pyproject.toml to $(VERSION). Review, commit, then: git tag v$(VERSION) && git push --tags"

@@ -33,3 +33,6 @@ Thumbs.db
 # Artifacts
 data/artifacts/**
 !data/artifacts/.gitkeep
+
+# Agent tooling (local only — OMC run state, not project artifacts)
+.sisyphus/

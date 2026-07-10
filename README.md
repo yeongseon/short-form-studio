@@ -160,16 +160,17 @@ profile. To start them alongside the core stack:
 docker compose --profile gpu up -d
 ```
 
-> **Note:** GPU services require an NVIDIA GPU with the Container Toolkit installed.
-> Without a GPU, configure remote AI providers via API keys in `.env` instead.
-> The `stable-diffusion`, `tts-qwen3`, and `stt-whisper` GPU services are optional and
-> require pre-built local images that are not currently shipped in this repository.
-> Expected image names are `shorts-automation-stable-diffusion`,
-> `shorts-automation-tts-qwen3`, and `shorts-automation-stt-whisper` with tags like
+> **Note:** GPU services require an NVIDIA GPU with the NVIDIA Container Toolkit installed.
+> Without a GPU, configure remote AI providers via API keys in `.env` instead — this is the
+> recommended path for most users.
+> The `stable-diffusion`, `tts-qwen3`, `stt-whisper`, and `tts-cosyvoice` GPU services are
+> optional and require pre-built local images that are **not currently shipped in this
+> repository and cannot be reproduced from source**. Expected image names are
+> `short-form-studio-stable-diffusion`, `short-form-studio-tts-qwen3`,
+> `short-form-studio-stt-whisper`, and `short-form-studio-tts-cosyvoice` with tags like
 > `:latest` for local iteration or versioned tags such as `:1.0.0` for reproducible deploys.
 > **Development:** `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d`
-> enables backend/worker source mounting, but does not provide frontend live-reload.
-> For frontend development, run `cd apps/studio-web && npm run dev` directly.
+> enables backend/worker source mounting and frontend live-reload (Vite dev server on port 5173).
 
 > **Security:** `studio-web` binds to `127.0.0.1:5174` by default so the UI is not exposed on the local network.
 > For public deployments, keep this behind an authenticated reverse proxy and add proper application authentication.
@@ -275,7 +276,7 @@ cd apps/api && uvicorn shorts_api.main:app --reload
 
 > **Reproducibility:** The repository includes a `constraints.txt` file that pins all
 > transitive Python dependencies. CI and Docker builds install against it. To regenerate
-> after updating dependencies: `pip freeze > constraints.txt`.
+> after updating dependencies, use `make lock` (runs `uv export --no-hashes -o constraints.txt`).
 
 ### Frontend
 

@@ -21,3 +21,30 @@ services:
       - ./packages/creator-service/creator_service:/usr/local/lib/python3.12/site-packages/creator_service
       - ./packages/creator-provider/creator_provider:/usr/local/lib/python3.12/site-packages/creator_provider
       - ./packages/creator-domain/creator_domain:/usr/local/lib/python3.12/site-packages/creator_domain
+
+  studio-web:
+    build:
+      context: .
+      dockerfile: apps/studio-web/Dockerfile
+      target: dev
+    ports: !override
+      # Vite dev server on loopback. !override replaces the base prod mapping
+      # (5174:8080 nginx) since the dev stage runs Vite on 5173, not nginx.
+      - "127.0.0.1:5173:5173"
+    environment:
+      # Vite proxy forwards /api, /artifacts, /docs, etc. to the API service
+      # on the compose network (resolvable as the 'api' service name).
+      API_TARGET: "http://api:8000"
+      # Vite must listen on all interfaces inside the container so Docker's
+      # 127.0.0.1:5173 host binding can reach it. Host-side stays loopback-only.
+      VITE_DEV_HOST: "0.0.0.0"
+    volumes:
+      # Live source mounting enables hot-module replacement (HMR).
+      - ./apps/studio-web:/app
+      # Anonymous volume preserves the image-installed node_modules
+      # (prevents the host directory from shadowing them).
+      - /app/node_modules
+    depends_on:
+      api:
+        condition: service_started
+    restart: unless-stopped

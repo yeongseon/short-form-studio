@@ -106,10 +106,10 @@ services:
     restart: unless-stopped
 
   stable-diffusion:
-    image: shorts-automation-stable-diffusion:latest
+    image: short-form-studio-stable-diffusion:latest
     # Optional GPU profile service: requires a pre-built local image.
     # Dockerfile is expected at docker/stable-diffusion/Dockerfile once model code is available.
-    # Example local build/tag: shorts-automation-stable-diffusion:1.0.0
+    # Example local build/tag: short-form-studio-stable-diffusion:1.0.0
     command: ["python", "launch.py", "--api", "--nowebui", "--listen", "--port", "7860", "--medvram", "--xformers", "--no-half", "--no-half-vae", "--skip-torch-cuda-test", "--skip-version-check", "--skip-python-version-check", "--skip-install"]
     ports:
       - "127.0.0.1:7860:7860"
@@ -131,10 +131,10 @@ services:
     restart: unless-stopped
 
   tts-qwen3:
-    image: shorts-automation-tts-qwen3:latest
+    image: short-form-studio-tts-qwen3:latest
     # Optional GPU profile service: requires a pre-built local image.
     # Dockerfile is expected at docker/tts-qwen3/Dockerfile once model code is available.
-    # Example local build/tag: shorts-automation-tts-qwen3:1.0.0
+    # Example local build/tag: short-form-studio-tts-qwen3:1.0.0
     ports:
       - "127.0.0.1:8100:8100"
     deploy:
@@ -155,10 +155,10 @@ services:
     restart: unless-stopped
 
   stt-whisper:
-    image: shorts-automation-stt-whisper:latest
+    image: short-form-studio-stt-whisper:latest
     # Optional GPU profile service: requires a pre-built local image.
     # Dockerfile is expected at docker/stt-whisper/Dockerfile once model code is available.
-    # Example local build/tag: shorts-automation-stt-whisper:1.0.0
+    # Example local build/tag: short-form-studio-stt-whisper:1.0.0
     ports:
       - "127.0.0.1:9000:8200"
     deploy:
@@ -179,11 +179,11 @@ services:
     restart: unless-stopped
 
   tts-cosyvoice:
-    image: shorts-automation-tts-cosyvoice:latest
+    image: short-form-studio-tts-cosyvoice:latest
     # Optional GPU profile service: CosyVoice 3.0 (Fun-CosyVoice3-0.5B-2512).
     # Dockerfile is expected at docker/tts-cosyvoice/Dockerfile.
     # Model downloads automatically on first start from ModelScope/HuggingFace.
-    # Example local build/tag: shorts-automation-tts-cosyvoice:1.0.0
+    # Example local build/tag: short-form-studio-tts-cosyvoice:1.0.0
     ports:
       - "127.0.0.1:50000:50000"
     deploy:
