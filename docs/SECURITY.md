@@ -183,5 +183,6 @@ Generated artifacts (videos, images, audio) are stored on the local filesystem
 under `ARTIFACT_ROOT`. Access is gated by the creator API — artifacts are never
 served directly from the filesystem to external clients.
 
-For external preview access during development, use the documented HTTP server
-+ localtunnel pattern (see `AGENTS.md`).
+For external preview access during development, use the documented loopback
+HTTP server pattern (see `AGENTS.md`). External tunneling requires explicit
+user confirmation.

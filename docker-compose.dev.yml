@@ -38,6 +38,8 @@ services:
       # Vite must listen on all interfaces inside the container so Docker's
       # 127.0.0.1:5173 host binding can reach it. Host-side stays loopback-only.
       VITE_DEV_HOST: "0.0.0.0"
+      # WARNING: Do NOT set VITE_API_KEY here. Any VITE_* var is baked into
+      # the client bundle and becomes visible to all browser users.
     volumes:
       # Live source mounting enables hot-module replacement (HMR).
       - ./apps/studio-web:/app
