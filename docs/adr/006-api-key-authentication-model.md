@@ -97,3 +97,7 @@ All verify that the authenticated user's workspace matches the resource's worksp
 - Admin key must be rotated by changing the env var and restarting the API
 - Workspace isolation is enforced at the route level, not the DB query level
 - Public-facing deployments MUST add a reverse proxy with TLS — keys travel in headers
+
+## Related ADRs
+
+- [ADR-007: OAuth2/OIDC Integration](./007-oauth-oidc-integration.md) — extends this ADR with per-user OAuth2/OIDC. ADR-006 remains in force for service-to-service and admin auth.
