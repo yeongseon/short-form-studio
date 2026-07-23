@@ -155,6 +155,10 @@ celery_app.conf.beat_schedule = {
         "task": "reconcile_stale_dispatches",
         "schedule": 60.0,
     },
+    "retry-failed-artifact-deletions": {
+        "task": "retry_failed_artifact_deletions",
+        "schedule": 300.0,  # every 5 minutes
+    },
 }
 celery_app.conf.update(
     # Prefetch only 1 task per worker to prevent queue saturation
