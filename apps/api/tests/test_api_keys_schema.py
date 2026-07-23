@@ -52,13 +52,13 @@ def _load_migration_module(filename: str, module_name: str) -> ModuleType:
 def _record_op_calls(module: ModuleType) -> list[tuple[str, tuple[object, ...]]]:
     """Replace module.op with a recorder and call upgrade().
 
-    Returns the recorded op calls as (op_name, args).
+    Returns the recorded op calls as (op_name, args, kwargs).
     """
-    recorded: list[tuple[str, tuple[object, ...]]] = []
+    recorded: list[tuple[str, tuple[object, ...], dict[str, object]]] = []
 
     def _make_recorder(op_name: str):
         def _impl(*args, **kwargs):
-            recorded.append((op_name, args))
+            recorded.append((op_name, args, kwargs))
 
         return _impl
 
@@ -96,7 +96,7 @@ def test_migration_018_creates_api_keys_without_name_or_revoked_at() -> None:
 
     create_calls = [c for c in calls if c[0] == "create_table" and c[1] and c[1][0] == "api_keys"]
     assert create_calls, "migration 018 must create the api_keys table"
-    _, args = create_calls[0]
+    _, args, _ = create_calls[0]  # type: ignore[misc]
     columns = args[1:]  # first positional arg is the table name
     column_names = {c.name for c in columns}
     assert column_names == {"id", "user_id", "key_hash", "created_at"}
@@ -129,7 +129,7 @@ def test_migration_029_adds_name_and_revoked_at_to_api_keys() -> None:
     calls = _record_op_calls(module)
 
     add_column_calls = [c for c in calls if c[0] == "add_column" and c[1] and c[1][0] == "api_keys"]
-    added_column_names = {args[1].name for _, args in add_column_calls}
+    added_column_names = {args[1].name for _, args, _ in add_column_calls}
 
     assert "name" in added_column_names, "migration 029 must add 'name' column to api_keys"
     assert "revoked_at" in added_column_names, (
@@ -143,18 +143,22 @@ def test_auth_py_sql_references_match_schema() -> None:
     Parses auth.py for SQL against api_keys and asserts every referenced column
     exists in EXPECTED_API_KEYS_COLUMNS. Catches SQL/schema drift at test time.
     """
+    import ast
     import re
 
     auth_path = Path(__file__).resolve().parents[1] / "src" / "shorts_api" / "auth.py"
     source = auth_path.read_text(encoding="utf-8")
 
-    # Extract any Python string literal containing an api_keys SQL reference.
-    # This keeps the regex simple and robust to triple-quote variants.
-    api_keys_sql_fragments = re.findall(
-        r'"([^"]*api_keys[^"]*)"',
-        source,
-        flags=re.IGNORECASE,
-    )
+    # Use AST to walk all string constants — robust to single/double/triple/f-string variants.
+    # The previous regex approach only matched double-quoted strings and silently broke on refactors.
+    tree = ast.parse(source)
+    api_keys_sql_fragments: list[str] = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and "api_keys" in node.value.lower()
+    ]
     assert api_keys_sql_fragments, "expected at least one SQL statement against api_keys in auth.py"
 
     column_re = re.compile(r"\b([a-z_][a-z0-9_]*)\b")

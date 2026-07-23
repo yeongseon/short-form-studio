@@ -76,12 +76,12 @@ When the user needs to view generated artifacts (videos, images, audio):
    - **localtunnel** (no auth): `npx -y localtunnel --port <port>`
    - **ngrok** (needs authtoken in `~/.config/ngrok/ngrok.yml`): `ngrok http <port>`
    - **serveo.net** (unreliable): `ssh -R 80:localhost:<port> serveo.net`
-4. Verify any public URL returns 200 before handing it over: `curl -s -H "Bypass-Tunnel-Reminder: true" <url> -o /dev/null -w "%{http_code}"`
+4. (Only if Step 3 was followed) Verify the public URL returns 200 before handing it over: `curl -s -H "Bypass-Tunnel-Reminder: true" <url> -o /dev/null -w "%{http_code}"`
 5. Serve ONLY the artifact directory — never the repository root or any directory containing source, secrets, or `.env`.
 
 **IMPORTANT RULES (security):**
 - **ALWAYS bind to `127.0.0.1`** (loopback). NEVER use `--bind 0.0.0.0`. This aligns with the loopback policy in `docs/SECURITY.md`.
 - **NEVER expose externally without asking the user first.** Do not run localtunnel/ngrok/serveo automatically.
-- When exposing, prefer localtunnel; if it fails, ask the user before trying the next method.
+- When exposing, prefer localtunnel (no signup/authtoken required); if it fails, ask the user before trying the next method.
 - Always verify a public URL returns 200 before giving it to the user.
 - localtunnel requires header `Bypass-Tunnel-Reminder: true` for programmatic access.

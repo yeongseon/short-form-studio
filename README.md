@@ -162,7 +162,7 @@ docker compose --profile gpu up -d
 
 > **Note:** GPU services require an NVIDIA GPU with the NVIDIA Container Toolkit installed.
 > Without a GPU, configure remote AI providers via API keys in `.env` instead — this is the
-> recommended path for most users.
+> simpler path for users without a GPU.
 > The `stable-diffusion`, `tts-qwen3`, `stt-whisper`, and `tts-cosyvoice` GPU services are
 > optional and require pre-built local images that are **not currently shipped in this
 > repository and cannot be reproduced from source**. Expected image names are

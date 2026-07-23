@@ -91,7 +91,7 @@ Three phases. Each phase is independently deployable and reversible.
 
 - Add `apps/api/src/shorts_api/oidc.py`: JWKS verifier + `OIDCMiddleware`.
 - Register `OIDCMiddleware` in `app_factory.py` **after** `ApiKeyMiddleware`.
-- Extend `CurrentUser` with `auth_method: Literal["api_key", "jwt"]` for audit logging.
+- Extend `CurrentUser` with `auth_method: Literal["api_key", "jwt"] = "api_key"` for audit logging (default preserves backward compat for existing construction sites).
 - Add `jwt_client` fixture to `conftest.py` alongside the existing `client`.
 - Document `SUPABASE_AUTH_URL` / `SUPABASE_JWKS_URL` / `SUPABASE_JWT_AUDIENCE` env vars.
 - **Acceptance gate:** existing 577 tests still pass; new tests cover JWT verification + both-auth-method coexistence.
@@ -117,13 +117,14 @@ Three phases. Each phase is independently deployable and reversible.
 |---|---|---|
 | `apps/api/src/shorts_api/oidc.py` | 1 | NEW — JWKS verifier + `OIDCMiddleware` |
 | `apps/api/src/shorts_api/app_factory.py` | 1 | Register `OIDCMiddleware` after `ApiKeyMiddleware` |
-| `apps/api/src/shorts_api/auth.py` | 1 | Extend `CurrentUser` with `auth_method` |
+| `apps/api/src/shorts_api/auth.py` | 1 | Extend `CurrentUser` with `auth_method: Literal["api_key", "jwt"] = "api_key"` |
 | `apps/api/tests/conftest.py` | 1 | Add `jwt_client` fixture |
 | `apps/studio-web/src/auth/` | 2 | NEW — Supabase client wrapper |
 | `apps/studio-web/nginx.conf.template` | 2 | Conditional `X-API-Key` injection (both modes documented) |
 | `docs/SECURITY.md` | 1 | Add "OAuth2/OIDC domain" alongside API-key and admin domains |
 | `docs/adr/006-api-key-authentication-model.md` | 1 | Cross-link to this ADR; note ADR-006 remains in force for service-to-service |
-| `scripts/create_api_key.py` | 3 | Bootstrap-only (not user-facing) once PATs are the default |
+| `scripts/create_api_key.py` | 2 | Update docs/help text to recommend user-scoped PATs from Supabase Studio for interactive CLI use |
+| `scripts/create_api_key.py` | 3 | Bootstrap-only (service accounts) once PATs are the default |
 
 ## Constraints honored
 
@@ -136,7 +137,7 @@ Three phases. Each phase is independently deployable and reversible.
 
 | Question | Recommendation |
 |---|---|
-| Self-host GoTrue in docker-compose, or require managed Supabase? | Support both via env vars. `compose.gpu`-style profile for self-hosted GoTrue; managed via `SUPABASE_URL`. |
+| Self-host GoTrue in docker-compose, or require managed Supabase? | Support both via env vars. Add a docker-compose profile (similar to the existing `gpu` profile) for self-hosted GoTrue; managed via `SUPABASE_URL`. |
 | Add Postgres RLS now? | Defer. RLS is a separate hardening layer and is not required for this ADR's auth migration. |
 | Migrate admin auth (`X-Admin-Key`) to OAuth? | No. Admin auth stays as ADR-006 specifies. Operator-only, separate trust domain. |
 

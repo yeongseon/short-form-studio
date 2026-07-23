@@ -22,7 +22,11 @@ services:
       - ./packages/creator-provider/creator_provider:/usr/local/lib/python3.12/site-packages/creator_provider
       - ./packages/creator-domain/creator_domain:/usr/local/lib/python3.12/site-packages/creator_domain
 
+  # NOTE: This service is incompatible with docker-compose.local-server.yml.
+  # The local-server override expects nginx on port 8080; this dev stage
+  # runs Vite on 5173. Do not combine both overrides for studio-web.
   studio-web:
+  # (see NOTE above)
     build:
       context: .
       dockerfile: apps/studio-web/Dockerfile

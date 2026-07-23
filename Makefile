@@ -73,5 +73,5 @@ lock:
 # Bump version in pyproject.toml. Usage: make release VERSION=0.5.0
 release:
 	@test -n "$(VERSION)" || { echo "Usage: make release VERSION=0.5.0"; exit 1; }
-	sed -i 's/^version = \".*/version = \"$(VERSION)\"/' pyproject.toml
+	python3 -c "import re; s=open('pyproject.toml').read(); s=re.sub(r'^version = \".*\"', 'version = \"$(VERSION)\"', s, flags=re.M); open('pyproject.toml','w').write(s)"
 	@echo "Bumped pyproject.toml to $(VERSION). Review, commit, then: git tag v$(VERSION) && git push --tags"
