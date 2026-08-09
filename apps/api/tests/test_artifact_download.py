@@ -152,6 +152,77 @@ async def test_download_artifact_nonexistent_returns_404(client, monkeypatch: py
 
 
 @pytest.mark.asyncio
+async def test_download_artifact_uses_storage_key_over_absolute_file_path(
+    client, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Worker-format artifact must download successfully (#584).
+
+    Workers store the absolute path in file_path and the root-relative
+    storage_key separately. The route must prefer storage_key; using
+    file_path directly triggers the leading-component guard and returns 404.
+    """
+    artifact_root = tmp_path
+    rel_key = "1/render/output.mp4"
+    target = artifact_root / rel_key
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"worker-format-video")
+
+    # Mirrors what render_video.py + PostgresRenderStorage persist:
+    #   file_path = absolute ({ARTIFACT_ROOT}/...)
+    #   storage_key = root-relative
+    stub = StubArtifactDownloadService(
+        {
+            "id": 910,
+            "run_id": 100,
+            "file_path": str(artifact_root / rel_key),
+            "storage_key": rel_key,
+            "storage_provider": "local",
+            "content_type": "video/mp4",
+        }
+    )
+
+    _patch_route_services(monkeypatch, stub)
+    monkeypatch.setenv("ARTIFACT_ROOT", str(artifact_root))
+
+    response = await client.get("/api/creator/runs/100/artifacts/910/download")
+
+    assert response.status_code == 200
+    assert response.content == b"worker-format-video"
+
+
+@pytest.mark.asyncio
+async def test_download_artifact_normalizes_legacy_absolute_file_path(
+    client, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Legacy rows without storage_key must still resolve via file_path (#584).
+
+    Some rows may predate storage_key. The route should strip a leading
+    ARTIFACT_ROOT prefix from file_path so those downloads keep working.
+    """
+    artifact_root = tmp_path
+    rel_key = "1/legacy/audio.wav"
+    target = artifact_root / rel_key
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(b"legacy-audio")
+
+    stub = StubArtifactDownloadService(
+        {
+            "id": 911,
+            "run_id": 100,
+            "file_path": str(artifact_root / rel_key),  # absolute, no storage_key
+            "storage_provider": "local",
+        }
+    )
+
+    _patch_route_services(monkeypatch, stub)
+    monkeypatch.setenv("ARTIFACT_ROOT", str(artifact_root))
+
+    response = await client.get("/api/creator/runs/100/artifacts/911/download")
+
+    assert response.status_code == 200
+    assert response.content == b"legacy-audio"
+
+@pytest.mark.asyncio
 async def test_old_artifact_endpoint_returns_404_for_missing_file(client):
     response = await client.get("/artifacts/1/100/audio.wav")
     assert response.status_code == 404
