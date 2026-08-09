@@ -160,8 +160,8 @@ class ArtifactDownloadService:
             ")",
             batch_size,
         )
-        # asyncpg CommandComplete returns a status string like 'UPDATE N'.
-        status = getattr(result, "statusmessage", "") or ""
+        # db.execute() returns the asyncpg status string directly ("UPDATE N").
+        status = result if isinstance(result, str) else (getattr(result, "statusmessage", "") or "")
         try:
             return int(status.rsplit(" ", 1)[-1])
         except (TypeError, ValueError):
