@@ -97,7 +97,6 @@ jobs:
           # Every beat_schedule entry needs a running beat process (#585).
           docker compose config --services | grep -q '^beat$' \
             || { echo 'ERROR: no beat service defined — scheduled tasks will never run'; exit 1; }
-        run: docker compose config --quiet
       - name: Verify API port not exposed on 0.0.0.0
         run: |
           # Ensure API, Postgres, and Redis are bound to 127.0.0.1 only
