@@ -356,3 +356,11 @@ def test_cors_middleware_configured():
             break
 
     assert cors_middleware is not None
+
+
+def test_cors_middleware_is_outermost():
+    """CORS must be the outermost middleware so auth failures still get CORS headers (#600)."""
+    # app.user_middleware is ordered outermost-first.
+    assert app.user_middleware[0].cls is CORSMiddleware, (
+        f"Expected CORSMiddleware outermost, got {[m.cls.__name__ for m in app.user_middleware]}"
+    )
