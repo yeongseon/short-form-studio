@@ -86,9 +86,14 @@ def is_shutting_down() -> bool:
     return _SHUTDOWN_REQUESTED
 
 def _apply_resource_limits() -> None:
-    """Apply memory limits. Only call from worker process startup."""
-    memory_limit_bytes = MAX_MEMORY_MB * 1024 * 1024
-    resource.setrlimit(resource.RLIMIT_AS, (memory_limit_bytes, memory_limit_bytes))
+    """Memory limits are now enforced via cgroup (Docker deploy.resources.limits.memory).
+
+    RLIMIT_AS was previously used but caused MemoryError on CUDA/torch/ffmpeg
+    which reserve large virtual address ranges even when RSS is low (#611).
+    The function is kept as a no-op for backward compatibility — callers still
+    invoke it during startup.
+    """
+    logging.getLogger(__name__).info("Memory limit: MAX_MEMORY_MB=%d (enforced via cgroup, not RLIMIT_AS)", MAX_MEMORY_MB)
 
 
 redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")

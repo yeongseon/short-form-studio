@@ -25,7 +25,13 @@ def _load_worker_module(monkeypatch: pytest.MonkeyPatch, module_name: str):
     return module
 
 
-def test_worker_applies_memory_setrlimit_from_env(monkeypatch: pytest.MonkeyPatch):
+def test_worker_does_not_call_setrlimit(monkeypatch: pytest.MonkeyPatch):
+    """RLIMIT_AS was replaced by cgroup memory limits (#611).
+
+    The worker's _apply_resource_limits() must NOT call setrlimit, because
+    RLIMIT_AS causes MemoryError on CUDA/torch/ffmpeg which reserve large
+    virtual address ranges.
+    """
     setrlimit_mock = Mock()
     monkeypatch.setenv("MAX_MEMORY_MB", "2048")
 
@@ -34,14 +40,10 @@ def test_worker_applies_memory_setrlimit_from_env(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(resource, "setrlimit", setrlimit_mock)
     module = _load_worker_module(monkeypatch, "worker_orchestrator_celery_app_test")
 
-    # Resource limits are now applied inside _apply_resource_limits(), not at import
     module._apply_resource_limits()
 
-    expected_bytes = 2048 * 1024 * 1024
-    setrlimit_mock.assert_called_once_with(
-        resource.RLIMIT_AS,
-        (expected_bytes, expected_bytes),
-    )
+    # setrlimit must NOT be called — memory is enforced via cgroup.
+    setrlimit_mock.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -70,16 +72,15 @@ async def test_cpu_monitor_triggers_shutdown_flag(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.asyncio
-async def test_api_startup_fails_when_setrlimit_fails(monkeypatch: pytest.MonkeyPatch):
+async def test_api_startup_does_not_call_setrlimit(monkeypatch: pytest.MonkeyPatch):
+    """RLIMIT_AS was replaced by cgroup memory limits (#611)."""
     from shorts_api import lifecycle
 
-    def fail_setrlimit(_limit, _values):
-        raise OSError("setrlimit failed")
+    setrlimit_mock = Mock()
+    monkeypatch.setattr(lifecycle.resource, "setrlimit", setrlimit_mock)
 
-    monkeypatch.setattr(lifecycle, "ENABLE_PROCESS_RESOURCE_GUARD", True)
-    monkeypatch.setattr(lifecycle.resource, "setrlimit", fail_setrlimit)
+    from shorts_api.main import app
+    async with lifecycle.lifespan(app):
+        pass
 
-    with pytest.raises(OSError, match="setrlimit failed"):
-        from shorts_api.main import app
-        async with lifecycle.lifespan(app):
-            pass
+    setrlimit_mock.assert_not_called()

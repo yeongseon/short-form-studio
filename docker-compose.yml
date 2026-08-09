@@ -50,6 +50,10 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: ${MAX_MEMORY_MB:-1024}M
 
   worker:
     build:
@@ -67,6 +71,12 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: ${MAX_MEMORY_MB:-4096}M
+
+  # Celery Beat scheduler
 
   # Celery Beat scheduler — required for any beat_schedule entry to actually fire.
   # Without this, reconcile_stale_dispatches / retry_failed_artifact_deletions never run (#585).
