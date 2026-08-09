@@ -16,7 +16,7 @@ server {
     # Proxy API requests to the backend
     location /api/ {
         set $csrf_check 0;
-        if ($http_origin = "$scheme://$host") {
+        if ($http_origin = "$scheme://$http_host") {
             set $csrf_check 1;
         }
         if ($request_method !~ ^(GET|HEAD|OPTIONS)$) {

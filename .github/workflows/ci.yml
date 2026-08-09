@@ -151,4 +151,17 @@ jobs:
             -d '{"style_preset":"default"}' \
             http://localhost:8000/api/creator/projects/$PROJECT_ID/runs
           echo "Creator API smoke test passed"
+          # --- nginx CSRF smoke test (#586) ---
+          # POST through nginx (port 5174) with the real browser Origin header.
+          # Before the fix, $host didn't include the port, so the CSRF check
+          # rejected every write with 403.
+          NGINX_POST_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Origin: http://127.0.0.1:5174" \
+            -H "X-API-Key: $API_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"title":"Nginx CSRF Smoke","source_type":"idea","idea_brief":"nginx"}' \
+            http://localhost:5174/api/creator/projects)
+          [ "$NGINX_POST_CODE" = "200" ] || [ "$NGINX_POST_CODE" = "201" ] \
+            || { echo "Expected 2xx for nginx-proxied POST with valid Origin, got $NGINX_POST_CODE"; exit 1; }
+          echo "nginx CSRF smoke passed ($NGINX_POST_CODE)"
           docker compose down
