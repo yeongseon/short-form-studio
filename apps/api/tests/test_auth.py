@@ -3,6 +3,7 @@
 """Tests for API key authentication middleware."""
 
 import hashlib
+from datetime import datetime, timezone
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -296,6 +297,60 @@ async def test_middleware_without_workspace_membership_returns_404(api_key, monk
         assert response.status_code == 404
         assert response.json() == {"detail": "Not found"}
 
+
+@pytest.mark.asyncio
+async def test_revoked_api_key_returns_401(api_key, monkeypatch: pytest.MonkeyPatch):
+    """A revoked key (revoked_at set in the DB) must NOT authenticate.
+
+    Reproduces #583: the middleware adapter discarded the ``revoked_at IS NULL``
+    filter from the SQL, so revoked keys kept authenticating. The stub below
+    faithfully models a real asyncpg connection — it applies the WHERE clause
+    as written, so a query that omits the filter returns the row (the bug),
+    while a query that includes ``revoked_at IS NULL`` excludes the revoked row.
+    """
+    expected_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+    revoked_at = datetime.now(timezone.utc)
+
+    class _Conn:
+        # Models the real api_keys row: key exists but revoked_at is set.
+        async def fetchrow(self, query: str, key_hash: str):
+            if key_hash != expected_hash:
+                return None
+            # Real DB applies the WHERE clause verbatim.
+            if "revoked_at IS NULL" in query:
+                return None  # revoked row is filtered out
+            # Query without the filter still returns the row — this is the bug.
+            return {"user_id": 1, "revoked_at": revoked_at}
+
+        async def fetch(self, _query: str, user_id: int):
+            if user_id == 1:
+                return [{"workspace_id": 1}]
+            return []
+
+    class _Acquire:
+        async def __aenter__(self):
+            return _Conn()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            _ = (exc_type, exc, tb)
+            return False
+
+    class _Pool:
+        def acquire(self):
+            return _Acquire()
+
+    async def _get_pool_stub(self):
+        _ = self
+        return _Pool()
+
+    monkeypatch.setattr("shorts_api.auth.ApiKeyMiddleware._get_pool", _get_pool_stub)
+
+    app = _make_app()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        response = await ac.get("/api/creator/data", headers={"X-API-Key": api_key})
+        assert response.status_code == 401
+        assert response.json() == {"detail": "API key is not associated with any user"}
 
 @pytest.mark.asyncio
 async def test_get_current_user_without_api_key_returns_401():

@@ -18,7 +18,6 @@ from creator_service.db import fetch_all, fetch_one
 from creator_service.workspace_service import workspace_service
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 
@@ -59,33 +58,22 @@ def _extract_api_key(request: Request) -> str | None:
     return None
 
 
-class _FetchOneResult:
-    def __init__(self, row: tuple[object, ...] | None) -> None:
-        self._row = row
+async def _resolve_user_id_from_api_key(api_key: str, connection) -> str | None:
+    """Resolve a user_id from an API key, rejecting revoked keys.
 
-    def fetchone(self) -> tuple[object, ...] | None:
-        return self._row
-
-
-class _AsyncpgSessionAdapter:
-    def __init__(self, connection) -> None:
-        self._connection = connection
-
-    async def execute(self, query, params: dict[str, object]):
-        row = await self._connection.fetchrow("SELECT user_id FROM api_keys WHERE key_hash = $1", params["h"])
-        if row is None:
-            return _FetchOneResult(None)
-        return _FetchOneResult((row.get("user_id"),))
-
-
-async def _resolve_user_id_from_api_key(api_key: str, db_session) -> str | None:
+    Runs the asyncpg query directly against ``connection`` so the
+    ``revoked_at IS NULL`` filter cannot be silently dropped (the bug fixed
+    in #583 — the previous _AsyncpgSessionAdapter discarded the query and ran
+    its own filter-less SQL).
+    """
     key_hash = hashlib.sha256(api_key.encode()).hexdigest()
-    result = await db_session.execute(
-        text("SELECT user_id FROM api_keys WHERE key_hash = :h AND revoked_at IS NULL"),
-        {"h": key_hash},
+    row = await connection.fetchrow(
+        "SELECT user_id FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL",
+        key_hash,
     )
-    row = result.fetchone()
-    return row[0] if row else None
+    if row is None:
+        return None
+    return row["user_id"]
 
 
 _ADMIN_PATH_PREFIX = "/api/admin"
@@ -207,9 +195,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             return JSONResponse(status_code=503, content={"detail": "Service unavailable"})
 
         async with pool.acquire() as connection:
-            user_id = await _resolve_user_id_from_api_key(
-                provided, _AsyncpgSessionAdapter(connection)
-            )
+            user_id = await _resolve_user_id_from_api_key(provided, connection)
         if user_id is None:
             return JSONResponse(
                 status_code=401,
