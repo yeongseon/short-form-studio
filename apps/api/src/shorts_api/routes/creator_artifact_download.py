@@ -38,6 +38,14 @@ async def download_artifact(
     if artifact.get("run_id") != run.id:
         raise HTTPException(status_code=404, detail="Artifact not found")
 
+    expires_at = artifact.get("expires_at")
+    if (
+        expires_at is not None
+        and isinstance(expires_at, datetime)
+        and expires_at < datetime.now(timezone.utc)
+    ):
+        raise HTTPException(status_code=410, detail="Artifact has expired")
+
     if artifact.get("storage_provider", "local") != "local":
         from creator_service.object_storage import get_storage_backend
 
@@ -48,13 +56,6 @@ async def download_artifact(
         except Exception as exc:
             raise HTTPException(status_code=502, detail="Storage backend error") from exc
 
-    expires_at = artifact.get("expires_at")
-    if (
-        expires_at is not None
-        and isinstance(expires_at, datetime)
-        and expires_at < datetime.now(timezone.utc)
-    ):
-        raise HTTPException(status_code=410, detail="Artifact has expired")
 
     artifact_root_str = os.getenv("ARTIFACT_ROOT", "data/artifacts")
     artifact_root = os.path.realpath(artifact_root_str)

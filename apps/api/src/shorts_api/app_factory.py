@@ -9,6 +9,7 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette import status
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from shorts_api.auth import ApiKeyMiddleware
 from shorts_api.health import register_health_routes
@@ -63,20 +64,6 @@ def create_app() -> FastAPI:
         else ["http://localhost:5174"]
     )
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-    app.add_middleware(ApiKeyMiddleware)
-    if os.getenv("OTEL_ENABLED", "").lower() in ("true", "1", "yes", "on"):
-        from shorts_api.middleware.telemetry import TelemetryMiddleware
-
-        app.add_middleware(TelemetryMiddleware)
-
-    @app.middleware("http")
     async def request_logging_middleware(request: Request, call_next):
         shutdown_state.inflight_requests += 1
         start = time.perf_counter()
@@ -96,7 +83,6 @@ def create_app() -> FastAPI:
                 elapsed_ms,
             )
 
-    @app.middleware("http")
     async def security_headers_middleware(request: Request, call_next):
         response = await call_next(request)
         if production_hardened:
@@ -108,7 +94,6 @@ def create_app() -> FastAPI:
             response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
         return response
 
-    @app.middleware("http")
     async def shutdown_guard_middleware(request: Request, call_next):
         if "PYTEST_CURRENT_TEST" in os.environ:
             return await call_next(request)
@@ -119,6 +104,25 @@ def create_app() -> FastAPI:
             )
         return await call_next(request)
 
+    # add_middleware inserts at the front of the stack, so the LAST call is outermost.
+    # Order (outermost → innermost at runtime):
+    #   CORS → request_logging → security_headers → shutdown_guard → [Telemetry] → ApiKey
+    # CORS must be outermost so auth failures (401/403/404/503) still get CORS headers (#600).
+    app.add_middleware(BaseHTTPMiddleware, dispatch=request_logging_middleware)
+    app.add_middleware(BaseHTTPMiddleware, dispatch=security_headers_middleware)
+    app.add_middleware(BaseHTTPMiddleware, dispatch=shutdown_guard_middleware)
+    app.add_middleware(ApiKeyMiddleware)
+    if os.getenv("OTEL_ENABLED", "").lower() in ("true", "1", "yes", "on"):
+        from shorts_api.middleware.telemetry import TelemetryMiddleware
+
+        app.add_middleware(TelemetryMiddleware)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     @app.exception_handler(ServiceError)
     async def service_error_handler(request: Request, exc: ServiceError) -> JSONResponse:
         """Central mapping from typed service exceptions to HTTP responses."""
