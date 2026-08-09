@@ -322,6 +322,9 @@ class _FakeConnection:
         self.queries.append((query, *args))
         return "OK"
 
+    async def fetchval(self, query: str, *args: object) -> int:
+        self.queries.append((query, *args))
+        return 0  # no abandoned rows in tests
 
 @contextlib.asynccontextmanager
 async def _fake_transaction(conn: _FakeConnection):
@@ -498,8 +501,8 @@ async def test_retry_all_operations_use_same_connection(
     retried = await service.retry_failed_deletions(max_retries=5)
 
     assert retried == 1
-    # All queries went through the transaction connection
-    assert len(conn.queries) == 3  # SELECT + failure UPDATE + DELETE
+    # Phase 1 (SELECT) + Phase 3 (DELETE success + UPDATE failure + COUNT abandoned) = 4 queries
+    assert len(conn.queries) == 4
 
 
 @pytest.mark.asyncio
