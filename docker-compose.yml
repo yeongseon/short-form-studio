@@ -68,6 +68,21 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Celery Beat scheduler — required for any beat_schedule entry to actually fire.
+  # Without this, reconcile_stale_dispatches / retry_failed_artifact_deletions never run (#585).
+  beat:
+    build:
+      context: .
+      dockerfile: apps/worker-orchestrator/Dockerfile
+      target: runtime
+    command: ["celery", "-A", "celery_app.celery_app", "beat", "--loglevel=info"]
+    env_file:
+      - .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
   studio-web:
     build:
       context: .
