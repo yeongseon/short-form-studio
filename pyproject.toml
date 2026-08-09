@@ -15,12 +15,13 @@ classifiers = [
 
 [tool.uv.workspace]
 members = [
-  "apps/api",
-  "apps/worker-orchestrator",
   "packages/creator-domain",
   "packages/creator-service",
   "packages/creator-provider",
 ]
+
+# apps/api and apps/worker-orchestrator use requirements.txt (no pyproject.toml).
+# They are intentionally excluded from the uv workspace.
 
 [tool.basedpyright]
 typeCheckingMode = "standard"

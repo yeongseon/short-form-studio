@@ -65,10 +65,26 @@ docker-local-status:
 	docker compose -f docker-compose.yml -f docker-compose.local-server.yml ps
 
 # --- Dependency locking ---
-# Regenerate constraints.txt from the uv lockfile (deterministic, no environment pollution).
+# Two lockfiles serve different purposes:
+#   uv.lock           — workspace packages (creator-domain/service/provider)
+#   constraints.txt   — full deployment pin (api + worker + packages + transitive)
+#
+# lock:       regenerate uv.lock for workspace packages.
+#             constraints.txt must be regenerated separately when api/worker
+#             requirements change (see lock-constraints below).
 lock:
-	uv export --no-hashes -o constraints.txt
-	@echo "constraints.txt regenerated from uv.lock"
+	uv lock
+	@echo "uv.lock regenerated"
+
+lock-constraints:
+	uv pip compile apps/api/requirements.txt apps/api/requirements-dev.txt \
+		apps/worker-orchestrator/requirements.txt \
+		apps/worker-orchestrator/requirements-dev.txt \
+		--output-file constraints.txt
+	@echo "constraints.txt regenerated"
+
+lock-check:
+	uv lock --check
 
 # Bump version in pyproject.toml. Usage: make release VERSION=0.5.0
 release:
