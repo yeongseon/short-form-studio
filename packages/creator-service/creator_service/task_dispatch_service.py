@@ -228,6 +228,34 @@ class TaskDispatchService:
             task_id=task_id,
         )
 
+    async def _cancel_quota_safe(
+        self,
+        workspace_id: int | None,
+        operation_type: str | None,
+        context: str = "",
+    ) -> None:
+        """Cancel a workspace quota reservation, swallowing errors.
+
+        Extracted from the 5 duplicated compensation blocks in
+        ``cas_dispatch_with_rollback`` (#613). Each block was identical
+        except for the log message suffix.
+        """
+        if workspace_id is None or operation_type is None:
+            return
+        from creator_service.usage_service import cancel_workspace_quota_reservation
+
+        try:
+            await cancel_workspace_quota_reservation(workspace_id, operation_type)
+        except Exception:
+            suffix = f" {context}" if context else ""
+            logger.warning(
+                "Failed to cancel quota reservation for workspace %s%s",
+                workspace_id,
+                suffix,
+                exc_info=True,
+            )
+
+
     async def cas_dispatch_with_rollback(
         self,
         *,
@@ -342,20 +370,7 @@ class TaskDispatchService:
                 "Storage failure during dispatch stage update",
             ) from None
         if not ok:
-            if workspace_id_for_reservation is not None and quota_operation_type is not None:
-                from creator_service.usage_service import cancel_workspace_quota_reservation
-
-                try:
-                    await cancel_workspace_quota_reservation(
-                        workspace_id_for_reservation,
-                        quota_operation_type,
-                    )
-                except Exception:
-                    logger.warning(
-                        "Failed to cancel quota reservation for workspace %s",
-                        workspace_id_for_reservation,
-                        exc_info=True,
-                    )
+            await self._cancel_quota_safe(workspace_id_for_reservation, quota_operation_type)
             if row is None:
                 raise NotFoundError("Run not found")
             raise ConflictError(
@@ -399,18 +414,7 @@ class TaskDispatchService:
                         run_id,
                         exc_info=True,
                     )
-                if workspace_id_for_reservation is not None and quota_operation_type is not None:
-                    from creator_service.usage_service import cancel_workspace_quota_reservation
-                    try:
-                        await cancel_workspace_quota_reservation(
-                            workspace_id_for_reservation, quota_operation_type,
-                        )
-                    except Exception:
-                        logger.warning(
-                            "Failed to cancel quota reservation for workspace %s",
-                            workspace_id_for_reservation,
-                            exc_info=True,
-                        )
+                await self._cancel_quota_safe(workspace_id_for_reservation, quota_operation_type)
                 raise ServiceUnavailableError(enqueue_error_detail) from None
 
         try:
@@ -419,36 +423,10 @@ class TaskDispatchService:
                 dispatch_kwargs["task_id"] = pre_generated_task_id
             task_id = dispatcher(**dispatch_kwargs)
         except SynchronousTaskExecutionError:
-            if workspace_id_for_reservation is not None and quota_operation_type is not None:
-                from creator_service.usage_service import cancel_workspace_quota_reservation
-
-                try:
-                    await cancel_workspace_quota_reservation(
-                        workspace_id_for_reservation,
-                        quota_operation_type,
-                    )
-                except Exception:
-                    logger.warning(
-                        "Failed to cancel quota reservation for workspace %s",
-                        workspace_id_for_reservation,
-                        exc_info=True,
-                    )
+            await self._cancel_quota_safe(workspace_id_for_reservation, quota_operation_type)
             raise ServiceError("Task execution failed") from None
         except Exception:
-            if workspace_id_for_reservation is not None and quota_operation_type is not None:
-                from creator_service.usage_service import cancel_workspace_quota_reservation
-
-                try:
-                    await cancel_workspace_quota_reservation(
-                        workspace_id_for_reservation,
-                        quota_operation_type,
-                    )
-                except Exception:
-                    logger.warning(
-                        "Failed to cancel quota reservation for workspace %s",
-                        workspace_id_for_reservation,
-                        exc_info=True,
-                    )
+            await self._cancel_quota_safe(workspace_id_for_reservation, quota_operation_type)
             try:
                 await run_service_obj.storage.conditional_update_run(
                     run_id,
@@ -491,20 +469,7 @@ class TaskDispatchService:
                 logger.warning(
                     "Failed to mark task %s revoked during rollback", task_id, exc_info=True
                 )
-            if workspace_id_for_reservation is not None and quota_operation_type is not None:
-                from creator_service.usage_service import cancel_workspace_quota_reservation
-
-                try:
-                    await cancel_workspace_quota_reservation(
-                        workspace_id_for_reservation,
-                        quota_operation_type,
-                    )
-                except Exception:
-                    logger.warning(
-                        "Failed to cancel quota reservation for workspace %s during rollback",
-                        workspace_id_for_reservation,
-                        exc_info=True,
-                    )
+            await self._cancel_quota_safe(workspace_id_for_reservation, quota_operation_type, "during rollback")
             try:
                 await run_service_obj.storage.conditional_update_run(
                     run_id,
@@ -558,20 +523,7 @@ class TaskDispatchService:
                     run_id,
                     exc_info=True,
                 )
-            if workspace_id_for_reservation is not None and quota_operation_type is not None:
-                from creator_service.usage_service import cancel_workspace_quota_reservation
-
-                try:
-                    await cancel_workspace_quota_reservation(
-                        workspace_id_for_reservation,
-                        quota_operation_type,
-                    )
-                except Exception:
-                    logger.warning(
-                        "Failed to cancel quota reservation for workspace %s during concurrent cancel",
-                        workspace_id_for_reservation,
-                        exc_info=True,
-                    )
+            await self._cancel_quota_safe(workspace_id_for_reservation, quota_operation_type, "during concurrent cancel")
             raise ConflictError("Run was cancelled during dispatch")
         return {
             "task_id": task_id,
