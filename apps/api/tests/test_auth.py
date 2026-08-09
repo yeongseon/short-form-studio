@@ -595,3 +595,26 @@ async def test_get_current_user_with_non_member_workspace_id_returns_404(monkeyp
         await get_current_user(request)
     assert exc_info.value.status_code == 404
     assert exc_info.value.detail == "Not found"
+
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_returns_early_from_request_state_user():
+    """Verify get_current_user() returns request.state.user without DB queries.
+    
+    When middleware has already resolved the user and set request.state.user,
+    get_current_user() should return it immediately WITHOUT making any DB queries.
+    This is the key optimization: eliminate 1 DB round-trip per authenticated request.
+    """
+    # Set up a request with request.state.user already populated by middleware
+    request = Request({"type": "http", "headers": []})
+    expected_user = CurrentUser(user_id=42, workspace_id=99)
+    request.state.user = expected_user
+    
+    # Call get_current_user and verify it returns the same user
+    result = await get_current_user(request)
+    
+    # Assert: same object returned, no DB queries needed
+    assert result is expected_user
+    assert result.user_id == 42
+    assert result.workspace_id == 99
