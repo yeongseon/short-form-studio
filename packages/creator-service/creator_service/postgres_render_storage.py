@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .db import fetch_all, fetch_one
@@ -38,6 +40,15 @@ class PostgresRenderStorage:
             row.get("size_bytes") or row.get("file_size_bytes") or metadata_dict.get("size_bytes")
         )
 
+        # Compute expires_at from ARTIFACT_RETENTION_DAYS (default 90)
+        retention_days = int(os.getenv('ARTIFACT_RETENTION_DAYS', '90'))
+        retention_days = retention_days if retention_days > 0 else 90
+        expires_at = (
+            datetime.now(timezone.utc) + timedelta(days=retention_days)
+            if retention_days > 0
+            else None
+        )
+
         saved = await fetch_one(
             """
             INSERT INTO creator_artifacts (
@@ -52,9 +63,10 @@ class PostgresRenderStorage:
                 storage_backend,
                 storage_key,
                 content_type,
-                size_bytes
+                size_bytes,
+                expires_at
             )
-            VALUES ($1, 'video', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            VALUES ($1, 'video', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             ON CONFLICT (idempotency_key) DO NOTHING
             RETURNING *
             """,
@@ -69,6 +81,7 @@ class PostgresRenderStorage:
             storage_key,
             content_type,
             size_bytes,
+            expires_at,
         )
         if saved is None and isinstance(idempotency_key, str):
             existing = await fetch_one(
