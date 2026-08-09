@@ -70,7 +70,7 @@ async def download_artifact(
     # Legacy rows may still carry an absolute file_path; strip the artifact root
     # so the remaining components are root-relative.
     try:
-        rel_path = os.path.relpath(artifact_path, artifact_root_str)
+        rel_path = os.path.relpath(artifact_path, artifact_root)
     except ValueError:
         # Different drives on Windows — fall back to the raw value.
         rel_path = artifact_path
@@ -118,8 +118,14 @@ async def download_artifact(
 
     artifact_id_str = str(artifact.get("id", artifact_id))
     filename = safe_components[-1] if safe_components else f"artifact-{artifact_id_str}"
+    # RFC 5987: encode non-ASCII filenames so Content-Disposition doesn't break
+    # latin-1 header encoding on Unicode (e.g. Korean) filenames.
+    from urllib.parse import quote
+
+    filename_ascii = filename.encode("ascii", "replace").decode("ascii")
+    filename_utf8 = quote(filename)
     return FileResponse(
         resolved_path,
         media_type=content_type,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": f"attachment; filename=\"{filename_ascii}\"; filename*=UTF-8''{filename_utf8}"},
     )

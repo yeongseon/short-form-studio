@@ -659,7 +659,11 @@ class FFmpegService:
             end = _srt_ts_to_ass(parts[1].strip())
             text = "\\N".join(lines[2:])  # ASS newline
 
-            # Apply keyword emphasis before escaping
+            # Escape braces FIRST to prevent ASS override injection from subtitle text.
+            # Must happen before emphasis insertion so the override tags we add aren't escaped.
+            text = text.replace("{", "\uff5b").replace("}", "\uff5d")
+
+            # Apply keyword emphasis AFTER escaping (our tags use real braces).
             if emphasis_words:
                 for word in emphasis_words:
                     pattern = re.escape(word)
@@ -669,9 +673,6 @@ class FFmpegService:
                         text,
                         flags=re.IGNORECASE,
                     )
-            else:
-                # No emphasis — escape braces to prevent ASS override injection
-                text = text.replace("{", "\uff5b").replace("}", "\uff5d")
 
             ass_lines.append(f"Dialogue: 0,{start},{end},Default,,0,0,0,,{text}")
 

@@ -53,7 +53,7 @@ services:
       context: .
       dockerfile: apps/worker-orchestrator/Dockerfile
       target: runtime
-    command: ["celery", "-A", "celery_app.celery_app", "worker", "--loglevel=info", "--pool=solo", "--concurrency=2", "-Q", "image"]
+    command: ["celery", "-A", "celery_app.celery_app", "worker", "--loglevel=info", "--pool=prefork", "--concurrency=2", "-Q", "image"]
     volumes:
       - ./data/artifacts:/app/data/artifacts
     env_file:
