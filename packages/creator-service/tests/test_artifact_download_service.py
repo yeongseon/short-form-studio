@@ -500,3 +500,56 @@ async def test_retry_all_operations_use_same_connection(
     assert retried == 1
     # All queries went through the transaction connection
     assert len(conn.queries) == 3  # SELECT + failure UPDATE + DELETE
+
+
+@pytest.mark.asyncio
+async def test_sweep_expired_marks_rows_for_deletion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """sweep_expired sets delete_requested_at on rows past expires_at (#587)."""
+    captured: dict[str, object] = {}
+
+    class _Result:
+        statusmessage = "UPDATE 7"
+
+    async def _execute(query: str, *args: object) -> object:
+        captured["query"] = query
+        captured["batch_size"] = args[0] if args else None
+        return _Result()
+
+    monkeypatch.setattr("creator_service.artifact_download_service.execute", _execute)
+
+    service = ArtifactDownloadService(InMemoryArtifactDownloadStorage())
+    marked = await service.sweep_expired(batch_size=500)
+
+    assert marked == 7
+    assert "UPDATE creator_artifacts" in str(captured["query"])
+    assert "delete_requested_at = NOW()" in str(captured["query"])
+    assert "expires_at < NOW()" in str(captured["query"])
+    assert "delete_requested_at IS NULL" in str(captured["query"])
+    assert captured["batch_size"] == 500
+
+
+@pytest.mark.asyncio
+async def test_sweep_expired_returns_zero_when_nothing_matched(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Result:
+        statusmessage = "UPDATE 0"
+
+    async def _execute(query: str, *args: object) -> object:
+        return _Result()
+
+    monkeypatch.setattr("creator_service.artifact_download_service.execute", _execute)
+
+    service = ArtifactDownloadService(InMemoryArtifactDownloadStorage())
+    marked = await service.sweep_expired()
+
+    assert marked == 0
+
+
+@pytest.mark.asyncio
+async def test_sweep_expired_rejects_invalid_batch_size() -> None:
+    service = ArtifactDownloadService(InMemoryArtifactDownloadStorage())
+    with pytest.raises(ValueError):
+        await service.sweep_expired(batch_size=0)

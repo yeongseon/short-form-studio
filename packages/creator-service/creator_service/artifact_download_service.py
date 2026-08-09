@@ -135,6 +135,39 @@ class ArtifactDownloadService:
             str(exc)[:500],
         )
 
+    async def sweep_expired(self, batch_size: int = 500) -> int:
+        """Mark expired artifacts for deletion.
+
+        Rows whose ``expires_at`` has passed and that haven't already been
+        scheduled for deletion get ``delete_requested_at = NOW()``. The actual
+        storage + DB row removal is handled by the existing
+        ``retry_failed_deletions`` flow (``FOR UPDATE SKIP LOCKED``).
+
+        Returns the number of rows newly marked for deletion.
+        """
+        if batch_size < 1:
+            raise ValueError("batch_size must be >= 1")
+
+        result = await execute(
+            "UPDATE creator_artifacts "
+            "SET delete_requested_at = NOW() "
+            "WHERE id IN ("
+            "    SELECT id FROM creator_artifacts "
+            "    WHERE expires_at IS NOT NULL"
+            "      AND expires_at < NOW()"
+            "      AND delete_requested_at IS NULL"
+            "    LIMIT $1"
+            ")",
+            batch_size,
+        )
+        # asyncpg CommandComplete returns a status string like 'UPDATE N'.
+        status = getattr(result, "statusmessage", "") or ""
+        try:
+            return int(status.rsplit(" ", 1)[-1])
+        except (TypeError, ValueError):
+            return 0
+
+
     async def retry_failed_deletions(self, max_retries: int = 5) -> int:
         """Reattempt deletion for artifacts that previously failed.
 

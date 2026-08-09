@@ -21,7 +21,10 @@ set ``expires_at = NULL`` explicitly or update to a far-future date.
 See ``apps/api/src/shorts_api/routes/creator_artifact_download.py:51-55``
 for the enforcement check, and
 ``apps/worker-orchestrator/tasks/retry_failed_artifact_deletions.py``
-for the periodic cleanup that now runs every 5 minutes.
+for the periodic cleanup that retries failed deletions (every 5 minutes).
+Migration 031 makes the retention window configurable via
+``ARTIFACT_RETENTION_DAYS`` and adds a ``sweep_expired_artifacts`` beat
+task (every 10 minutes) that marks expired rows for deletion.
 """
 
 from collections.abc import Sequence
