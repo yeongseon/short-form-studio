@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Celery Beat scheduler service (`beat`) in `docker-compose.yml` (+ dev and scaled-workers overlays) so scheduled tasks actually run (#585).
+- `retry_failed_artifact_deletions` and `sweep_expired_artifacts` registered in `celery_app.include` (#585, #587).
+- `ARTIFACT_RETENTION_DAYS` env var (default 90) + `sweep_expired_artifacts` beat task that marks expired artifacts for deletion (#587).
+- CI smoke: `celery inspect registered` verifies every beat task is registered on the worker (#585).
+- CI smoke: POST through nginx (port 5174) with the browser Origin header to catch CSRF regressions (#586).
+
+### Fixed
+
+- API key revocation silently bypassed — `_AsyncpgSessionAdapter` discarded the `revoked_at IS NULL` filter. Adapter removed; the resolver now runs the asyncpg query directly (#583).
+- Local artifact downloads always returned 404 — the route read `file_path` (absolute) instead of `storage_key` (root-relative). Legacy rows now normalized via `os.path.relpath` (#584).
+- nginx CSRF check rejected default compose port — `$host` doesn't include the port, switched to `$http_host` (#586).
+
+## [0.4.0] - 2026-07-23
+
+### Added
+
 - Mermaid architecture diagrams in README (system topology, pipeline flow, package dependencies)
 - CI pipeline with lint, test (coverage), Docker build, and smoke test
 - Community files: CONTRIBUTING.md, CODE_OF_CONDUCT.md, SECURITY.md
@@ -23,6 +39,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Authenticated artifact route replacing static file mounts
 - Paragraph-level generation with per-section skip/retry logic
 - Human-in-the-loop review gates at every pipeline stage
+- ADR-006 (API key auth) and ADR-007 (OAuth2/OIDC roadmap, Supabase primary)
+- `api_keys.name` and `api_keys.revoked_at` columns (migration 029)
+- Server-side `expires_at` default on `creator_artifacts` (migration 030)
+- Deletion retry metadata on `creator_artifacts` (`delete_requested_at`, `delete_failed_at`, `delete_retry_count`)
 
 ### Changed
 

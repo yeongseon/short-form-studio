@@ -37,15 +37,15 @@ Operator-facing guide for deploying and verifying the short-form-studio system.
    | `OLLAMA_BASE_URL` | Yes | Default: `http://ollama:11434` |
    | `OLLAMA_DEFAULT_MODEL` | Yes | Default: `qwen3:4b` |
    | `STABLE_DIFFUSION_BASE_URL` | Yes | Default: `http://stable-diffusion:7860` |
-| `TTS_QWEN3_BASE_URL` | Yes | Default: `http://tts-qwen3:8100` |
-| `STT_WHISPER_BASE_URL` | Yes | Default: `http://stt-whisper:8200` |
+   | `TTS_QWEN3_BASE_URL` | Yes | Default: `http://tts-qwen3:8100` |
+   | `STT_WHISPER_BASE_URL` | Yes | Default: `http://stt-whisper:8200` |
    | `GPU_LOCK_KEY` | Yes | Default: `gpu:lock` |
    | `GPU_LOCK_TIMEOUT_SECONDS` | Yes | Default: `600` |
-| `OPENAI_API_KEY` | No | External LLM/Image/TTS provider |
-| `ANTHROPIC_API_KEY` | No | External LLM provider |
-| `GOOGLE_API_KEY` | No | External LLM/Image provider |
-| `STABILITY_API_KEY` | No | External image provider |
-| `ELEVENLABS_API_KEY` | No | External TTS fallback |
+   | `OPENAI_API_KEY` | No | External LLM/Image/TTS provider |
+   | `ANTHROPIC_API_KEY` | No | External LLM provider |
+   | `GOOGLE_API_KEY` | No | External LLM/Image provider |
+   | `STABILITY_API_KEY` | No | External image provider |
+   | `ELEVENLABS_API_KEY` | No | External TTS fallback |
 
 3. **Ensure AI model images exist** (pre-built locally; not shipped in this repo)
 
@@ -53,7 +53,7 @@ Operator-facing guide for deploying and verifying the short-form-studio system.
    docker images | grep short-form-studio
    # Expected:
    #   short-form-studio-stable-diffusion
-#   short-form-studio-tts-qwen3
+   #   short-form-studio-tts-qwen3
    #   short-form-studio-stt-whisper
    ```
 

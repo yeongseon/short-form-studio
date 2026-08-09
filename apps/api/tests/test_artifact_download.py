@@ -222,6 +222,66 @@ async def test_download_artifact_normalizes_legacy_absolute_file_path(
     assert response.status_code == 200
     assert response.content == b"legacy-audio"
 
+
+@pytest.mark.asyncio
+async def test_download_artifact_forces_attachment_disposition(
+    client, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Downloads must be served as attachments with a whitelisted MIME (#588)."""
+    artifact_rel_path = "1/100/audio.wav"
+    target_path = tmp_path / artifact_rel_path
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_bytes(b"test-audio")
+
+    stub = StubArtifactDownloadService(
+        {
+            "id": 920,
+            "run_id": 100,
+            "file_path": artifact_rel_path,
+            "storage_provider": "local",
+            "content_type": "audio/wav",
+        }
+    )
+
+    _patch_route_services(monkeypatch, stub)
+    monkeypatch.setenv("ARTIFACT_ROOT", str(tmp_path))
+
+    response = await client.get("/api/creator/runs/100/artifacts/920/download")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/wav"
+    assert response.headers["content-disposition"] == 'attachment; filename="audio.wav"'
+
+
+@pytest.mark.asyncio
+async def test_download_artifact_rejects_untrusted_content_type(
+    client, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """Untrusted content_type falls back to application/octet-stream (#588)."""
+    artifact_rel_path = "1/100/evil.html"
+    target_path = tmp_path / artifact_rel_path
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_bytes(b"<script>x</script>")
+
+    stub = StubArtifactDownloadService(
+        {
+            "id": 921,
+            "run_id": 100,
+            "file_path": artifact_rel_path,
+            "storage_provider": "local",
+            "content_type": "text/html",
+        }
+    )
+
+    _patch_route_services(monkeypatch, stub)
+    monkeypatch.setenv("ARTIFACT_ROOT", str(tmp_path))
+
+    response = await client.get("/api/creator/runs/100/artifacts/921/download")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/octet-stream"
+    assert response.headers["content-disposition"].startswith("attachment;")
+
 @pytest.mark.asyncio
 async def test_old_artifact_endpoint_returns_404_for_missing_file(client):
     response = await client.get("/artifacts/1/100/audio.wav")
