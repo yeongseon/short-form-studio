@@ -138,6 +138,11 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             try:
                 rows = await connection.fetch(query, user_id)
             except Exception:
+                logger.exception("DB error resolving member workspaces for user_id=%s", user_id)
+                raise
+            try:
+                rows = await connection.fetch(query, user_id)
+            except Exception:
                 return []
 
         workspace_ids: list[int] = []
@@ -210,7 +215,10 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
                 content={"detail": "API key is not associated with any user"},
             )
 
-        member_workspace_ids = await self._resolve_member_workspaces(user_id_int)
+        try:
+            member_workspace_ids = await self._resolve_member_workspaces(user_id_int)
+        except Exception:
+            return JSONResponse(status_code=503, content={"detail": "Service unavailable"})
         if not member_workspace_ids:
             return JSONResponse(status_code=404, content={"detail": "Not found"})
 
