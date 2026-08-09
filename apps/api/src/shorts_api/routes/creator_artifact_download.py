@@ -56,14 +56,34 @@ async def download_artifact(
     ):
         raise HTTPException(status_code=410, detail="Artifact has expired")
 
-    artifact_root = os.path.realpath(os.getenv("ARTIFACT_ROOT", "data/artifacts"))
-    artifact_path = artifact.get("file_path")
+    artifact_root_str = os.getenv("ARTIFACT_ROOT", "data/artifacts")
+    artifact_root = os.path.realpath(artifact_root_str)
+
+    # Prefer storage_key (always root-relative) over file_path (absolute since
+    # render_video.py stores `{_ARTIFACT_ROOT}/{run_id}/render/...`). Using
+    # file_path directly triggers the leading-component guard and returns 404 (#584).
+    artifact_path = artifact.get("storage_key") or artifact.get("file_path")
     if not isinstance(artifact_path, str) or not artifact_path:
         raise HTTPException(status_code=404, detail="Artifact not found")
 
-    normalized = artifact_path.replace("\\", "/")
-    path_components = normalized.split("/")
-    if any(component in {"", ".", ".."} for component in path_components):
+    # Legacy rows may still carry an absolute file_path; strip the artifact root
+    # so the remaining components are root-relative.
+    try:
+        rel_path = os.path.relpath(artifact_path, artifact_root_str)
+    except ValueError:
+        # Different drives on Windows — fall back to the raw value.
+        rel_path = artifact_path
+    if rel_path == ".." or rel_path.startswith("../") or rel_path.startswith(f"..{os.sep}"):
+        # file_path was not under ARTIFACT_ROOT; keep the original so the
+        # component guard + commonpath check below reject it safely.
+        rel_path = artifact_path
+        # file_path was not under ARTIFACT_ROOT; keep the original so the
+        # component guard + commonpath check below reject it safely.
+        rel_path = artifact_path
+
+    normalized = rel_path.replace("\\", "/")
+    path_components = [c for c in normalized.split("/") if c not in {"", "."}]
+    if any(component in {".."} for component in path_components):
         raise HTTPException(status_code=404, detail="Artifact not found")
 
     try:
