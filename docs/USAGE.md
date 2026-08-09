@@ -265,6 +265,21 @@ data/artifacts/<run_id>/
     └── output.mp4              # Final rendered video (1080x1920, H.264, 30fps)
 ```
 
+### Artifact retention
+
+By default, artifacts are automatically deleted **90 days** after creation.
+Configure the window with the `ARTIFACT_RETENTION_DAYS` env var (set to `0`
+to disable expiry):
+
+- The `sweep_expired_artifacts` beat task (every 10 minutes) marks rows
+  whose `expires_at` has passed by setting `delete_requested_at = NOW()`.
+- The `retry_failed_artifact_deletions` task (every 5 minutes) then removes
+  the file from storage and deletes the DB row, retrying transient failures
+  with `FOR UPDATE SKIP LOCKED`.
+
+Requires Celery Beat to be running (see the `beat` service in
+`docker-compose.yml`). Downloads return `410 Gone` once `expires_at` passes.
+
 ---
 
 ## Limitations

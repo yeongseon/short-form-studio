@@ -110,6 +110,7 @@ celery_app = Celery(
         "tasks.generate_paragraph_subtitles",
         "tasks.reconcile_stale_dispatches",
         "tasks.retry_failed_artifact_deletions",
+        "tasks.sweep_expired_artifacts",
     ],
 )
 celery_app.conf.task_default_queue = "creator"
@@ -159,6 +160,10 @@ celery_app.conf.beat_schedule = {
     "retry-failed-artifact-deletions": {
         "task": "retry_failed_artifact_deletions",
         "schedule": 300.0,  # every 5 minutes
+    },
+    "sweep-expired-artifacts": {
+        "task": "sweep_expired_artifacts",
+        "schedule": 600.0,  # every 10 minutes
     },
 }
 celery_app.conf.update(

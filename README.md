@@ -243,6 +243,7 @@ Key settings:
 |---|---|---|
 | `CORS_ORIGINS` | Allowed CORS origins | `http://localhost:5174` |
 | `ARTIFACT_ROOT` | Path for generated artifacts | `./data/artifacts` |
+| `ARTIFACT_RETENTION_DAYS` | Days before artifacts are auto-deleted (0 disables) | `90` |
 | `OLLAMA_DEFAULT_MODEL` | Default LLM model | `qwen3:4b` |
 
 ## API Authentication
