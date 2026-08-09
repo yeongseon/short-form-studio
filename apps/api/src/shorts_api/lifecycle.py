@@ -54,16 +54,16 @@ ENABLE_PROCESS_RESOURCE_GUARD = os.getenv("ENABLE_PROCESS_RESOURCE_GUARD", "fals
 
 
 def _apply_resource_limits() -> None:
-    memory_limit_bytes = MAX_MEMORY_MB * 1024 * 1024
-    try:
-        resource.setrlimit(resource.RLIMIT_AS, (memory_limit_bytes, memory_limit_bytes))
-    except (OSError, ValueError):
-        logger.error(
-            "Failed to set RLIMIT_AS to %d bytes during startup",
-            memory_limit_bytes,
-            exc_info=True,
-        )
-        raise
+    """Memory limits are now enforced via cgroup (Docker deploy.resources.limits.memory).
+
+    RLIMIT_AS was previously used but caused MemoryError on processes that
+    reserve large virtual address ranges (CUDA/torch/ffmpeg) even when RSS
+    is low (#611). Kept as a no-op for backward compatibility.
+    """
+    logger.info(
+        "Memory limit: MAX_MEMORY_MB=%d (enforced via cgroup, not RLIMIT_AS)",
+        MAX_MEMORY_MB,
+    )
 
 
 def _cpu_usage_percent(
