@@ -22,6 +22,17 @@ services:
       - ./packages/creator-provider/creator_provider:/usr/local/lib/python3.12/site-packages/creator_provider
       - ./packages/creator-domain/creator_domain:/usr/local/lib/python3.12/site-packages/creator_domain
 
+  # Mount source for live beat schedule reload during development.
+  beat:
+    build:
+      target: dev
+    volumes:
+      - ./apps/worker-orchestrator/tasks:/app/tasks
+      - ./apps/worker-orchestrator/celery_app.py:/app/celery_app.py
+      - ./packages/creator-service/creator_service:/usr/local/lib/python3.12/site-packages/creator_service
+      - ./packages/creator-provider/creator_provider:/usr/local/lib/python3.12/site-packages/creator_provider
+      - ./packages/creator-domain/creator_domain:/usr/local/lib/python3.12/site-packages/creator_domain
+
   # NOTE: This service is incompatible with docker-compose.local-server.yml.
   # The local-server override expects nginx on port 8080; this dev stage
   # runs Vite on 5173. Do not combine both overrides for studio-web.

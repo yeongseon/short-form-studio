@@ -92,6 +92,12 @@ jobs:
         run: cp .env.example .env
       - name: Validate docker-compose config
         run: docker compose config --quiet
+      - name: Verify celery beat service is defined
+        run: |
+          # Every beat_schedule entry needs a running beat process (#585).
+          docker compose config --services | grep -q '^beat$' \
+            || { echo 'ERROR: no beat service defined — scheduled tasks will never run'; exit 1; }
+        run: docker compose config --quiet
       - name: Verify API port not exposed on 0.0.0.0
         run: |
           # Ensure API, Postgres, and Redis are bound to 127.0.0.1 only
@@ -116,7 +122,7 @@ jobs:
         run: docker build --target runtime -f apps/worker-orchestrator/Dockerfile .
       - name: Smoke-test compose up
         run: |
-          docker compose up -d postgres redis api studio-web worker
+          docker compose up -d postgres redis api studio-web worker beat
           # Wait for API health endpoint
           timeout 60 bash -c 'until curl -sf http://localhost:8000/healthz; do sleep 2; done'
           # Verify API responds
@@ -127,6 +133,14 @@ jobs:
           curl -sf http://localhost:5174/
           # Verify worker container is running
           docker compose ps worker --format json | grep -q running
+          # Verify every beat_schedule task is registered on the worker (#585).
+          # Catches both missing include entries and NotRegistered at dispatch time.
+          for task in reconcile_stale_dispatches retry_failed_artifact_deletions; do
+            docker compose exec -T worker celery -A celery_app.celery_app inspect registered \
+              | grep -q "$task" \
+              || { echo "ERROR: beat task '$task' not registered on worker"; exit 1; }
+            echo "OK: $task registered"
+          done
           # --- Creator API smoke test ---
           # Run migrations
           docker compose exec -T api alembic upgrade head

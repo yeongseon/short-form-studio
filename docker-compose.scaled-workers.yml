@@ -15,6 +15,22 @@ services:
   worker:
     profiles: ["disabled"]
 
+  # Beat scheduler must run as a single instance — independent of worker scaling.
+  beat:
+    build:
+      context: .
+      dockerfile: apps/worker-orchestrator/Dockerfile
+      target: runtime
+    command: ["celery", "-A", "celery_app.celery_app", "beat", "--loglevel=info"]
+    env_file:
+      - .env
+    environment:
+      PYTHONPATH: /app/src:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
   worker-script:
     build:
       context: .

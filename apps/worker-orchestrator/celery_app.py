@@ -109,6 +109,7 @@ celery_app = Celery(
         "tasks.generate_paragraph_audio",
         "tasks.generate_paragraph_subtitles",
         "tasks.reconcile_stale_dispatches",
+        "tasks.retry_failed_artifact_deletions",
     ],
 )
 celery_app.conf.task_default_queue = "creator"
