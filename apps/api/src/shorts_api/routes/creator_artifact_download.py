@@ -77,9 +77,6 @@ async def download_artifact(
         # file_path was not under ARTIFACT_ROOT; keep the original so the
         # component guard + commonpath check below reject it safely.
         rel_path = artifact_path
-        # file_path was not under ARTIFACT_ROOT; keep the original so the
-        # component guard + commonpath check below reject it safely.
-        rel_path = artifact_path
 
     normalized = rel_path.replace("\\", "/")
     path_components = [c for c in normalized.split("/") if c not in {"", "."}]
