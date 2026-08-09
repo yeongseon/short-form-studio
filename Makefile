@@ -1,5 +1,5 @@
 install:
-	python3 -m pip install -r apps/api/requirements.txt -r apps/worker-orchestrator/requirements.txt
+	python3 -m pip install -c constraints.txt -r apps/api/requirements.txt -r apps/worker-orchestrator/requirements.txt
 	npm --prefix apps/studio-web install
 
 dev:

@@ -97,5 +97,28 @@ async def download_artifact(
     if not os.path.isfile(resolved_path):
         raise HTTPException(status_code=404, detail="Artifact not found")
 
-    content_type = artifact.get("content_type") or artifact.get("mime_type")
-    return FileResponse(resolved_path, media_type=content_type)
+    raw_content_type = artifact.get("content_type") or artifact.get("mime_type")
+    # Defense in depth: only allow known artifact MIME types and force download.
+    # Prevents the API origin from ever rendering HTML/SVG as a document.
+    _ALLOWED_CONTENT_TYPES = frozenset({
+        "video/mp4",
+        "video/webm",
+        "audio/wav",
+        "audio/mpeg",
+        "audio/mp3",
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+        "text/vtt",
+        "application/x-subrip",
+        "application/octet-stream",
+    })
+    content_type = raw_content_type if raw_content_type in _ALLOWED_CONTENT_TYPES else "application/octet-stream"
+
+    artifact_id_str = str(artifact.get("id", artifact_id))
+    filename = safe_components[-1] if safe_components else f"artifact-{artifact_id_str}"
+    return FileResponse(
+        resolved_path,
+        media_type=content_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

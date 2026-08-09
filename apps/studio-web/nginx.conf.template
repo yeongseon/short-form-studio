@@ -35,14 +35,6 @@ server {
         proxy_set_header X-API-Key "${API_KEY}";
     }
 
-    # Proxy artifact requests to the backend
-    location /artifacts/ {
-        proxy_pass http://api:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-API-Key "${API_KEY}";
-    }
-
     # Proxy health/docs endpoints so frontend can use same-origin relative URLs
     location /health {
         proxy_pass http://api:8000;
