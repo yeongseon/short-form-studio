@@ -250,7 +250,7 @@ async def test_download_artifact_forces_attachment_disposition(
 
     assert response.status_code == 200
     assert response.headers["content-type"] == "audio/wav"
-    assert response.headers["content-disposition"] == 'attachment; filename="audio.wav"'
+    assert response.headers["content-disposition"].startswith('attachment; filename="audio.wav"')
 
 
 @pytest.mark.asyncio

@@ -88,6 +88,9 @@ class GroqSvgImageProvider(ImageProvider):
             bytestring=svg_content.encode("utf-8"),
             output_width=width,
             output_height=height,
+            # Deny ALL external resource fetches to prevent SSRF from LLM-generated
+            # SVG containing <image href="http://169.254.169.254/..."> etc.
+            url_fetcher=lambda *args, **kwargs: None,
         )
 
         # Write output

@@ -54,7 +54,7 @@ class PlaceholderImageProvider(ImageProvider):
 
         # Generate a deterministic color from the prompt (hashlib for consistency across runs)
         import hashlib
-        h = int(hashlib.md5(prompt.encode()).hexdigest()[:6], 16)
+        h = int(hashlib.md5(prompt.encode(), usedforsecurity=False).hexdigest()[:6], 16)
         r, g, b = (h >> 16) & 0xFF, (h >> 8) & 0xFF, h & 0xFF
         # Ensure minimum brightness
         r, g, b = max(r, 40), max(g, 40), max(b, 40)
