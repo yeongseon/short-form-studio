@@ -171,10 +171,18 @@ class ArtifactDownloadService:
     async def retry_failed_deletions(self, max_retries: int = 5) -> int:
         """Reattempt deletion for artifacts that previously failed.
 
-        Runs inside a single database transaction so that
-        ``FOR UPDATE SKIP LOCKED`` keeps claimed rows locked until the
-        transaction commits, preventing concurrent retry jobs from
-        processing the same artifacts.
+        Uses a 3-phase design to avoid holding database locks during
+        network (S3/Azure/local) storage deletes:
+
+        1. **Claim** (short transaction): SELECT ... FOR UPDATE SKIP LOCKED
+           collects up to 500 candidate rows and immediately commits.
+           The lock prevents concurrent callers from claiming the same
+           rows during the SELECT, but is released before any network I/O.
+        2. **Delete** (no transaction): call ``backend.delete(key)`` for
+           each claimed row outside any database transaction.
+        3. **Commit** (short transaction): DELETE successful rows from
+           the DB, UPDATE failures with error metadata, and mark rows
+           that have exhausted all retries as abandoned.
 
         Also picks up *stranded* rows — those with ``delete_requested_at``
         set but no ``delete_failed_at`` (e.g. process crashed after storage
@@ -185,10 +193,8 @@ class ArtifactDownloadService:
         if max_retries < 1:
             raise ValueError("max_retries must be >= 1")
 
+        # Phase 1: Claim rows in a short transaction.
         async with transaction() as conn:
-            # Claim rows with FOR UPDATE SKIP LOCKED inside the transaction.
-            # The lock is held until the transaction commits/rolls back,
-            # so concurrent callers skip these rows entirely.
             rows = await conn.fetch(
                 "SELECT id, storage_key, delete_retry_count "
                 "FROM creator_artifacts "
@@ -197,45 +203,77 @@ class ArtifactDownloadService:
                 "  OR (delete_requested_at IS NOT NULL AND delete_failed_at IS NULL)"
                 ") "
                 "AND COALESCE(delete_retry_count, 0) < $1 "
-                "AND storage_key IS NOT NULL AND storage_key != \'\' "
+                "AND storage_key IS NOT NULL AND storage_key != '' "
                 "LIMIT 500 "
                 "FOR UPDATE SKIP LOCKED",
                 max_retries,
             )
             artifacts = [dict(r) for r in rows]
-            if not artifacts:
-                return 0
+        # Locks released here — transaction committed.
 
-            backend = get_storage_backend()
-            deleted_ids: list[int] = []
+        if not artifacts:
+            return 0
 
-            for artifact in artifacts:
-                key = artifact.get("storage_key")
-                artifact_id = artifact.get("id")
-                if not isinstance(key, str) or not key or not isinstance(artifact_id, int):
-                    continue
-                try:
-                    backend.delete(key)
-                    deleted_ids.append(artifact_id)
-                except Exception as exc:
-                    logger.exception(
-                        "Retry failed for artifact id=%s key=\'%s\'", artifact_id, key
-                    )
-                    await conn.execute(
-                        "UPDATE creator_artifacts "
-                        "SET delete_failed_at = NOW(), "
-                        "    delete_error = $2, "
-                        "    delete_retry_count = COALESCE(delete_retry_count, 0) + 1 "
-                        "WHERE id = $1",
-                        artifact_id,
-                        str(exc)[:500],
-                    )
+        # Phase 2: Delete storage objects (NO transaction — no locks held).
+        backend = get_storage_backend()
+        deleted_ids: list[int] = []
+        failed_updates: list[tuple[int, str]] = []
 
+        for artifact in artifacts:
+            key = artifact.get("storage_key")
+            artifact_id = artifact.get("id")
+            if not isinstance(key, str) or not key or not isinstance(artifact_id, int):
+                continue
+            try:
+                backend.delete(key)
+                deleted_ids.append(artifact_id)
+            except Exception as exc:
+                logger.exception(
+                    "Retry failed for artifact id=%s key='%s'", artifact_id, key
+                )
+                failed_updates.append((artifact_id, str(exc)[:500]))
+
+        # Phase 3: Update DB in a short transaction.
+        async with transaction() as conn:
             if deleted_ids:
                 await conn.execute(
                     "DELETE FROM creator_artifacts WHERE id = ANY($1::int[])",
                     deleted_ids,
                 )
+            for artifact_id, error_msg in failed_updates:
+                await conn.execute(
+                    "UPDATE creator_artifacts "
+                    "SET delete_failed_at = NOW(), "
+                    "    delete_error = $2, "
+                    "    delete_retry_count = COALESCE(delete_retry_count, 0) + 1 "
+                    "WHERE id = $1",
+                    artifact_id,
+                    error_msg,
+                )
+            # Log rows that have exhausted all retries (#610).
+            # These rows remain in the DB with delete_retry_count >= max_retries
+            # and will not be picked up by future retry passes (the WHERE clause
+            # filters them out). Storage objects become orphaned — manual cleanup
+            # may be needed.
+            abandoned_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM creator_artifacts "
+                "WHERE COALESCE(delete_retry_count, 0) >= $1",
+                max_retries,
+            )
+            if abandoned_count and abandoned_count > 0:
+                logger.warning(
+                    "retry_failed_deletions: %d artifacts have exhausted max_retries=%d "
+                    "and will not be retried — storage orphans may need manual cleanup",
+                    abandoned_count,
+                    max_retries,
+                )
+
+        if failed_updates:
+            logger.warning(
+                "retry_failed_deletions: %d succeeded, %d failed",
+                len(deleted_ids),
+                len(failed_updates),
+            )
 
         return len(deleted_ids)
 
