@@ -509,13 +509,13 @@ async def test_sweep_expired_marks_rows_for_deletion(
     """sweep_expired sets delete_requested_at on rows past expires_at (#587)."""
     captured: dict[str, object] = {}
 
-    class _Result:
-        statusmessage = "UPDATE 7"
-
-    async def _execute(query: str, *args: object) -> object:
+    # db.execute() returns the asyncpg status string (e.g. "UPDATE 7").
+    # The previous test invented a fake _Result.statusmessage class that
+    # did not match the real contract — that's how #596 slipped through.
+    async def _execute(query: str, *args: object) -> str:
         captured["query"] = query
         captured["batch_size"] = args[0] if args else None
-        return _Result()
+        return "UPDATE 7"
 
     monkeypatch.setattr("creator_service.artifact_download_service.execute", _execute)
 
@@ -534,11 +534,8 @@ async def test_sweep_expired_marks_rows_for_deletion(
 async def test_sweep_expired_returns_zero_when_nothing_matched(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class _Result:
-        statusmessage = "UPDATE 0"
-
-    async def _execute(query: str, *args: object) -> object:
-        return _Result()
+    async def _execute(query: str, *args: object) -> str:
+        return "UPDATE 0"
 
     monkeypatch.setattr("creator_service.artifact_download_service.execute", _execute)
 
