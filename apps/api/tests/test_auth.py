@@ -299,6 +299,51 @@ async def test_middleware_without_workspace_membership_returns_404(api_key, monk
 
 
 @pytest.mark.asyncio
+async def test_db_error_during_workspace_resolution_returns_503(api_key, monkeypatch: pytest.MonkeyPatch):
+    """DB failure in workspace resolution must return 503, not 404 (#601).
+
+    _resolve_member_workspaces previously had a bare except that returned [],
+    which dispatch() mapped to 404. A transient DB outage made every user look
+    like they had zero memberships.
+    """
+    expected_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+
+    class _Conn:
+        async def fetchrow(self, query: str, key_hash: str):
+            if key_hash != expected_hash:
+                return None
+            return {"user_id": 1}
+
+        async def fetch(self, _query: str, user_id: int):
+            raise RuntimeError("DB connection lost")
+
+    class _Acquire:
+        async def __aenter__(self):
+            return _Conn()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            _ = (exc_type, exc, tb)
+            return False
+
+    class _Pool:
+        def acquire(self):
+            return _Acquire()
+
+    async def _get_pool_stub(self):
+        _ = self
+        return _Pool()
+
+    monkeypatch.setattr("shorts_api.auth.ApiKeyMiddleware._get_pool", _get_pool_stub)
+
+    app = _make_app()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        response = await ac.get("/api/creator/data", headers={"X-API-Key": api_key})
+        assert response.status_code == 503
+        assert response.json() == {"detail": "Service unavailable"}
+
+
+@pytest.mark.asyncio
 async def test_revoked_api_key_returns_401(api_key, monkeypatch: pytest.MonkeyPatch):
     """A revoked key (revoked_at set in the DB) must NOT authenticate.
 
