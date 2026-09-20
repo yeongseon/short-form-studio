@@ -195,8 +195,11 @@ jobs:
           # rejected every write with 403.
           # nginx overwrites X-API-Key with its own ${API_KEY} env (blank at the
           # initial compose-up, since the key is bootstrapped later), so recreate
-          # studio-web with the seeded key before exercising the proxied write.
-          API_KEY="$API_KEY" docker compose up -d --force-recreate studio-web
+          # only studio-web with the seeded key before exercising the proxied
+          # write. --no-deps keeps the already-running api container untouched so
+          # the proxy upstream stays up (avoids a 502 on a freshly-recreated api).
+          API_KEY="$API_KEY" docker compose up -d --no-deps --force-recreate studio-web
+          timeout 60 bash -c 'until curl -sf http://localhost:8000/healthz; do sleep 2; done'
           timeout 60 bash -c 'until curl -sf http://localhost:5174/; do sleep 2; done'
           NGINX_POST_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
             -H "Origin: http://localhost:5174" \
