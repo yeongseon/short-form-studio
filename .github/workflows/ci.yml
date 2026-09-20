@@ -188,11 +188,13 @@ jobs:
             http://localhost:8000/api/creator/projects/$PROJECT_ID/runs
           echo "Creator API smoke test passed"
           # --- nginx CSRF smoke test (#586) ---
-          # POST through nginx (port 5174) with the real browser Origin header.
+          # POST through nginx (port 5174) with a same-origin browser Origin
+          # header. The CSRF check requires Origin == scheme://host, so the
+          # Origin host must match the request host (localhost, not 127.0.0.1).
           # Before the fix, $host didn't include the port, so the CSRF check
           # rejected every write with 403.
           NGINX_POST_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
-            -H "Origin: http://127.0.0.1:5174" \
+            -H "Origin: http://localhost:5174" \
             -H "X-API-Key: $API_KEY" \
             -H "Content-Type: application/json" \
             -d '{"title":"Nginx CSRF Smoke","source_type":"idea","idea_brief":"nginx"}' \
