@@ -48,16 +48,34 @@ _EXTENSION_BY_MIME = {
     "video/mp4": ".mp4",
     "video/webm": ".webm",
     "video/quicktime": ".mov",
+    "audio/mpeg": ".mp3",
+    "audio/wav": ".wav",
+    "audio/mp4": ".m4a",
+    "audio/ogg": ".ogg",
+    "audio/webm": ".weba",
 }
 
 # 500 MiB default cap for video uploads.
 _DEFAULT_MAX_VIDEO_BYTES = 500 * 1024 * 1024
+
+# 100 MiB default cap for audio uploads.
+_DEFAULT_MAX_AUDIO_BYTES = 100 * 1024 * 1024
 
 _ALLOWED_VIDEO_CONTENT_TYPES = frozenset(
     {
         "video/mp4",
         "video/webm",
         "video/quicktime",
+    }
+)
+
+_ALLOWED_AUDIO_CONTENT_TYPES = frozenset(
+    {
+        "audio/mpeg",
+        "audio/wav",
+        "audio/mp4",
+        "audio/ogg",
+        "audio/webm",
     }
 )
 
@@ -153,6 +171,22 @@ def _validate_video_upload(
     normalized = (content_type or "").split(";", 1)[0].strip().lower()
     if normalized not in _ALLOWED_VIDEO_CONTENT_TYPES:
         raise MediaUploadRejected(f"Unsupported video content type: {content_type!r}")
+    if not data:
+        raise MediaUploadRejected("Empty upload")
+    if len(data) > max_bytes:
+        raise MediaUploadRejected("Upload exceeds maximum allowed size")
+    return normalized
+
+
+def _validate_audio_upload(
+    data: bytes,
+    *,
+    content_type: str,
+    max_bytes: int = _DEFAULT_MAX_AUDIO_BYTES,
+) -> str:
+    normalized = (content_type or "").split(";", 1)[0].strip().lower()
+    if normalized not in _ALLOWED_AUDIO_CONTENT_TYPES:
+        raise MediaUploadRejected(f"Unsupported audio content type: {content_type!r}")
     if not data:
         raise MediaUploadRejected("Empty upload")
     if len(data) > max_bytes:
@@ -361,6 +395,38 @@ class MediaAssetService:
             data=data,
             canonical_mime=canonical_mime,
             media_type=MediaType.VIDEO,
+            probed=probed,
+            project_id=project_id,
+            run_id=run_id,
+        )
+
+    async def create_audio_asset(
+        self,
+        *,
+        workspace_id: int,
+        filename: str,
+        data: bytes,
+        content_type: str,
+        project_id: int | None = None,
+        run_id: int | None = None,
+        max_bytes: int = _DEFAULT_MAX_AUDIO_BYTES,
+    ) -> MediaAsset:
+        """Validate, probe, store, and persist an uploaded audio asset.
+
+        The exact uploaded bytes are stored unchanged (source-preserving).
+        Rejections raise before any storage write.
+        """
+        safe_name = _safe_filename(filename)
+        canonical_mime = _validate_audio_upload(
+            data, content_type=content_type, max_bytes=max_bytes
+        )
+        probed = _probe_media_metadata(data, kind="audio")
+        return await self._store_asset(
+            workspace_id=workspace_id,
+            safe_name=safe_name,
+            data=data,
+            canonical_mime=canonical_mime,
+            media_type=MediaType.AUDIO,
             probed=probed,
             project_id=project_id,
             run_id=run_id,
