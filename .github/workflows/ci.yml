@@ -99,20 +99,43 @@ jobs:
             || { echo 'ERROR: no beat service defined — scheduled tasks will never run'; exit 1; }
       - name: Verify API port not exposed on 0.0.0.0
         run: |
-          # Ensure API, Postgres, and Redis are bound to 127.0.0.1 only
-          if docker compose config | grep -E 'published:.*8000' | grep -v '127.0.0.1'; then
-            echo "ERROR: API port 8000 must be bound to 127.0.0.1, not 0.0.0.0"
-            exit 1
-          fi
-          if docker compose config | grep -E 'published:.*5432' | grep -v '127.0.0.1'; then
-            echo "ERROR: Postgres port 5432 must be bound to 127.0.0.1"
-            exit 1
-          fi
-          if docker compose config | grep -E 'published:.*6379' | grep -v '127.0.0.1'; then
-            echo "ERROR: Redis port 6379 must be bound to 127.0.0.1"
-            exit 1
-          fi
-          echo "Port exposure check passed: all backend services on 127.0.0.1"
+          # Ensure API, Postgres, and Redis are bound to 127.0.0.1 only.
+          # `docker compose config` normalizes "127.0.0.1:8000:8000" into a
+          # per-port block with separate `host_ip:` and `published:` fields, so
+          # we resolve each published port's host_ip via a small Python parser
+          # rather than a line-oriented grep.
+          docker compose config -o /tmp/compose.resolved.yml
+          python3 - <<'PY'
+          import sys
+          import yaml
+
+          with open("/tmp/compose.resolved.yml") as handle:
+              config = yaml.safe_load(handle)
+
+          required = {"8000": "API", "5432": "Postgres", "6379": "Redis"}
+          failures = []
+          for service in (config.get("services") or {}).values():
+              for port in service.get("ports") or []:
+                  if isinstance(port, dict):
+                      published = str(port.get("published", ""))
+                      host_ip = port.get("host_ip", "")
+                  else:
+                      # "host_ip:published:target" or "published:target"
+                      parts = str(port).split(":")
+                      host_ip = parts[0] if len(parts) == 3 else ""
+                      published = parts[-2] if len(parts) >= 2 else ""
+                  if published in required and host_ip != "127.0.0.1":
+                      failures.append(
+                          f"{required[published]} port {published} must be bound to "
+                          f"127.0.0.1, got host_ip={host_ip!r}"
+                      )
+
+          if failures:
+              for message in failures:
+                  print(f"ERROR: {message}")
+              sys.exit(1)
+          print("Port exposure check passed: all backend services on 127.0.0.1")
+          PY
       - name: Build API runtime image
         run: docker build --target runtime -f apps/api/Dockerfile .
       - name: Build Studio Web runtime image
@@ -165,12 +188,18 @@ jobs:
             http://localhost:8000/api/creator/projects/$PROJECT_ID/runs
           echo "Creator API smoke test passed"
           # --- nginx CSRF smoke test (#586) ---
-          # POST through nginx (port 5174) with the real browser Origin header.
+          # POST through nginx (port 5174) with a same-origin browser Origin
+          # header. The CSRF check requires Origin == scheme://host, so the
+          # Origin host must match the request host (localhost, not 127.0.0.1).
           # Before the fix, $host didn't include the port, so the CSRF check
           # rejected every write with 403.
+          # nginx overwrites X-API-Key with its own ${API_KEY} env (blank at the
+          # initial compose-up, since the key is bootstrapped later), so recreate
+          # studio-web with the seeded key before exercising the proxied write.
+          API_KEY="$API_KEY" docker compose up -d --force-recreate studio-web
+          timeout 60 bash -c 'until curl -sf http://localhost:5174/; do sleep 2; done'
           NGINX_POST_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
-            -H "Origin: http://127.0.0.1:5174" \
-            -H "X-API-Key: $API_KEY" \
+            -H "Origin: http://localhost:5174" \
             -H "Content-Type: application/json" \
             -d '{"title":"Nginx CSRF Smoke","source_type":"idea","idea_brief":"nginx"}' \
             http://localhost:5174/api/creator/projects)

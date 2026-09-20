@@ -1,12 +1,31 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from creator_service.quality_profile import get_quality_profile
 from tasks import render_video as render_video_module
+
+
+@pytest.fixture
+def no_pacing_split(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Neutralize the pacing sub-beat split so scene counts stay 1:1.
+
+    render_video splits scenes longer than the profile's max_scene_duration
+    into two sub-beats. These orchestration tests predate that feature and
+    assert one image path per scene, so raise the threshold above any test
+    duration to keep the mapping 1:1.
+    """
+
+    def _profile(name: str = "ssul_v2"):
+        return replace(get_quality_profile(name), max_scene_duration=1_000_000.0)
+
+    monkeypatch.setattr(
+        "creator_service.quality_profile.get_quality_profile", _profile
+    )
 
 
 class FakeStorage:
@@ -300,7 +319,9 @@ def _invoke_task(**kwargs: Any) -> dict[str, object]:
     return run_callable(**kwargs)
 
 
-def test_render_video_success(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_render_video_success(
+    monkeypatch: pytest.MonkeyPatch, no_pacing_split: None
+) -> None:
     run_id = 201
     storage = _make_storage(run_id=run_id, stage="RENDER_GENERATING")
     fake_render_service = FakeRenderService(manifest=_manifest(run_id=run_id), artifact_id=77)
@@ -602,7 +623,7 @@ def test_render_video_profile_propagated_to_ffmpeg(monkeypatch: pytest.MonkeyPat
 
 
 def test_render_video_reorders_scenes_from_active_visual_plan(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, no_pacing_split: None
 ) -> None:
     run_id = 209
     storage = _make_storage(run_id=run_id, stage="RENDER_GENERATING")
@@ -650,7 +671,7 @@ def test_render_video_reorders_scenes_from_active_visual_plan(
 
 
 def test_render_video_handles_sparse_paragraph_artifacts(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, no_pacing_split: None
 ) -> None:
     run_id = 210
     storage = _make_storage(run_id=run_id, stage="RENDER_GENERATING")

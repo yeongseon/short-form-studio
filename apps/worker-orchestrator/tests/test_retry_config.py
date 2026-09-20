@@ -13,8 +13,10 @@ from tasks.generate_visual_plan import generate_visual_plan
 from tasks.render_video import render_video
 
 
-def _assert_common_retry_policy(task: Any, *, soft_time_limit: int, time_limit: int) -> None:
-    assert task.max_retries == 3
+def _assert_common_retry_policy(
+    task: Any, *, max_retries: int, soft_time_limit: int, time_limit: int
+) -> None:
+    assert task.max_retries == max_retries
     autoretry_for = task.autoretry_for
     assert ProviderTimeoutError in autoretry_for
     assert RateLimitError in autoretry_for
@@ -23,11 +25,27 @@ def _assert_common_retry_policy(task: Any, *, soft_time_limit: int, time_limit: 
 
 
 def test_task_retry_policies() -> None:
-    _assert_common_retry_policy(generate_script, soft_time_limit=300, time_limit=360)
-    _assert_common_retry_policy(generate_audio, soft_time_limit=300, time_limit=360)
-    _assert_common_retry_policy(generate_subtitles, soft_time_limit=300, time_limit=360)
-    _assert_common_retry_policy(generate_visual_plan, soft_time_limit=300, time_limit=360)
-    _assert_common_retry_policy(generate_paragraph_audio, soft_time_limit=300, time_limit=360)
-    _assert_common_retry_policy(generate_paragraph_subtitles, soft_time_limit=300, time_limit=360)
-    _assert_common_retry_policy(generate_scene_image, soft_time_limit=600, time_limit=660)
-    _assert_common_retry_policy(render_video, soft_time_limit=600, time_limit=660)
+    _assert_common_retry_policy(
+        generate_script, max_retries=5, soft_time_limit=300, time_limit=360
+    )
+    _assert_common_retry_policy(
+        generate_audio, max_retries=5, soft_time_limit=300, time_limit=360
+    )
+    _assert_common_retry_policy(
+        generate_subtitles, max_retries=5, soft_time_limit=300, time_limit=360
+    )
+    _assert_common_retry_policy(
+        generate_visual_plan, max_retries=5, soft_time_limit=300, time_limit=360
+    )
+    _assert_common_retry_policy(
+        generate_paragraph_audio, max_retries=3, soft_time_limit=300, time_limit=360
+    )
+    _assert_common_retry_policy(
+        generate_paragraph_subtitles, max_retries=3, soft_time_limit=300, time_limit=360
+    )
+    _assert_common_retry_policy(
+        generate_scene_image, max_retries=5, soft_time_limit=600, time_limit=660
+    )
+    _assert_common_retry_policy(
+        render_video, max_retries=3, soft_time_limit=600, time_limit=660
+    )
