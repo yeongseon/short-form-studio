@@ -7,7 +7,7 @@ import hashlib
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 from shorts_api.auth import ApiKeyMiddleware, CurrentUser
 
 
@@ -78,7 +78,7 @@ async def multi_workspace_client(api_key, monkeypatch: pytest.MonkeyPatch):
     )
 
     app = _make_app()
-    return AsyncClient(app=app, base_url="http://test"), api_key
+    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test"), api_key
 
 
 @pytest.mark.asyncio

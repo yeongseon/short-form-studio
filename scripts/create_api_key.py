@@ -24,18 +24,36 @@ async def main(email: str, workspace_name: str, key_name: str) -> None:
     pool = await get_pool()
 
     async with pool.acquire() as conn:
-        # 1. Create or get user
+        # 1. Create or get user. Uniqueness is on (auth_provider, auth_subject),
+        # not email, so derive a stable auth_subject from the email and upsert
+        # on the real constraint.
+        auth_subject = email
         row = await conn.fetchrow(
-            "INSERT INTO users (email) VALUES ($1) ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email RETURNING id",
+            """
+            INSERT INTO users (email, auth_provider, auth_subject)
+            VALUES ($1, 'api_key', $2)
+            ON CONFLICT ON CONSTRAINT uq_users_auth_provider_auth_subject
+            DO UPDATE SET email = EXCLUDED.email
+            RETURNING id
+            """,
             email,
+            auth_subject,
         )
         user_id = row["id"]
         print(f"User: id={user_id} email={email}")
 
-        # 2. Create or get workspace
+        # 2. Create or get workspace. `slug` is the unique column (not `name`),
+        # and `owner_id` is required, so upsert on slug.
         row = await conn.fetchrow(
-            "INSERT INTO workspaces (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id",
+            """
+            INSERT INTO workspaces (name, slug, owner_id)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
+            RETURNING id
+            """,
             workspace_name,
+            workspace_name,
+            user_id,
         )
         workspace_id = row["id"]
         print(f"Workspace: id={workspace_id} name={workspace_name}")
@@ -59,7 +77,7 @@ async def main(email: str, workspace_name: str, key_name: str) -> None:
             key_name,
         )
         print(f"\n{'='*60}")
-        print(f"API Key (save this — it cannot be recovered):")
+        print("API Key (save this — it cannot be recovered):")
         print(f"  {raw_key}")
         print(f"{'='*60}")
 

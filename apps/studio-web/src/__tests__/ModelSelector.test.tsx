@@ -274,6 +274,26 @@ describe("ModelSelector", () => {
       expect(screen.getByTestId("model-selector")).toBeTruthy();
     });
 
+    // Wait for the default-selection effects to fire before counting; under
+    // StrictMode the callbacks settle asynchronously after the initial render.
+    await waitFor(() => {
+      expect(
+        onChange.mock.calls.some(
+          ([cat, key]: [string, string]) => cat === "script" && key === "qwen3-4b",
+        ),
+      ).toBe(true);
+      expect(
+        onChange.mock.calls.some(
+          ([cat, key]: [string, string]) => cat === "image" && key === "sd15",
+        ),
+      ).toBe(true);
+      expect(
+        onChange.mock.calls.some(
+          ([cat, key]: [string, string]) => cat === "tts" && key === "qwen3-tts",
+        ),
+      ).toBe(true);
+    });
+
     // Each category default should fire exactly once, not doubled by StrictMode
     const scriptCalls = onChange.mock.calls.filter(
       ([cat, key]: [string, string]) => cat === "script" && key === "qwen3-4b",
