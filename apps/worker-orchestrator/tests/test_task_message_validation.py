@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import SimpleNamespace
 from typing import Any
 
@@ -45,7 +45,7 @@ class _RequestStub:
 
 @dataclass
 class _CelerySelfStub:
-    request: object = _RequestStub()
+    request: object = field(default_factory=_RequestStub)
 
 
 async def _never_execute(_ctx: Any) -> Any:
