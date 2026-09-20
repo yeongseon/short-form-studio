@@ -28,19 +28,5 @@ extend-immutable-calls = [
     "fastapi.Body",
 ]
 
-# FastAPI dependency/parameter helpers are the framework's intended default-arg
-# pattern; they are safe (no per-call mutable state) so B008 should allow them.
-[lint.flake8-bugbear]
-extend-immutable-calls = [
-    "fastapi.Depends",
-    "fastapi.File",
-    "fastapi.Form",
-    "fastapi.Query",
-    "fastapi.Path",
-    "fastapi.Header",
-    "fastapi.Cookie",
-    "fastapi.Body",
-]
-
 [format]
 quote-style = "double"
