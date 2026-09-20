@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import io
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import PurePosixPath
 from typing import Any, BinaryIO, Protocol
@@ -44,7 +45,23 @@ _EXTENSION_BY_MIME = {
     "image/jpeg": ".jpg",
     "image/webp": ".webp",
     "image/gif": ".gif",
+    "video/mp4": ".mp4",
+    "video/webm": ".webm",
+    "video/quicktime": ".mov",
 }
+
+# 500 MiB default cap for video uploads.
+_DEFAULT_MAX_VIDEO_BYTES = 500 * 1024 * 1024
+
+_ALLOWED_VIDEO_CONTENT_TYPES = frozenset(
+    {
+        "video/mp4",
+        "video/webm",
+        "video/quicktime",
+    }
+)
+
+_PROBE_TIMEOUT_SECONDS = 30
 
 
 class MediaUploadRejected(ValueError):
@@ -118,6 +135,100 @@ def _validate_image_upload(
     if detected is None:
         raise MediaUploadRejected("File content is not a recognized image")
     return detected
+
+
+@dataclass(frozen=True)
+class _ProbedMetadata:
+    width: int | None
+    height: int | None
+    duration_seconds: float | None
+
+
+def _validate_video_upload(
+    data: bytes,
+    *,
+    content_type: str,
+    max_bytes: int = _DEFAULT_MAX_VIDEO_BYTES,
+) -> str:
+    normalized = (content_type or "").split(";", 1)[0].strip().lower()
+    if normalized not in _ALLOWED_VIDEO_CONTENT_TYPES:
+        raise MediaUploadRejected(f"Unsupported video content type: {content_type!r}")
+    if not data:
+        raise MediaUploadRejected("Empty upload")
+    if len(data) > max_bytes:
+        raise MediaUploadRejected("Upload exceeds maximum allowed size")
+    return normalized
+
+
+def _probe_media_metadata(data: bytes, *, kind: str) -> _ProbedMetadata:
+    """Probe media dimensions/duration via ffprobe on a temp file.
+
+    ffprobe requires a path, so the bytes are spooled to a bounded temp file and
+    the subprocess runs with an argument list (no shell) and a hard timeout. Any
+    probe failure means the content is not a valid media file and is rejected.
+    """
+    import json
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        probe_path = Path(tmp) / "probe"
+        probe_path.write_bytes(data)
+        cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-print_format",
+            "json",
+            "-show_streams",
+            "-show_format",
+            str(probe_path),
+        ]
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=_PROBE_TIMEOUT_SECONDS,
+            )
+        except (subprocess.TimeoutExpired, OSError) as error:
+            raise MediaUploadRejected("Failed to probe media file") from error
+
+    if proc.returncode != 0:
+        raise MediaUploadRejected("File content is not a recognized media file")
+
+    try:
+        parsed = json.loads(proc.stdout)
+    except (json.JSONDecodeError, ValueError) as error:
+        raise MediaUploadRejected("Failed to parse media metadata") from error
+
+    streams = parsed.get("streams") or []
+    want = "video" if kind == "video" else "audio"
+    matching = [s for s in streams if s.get("codec_type") == want]
+    if not matching:
+        raise MediaUploadRejected(f"No {want} stream found in upload")
+
+    stream = matching[0]
+    width = stream.get("width")
+    height = stream.get("height")
+
+    duration_raw = stream.get("duration")
+    if duration_raw is None:
+        duration_raw = (parsed.get("format") or {}).get("duration")
+    duration: float | None
+    try:
+        duration = float(duration_raw) if duration_raw is not None else None
+    except (TypeError, ValueError):
+        duration = None
+    if duration is not None and duration <= 0:
+        duration = None
+
+    return _ProbedMetadata(
+        width=int(width) if isinstance(width, int) else None,
+        height=int(height) if isinstance(height, int) else None,
+        duration_seconds=duration,
+    )
 
 
 class MediaAssetStorageBackend(Protocol):
@@ -207,13 +318,66 @@ class MediaAssetService:
         Rejections (bad type/size/content/filename) raise before any storage
         write, so a rejected upload never leaves a partial artifact.
         """
-        # Validate filename first so unsafe names never reach storage.
         safe_name = _safe_filename(filename)
         canonical_mime = _validate_image_upload(
             data, content_type=content_type, max_bytes=max_bytes
         )
         width, height = _probe_image_dimensions(data)
+        return await self._store_asset(
+            workspace_id=workspace_id,
+            safe_name=safe_name,
+            data=data,
+            canonical_mime=canonical_mime,
+            media_type=MediaType.IMAGE,
+            probed=_ProbedMetadata(width=width, height=height, duration_seconds=None),
+            project_id=project_id,
+            run_id=run_id,
+        )
 
+    async def create_video_asset(
+        self,
+        *,
+        workspace_id: int,
+        filename: str,
+        data: bytes,
+        content_type: str,
+        project_id: int | None = None,
+        run_id: int | None = None,
+        max_bytes: int = _DEFAULT_MAX_VIDEO_BYTES,
+    ) -> MediaAsset:
+        """Validate, probe, store, and persist an uploaded video asset.
+
+        The exact uploaded bytes are stored unchanged (source-preserving).
+        Rejections raise before any storage write.
+        """
+        safe_name = _safe_filename(filename)
+        canonical_mime = _validate_video_upload(
+            data, content_type=content_type, max_bytes=max_bytes
+        )
+        probed = _probe_media_metadata(data, kind="video")
+        return await self._store_asset(
+            workspace_id=workspace_id,
+            safe_name=safe_name,
+            data=data,
+            canonical_mime=canonical_mime,
+            media_type=MediaType.VIDEO,
+            probed=probed,
+            project_id=project_id,
+            run_id=run_id,
+        )
+
+    async def _store_asset(
+        self,
+        *,
+        workspace_id: int,
+        safe_name: str,
+        data: bytes,
+        canonical_mime: str,
+        media_type: MediaType,
+        probed: _ProbedMetadata,
+        project_id: int | None,
+        run_id: int | None,
+    ) -> MediaAsset:
         extension = _EXTENSION_BY_MIME.get(canonical_mime, "")
         storage_key = f"workspaces/{workspace_id}/assets/{uuid.uuid4().hex}-{safe_name}"
         if extension and not storage_key.endswith(extension):
@@ -225,13 +389,13 @@ class MediaAssetService:
             "workspace_id": workspace_id,
             "project_id": project_id,
             "run_id": run_id,
-            "media_type": MediaType.IMAGE.value,
+            "media_type": media_type.value,
             "origin": MediaOrigin.UPLOADED.value,
             "storage_key": result.key,
             "mime_type": canonical_mime,
-            "width": width,
-            "height": height,
-            "duration_seconds": None,
+            "width": probed.width,
+            "height": probed.height,
+            "duration_seconds": probed.duration_seconds,
             "source_url": None,
             "metadata": {
                 "size_bytes": result.size_bytes,
