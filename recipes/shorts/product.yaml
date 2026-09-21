@@ -1,0 +1,22 @@
+id: shorts_product
+content_format: short
+target_duration:
+  min_seconds: 20
+  max_seconds: 60
+structure:
+  - hook
+  - product_intro
+  - features
+  - proof
+  - cta
+visual_strategy:
+  pacing: medium
+  segment_duration:
+    min_seconds: 2.0
+    max_seconds: 6.0
+audio:
+  narration: true
+  bgm: true
+subtitles:
+  enabled: true
+  emphasis: true
