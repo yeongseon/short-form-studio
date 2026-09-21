@@ -9,6 +9,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 from creator_domain.models import (
@@ -48,7 +49,7 @@ def _img_segment(source: str, start: float, dur: float) -> RenderSegment:
     )
 
 
-def _probe(path: Path) -> dict[str, object]:
+def _probe(path: Path) -> dict[str, Any]:
     proc = subprocess.run(
         [
             "ffprobe", "-v", "error", "-print_format", "json",
@@ -57,11 +58,12 @@ def _probe(path: Path) -> dict[str, object]:
         capture_output=True, text=True, timeout=30,
     )
     assert proc.returncode == 0, proc.stderr
-    return json.loads(proc.stdout)
+    result: dict[str, Any] = json.loads(proc.stdout)
+    return result
 
 
-def _video_stream(meta: dict[str, object]) -> dict[str, object]:
-    streams = meta.get("streams") or []
+def _video_stream(meta: dict[str, Any]) -> dict[str, Any]:
+    streams: list[dict[str, Any]] = meta.get("streams") or []
     return next(s for s in streams if s.get("codec_type") == "video")
 
 
