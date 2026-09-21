@@ -92,6 +92,8 @@ jobs:
         run: cp .env.example .env
       - name: Validate docker-compose config
         run: docker compose config --quiet
+      - name: Quick Start smoke check
+        run: bash scripts/quickstart_smoke.sh
       - name: Verify celery beat service is defined
         run: |
           # Every beat_schedule entry needs a running beat process (#585).
