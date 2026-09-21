@@ -21,8 +21,9 @@ from creator_domain.models import EditorCommand, EditorCommandModel
 from pydantic import BaseModel, ConfigDict, Field, ValidationError as PydanticValidationError
 
 _DEFAULT_MAX_COMMANDS = 50
+_MAX_RAW_CHARS = 100_000
 
-_JSON_FENCE = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
+_JSON_FENCE = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.DOTALL)
 
 
 class CommandProposal(BaseModel):
@@ -39,7 +40,7 @@ def _extract_json_object(raw: str) -> dict[str, Any]:
     candidate = fenced.group(1) if fenced is not None else raw
     try:
         parsed = json.loads(candidate)
-    except (json.JSONDecodeError, ValueError) as error:
+    except (json.JSONDecodeError, ValueError, RecursionError) as error:
         # Fall back to the first balanced object substring for un-fenced prose.
         start = candidate.find("{")
         end = candidate.rfind("}")
@@ -47,7 +48,7 @@ def _extract_json_object(raw: str) -> dict[str, Any]:
             raise ValidationError("proposal is not valid JSON") from error
         try:
             parsed = json.loads(candidate[start : end + 1])
-        except (json.JSONDecodeError, ValueError) as inner:
+        except (json.JSONDecodeError, ValueError, RecursionError) as inner:
             raise ValidationError("proposal is not valid JSON") from inner
     if not isinstance(parsed, dict):
         raise ValidationError("proposal must be a JSON object")
@@ -65,10 +66,19 @@ def parse_command_proposal(
         raise ValidationError(
             f"max_commands must be between 1 and {_DEFAULT_MAX_COMMANDS}"
         )
+    if len(raw) > _MAX_RAW_CHARS:
+        raise ValidationError(
+            f"proposal is {len(raw)} chars, exceeding the bound of {_MAX_RAW_CHARS}"
+        )
 
     payload = _extract_json_object(raw)
 
-    raw_commands = payload.get("commands")
+    if set(payload.keys()) != {"base_revision", "commands"}:
+        raise ValidationError(
+            "proposal must have exactly base_revision and commands"
+        )
+
+    raw_commands = payload["commands"]
     if not isinstance(raw_commands, list):
         raise ValidationError("proposal.commands must be a list")
     if len(raw_commands) == 0:
@@ -78,7 +88,8 @@ def parse_command_proposal(
             f"proposal has {len(raw_commands)} commands, exceeding the bound of {max_commands}"
         )
 
-    if payload.get("base_revision") != base_revision:
+    declared_revision = payload["base_revision"]
+    if type(declared_revision) is not int or declared_revision != base_revision:
         raise ValidationError(
             "proposal base_revision does not match the current timeline revision"
         )

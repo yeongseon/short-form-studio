@@ -103,3 +103,34 @@ def test_rejects_a_batch_exceeding_the_command_bound() -> None:
     raw = _payload("[" + commands + "]")
     with pytest.raises(ValidationError):
         parse_command_proposal(raw, base_revision=7, max_commands=50)
+
+
+def test_rejects_oversized_raw_input() -> None:
+    raw = _payload('[{"type": "deleteSegment", "segment_id": "s1"}]') + (" " * 200_000)
+    with pytest.raises(ValidationError):
+        parse_command_proposal(raw, base_revision=7)
+
+
+def test_rejects_deeply_nested_json_without_crashing() -> None:
+    raw = "[" * 5000 + "]" * 5000
+    with pytest.raises(ValidationError):
+        parse_command_proposal(raw, base_revision=7)
+
+
+def test_rejects_non_integer_base_revision() -> None:
+    raw = '{"base_revision": 7.0, "commands": [{"type": "deleteSegment", "segment_id": "s1"}]}'
+    with pytest.raises(ValidationError):
+        parse_command_proposal(raw, base_revision=7)
+    raw_bool = '{"base_revision": true, "commands": [{"type": "deleteSegment", "segment_id": "s1"}]}'
+    with pytest.raises(ValidationError):
+        parse_command_proposal(raw_bool, base_revision=1)
+
+
+def test_rejects_top_level_extra_fields() -> None:
+    raw = (
+        '{"base_revision": 7, "apply": true, '
+        '"commands": [{"type": "deleteSegment", "segment_id": "s1"}]}'
+    )
+    with pytest.raises(ValidationError):
+        parse_command_proposal(raw, base_revision=7)
+
