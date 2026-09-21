@@ -78,7 +78,7 @@ async def test_undo_enables_redo() -> None:
     h = _history()
     await h.apply(TrimSegmentCommand(segment_id="s1", trim_start_seconds=1.0, trim_end_seconds=3.0))
     assert h.can_redo is False
-    h.undo()
+    await h.undo()
     assert h.can_redo is True
 
 
@@ -87,8 +87,8 @@ async def test_redo_replays_the_undone_change_exactly() -> None:
     h = _history()
     await h.apply(TrimSegmentCommand(segment_id="s1", trim_start_seconds=1.0, trim_end_seconds=3.0))
     after_apply = h.present.model_dump(mode="json")
-    h.undo()
-    h.redo()
+    await h.undo()
+    await h.redo()
     assert h.present.model_dump(mode="json") == after_apply
     assert h.can_redo is False
 
@@ -99,8 +99,8 @@ async def test_repeated_undo_redo_is_deterministic() -> None:
     await h.apply(TrimSegmentCommand(segment_id="s1", trim_start_seconds=1.0, trim_end_seconds=3.0))
     snap = h.present.model_dump(mode="json")
     for _ in range(3):
-        h.undo()
-        h.redo()
+        await h.undo()
+        await h.redo()
     assert h.present.model_dump(mode="json") == snap
 
 
@@ -112,12 +112,12 @@ async def test_redo_stack_across_multiple_commands() -> None:
     s1 = h.present.model_dump(mode="json")
     await h.apply(ResizeSegmentCommand(segment_id="s1", duration_seconds=1.5))
     s2 = h.present.model_dump(mode="json")
-    h.undo()
-    h.undo()
+    await h.undo()
+    await h.undo()
     assert h.present.model_dump(mode="json") == s0
-    h.redo()
+    await h.redo()
     assert h.present.model_dump(mode="json") == s1
-    h.redo()
+    await h.redo()
     assert h.present.model_dump(mode="json") == s2
 
 
@@ -125,12 +125,12 @@ async def test_redo_stack_across_multiple_commands() -> None:
 async def test_new_apply_clears_redo_branch() -> None:
     h = _history()
     await h.apply(TrimSegmentCommand(segment_id="s1", trim_start_seconds=1.0, trim_end_seconds=3.0))
-    h.undo()
+    await h.undo()
     assert h.can_redo is True
     await h.apply(ResizeSegmentCommand(segment_id="s1", duration_seconds=1.5))
     assert h.can_redo is False
     with pytest.raises(NoHistoryError):
-        h.redo()
+        await h.redo()
 
 
 @pytest.mark.asyncio
@@ -144,9 +144,9 @@ async def test_batch_undo_redo_is_one_step() -> None:
         ]
     )
     after = h.present.model_dump(mode="json")
-    h.undo()
+    await h.undo()
     assert h.present.model_dump(mode="json") == before
-    h.redo()
+    await h.redo()
     assert h.present.model_dump(mode="json") == after
 
 
@@ -154,14 +154,14 @@ async def test_batch_undo_redo_is_one_step() -> None:
 async def test_redo_at_boundary_raises() -> None:
     h = _history()
     with pytest.raises(NoHistoryError):
-        h.redo()
+        await h.redo()
 
 
 @pytest.mark.asyncio
 async def test_failed_command_does_not_clear_redo_branch() -> None:
     h = _history()
     await h.apply(TrimSegmentCommand(segment_id="s1", trim_start_seconds=1.0, trim_end_seconds=3.0))
-    h.undo()
+    await h.undo()
     with pytest.raises(ValidationError):
         await h.apply(TrimSegmentCommand(segment_id="nope", trim_start_seconds=0.0, trim_end_seconds=1.0))
     # a rejected command is not an accepted edit, so the redo branch survives
@@ -173,9 +173,9 @@ async def test_redo_snapshot_is_defensively_copied() -> None:
     h = _history()
     await h.apply(TrimSegmentCommand(segment_id="s1", trim_start_seconds=1.0, trim_end_seconds=3.0))
     after = h.present.model_dump(mode="json")
-    h.undo()
+    await h.undo()
     held = h.present
     # mutate the object now on the redo stack's counterpart
     held.segments[0].trim_start_seconds = 42.0
-    h.redo()
+    await h.redo()
     assert h.present.model_dump(mode="json") == after
