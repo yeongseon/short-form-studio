@@ -208,6 +208,11 @@ You can use external APIs for higher-quality results instead of (or in addition 
 The Settings page is currently a **read-only status page** — it does not support editing or saving API keys.
 You can check whether each provider key is configured at `/settings`, but actual key values are managed via server environment variables.
 
+This is a deliberate security decision: the API never writes `.env` from a request, never returns key values
+(not even masked), never logs keys, and the browser never stores them. See
+[Provider API Key Configuration](SECURITY.md#provider-api-key-configuration) in the Security Model for the full
+supported deployment model, rotation procedure, and CSRF applicability.
+
 #### Editing the .env File
 
 Add your API keys to the `.env` file:

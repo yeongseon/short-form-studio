@@ -177,6 +177,52 @@ All admin mutations are logged to the `admin.audit` logger with:
 
 ---
 
+## Provider API Key Configuration
+
+### Supported model: server-side environment variables, read-only status surface
+
+Provider API keys (OpenAI, Anthropic, Google, Stability, ElevenLabs, Groq) are
+configured **exclusively through server environment variables** and are resolved
+at runtime with `os.getenv` only. This is a deliberate security decision, not a
+missing feature.
+
+| Property | Behavior |
+|----------|----------|
+| Source of truth | Server environment variables (`OPENAI_API_KEY`, etc.) |
+| Request-time writes | **None** — the API never writes `.env`, a DB, or any secret store from a request |
+| Settings surface | `GET /api/creator/settings/api-keys` returns `{provider, label, configured}` only |
+| Key values in responses | **Never** — not raw, not masked, not truncated (presence boolean only) |
+| Key values in logs | **Never** — no key material is passed to any logger |
+| Browser storage | **Never** — the UI holds no provider keys in `localStorage`/`sessionStorage` |
+| Rotation | Change the env var and restart: `docker compose restart api worker` |
+
+Write verbs (`POST`/`PUT`/`PATCH`/`DELETE`) on the settings path return `405
+Method Not Allowed` and have no side effects. A presence-only contract is
+preferred over masked values because a mask still leaks length, prefix, suffix,
+or format of the secret.
+
+### CSRF applicability
+
+CSRF protection is **not applicable** to the current creator API because
+authentication uses explicit request headers (`X-API-Key` /
+`Authorization: Bearer`), not cookies or any browser-auto-attached credential.
+A cross-origin page cannot forge those headers, and there are no mutating
+settings endpoints. If creator authentication ever moves to cookie/session
+credentials, or request-time key-mutation endpoints are introduced, CSRF
+protection (or per-request CSRF tokens at the `apps/studio-web/src/api/client.ts`
+choke point) becomes required before enabling them.
+
+### Trust model note
+
+The presence booleans reveal which providers are configured to any authenticated
+operator. This is intentional and acceptable under the documented single-user /
+internal-team trust model; it is not a public endpoint. Self-service key
+management from the UI (encrypted server-side storage, admin-scoped rotation,
+audit) is explicitly **out of scope** and would be tracked as a separate,
+larger secret-management feature.
+
+---
+
 ## Artifact Access
 
 Generated artifacts (videos, images, audio) are stored on the local filesystem
