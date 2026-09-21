@@ -101,11 +101,13 @@ async def _apply_trim(
     source = await _effective_source_duration(target, workspace_id, lookup)
     if source is not None and command.trim_end_seconds > source + 1e-6:
         raise ValidationError("trim exceeds source duration")
+    window = command.trim_end_seconds - command.trim_start_seconds
     return [
         s.model_copy(
             update={
                 "trim_start_seconds": command.trim_start_seconds,
                 "trim_end_seconds": command.trim_end_seconds,
+                "duration_seconds": window,
             }
         )
         if s.id == command.segment_id
@@ -235,13 +237,17 @@ async def _apply_resize(
         raise ValidationError(f"segment not found: {command.segment_id}")
     target = segments[index]
     source = await _effective_source_duration(target, workspace_id, lookup)
+    resize_update: dict[str, object] = {"duration_seconds": command.duration_seconds}
     if source is not None:
-        available = source - (target.trim_start_seconds or 0.0)
+        trim_start = target.trim_start_seconds or 0.0
+        available = source - trim_start
         if command.duration_seconds > available + 1e-6:
             raise ValidationError("resize exceeds remaining source duration")
+        if target.trim_end_seconds is not None:
+            resize_update["trim_end_seconds"] = trim_start + command.duration_seconds
     delta = command.duration_seconds - target.duration_seconds
     return [
-        s.model_copy(update={"duration_seconds": command.duration_seconds})
+        s.model_copy(update=resize_update)
         if i == index
         else (
             s.model_copy(update={"timeline_start_seconds": s.timeline_start_seconds + delta})

@@ -122,6 +122,27 @@ async def test_trim_rejects_beyond_source_duration() -> None:
 
 
 @pytest.mark.asyncio
+async def test_trim_keeps_visible_duration_within_the_new_window() -> None:
+    # s1 duration is 4; trimming to [0, 2] must not leave a visible duration
+    # (4) larger than the represented source window (2).
+    result = await _apply(
+        TrimSegmentCommand(segment_id="s1", trim_start_seconds=0.0, trim_end_seconds=2.0)
+    )
+    seg = next(s for s in result.segments if s.id == "s1")
+    assert seg.duration_seconds <= seg.trim_end_seconds - seg.trim_start_seconds + 1e-6
+
+
+@pytest.mark.asyncio
+async def test_resize_keeps_trim_end_consistent_with_new_duration() -> None:
+    # s1 has trim_end 4; resizing to 6 (within the 30s raw source) must extend
+    # trim_end so the represented window covers the new visible duration.
+    result = await _apply(ResizeSegmentCommand(segment_id="s1", duration_seconds=6.0))
+    seg = next(s for s in result.segments if s.id == "s1")
+    start = seg.trim_start_seconds or 0.0
+    assert seg.trim_end_seconds is None or seg.trim_end_seconds >= start + seg.duration_seconds - 1e-6
+
+
+@pytest.mark.asyncio
 async def test_split_creates_two_segments() -> None:
     result = await _apply(SplitSegmentCommand(segment_id="s1", at_seconds=2.0))
     ids = [s.id for s in result.segments]
