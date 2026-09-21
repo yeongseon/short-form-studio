@@ -97,7 +97,9 @@ describe("ModelSelector", () => {
 
     // qwen3-4b radio should be checked (first available in script)
     const qwenRadio = screen.getByRole("radio", { name: /Qwen3 4B/ });
-    expect(qwenRadio).toBeChecked();
+    await waitFor(() => {
+      expect(qwenRadio).toBeChecked();
+    });
 
     // gpt-4o-mini radio should NOT be checked
     const gptRadio = screen.getByRole("radio", { name: /GPT-4o Mini/ });
