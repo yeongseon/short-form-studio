@@ -7,16 +7,25 @@ can move toward segments without changing ``FFmpegService.render`` internals.
 
 from __future__ import annotations
 
+import json
+import subprocess
 from pathlib import Path
 
 from creator_domain.models import RenderPlan, RenderSegment, RenderSegmentKind
 
-from creator_service.ffmpeg_service import RenderInput
+from creator_service.ffmpeg_service import RenderInput, _run_ffmpeg
 from creator_service.render_profile import AudioCodec, Codec, RenderProfile
+
+_PROBE_TIMEOUT_SECONDS = 30
+_RENDER_TIMEOUT_SECONDS = 180
 
 
 class UnsupportedSegmentKindError(ValueError):
     """Raised when a segment kind is not supported by the legacy image path."""
+
+
+class SegmentSourceError(ValueError):
+    """Raised when a segment's source media is missing, malformed, or out of bounds."""
 
 
 def render_input_from_segments(
@@ -89,3 +98,119 @@ def render_profile_from_plan(plan: RenderPlan) -> RenderProfile:
         crf=encoding.crf,
         preset=encoding.preset,
     )
+
+
+def _probe_source_duration(source: Path) -> float:
+    """Probe a source video's duration; raise if missing or malformed."""
+    if not source.is_file():
+        raise SegmentSourceError(f"segment source not found: {source}")
+    try:
+        proc = subprocess.run(
+            [
+                "ffprobe",
+                "-v",
+                "error",
+                "-print_format",
+                "json",
+                "-show_format",
+                "-show_streams",
+                str(source),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=_PROBE_TIMEOUT_SECONDS,
+        )
+    except (subprocess.TimeoutExpired, OSError) as error:
+        raise SegmentSourceError(f"failed to probe segment source: {source}") from error
+    if proc.returncode != 0:
+        raise SegmentSourceError(f"segment source is not valid media: {source}")
+    try:
+        parsed = json.loads(proc.stdout)
+    except (json.JSONDecodeError, ValueError) as error:
+        raise SegmentSourceError(f"failed to parse media metadata: {source}") from error
+    has_video = any(
+        s.get("codec_type") == "video" for s in (parsed.get("streams") or [])
+    )
+    if not has_video:
+        raise SegmentSourceError(f"segment source has no video stream: {source}")
+    raw = (parsed.get("format") or {}).get("duration")
+    try:
+        return float(raw)
+    except (TypeError, ValueError) as error:
+        raise SegmentSourceError(f"segment source has no duration: {source}") from error
+
+
+def render_video_segment(
+    segment: RenderSegment,
+    output_path: Path,
+    *,
+    profile: RenderProfile,
+) -> Path:
+    """Render a source-video segment to a self-contained ``.ts`` clip.
+
+    Trims the source to ``[trim_start, trim_end]`` (defaulting to the segment
+    duration), scales/pads it to the profile geometry, and re-encodes with the
+    profile codec/quality. Source media is validated (exists, decodable, has a
+    video stream, and the trim is within bounds). Missing source audio is not an
+    error (explicit audio policy): the clip is rendered video-only.
+    """
+    if segment.kind is not RenderSegmentKind.VIDEO:
+        raise ValueError(
+            f"render_video_segment requires a video segment, got {segment.kind.value!r}"
+        )
+
+    source = Path(segment.source)
+    source_duration = _probe_source_duration(source)
+
+    trim_start = segment.trim_start_seconds if segment.trim_start_seconds is not None else 0.0
+    trim_end = (
+        segment.trim_end_seconds
+        if segment.trim_end_seconds is not None
+        else trim_start + segment.duration_seconds
+    )
+    if trim_start > source_duration + 1e-6 or trim_end > source_duration + 1e-6:
+        raise SegmentSourceError(
+            f"trim [{trim_start}, {trim_end}] exceeds source duration {source_duration}"
+        )
+    clip_duration = trim_end - trim_start
+
+    vf = (
+        f"scale={profile.width}:{profile.height}"
+        f":force_original_aspect_ratio=decrease,"
+        f"pad={profile.width}:{profile.height}:(ow-iw)/2:(oh-ih)/2,"
+        f"format=yuv420p,setsar=1"
+    )
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-nostdin",
+        "-ss",
+        f"{trim_start:.3f}",
+        "-t",
+        f"{clip_duration:.3f}",
+        "-i",
+        str(source),
+        "-an",
+        "-vf",
+        vf,
+        "-c:v",
+        profile.video_codec.value,
+        "-crf",
+        str(profile.crf),
+        "-preset",
+        profile.preset,
+        "-pix_fmt",
+        "yuv420p",
+        "-r",
+        str(profile.fps),
+        "-force_key_frames",
+        "expr:eq(n,0)",
+        str(output_path),
+    ]
+    result = _run_ffmpeg(cmd, timeout=_RENDER_TIMEOUT_SECONDS)
+    if result.returncode != 0:
+        raise SegmentSourceError(
+            f"failed to render video segment {source}: {result.stderr[-500:]}"
+        )
+    return output_path
