@@ -56,7 +56,11 @@ async def compile_timeline_to_render_plan(
     render_segments: list[RenderSegment] = []
     for segment in sorted(timeline.segments, key=lambda s: s.timeline_start_seconds):
         asset = await asset_resolver.get_asset(segment.asset_id, workspace_id)
-        if asset is None or asset.project_id != timeline.project_id:
+        if (
+            asset is None
+            or asset.workspace_id != workspace_id
+            or asset.project_id != timeline.project_id
+        ):
             raise ValidationError(
                 f"Timeline segment {segment.id!r} references an unavailable asset"
             )
@@ -104,13 +108,21 @@ def _validate_source_bounds(
     """Reject video trims that exceed the source's known duration.
 
     Images have no intrinsic duration, so only video sources are bounds-checked,
-    and only when the source duration is known.
+    and only when the source duration is known. The effective source end is
+    ``trim_end`` when set, otherwise ``trim_start + duration_seconds`` — matching
+    the renderer's implicit-range semantics, so an omitted trim_end cannot smuggle
+    an overrun past compilation.
     """
     if kind is not RenderSegmentKind.VIDEO or asset.duration_seconds is None:
         return
-    for value in (segment.trim_start_seconds, segment.trim_end_seconds):
-        if value is not None and value > asset.duration_seconds + 1e-6:
-            raise ValidationError(
-                f"Asset {asset.id} trim {value} exceeds source duration "
-                f"{asset.duration_seconds}"
-            )
+    trim_start = segment.trim_start_seconds or 0.0
+    effective_end = (
+        segment.trim_end_seconds
+        if segment.trim_end_seconds is not None
+        else trim_start + segment.duration_seconds
+    )
+    if effective_end > asset.duration_seconds + 1e-6:
+        raise ValidationError(
+            f"Asset {asset.id} source range end {effective_end} exceeds source "
+            f"duration {asset.duration_seconds}"
+        )

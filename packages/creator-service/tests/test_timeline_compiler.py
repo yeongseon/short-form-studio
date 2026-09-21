@@ -184,6 +184,37 @@ async def test_allows_video_trim_within_source_duration() -> None:
 
 
 @pytest.mark.asyncio
+async def test_rejects_video_implicit_end_beyond_source_duration() -> None:
+    # trim_end omitted: renderer uses trim_start + duration_seconds, so a 10s
+    # segment over a 5s source overruns even with no explicit trim.
+    resolver = _FakeAssetResolver(
+        {10: _asset(10, media_type=MediaType.VIDEO, storage_key="v.mp4", duration_seconds=5.0)}
+    )
+    tl = _timeline([_seg(timeline_start_seconds=0.0, duration_seconds=10.0)])
+    with pytest.raises(ValidationError):
+        await _compile(tl, resolver)
+
+
+@pytest.mark.asyncio
+async def test_rejects_asset_matching_project_but_other_workspace() -> None:
+    # Defense in depth: resolver returns an asset whose workspace_id mismatches.
+    resolver = _FakeAssetResolver({10: _asset(10, workspace_id=2, project_id=1)})
+
+    class _LeakyResolver:
+        async def get_asset(self, asset_id: int, workspace_id: int) -> MediaAsset | None:
+            return resolver._assets.get(asset_id)
+
+    with pytest.raises(ValidationError):
+        await compile_timeline_to_render_plan(
+            _timeline([_seg()]),
+            workspace_id=1,
+            output_spec=OutputSpec.short_vertical(),
+            encoding_profile=EncodingProfile.preview(),
+            asset_resolver=_LeakyResolver(),
+        )
+
+
+@pytest.mark.asyncio
 async def test_rejects_asset_without_storage_key() -> None:
     resolver = _FakeAssetResolver({10: _asset(10, storage_key=None)})  # type: ignore[arg-type]
     with pytest.raises(ValidationError):
