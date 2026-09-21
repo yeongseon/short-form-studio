@@ -211,3 +211,38 @@ def apply_audio_mix(history: AudioMixHistory, command: AudioMixCommand) -> Audio
     return AudioMixHistory(
         present=new_present, past=(*history.past, history.present), future=()
     )
+
+
+# SF-68: named reusable BGM/mix presets over the SF-62 levels-only model. Each preset
+# is a validated AudioMix (levels only: music_volume / narration_volume / music_muted),
+# so a preset structurally cannot replace the user's music asset — it carries no
+# bgm_path. The same resolved effective volumes feed preview and the renderer's
+# ducking, so presets stay compatible with existing ducking without touching it.
+AUDIO_MIX_PRESETS: dict[str, AudioMix] = {
+    "balanced": AudioMix(),
+    "music_forward": AudioMix(music_volume=0.5, narration_volume=0.9),
+    "voice_focused": AudioMix(music_volume=0.12, narration_volume=1.0),
+    "muted_music": AudioMix(music_volume=0.25, narration_volume=1.0, music_muted=True),
+}
+
+
+def audio_mix_preset_ids() -> tuple[str, ...]:
+    """Return the shipped BGM/mix preset ids, sorted."""
+    return tuple(sorted(AUDIO_MIX_PRESETS))
+
+
+def resolve_audio_mix_preset(preset_id: str) -> AudioMix:
+    """Resolve a named BGM/mix preset; unknown or non-string ids raise."""
+    if not isinstance(preset_id, str) or preset_id not in AUDIO_MIX_PRESETS:
+        raise ValidationError(f"unknown audio mix preset: {preset_id!r}")
+    return AUDIO_MIX_PRESETS[preset_id]
+
+
+def apply_audio_mix_preset(history: AudioMixHistory, preset_id: str) -> AudioMixHistory:
+    """Select a preset as one full-state undoable step; a preset equal to the present is a no-op."""
+    preset = resolve_audio_mix_preset(preset_id)
+    if preset == history.present:
+        return history
+    return AudioMixHistory(
+        present=preset, past=(*history.past, history.present), future=()
+    )
