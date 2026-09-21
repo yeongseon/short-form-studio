@@ -70,6 +70,35 @@ class OutputSpec(BaseModel):
         return _aspect_ratio(self.width, self.height)
 
     @classmethod
+    def short_vertical(cls) -> OutputSpec:
+        return cls(width=1080, height=1920, fps=30)
+
+    @classmethod
+    def short_square(cls) -> OutputSpec:
+        return cls(width=1080, height=1080, fps=30)
+
+    @classmethod
+    def short_landscape(cls) -> OutputSpec:
+        return cls(width=1920, height=1080, fps=30)
+
+    @classmethod
+    def preset(cls, name: str) -> OutputSpec:
+        """Resolve a named short output preset (geometry only).
+
+        Platform names (Shorts/Reels/TikTok) belong to the product layer; the
+        core presets are geometry-only and platform-agnostic.
+        """
+        presets = {
+            "short_vertical": cls.short_vertical,
+            "short_square": cls.short_square,
+            "short_landscape": cls.short_landscape,
+        }
+        factory = presets.get(name)
+        if factory is None:
+            raise ValueError(f"Unknown output preset: {name!r}")
+        return factory()
+
+    @classmethod
     def from_render_profile(cls, profile: _RenderProfileLike) -> OutputSpec:
         """Adapt a legacy RenderProfile's geometry into an OutputSpec.
 
