@@ -1,4 +1,11 @@
 from .audio_artifact import AudioArtifact
+from .content_recipe import (
+    AudioSettings,
+    ContentRecipe,
+    DurationRange,
+    SubtitleSettings,
+    VisualStrategy,
+)
 from .media_asset import MediaAsset
 from .media_type import MediaOrigin, MediaType
 from .output_spec import (
@@ -35,6 +42,11 @@ from .visual_plan import VisualPlan, VisualScene
 
 __all__ = [
     "MediaAsset",
+    "ContentRecipe",
+    "DurationRange",
+    "VisualStrategy",
+    "AudioSettings",
+    "SubtitleSettings",
     "AspectRatio",
     "AudioCodec",
     "EncodingProfile",
