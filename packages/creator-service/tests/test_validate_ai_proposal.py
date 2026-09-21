@@ -10,6 +10,8 @@ not enter history — nothing is applied before validation passes.
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from creator_domain.exceptions import ValidationError, VersionConflictError
 from creator_domain.models import Timeline
@@ -187,3 +189,27 @@ async def test_second_proposal_with_same_base_revision_is_stale_after_a_mutation
     with pytest.raises(VersionConflictError):
         await apply_ai_proposal(h, proposal_b)
     assert h.present.model_dump(mode="json") == after_a
+
+
+@pytest.mark.asyncio
+async def test_concurrent_same_generation_proposals_apply_exactly_once() -> None:
+    # Two proposals built against the same generation applied concurrently: the
+    # check-and-apply is one critical section, so exactly one succeeds and the
+    # other is rejected as stale (no double-apply race).
+    h = _history()
+    proposal_a = _proposal(
+        [{"type": "deleteSegment", "segment_id": "s2", "policy": "ripple"}], base_revision=3
+    )
+    proposal_b = _proposal(
+        [{"type": "deleteSegment", "segment_id": "s1", "policy": "ripple"}], base_revision=3
+    )
+    results = await asyncio.gather(
+        apply_ai_proposal(h, proposal_a),
+        apply_ai_proposal(h, proposal_b),
+        return_exceptions=True,
+    )
+    successes = [r for r in results if isinstance(r, Timeline)]
+    conflicts = [r for r in results if isinstance(r, VersionConflictError)]
+    assert len(successes) == 1
+    assert len(conflicts) == 1
+    assert h.generation == 4

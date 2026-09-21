@@ -20,10 +20,11 @@ detected as stale without disturbing the persisted revision.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from creator_domain.exceptions import NoHistoryError, ValidationError
+from creator_domain.exceptions import NoHistoryError, ValidationError, VersionConflictError
 from creator_domain.models import Timeline
 
 from creator_service.editor_command_applier import (
@@ -52,6 +53,24 @@ class EditorHistory:
         self._generation = timeline.revision
         self._past: list[_HistoryEntry] = []
         self._future: list[_HistoryEntry] = []
+        self._lock = asyncio.Lock()
+
+    async def apply_batch_if_generation(
+        self, commands: Sequence[object], *, expected_generation: int
+    ) -> Timeline:
+        """Atomically check the generation and apply a batch as one critical section.
+
+        The generation check, the batch application, and the generation increment
+        are serialized under a lock, so two concurrent proposals built against the
+        same generation cannot both pass the check and double-apply — exactly one
+        succeeds and the other is rejected as stale.
+        """
+        async with self._lock:
+            if expected_generation != self._generation:
+                raise VersionConflictError(
+                    self._present.project_id, expected_generation, self._generation
+                )
+            return await self.apply_batch(commands)
 
     @property
     def present(self) -> Timeline:

@@ -13,7 +13,6 @@ and does not enter history — nothing is applied before validation passes.
 
 from __future__ import annotations
 
-from creator_domain.exceptions import VersionConflictError
 from creator_domain.models import Timeline
 
 from creator_service.command_proposal import CommandProposal
@@ -29,11 +28,10 @@ async def apply_ai_proposal(
     Asset ownership and workspace scoping are enforced by the EditorHistory the
     proposal is applied to (its workspace_id drives the per-command validation),
     so this function does not take a separate workspace_id — the history is the
-    trust boundary. Staleness is checked against the history's edit generation,
-    not the persisted revision.
+    trust boundary. The generation check and the batch application happen inside
+    one EditorHistory critical section, so a stale proposal is rejected and two
+    concurrent same-generation proposals cannot both land.
     """
-    if proposal.base_revision != history.generation:
-        raise VersionConflictError(
-            history.present.project_id, proposal.base_revision, history.generation
-        )
-    return await history.apply_batch(proposal.commands)
+    return await history.apply_batch_if_generation(
+        proposal.commands, expected_generation=proposal.base_revision
+    )
