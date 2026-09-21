@@ -15,6 +15,7 @@ _PROVIDER_ENV_MAP: dict[str, str] = {
     "google": "GOOGLE_API_KEY",
     "stability": "STABILITY_API_KEY",
     "elevenlabs": "ELEVENLABS_API_KEY",
+    "groq": "GROQ_API_KEY",
 }
 
 _PROVIDER_LABELS: dict[str, str] = {
@@ -23,6 +24,7 @@ _PROVIDER_LABELS: dict[str, str] = {
     "google": "Google (Gemini / Imagen)",
     "stability": "Stability AI",
     "elevenlabs": "ElevenLabs",
+    "groq": "Groq",
 }
 
 

@@ -45,14 +45,14 @@ async def settings_client(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.asyncio
 async def test_list_api_keys_returns_all_providers(client):
-    """Should return status for all 5 providers."""
+    """Should return status for all 6 approved providers (incl. groq for STT)."""
     response = await client.get("/api/creator/settings/api-keys")
     assert response.status_code == 200
     data = response.json()
     assert isinstance(data, list)
-    assert len(data) == 5
+    assert len(data) == 6
     providers = {item["provider"] for item in data}
-    assert providers == {"openai", "anthropic", "google", "stability", "elevenlabs"}
+    assert providers == {"openai", "anthropic", "google", "stability", "elevenlabs", "groq"}
 
 
 @pytest.mark.asyncio
