@@ -12,6 +12,7 @@ from pathlib import Path
 from creator_domain.models import RenderPlan, RenderSegment, RenderSegmentKind
 
 from creator_service.ffmpeg_service import RenderInput
+from creator_service.render_profile import AudioCodec, Codec, RenderProfile
 
 
 class UnsupportedSegmentKindError(ValueError):
@@ -65,4 +66,26 @@ def render_input_from_plan(plan: RenderPlan) -> RenderInput:
         plan.segments,
         audio_path=Path(plan.narration_path) if plan.narration_path else None,
         subtitle_path=Path(plan.subtitle_path) if plan.subtitle_path else None,
+    )
+
+
+def render_profile_from_plan(plan: RenderPlan) -> RenderProfile:
+    """Map a RenderPlan's OutputSpec geometry and EncodingProfile into a RenderProfile.
+
+    Bridges the generic domain value objects onto the FFmpegService-facing
+    RenderProfile: OutputSpec drives width/height/fps, EncodingProfile drives
+    codec/crf/preset. The domain codec values (e.g. "libx264"/"aac") match the
+    RenderProfile Codec/AudioCodec enum values, so they map by value.
+    """
+    spec = plan.output_spec
+    encoding = plan.encoding_profile
+    return RenderProfile(
+        name=encoding.name,
+        width=spec.width,
+        height=spec.height,
+        fps=spec.fps,
+        video_codec=Codec(encoding.video_codec.value),
+        audio_codec=AudioCodec(encoding.audio_codec.value),
+        crf=encoding.crf,
+        preset=encoding.preset,
     )
