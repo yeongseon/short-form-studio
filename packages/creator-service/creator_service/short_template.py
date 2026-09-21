@@ -32,6 +32,7 @@ from creator_domain.models import (
     Timeline,
 )
 
+from creator_service.creative_profile_library import resolve_creative_profile
 from creator_service.recipe_registry import RecipeNotFoundError, RecipeRegistry
 
 
@@ -80,12 +81,7 @@ def resolve_short_template(
         recipe = recipe_registry.resolve(template.recipe_id)
     except RecipeNotFoundError as error:
         raise ValidationError(f"unknown recipe id: {template.recipe_id!r}") from error
-    try:
-        creative_profile = CreativeProfile.preset(template.creative_profile_id)
-    except ValueError as error:
-        raise ValidationError(
-            f"unknown creative profile id: {template.creative_profile_id!r}"
-        ) from error
+    creative_profile = resolve_creative_profile(template.creative_profile_id)
     try:
         output_spec = OutputSpec.preset(template.output_preset)
     except ValueError as error:
