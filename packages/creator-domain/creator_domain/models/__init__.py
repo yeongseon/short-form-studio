@@ -1,6 +1,13 @@
 from .audio_artifact import AudioArtifact
 from .media_asset import MediaAsset
 from .media_type import MediaOrigin, MediaType
+from .output_spec import (
+    AspectRatio,
+    AudioCodec,
+    EncodingProfile,
+    OutputSpec,
+    VideoCodec,
+)
 from .model_selection import ModelSelection
 from .pipeline_run import PipelineRun
 from .project import Project
@@ -28,6 +35,11 @@ from .visual_plan import VisualPlan, VisualScene
 
 __all__ = [
     "MediaAsset",
+    "AspectRatio",
+    "AudioCodec",
+    "EncodingProfile",
+    "OutputSpec",
+    "VideoCodec",
     "MediaType",
     "MediaOrigin",
     "Project",
