@@ -198,3 +198,38 @@ def apply_subtitle_style(
         past=(*history.past, history.present),
         future=(),
     )
+
+
+# SF-66: named reusable presets over the SF-61 ratio model. Each preset is a
+# validated SubtitleStyle; the ratio stays the single source of truth (no preset_id
+# is stored on the style), and the shared resolver keeps preview and renderer
+# output-relative and identical for a given output height. CJK legibility comes from
+# the renderer's existing NanumGothic ASS default — presets only name reusable sizes.
+SUBTITLE_STYLE_PRESETS: dict[str, SubtitleStyle] = {
+    "caption_small": SubtitleStyle(font_size_ratio=FONT_SIZE_TIERS["small"]),
+    "caption_default": SubtitleStyle(font_size_ratio=FONT_SIZE_TIERS["medium"]),
+    "caption_large": SubtitleStyle(font_size_ratio=FONT_SIZE_TIERS["large"]),
+    "caption_xlarge": SubtitleStyle(font_size_ratio=FONT_SIZE_TIERS["xlarge"]),
+}
+
+
+def subtitle_style_preset_ids() -> tuple[str, ...]:
+    """Return the shipped subtitle-style preset ids, sorted."""
+    return tuple(sorted(SUBTITLE_STYLE_PRESETS))
+
+
+def resolve_subtitle_style_preset(preset_id: str) -> SubtitleStyle:
+    """Resolve a named subtitle-style preset; unknown or non-string ids raise."""
+    if not isinstance(preset_id, str) or preset_id not in SUBTITLE_STYLE_PRESETS:
+        raise ValidationError(f"unknown subtitle style preset: {preset_id!r}")
+    return SUBTITLE_STYLE_PRESETS[preset_id]
+
+
+def apply_subtitle_style_preset(
+    history: SubtitleStyleHistory, preset_id: str
+) -> SubtitleStyleHistory:
+    """Select a preset as one undoable step, reusing the style-command apply path."""
+    style = resolve_subtitle_style_preset(preset_id)
+    return apply_subtitle_style(
+        history, SubtitleStyleCommand(font_size_ratio=style.font_size_ratio)
+    )
