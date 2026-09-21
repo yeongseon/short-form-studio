@@ -7,6 +7,20 @@ from .content_recipe import (
     VisualStrategy,
 )
 from .creative_profile import CreativeProfile
+from .editor_commands import (
+    DeleteSegmentCommand,
+    EditorCommand,
+    EditorCommandModel,
+    MoveSegmentCommand,
+    ReplaceAssetCommand,
+    ResizeSegmentCommand,
+    SetAudioCommand,
+    SetStyleCommand,
+    SetTransitionCommand,
+    SplitSegmentCommand,
+    SwitchOutputCommand,
+    TrimSegmentCommand,
+)
 from .media_asset import MediaAsset
 from .media_segment import MediaSegment
 from .media_type import MediaOrigin, MediaType
@@ -62,6 +76,18 @@ __all__ = [
     "VisualStrategy",
     "AudioSettings",
     "SubtitleSettings",
+    "EditorCommand",
+    "EditorCommandModel",
+    "TrimSegmentCommand",
+    "SplitSegmentCommand",
+    "DeleteSegmentCommand",
+    "ReplaceAssetCommand",
+    "MoveSegmentCommand",
+    "ResizeSegmentCommand",
+    "SetTransitionCommand",
+    "SwitchOutputCommand",
+    "SetStyleCommand",
+    "SetAudioCommand",
     "AspectRatio",
     "AudioCodec",
     "EncodingProfile",
