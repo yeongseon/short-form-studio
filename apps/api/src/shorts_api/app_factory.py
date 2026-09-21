@@ -19,6 +19,7 @@ from shorts_api.routes.creator_artifact_download import router as artifact_downl
 from shorts_api.routes.creator_assets import router as assets_router
 from shorts_api.routes.creator_demo_short import router as demo_short_router
 from shorts_api.routes.creator_models import router as models_router
+from shorts_api.routes.creator_onboarding import router as onboarding_router
 from shorts_api.routes.creator_projects import router as projects_router
 from shorts_api.routes.creator_run_tasks import router as run_tasks_router
 from shorts_api.routes.creator_timeline import router as timeline_router
@@ -160,6 +161,7 @@ def create_app() -> FastAPI:
     app.include_router(workspaces_router, prefix="/api/creator")
     app.include_router(assets_router, prefix="/api/creator")
     app.include_router(demo_short_router, prefix="/api/creator")
+    app.include_router(onboarding_router, prefix="/api/creator")
     app.include_router(users_router, prefix="/api/creator")
     app.include_router(admin_router, prefix="/api/admin")
     register_health_routes(app)

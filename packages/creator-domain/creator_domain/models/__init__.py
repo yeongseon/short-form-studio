@@ -7,6 +7,12 @@ from .content_recipe import (
     VisualStrategy,
 )
 from .creative_profile import CreativeProfile
+from .duration_preset import (
+    DURATION_PRESETS,
+    duration_preset_ids,
+    resolve_custom_duration,
+    resolve_duration_preset,
+)
 from .editor_commands import (
     DeleteSegmentCommand,
     EditorCommand,
@@ -73,6 +79,10 @@ __all__ = [
     "ContentRecipe",
     "CreativeProfile",
     "DurationRange",
+    "DURATION_PRESETS",
+    "duration_preset_ids",
+    "resolve_custom_duration",
+    "resolve_duration_preset",
     "VisualStrategy",
     "AudioSettings",
     "SubtitleSettings",
