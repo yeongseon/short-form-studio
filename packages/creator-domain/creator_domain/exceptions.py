@@ -78,6 +78,13 @@ class VersionConflictError(ConflictError):
         )
 
 
+class NoHistoryError(ConflictError):
+    """No undo/redo history entry is available at this boundary."""
+
+    def __init__(self, detail: str = "No history to apply") -> None:
+        super().__init__(detail)
+
+
 class QuotaExceededError(ServiceError):
     """Usage quota or rate limit exceeded."""
 
