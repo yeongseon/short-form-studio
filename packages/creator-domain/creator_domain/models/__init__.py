@@ -17,6 +17,7 @@ from .output_spec import (
     OutputSpec,
     VideoCodec,
 )
+from .render_segment import RenderSegment, RenderSegmentKind
 from .model_selection import ModelSelection
 from .pipeline_run import PipelineRun
 from .project import Project
@@ -45,6 +46,8 @@ from .visual_plan import VisualPlan, VisualScene
 __all__ = [
     "MediaAsset",
     "MediaSegment",
+    "RenderSegment",
+    "RenderSegmentKind",
     "ContentRecipe",
     "CreativeProfile",
     "DurationRange",
