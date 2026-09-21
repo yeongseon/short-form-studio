@@ -16,6 +16,11 @@ layer). It starts at the loaded revision and advances on every accepted edit, an
 undo/redo restore it alongside the snapshot. AI proposals carry the generation
 they were built against so a proposal built before a later accepted edit is
 detected as stale without disturbing the persisted revision.
+
+ALL state mutations (apply, apply_batch, undo, redo, and the generation-checked
+proposal path) serialize through one ``asyncio.Lock``, so a mutation that awaits
+mid-way (e.g. an asset lookup) cannot be interleaved by another mutation on the
+same history — the history is a single consistent critical section.
 """
 
 from __future__ import annotations
@@ -55,23 +60,6 @@ class EditorHistory:
         self._future: list[_HistoryEntry] = []
         self._lock = asyncio.Lock()
 
-    async def apply_batch_if_generation(
-        self, commands: Sequence[object], *, expected_generation: int
-    ) -> Timeline:
-        """Atomically check the generation and apply a batch as one critical section.
-
-        The generation check, the batch application, and the generation increment
-        are serialized under a lock, so two concurrent proposals built against the
-        same generation cannot both pass the check and double-apply — exactly one
-        succeeds and the other is rejected as stale.
-        """
-        async with self._lock:
-            if expected_generation != self._generation:
-                raise VersionConflictError(
-                    self._present.project_id, expected_generation, self._generation
-                )
-            return await self.apply_batch(commands)
-
     @property
     def present(self) -> Timeline:
         return self._present
@@ -90,6 +78,55 @@ class EditorHistory:
 
     async def apply(self, command: object) -> Timeline:
         """Apply one command; record the prior snapshot only on success."""
+        async with self._lock:
+            return await self._apply_unlocked(command)
+
+    async def apply_batch(self, commands: Sequence[object]) -> Timeline:
+        """Apply commands atomically as one undoable step."""
+        async with self._lock:
+            return await self._apply_batch_unlocked(commands)
+
+    async def apply_batch_if_generation(
+        self, commands: Sequence[object], *, expected_generation: int
+    ) -> Timeline:
+        """Atomically check the generation and apply a batch as one critical section.
+
+        The generation check, the batch application, and the generation increment
+        are serialized under the lock, so two concurrent proposals built against
+        the same generation cannot both pass the check and double-apply — exactly
+        one succeeds and the other is rejected as stale — and no other history
+        mutation can interleave mid-application.
+        """
+        async with self._lock:
+            if expected_generation != self._generation:
+                raise VersionConflictError(
+                    self._present.project_id, expected_generation, self._generation
+                )
+            return await self._apply_batch_unlocked(commands)
+
+    async def undo(self) -> Timeline:
+        """Restore the prior snapshot; move the current state onto the redo stack."""
+        async with self._lock:
+            if not self._past:
+                raise NoHistoryError("nothing to undo")
+            self._future.append(self._snapshot())
+            entry = self._past.pop()
+            self._present = entry.timeline
+            self._generation = entry.generation
+            return self._present
+
+    async def redo(self) -> Timeline:
+        """Deterministically replay the last undone change."""
+        async with self._lock:
+            if not self._future:
+                raise NoHistoryError("nothing to redo")
+            self._past.append(self._snapshot())
+            entry = self._future.pop()
+            self._present = entry.timeline
+            self._generation = entry.generation
+            return self._present
+
+    async def _apply_unlocked(self, command: object) -> Timeline:
         result = await apply_editor_command(
             self._present,
             command,
@@ -103,15 +140,11 @@ class EditorHistory:
         self._future.clear()
         return result
 
-    async def apply_batch(self, commands: Sequence[object]) -> Timeline:
-        """Apply commands atomically as one undoable step.
-
-        The batch is applied against a working copy; if any command fails the
-        whole batch is discarded and history is untouched (the accepted AI edit
-        never partially lands). On success a single prior snapshot is recorded.
-        An empty batch is not an accepted change, so it is rejected rather than
-        recording a no-op undo boundary.
-        """
+    async def _apply_batch_unlocked(self, commands: Sequence[object]) -> Timeline:
+        # The batch is applied against a working copy; if any command fails the
+        # whole batch is discarded and history is untouched (never partially
+        # lands). On success a single prior snapshot is recorded. An empty batch
+        # is not an accepted change, so it is rejected.
         if not commands:
             raise ValidationError("cannot apply an empty command batch")
         working = self._present
@@ -128,26 +161,6 @@ class EditorHistory:
         self._generation += 1
         self._future.clear()
         return working
-
-    def undo(self) -> Timeline:
-        """Restore the prior snapshot; move the current state onto the redo stack."""
-        if not self._past:
-            raise NoHistoryError("nothing to undo")
-        self._future.append(self._snapshot())
-        entry = self._past.pop()
-        self._present = entry.timeline
-        self._generation = entry.generation
-        return self._present
-
-    def redo(self) -> Timeline:
-        """Deterministically replay the last undone change."""
-        if not self._future:
-            raise NoHistoryError("nothing to redo")
-        self._past.append(self._snapshot())
-        entry = self._future.pop()
-        self._present = entry.timeline
-        self._generation = entry.generation
-        return self._present
 
     def _snapshot(self) -> _HistoryEntry:
         return _HistoryEntry(

@@ -31,6 +31,26 @@ class _FakeAssetLookup:
         return self._assets.get(asset_id)
 
 
+class _GatedAssetLookup:
+    # Blocks the first lookup on a released Event so a proposal apply can be
+    # paused mid-application; used to prove another mutator cannot interleave
+    # while the lock is held across the awaited command validation.
+    def __init__(self, assets: dict[int, EditorAssetRef]) -> None:
+        self._assets = assets
+        self.paused = asyncio.Event()
+        self.resume = asyncio.Event()
+        self.armed = False
+
+    async def get_asset_for_editor(
+        self, asset_id: int, workspace_id: int
+    ) -> EditorAssetRef | None:
+        if self.armed:
+            self.armed = False
+            self.paused.set()
+            await self.resume.wait()
+        return self._assets.get(asset_id)
+
+
 def _ref(asset_id: int, *, project_id: int = 1, duration_seconds: float = 30.0) -> EditorAssetRef:
     return EditorAssetRef(
         id=asset_id, project_id=project_id, media_type="VIDEO", duration_seconds=duration_seconds
@@ -213,3 +233,35 @@ async def test_concurrent_same_generation_proposals_apply_exactly_once() -> None
     assert len(successes) == 1
     assert len(conflicts) == 1
     assert h.generation == 4
+
+
+@pytest.mark.asyncio
+async def test_direct_undo_cannot_interleave_a_paused_proposal_apply() -> None:
+    # A proposal apply pauses inside asset validation while still holding the
+    # history lock; a concurrent direct undo must not mutate the history until
+    # the apply fully completes. If the lock did not cover undo, the undo would
+    # run against the pre-apply state and lose the applied edit.
+    lookup = _GatedAssetLookup({10: _ref(10), 11: _ref(11), 12: _ref(12)})
+    h = EditorHistory(_timeline(), workspace_id=1, asset_lookup=lookup)
+    seed = _proposal([{"type": "deleteSegment", "segment_id": "s2", "policy": "ripple"}])
+    await apply_ai_proposal(h, seed)
+    assert h.generation == 4 and h.can_undo is True
+
+    proposal = _proposal(
+        [{"type": "replaceAsset", "segment_id": "s1", "asset_id": 12}], base_revision=4
+    )
+    lookup.armed = True
+    apply_task = asyncio.create_task(apply_ai_proposal(h, proposal))
+    await lookup.paused.wait()
+
+    undo_task = asyncio.create_task(h.undo())
+    await asyncio.sleep(0)
+    assert undo_task.done() is False
+    assert h.generation == 4
+
+    lookup.resume.set()
+    applied = await apply_task
+    assert applied.segments[0].asset_id == 12
+    await undo_task
+    assert h.generation == 4
+    assert h.present.segments[0].asset_id == 10

@@ -90,7 +90,7 @@ async def test_undo_restores_exact_prior_state() -> None:
     h = _history()
     before = h.present.model_dump(mode="json")
     await h.apply(TrimSegmentCommand(segment_id="s1", trim_start_seconds=1.0, trim_end_seconds=3.0))
-    h.undo()
+    await h.undo()
     assert h.present.model_dump(mode="json") == before
 
 
@@ -101,9 +101,9 @@ async def test_undo_multiple_commands_in_reverse_order() -> None:
     await h.apply(TrimSegmentCommand(segment_id="s1", trim_start_seconds=1.0, trim_end_seconds=3.0))
     snapshot1 = h.present.model_dump(mode="json")
     await h.apply(ResizeSegmentCommand(segment_id="s1", duration_seconds=1.5))
-    h.undo()
+    await h.undo()
     assert h.present.model_dump(mode="json") == snapshot1
-    h.undo()
+    await h.undo()
     assert h.present.model_dump(mode="json") == snapshot0
     assert h.can_undo is False
 
@@ -122,7 +122,7 @@ async def test_failed_command_does_not_enter_history() -> None:
 async def test_undo_at_boundary_raises() -> None:
     h = _history()
     with pytest.raises(NoHistoryError):
-        h.undo()
+        await h.undo()
 
 
 @pytest.mark.asyncio
@@ -136,7 +136,7 @@ async def test_apply_batch_is_one_undoable_step() -> None:
         ]
     )
     assert len(h.present.segments) == 1
-    h.undo()
+    await h.undo()
     assert h.present.model_dump(mode="json") == before
     assert h.can_undo is False
 
@@ -175,5 +175,5 @@ async def test_snapshot_is_defensively_copied_so_mutating_present_cannot_corrupt
     await h.apply(TrimSegmentCommand(segment_id="s1", trim_start_seconds=1.0, trim_end_seconds=3.0))
     # mutate the object that was present before the apply (now the recorded snapshot's source)
     held.segments[0].trim_start_seconds = 99.0
-    h.undo()
+    await h.undo()
     assert h.present.model_dump(mode="json") == before
