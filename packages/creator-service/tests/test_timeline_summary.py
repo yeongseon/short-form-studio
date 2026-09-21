@@ -117,6 +117,16 @@ def test_summary_rejects_a_segment_with_an_unresolved_asset() -> None:
         build_timeline_summary(_timeline(), asset_refs=refs)
 
 
+def test_summary_rejects_max_segments_above_the_hard_cap() -> None:
+    with pytest.raises(ValidationError):
+        build_timeline_summary(_timeline(), asset_refs=_refs(), max_segments=501)
+
+
+def test_summary_rejects_non_positive_max_segments() -> None:
+    with pytest.raises(ValidationError):
+        build_timeline_summary(_timeline(), asset_refs=_refs(), max_segments=0)
+
+
 def test_summary_bounds_the_segment_count() -> None:
     segments = [
         {

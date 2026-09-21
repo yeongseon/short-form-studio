@@ -42,6 +42,10 @@ def build_timeline_summary(
     max_segments: int = _DEFAULT_MAX_SEGMENTS,
 ) -> dict[str, Any]:
     """Summarize a Timeline revision for an LLM editor (bounded, secret-free)."""
+    if max_segments < 1 or max_segments > _DEFAULT_MAX_SEGMENTS:
+        raise ValidationError(
+            f"max_segments must be between 1 and {_DEFAULT_MAX_SEGMENTS}"
+        )
     if len(timeline.segments) > max_segments:
         raise ValidationError(
             f"timeline has {len(timeline.segments)} segments, exceeding the "
