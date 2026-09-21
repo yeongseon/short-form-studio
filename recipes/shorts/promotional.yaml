@@ -1,0 +1,21 @@
+id: shorts_promotional
+content_format: short
+target_duration:
+  min_seconds: 15
+  max_seconds: 45
+structure:
+  - hook
+  - offer
+  - benefit
+  - cta
+visual_strategy:
+  pacing: fast
+  segment_duration:
+    min_seconds: 1.5
+    max_seconds: 5.0
+audio:
+  narration: true
+  bgm: true
+subtitles:
+  enabled: true
+  emphasis: true
