@@ -158,9 +158,9 @@ def render_video(self, run_id: int, render_profile: str = "shorts_default") -> d
         # Resolve render profile and apply quality profile overrides
         resolved_profile = _resolve_profile(render_profile)
         try:
-            from creator_service.quality_profile import get_quality_profile
+            from creator_service.recipe_profile import resolve_quality_profile
             from creator_service.render_profile import TransitionStyle
-            _qp = get_quality_profile(render_profile if render_profile != "shorts_default" else "ssul_v2")
+            _qp = resolve_quality_profile(render_profile)
             # Override transition style from quality profile
             transition_map = {
                 "ken_burns": TransitionStyle.KEN_BURNS,
@@ -281,8 +281,8 @@ def render_video(self, run_id: int, render_profile: str = "shorts_default") -> d
         if audio_path:
             try:
                 from creator_service.bgm_service import bgm_service
-                from creator_service.quality_profile import get_quality_profile
-                qp = get_quality_profile(render_profile if render_profile != "shorts_default" else "ssul_v2")
+                from creator_service.recipe_profile import resolve_quality_profile
+                qp = resolve_quality_profile(render_profile)
                 total_duration = sum(scene_durations)
                 bgm_path = f"{_ARTIFACT_ROOT}/{run_id}/render/bgm.mp3"
                 Path(bgm_path).parent.mkdir(parents=True, exist_ok=True)
@@ -345,8 +345,8 @@ def render_video(self, run_id: int, render_profile: str = "shorts_default") -> d
         if subtitle_path and str(subtitle_path).endswith(".srt"):
             try:
                 from tasks.script_qc import extract_emphasis_words
-                from creator_service.quality_profile import get_quality_profile
-                qp = get_quality_profile(render_profile if render_profile != "shorts_default" else "ssul_v2")
+                from creator_service.recipe_profile import resolve_quality_profile
+                qp = resolve_quality_profile(render_profile)
                 # Extract emphasis words from script if available
                 emphasis_words: list[str] | None = None
                 if qp.subtitle_emphasis:
@@ -369,8 +369,8 @@ def render_video(self, run_id: int, render_profile: str = "shorts_default") -> d
 
         # --- Pacing enforcement: split scenes > max_scene_duration into sub-beats ---
         try:
-            from creator_service.quality_profile import get_quality_profile
-            _qp_pace = get_quality_profile(render_profile if render_profile != "shorts_default" else "ssul_v2")
+            from creator_service.recipe_profile import resolve_quality_profile
+            _qp_pace = resolve_quality_profile(render_profile)
             max_scene_dur = _qp_pace.max_scene_duration
             new_image_paths: list[Path] = []
             new_scene_durations: list[float] = []
@@ -401,8 +401,8 @@ def render_video(self, run_id: int, render_profile: str = "shorts_default") -> d
         # --- Compute per-scene transition overrides (hard cut on climax) ---
         scene_transitions: list[str] | None = None
         try:
-            from creator_service.quality_profile import get_quality_profile
-            _qp_trans = get_quality_profile(render_profile if render_profile != "shorts_default" else "ssul_v2")
+            from creator_service.recipe_profile import resolve_quality_profile
+            _qp_trans = resolve_quality_profile(render_profile)
             if _qp_trans.hard_cut_on_climax and scene_count >= 4:
                 # Determine climax scene by metadata (section_type) if available,
                 # falling back to index-based heuristic for legacy scripts.

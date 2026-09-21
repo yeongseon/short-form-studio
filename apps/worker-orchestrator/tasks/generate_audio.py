@@ -160,8 +160,8 @@ def generate_audio(
             per_section_generated = False
             if entry.provider_type == "edge_tts" and draft.structured_script:
                 try:
-                    from creator_service.quality_profile import get_quality_profile
-                    qp = get_quality_profile("ssul_v2")
+                    from creator_service.recipe_profile import resolve_quality_profile
+                    qp = resolve_quality_profile("shorts_default")
                     sections = draft.structured_script
                     section_audio_paths: list[str] = []
                     section_ids: list[str] = []
@@ -232,8 +232,8 @@ def generate_audio(
                 params["output_path"] = audio_path
                 if entry.provider_type == "edge_tts":
                     try:
-                        from creator_service.quality_profile import get_quality_profile
-                        qp = get_quality_profile("ssul_v2")
+                        from creator_service.recipe_profile import resolve_quality_profile
+                        qp = resolve_quality_profile("shorts_default")
                         params.update(qp.to_tts_params())
                         logger.info("Applied TTS rate=%s for run %d", params.get('rate'), run_id)
                     except Exception:

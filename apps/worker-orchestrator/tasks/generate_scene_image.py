@@ -117,8 +117,8 @@ def generate_scene_image(
             # Apply quality profile image style prefix for photo-quality providers
             if model_key in ("pollinations", "hf-flux-schnell"):
                 try:
-                    from creator_service.quality_profile import get_quality_profile
-                    qp = get_quality_profile("ssul_v2")
+                    from creator_service.recipe_profile import resolve_quality_profile
+                    qp = resolve_quality_profile("shorts_default")
                     if qp.image_style_prefix and not effective_prompt.startswith(qp.image_style_prefix):
                         effective_prompt = qp.image_style_prefix + effective_prompt
                 except Exception:
