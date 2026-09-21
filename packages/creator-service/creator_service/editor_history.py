@@ -65,6 +65,14 @@ class EditorHistory:
         return self._present
 
     @property
+    def workspace_id(self) -> int:
+        return self._workspace_id
+
+    @property
+    def asset_lookup(self) -> EditorAssetLookup:
+        return self._asset_lookup
+
+    @property
     def generation(self) -> int:
         return self._generation
 
@@ -103,6 +111,14 @@ class EditorHistory:
                     self._present.project_id, expected_generation, self._generation
                 )
             return await self._apply_batch_unlocked(commands)
+
+    async def capture(self) -> tuple[Timeline, int]:
+        # Read-only atomic snapshot of (present, generation) for a dry-run
+        # preview: a deep copy is returned under the lock so the caller can
+        # fold commands over an immutable timeline without a concurrent mutation
+        # moving present/generation mid-read. History itself is NOT mutated.
+        async with self._lock:
+            return self._present.model_copy(deep=True), self._generation
 
     async def undo(self) -> Timeline:
         """Restore the prior snapshot; move the current state onto the redo stack."""
