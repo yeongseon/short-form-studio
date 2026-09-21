@@ -34,9 +34,13 @@ def test_legacy_default_profile_fields_are_stable() -> None:
     assert qp.subtitle_emphasis is False
 
 
-def test_legacy_unknown_name_currently_falls_back_to_ssul_v2() -> None:
-    # Characterize the pre-existing implicit fallback (SF-17 removes it later).
-    assert get_quality_profile("does_not_exist").name == "ssul_v2"
+def test_unknown_name_raises_after_fallback_removal() -> None:
+    # SF-17 removed the implicit fallback: an unknown name now raises explicitly
+    # instead of silently resolving to ssul_v2.
+    from creator_service.quality_profile import UnknownQualityProfileError
+
+    with pytest.raises(UnknownQualityProfileError):
+        get_quality_profile("does_not_exist")
 
 
 # --- new explicit recipe-driven resolver ------------------------------------

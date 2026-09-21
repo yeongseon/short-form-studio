@@ -151,6 +151,30 @@ QUALITY_PROFILES: dict[str, QualityProfile] = {
 }
 
 
+class UnknownQualityProfileError(KeyError):
+    """Raised when a quality-profile name cannot be resolved explicitly."""
+
+
+# Legacy stored runs may reference render-profile names that predate the
+# recipe/profile split. Resolve them explicitly (documented mapping) instead of
+# a silent dict.get fallback, so saved runs stay reproducible without silently
+# reinterpreting unknown names as ssul_v2.
+LEGACY_PROFILE_ALIASES: dict[str, str] = {
+    "shorts_default": "ssul_v2",
+}
+
+
 def get_quality_profile(name: str = "ssul_v2") -> QualityProfile:
-    """Get a quality profile by name, defaulting to ssul_v2."""
-    return QUALITY_PROFILES.get(name, QUALITY_PROFILES["ssul_v2"])
+    """Resolve a quality profile by name, explicitly.
+
+    Known profile names and documented legacy aliases resolve to their profile;
+    any other name raises ``UnknownQualityProfileError`` rather than silently
+    falling back to ssul_v2 (SF-17).
+    """
+    if name in QUALITY_PROFILES:
+        return QUALITY_PROFILES[name]
+    aliased = LEGACY_PROFILE_ALIASES.get(name)
+    if aliased is not None:
+        return QUALITY_PROFILES[aliased]
+    raise UnknownQualityProfileError(f"Unknown quality profile: {name!r}")
+
