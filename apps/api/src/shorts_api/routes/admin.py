@@ -12,39 +12,35 @@ handled separately from this API surface.
 
 from __future__ import annotations
 
-import hmac
 import hashlib
+import hmac
 import logging
 import os
-import sys
 import time
+import uuid
 from collections import defaultdict
-from importlib import import_module
-from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from redis import Redis
 from redis.exceptions import RedisError
 
-try:
-    admin_service = import_module("creator_service.admin_service").admin_service
-except ModuleNotFoundError:
-    repo_root = Path(__file__).resolve().parents[5]
-    creator_service_pkg = repo_root / "packages" / "creator-service"
-    if str(creator_service_pkg) not in sys.path:
-        sys.path.append(str(creator_service_pkg))
-    try:
-        creator_service_package = import_module("creator_service")
-        local_creator_service = str(creator_service_pkg / "creator_service")
-        if local_creator_service not in creator_service_package.__path__:
-            creator_service_package.__path__.append(local_creator_service)
-    except Exception:
-        pass
-    admin_service = import_module("creator_service.admin_service").admin_service
+from creator_service.admin_service import admin_service
+
 logger = logging.getLogger(__name__)
 audit_logger = logging.getLogger("admin.audit")
+
+_ALLOWED_CACHE_CLEAR_PREFIXES = (
+    "cache:creator:",
+    "cache:",
+    "cache:test:",
+    "session:",
+    "model_health:",
+    "rate_limit:",
+    "artifact:",
+)
+
+_DANGEROUS_PATTERNS = frozenset({"*", "*:*", ""})
 
 
 class DestructiveOpRateLimiter:
@@ -179,50 +175,14 @@ router = APIRouter(
     dependencies=[Depends(require_admin)],
 )
 
-
-class HealthResponse(BaseModel):
-    status: str
-    db: dict[str, Any]
-    redis: dict[str, Any]
-    uptime_seconds: int
-
-
-class RunInfo(BaseModel):
-    id: int
-    project_id: int
-    current_stage: str | None = None
-    status: str | None = None
-    updated_at: Any | None = None
-
-
-class QueueDepthResponse(BaseModel):
-    creator: int
-
-
-class StorageStatsResponse(BaseModel):
-    artifact_root: str
-    file_count: int
-    total_size_bytes: int
-    error: str | None = None
-
-
-class UnstickRunResponse(BaseModel):
-    ok: bool
-    run_id: str
-    previous_stage: str | None = None
-    current_stage: str | None = None
-    status: str | None = None
-    error: str | None = None
-
-
-class CacheClearResponse(BaseModel):
-    ok: bool
-    deleted_keys: int
-    key_pattern: str
-    dry_run: bool
-    matched_keys: list[str] = Field(default_factory=list)
-    error: str | None = None
-
+from shorts_api.schemas.admin import (
+    CacheClearResponse,
+    HealthResponse,
+    QueueDepthResponse,
+    RunInfo,
+    StorageStatsResponse,
+    UnstickRunResponse,
+)
 
 @router.get("/health", response_model=HealthResponse)
 async def admin_health() -> dict[str, Any]:
@@ -254,6 +214,7 @@ async def admin_storage_stats() -> dict[str, Any]:
 @router.post("/runs/{run_id}/unstick", response_model=UnstickRunResponse)
 async def admin_unstick_run(
     run_id: str,
+    request: Request,
     admin_key: str = Depends(require_admin),
     _: None = Depends(require_confirmation_and_rate_limit),
 ) -> dict[str, Any]:
@@ -262,13 +223,26 @@ async def admin_unstick_run(
         if isinstance(admin_key, str)
         else "unknown"
     )
+    request_id = request.headers.get("X-Request-Id", "none")
+    source_ip = request.client.host if request.client else "unknown"
     logger.warning("Admin mutation requested: unstick run_id=%s", run_id)
-    audit_logger.warning("ADMIN_ACTION: unstick_run | run_id=%s | key=%s", run_id, key_fingerprint)
-    return await admin_service.unstick_run(run_id)
+    audit_id = str(uuid.uuid4())
+    audit_logger.warning(
+        "ADMIN_ACTION: unstick_run | run_id=%s | key=%s | request_id=%s | source_ip=%s | audit_id=%s",
+        run_id,
+        key_fingerprint,
+        request_id,
+        source_ip,
+        audit_id,
+    )
+    result = await admin_service.unstick_run(run_id)
+    result["audit_id"] = audit_id
+    return result
 
 
 @router.post("/cache/clear", response_model=CacheClearResponse)
 async def admin_clear_cache(
+    request: Request,
     key_pattern: str | None = Query(default=None),
     dry_run: bool = Query(default=False),
     admin_key: str = Depends(require_admin),
@@ -280,20 +254,65 @@ async def admin_clear_cache(
         if isinstance(admin_key, str)
         else "unknown"
     )
+    request_id = request.headers.get("X-Request-Id", "none")
+    source_ip = request.client.host if request.client else "unknown"
     logger.warning(
         "Admin mutation requested: clear cache key_pattern=%s dry_run=%s",
         safe_pattern,
         dry_run,
     )
+    audit_id = str(uuid.uuid4())
     if key_pattern is None:
         audit_logger.warning(
-            "ADMIN_ACTION: cache_clear | dry_run=%s | key=%s", dry_run, key_fingerprint
+            "ADMIN_ACTION: cache_clear | dry_run=%s | key=%s | request_id=%s | source_ip=%s | audit_id=%s",
+            dry_run,
+            key_fingerprint,
+            request_id,
+            source_ip,
+            audit_id,
         )
     else:
         audit_logger.warning(
-            "ADMIN_ACTION: cache_clear | key_pattern=%s | dry_run=%s | key=%s",
+            "ADMIN_ACTION: cache_clear | key_pattern=%s | dry_run=%s | key=%s | request_id=%s | source_ip=%s | audit_id=%s",
             safe_pattern,
             dry_run,
             key_fingerprint,
+            request_id,
+            source_ip,
+            audit_id,
         )
-    return await admin_service.clear_cache(key_pattern=key_pattern, dry_run=dry_run)
+
+    # Validate pattern against allowlist (dry_run=True allows any pattern for inspection)
+    if not dry_run:
+        if key_pattern is None or key_pattern.strip() in _DANGEROUS_PATTERNS:
+            audit_logger.warning(
+                "ADMIN_REJECTED: cache_clear | reason=dangerous_pattern | pattern=%s | key=%s | audit_id=%s",
+                safe_pattern,
+                key_fingerprint,
+                audit_id,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Destructive pattern rejected. Use a specific prefix from allowlist: "
+                + ", ".join(_ALLOWED_CACHE_CLEAR_PREFIXES),
+            )
+
+        pattern_allowed = any(
+            key_pattern.startswith(prefix) for prefix in _ALLOWED_CACHE_CLEAR_PREFIXES
+        )
+        if not pattern_allowed:
+            audit_logger.warning(
+                "ADMIN_REJECTED: cache_clear | reason=prefix_not_allowed | pattern=%s | key=%s | audit_id=%s",
+                safe_pattern,
+                key_fingerprint,
+                audit_id,
+            )
+            raise HTTPException(
+                status_code=400,
+                detail="Pattern prefix not in allowlist. Allowed: "
+                + ", ".join(_ALLOWED_CACHE_CLEAR_PREFIXES),
+            )
+
+    result = await admin_service.clear_cache(key_pattern=key_pattern, dry_run=dry_run)
+    result["audit_id"] = audit_id
+    return result

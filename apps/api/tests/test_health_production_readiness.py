@@ -10,6 +10,7 @@ def _set_production_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql://svc_user:strong-pass@db.internal:5432/shorts")
     monkeypatch.setenv("CORS_ORIGINS", "https://studio.example.com")
     monkeypatch.setenv("REDIS_URL", "redis://redis.internal:6379/0")
+    monkeypatch.setenv("ADMIN_API_KEY", "test-admin-key")
 
 
 def _main_module():
@@ -34,7 +35,7 @@ async def test_health_returns_200_when_db_and_redis_are_healthy(monkeypatch: pyt
     ):
         transport = ASGITransport(app=main_module.app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            response = await client.get("/health")
+            response = await client.get("/health", headers={"X-Admin-Key": "test-admin-key"})
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
@@ -59,7 +60,7 @@ async def test_health_returns_503_when_database_is_down(monkeypatch: pytest.Monk
     ):
         transport = ASGITransport(app=main_module.app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            response = await client.get("/health")
+            response = await client.get("/health", headers={"X-Admin-Key": "test-admin-key"})
 
     assert response.status_code == 503
     detail = response.json()["detail"]
@@ -85,7 +86,7 @@ async def test_health_returns_503_when_redis_is_down(monkeypatch: pytest.MonkeyP
     ):
         transport = ASGITransport(app=main_module.app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            response = await client.get("/health")
+            response = await client.get("/health", headers={"X-Admin-Key": "test-admin-key"})
 
     assert response.status_code == 503
     detail = response.json()["detail"]

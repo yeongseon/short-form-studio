@@ -45,10 +45,14 @@ class StubRunService:
         self.runs: dict[int, StubRun] = {}
         self.updated_defaults: list[dict[str, object]] = []
 
-    async def get_run(self, run_id: int) -> StubRun | None:
+    async def get_run(self, run_id: int, workspace_id: int | None = None) -> StubRun | None:
+        _ = workspace_id
         return self.runs.get(run_id)
 
-    async def update_model_defaults(self, run_id: int, updates: dict[str, str]) -> StubRun:
+    async def update_model_defaults(
+        self, run_id: int, updates: dict[str, str], workspace_id: int | None = None
+    ) -> StubRun:
+        _ = workspace_id
         run = self.runs.get(run_id)
         if run is None:
             raise ValueError(f"Run {run_id} not found")
@@ -107,6 +111,8 @@ def contract_services(
     script_svc = StubScriptService()
     audio_svc = StubAudioService()
 
+    monkeypatch.setattr("creator_service.run_service.run_service", run_svc)
+
     task_counter = {"value": 0}
 
     def dispatch_audio(**kwargs: object) -> str:
@@ -119,8 +125,9 @@ def contract_services(
         task_counter["value"] += 1
         return f"subtitle-task-{task_counter['value']}"
 
-    def validate_model_key(model_key: str) -> None:
+    def validate_model_key(model_key: str, expected_category: str | None = None) -> None:
         _ = model_key
+        _ = expected_category
 
     def validate_model_defaults(model_defaults: dict[str, str] | None) -> None:
         _ = model_defaults
@@ -290,8 +297,8 @@ async def test_health_contract(client):
     assert response.status_code == 200
     body = response.json()
     assert "status" in body
-    assert "models" in body
-    assert isinstance(body["models"], dict)
+    # models detail only visible with admin key
+    assert "models" not in body
 
 
 @pytest.mark.asyncio
@@ -349,3 +356,11 @@ def test_cors_middleware_configured():
             break
 
     assert cors_middleware is not None
+
+
+def test_cors_middleware_is_outermost():
+    """CORS must be the outermost middleware so auth failures still get CORS headers (#600)."""
+    # app.user_middleware is ordered outermost-first.
+    assert app.user_middleware[0].cls is CORSMiddleware, (
+        f"Expected CORSMiddleware outermost, got {[m.cls.__name__ for m in app.user_middleware]}"
+    )

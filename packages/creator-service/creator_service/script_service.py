@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from creator_domain.models.script_draft import ScriptDraft, ScriptSection
 
 from .markdown_parser import parse_markdown
+
+logger = logging.getLogger(__name__)
 
 
 class ScriptStorageBackend(Protocol):
@@ -37,11 +40,15 @@ class InMemoryScriptStorage:
         self._drafts: dict[int, list[dict[str, Any]]] = {}
         self._next_id = 1
         self._run_locks: dict[int, asyncio.Lock] = {}
+        self._by_idempotency_key: dict[str, dict[str, Any]] = {}
 
     async def save_draft(self, row: dict[str, Any]) -> dict[str, Any]:
         run_id = row["run_id"]
         lock = self._run_locks.setdefault(run_id, asyncio.Lock())
         async with lock:
+            idem_key = row.get("idempotency_key")
+            if isinstance(idem_key, str) and idem_key in self._by_idempotency_key:
+                return dict(self._by_idempotency_key[idem_key])
             drafts = self._drafts.setdefault(run_id, [])
             next_version = max((d["version"] for d in drafts), default=0) + 1
             now = datetime.now(timezone.utc)
@@ -53,6 +60,8 @@ class InMemoryScriptStorage:
             }
             self._next_id += 1
             drafts.append(saved)
+            if isinstance(idem_key, str):
+                self._by_idempotency_key[idem_key] = saved
         return dict(saved)
 
     async def get_active_draft(self, run_id: int) -> dict[str, Any] | None:
@@ -76,6 +85,8 @@ class ScriptService:
         source_type: str,
         markdown_content: str | None = None,
         structured_script: list[ScriptSection] | None = None,
+        *,
+        idempotency_key: str | None = None,
     ) -> ScriptDraft:
         """Save a new script draft version.
 
@@ -95,16 +106,26 @@ class ScriptService:
             if existing_json:
                 try:
                     existing_data = json.loads(existing_json)
-                    existing_sections = [ScriptSection.model_validate(section) for section in existing_data]
+                    existing_sections = [
+                        ScriptSection.model_validate(section) for section in existing_data
+                    ]
                 except (json.JSONDecodeError, Exception):
+                    logger.warning(
+                        "Malformed structured_script_json for run/draft id=%s",
+                        current.get("id", run_id),
+                    )
                     existing_sections = None
 
         if markdown_content is not None and structured_script is None:
-            structured_script = parse_markdown(markdown_content, existing_sections=existing_sections)
+            structured_script = parse_markdown(
+                markdown_content, existing_sections=existing_sections
+            )
 
         structured_script_json: str | None = None
         if structured_script is not None:
-            structured_script_json = json.dumps([section.model_dump(mode="json") for section in structured_script])
+            structured_script_json = json.dumps(
+                [section.model_dump(mode="json") for section in structured_script]
+            )
 
         row = await self.storage.save_draft(
             {
@@ -112,6 +133,7 @@ class ScriptService:
                 "source_type": source_type,
                 "markdown_content": markdown_content,
                 "structured_script_json": structured_script_json,
+                "idempotency_key": idempotency_key,
             }
         )
 
@@ -139,6 +161,10 @@ class ScriptService:
                 data = json.loads(structured_json)
                 structured_script = [ScriptSection.model_validate(section) for section in data]
             except (json.JSONDecodeError, Exception):
+                logger.warning(
+                    "Malformed structured_script_json for run/draft id=%s",
+                    row.get("id", row.get("run_id", "unknown")),
+                )
                 structured_script = None
 
         return ScriptDraft(

@@ -7,6 +7,10 @@ from .db import fetch_all, fetch_one
 
 class PostgresUserStorage:
     async def create_user(self, payload: dict[str, Any]) -> dict[str, Any]:
+        auth_subject = str(payload.get("auth_subject", "")).strip()
+        if not auth_subject:
+            raise ValueError("auth_subject must not be empty")
+
         row = await fetch_one(
             """
             INSERT INTO users (email, name, auth_provider, auth_subject)
@@ -21,7 +25,7 @@ class PostgresUserStorage:
             payload.get("email"),
             payload.get("name"),
             payload.get("auth_provider", "api_key"),
-            payload.get("auth_subject", ""),
+            auth_subject,
         )
         if row is None:
             raise ValueError("Failed to create user")

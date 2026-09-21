@@ -1,5 +1,5 @@
 install:
-	python3 -m pip install -r apps/api/requirements.txt -r apps/worker-orchestrator/requirements.txt
+	python3 -m pip install -c constraints.txt -r apps/api/requirements.txt -r apps/worker-orchestrator/requirements.txt
 	npm --prefix apps/studio-web install
 
 dev:
@@ -37,3 +37,57 @@ docker-up-all:
 
 docker-logs:
 	docker compose logs -f
+
+# --- Local Server (LAN-accessible) ---
+
+docker-local-up:
+	docker compose -f docker-compose.yml -f docker-compose.local-server.yml up -d postgres redis api worker studio-web
+
+docker-local-build:
+	docker compose -f docker-compose.yml -f docker-compose.local-server.yml up -d --build postgres redis api worker studio-web
+
+docker-local-migrate:
+	docker compose run --rm api alembic upgrade head
+
+docker-local-bootstrap:
+	docker compose run --rm api python scripts/create_api_key.py --email local@example.com --workspace local --name local-server
+	@echo ""
+	@echo "Copy the generated API key into .env as API_KEY, then run:"
+	@echo "  make docker-local-up"
+
+docker-local-logs:
+	docker compose -f docker-compose.yml -f docker-compose.local-server.yml logs -f api worker studio-web
+
+docker-local-down:
+	docker compose -f docker-compose.yml -f docker-compose.local-server.yml down
+
+docker-local-status:
+	docker compose -f docker-compose.yml -f docker-compose.local-server.yml ps
+
+# --- Dependency locking ---
+# Two lockfiles serve different purposes:
+#   uv.lock           — workspace packages (creator-domain/service/provider)
+#   constraints.txt   — full deployment pin (api + worker + packages + transitive)
+#
+# lock:       regenerate uv.lock for workspace packages.
+#             constraints.txt must be regenerated separately when api/worker
+#             requirements change (see lock-constraints below).
+lock:
+	uv lock
+	@echo "uv.lock regenerated"
+
+lock-constraints:
+	uv pip compile apps/api/requirements.txt apps/api/requirements-dev.txt \
+		apps/worker-orchestrator/requirements.txt \
+		apps/worker-orchestrator/requirements-dev.txt \
+		--output-file constraints.txt
+	@echo "constraints.txt regenerated"
+
+lock-check:
+	uv lock --check
+
+# Bump version in pyproject.toml. Usage: make release VERSION=0.5.0
+release:
+	@test -n "$(VERSION)" || { echo "Usage: make release VERSION=0.5.0"; exit 1; }
+	python3 -c "import re; s=open('pyproject.toml').read(); s=re.sub(r'^version = \".*\"', 'version = \"$(VERSION)\"', s, flags=re.M); open('pyproject.toml','w').write(s)"
+	@echo "Bumped pyproject.toml to $(VERSION). Review, commit, then: git tag v$(VERSION) && git push --tags"

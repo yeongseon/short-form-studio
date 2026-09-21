@@ -9,7 +9,7 @@ from typing import Any, Protocol
 from creator_service.artifact_storage_integration import get_artifact_download_path
 from creator_service.object_storage import get_storage_backend
 
-from .db import execute, fetch_all, fetch_one
+from .db import execute, fetch_all, fetch_one, transaction
 
 logger = logging.getLogger(__name__)
 
@@ -56,26 +56,56 @@ class ArtifactDownloadService:
     async def get_artifact_by_id(self, artifact_id: int) -> dict[str, Any] | None:
         return await self.storage.get_artifact_by_id(artifact_id)
 
-    async def delete_artifacts_for_run(self, run_id: int) -> None:
+    async def delete_artifacts_for_run(self, run_id: int) -> int:
         artifacts = await fetch_all(
-            "SELECT storage_key, storage_provider FROM creator_artifacts WHERE run_id = $1",
+            "SELECT id, storage_key, storage_provider FROM creator_artifacts WHERE run_id = $1",
             run_id,
         )
+        # Mark all artifacts as deletion-requested
+        if artifacts:
+            await execute(
+                "UPDATE creator_artifacts SET delete_requested_at = NOW() "
+                "WHERE run_id = $1 AND delete_requested_at IS NULL",
+                run_id,
+            )
+
         backend = get_storage_backend()
+
+        deleted_ids: list[int] = []
+        failed_count = 0
 
         for artifact in artifacts:
             key = artifact.get("storage_key")
+            artifact_id = artifact.get("id")
             if not isinstance(key, str) or not key:
+                if isinstance(artifact_id, int):
+                    deleted_ids.append(artifact_id)
                 continue
             try:
                 backend.delete(key)
-            except Exception:
+                if isinstance(artifact_id, int):
+                    deleted_ids.append(artifact_id)
+            except Exception as exc:
+                failed_count += 1
                 logger.exception("Failed deleting artifact key '%s' for run_id=%s", key, run_id)
+                if isinstance(artifact_id, int):
+                    await self._record_delete_failure(artifact_id, exc)
 
-        await execute("DELETE FROM creator_artifacts WHERE run_id = $1", run_id)
+        if deleted_ids:
+            await execute(
+                "DELETE FROM creator_artifacts WHERE id = ANY($1::int[])",
+                deleted_ids,
+            )
 
-        if os.getenv("STORAGE_BACKEND", "local") != "local":
-            return
+        if failed_count:
+            logger.warning(
+                "%d artifact(s) for run_id=%s could not be deleted from storage; DB rows retained for retry",
+                failed_count,
+                run_id,
+            )
+
+        if failed_count or os.getenv("STORAGE_BACKEND", "local") != "local":
+            return failed_count
 
         artifact_root = Path(os.getenv("ARTIFACT_ROOT", "data/artifacts"))
         run_dir = artifact_root / str(run_id)
@@ -89,6 +119,163 @@ class ArtifactDownloadService:
                 run_dir.rmdir()
             except Exception:
                 logger.exception("Failed deleting local run directory '%s'", run_dir)
+        return failed_count
+
+
+    @staticmethod
+    async def _record_delete_failure(artifact_id: int, exc: Exception) -> None:
+        """Persist failure metadata for a single artifact."""
+        await execute(
+            "UPDATE creator_artifacts "
+            "SET delete_failed_at = NOW(), "
+            "    delete_error = $2, "
+            "    delete_retry_count = COALESCE(delete_retry_count, 0) + 1 "
+            "WHERE id = $1",
+            artifact_id,
+            str(exc)[:500],
+        )
+
+    async def sweep_expired(self, batch_size: int = 500) -> int:
+        """Mark expired artifacts for deletion.
+
+        Rows whose ``expires_at`` has passed and that haven't already been
+        scheduled for deletion get ``delete_requested_at = NOW()``. The actual
+        storage + DB row removal is handled by the existing
+        ``retry_failed_deletions`` flow (``FOR UPDATE SKIP LOCKED``).
+
+        Returns the number of rows newly marked for deletion.
+        """
+        if batch_size < 1:
+            raise ValueError("batch_size must be >= 1")
+
+        result = await execute(
+            "UPDATE creator_artifacts "
+            "SET delete_requested_at = NOW() "
+            "WHERE id IN ("
+            "    SELECT id FROM creator_artifacts "
+            "    WHERE expires_at IS NOT NULL"
+            "      AND expires_at < NOW()"
+            "      AND delete_requested_at IS NULL"
+            "    LIMIT $1"
+            ")",
+            batch_size,
+        )
+        # db.execute() returns the asyncpg status string directly ("UPDATE N").
+        status = result if isinstance(result, str) else (getattr(result, "statusmessage", "") or "")
+        try:
+            return int(status.rsplit(" ", 1)[-1])
+        except (TypeError, ValueError):
+            return 0
+
+
+    async def retry_failed_deletions(self, max_retries: int = 5) -> int:
+        """Reattempt deletion for artifacts that previously failed.
+
+        Uses a 3-phase design to avoid holding database locks during
+        network (S3/Azure/local) storage deletes:
+
+        1. **Claim** (short transaction): SELECT ... FOR UPDATE SKIP LOCKED
+           collects up to 500 candidate rows and immediately commits.
+           The lock prevents concurrent callers from claiming the same
+           rows during the SELECT, but is released before any network I/O.
+        2. **Delete** (no transaction): call ``backend.delete(key)`` for
+           each claimed row outside any database transaction.
+        3. **Commit** (short transaction): DELETE successful rows from
+           the DB, UPDATE failures with error metadata, and mark rows
+           that have exhausted all retries as abandoned.
+
+        Also picks up *stranded* rows — those with ``delete_requested_at``
+        set but no ``delete_failed_at`` (e.g. process crashed after storage
+        delete succeeded but before the DB row was removed).
+
+        Returns the number of artifacts successfully deleted in this pass.
+        """
+        if max_retries < 1:
+            raise ValueError("max_retries must be >= 1")
+
+        # Phase 1: Claim rows in a short transaction.
+        async with transaction() as conn:
+            rows = await conn.fetch(
+                "SELECT id, storage_key, delete_retry_count "
+                "FROM creator_artifacts "
+                "WHERE ("
+                "  delete_failed_at IS NOT NULL"
+                "  OR (delete_requested_at IS NOT NULL AND delete_failed_at IS NULL)"
+                ") "
+                "AND COALESCE(delete_retry_count, 0) < $1 "
+                "AND storage_key IS NOT NULL AND storage_key != '' "
+                "LIMIT 500 "
+                "FOR UPDATE SKIP LOCKED",
+                max_retries,
+            )
+            artifacts = [dict(r) for r in rows]
+        # Locks released here — transaction committed.
+
+        if not artifacts:
+            return 0
+
+        # Phase 2: Delete storage objects (NO transaction — no locks held).
+        backend = get_storage_backend()
+        deleted_ids: list[int] = []
+        failed_updates: list[tuple[int, str]] = []
+
+        for artifact in artifacts:
+            key = artifact.get("storage_key")
+            artifact_id = artifact.get("id")
+            if not isinstance(key, str) or not key or not isinstance(artifact_id, int):
+                continue
+            try:
+                backend.delete(key)
+                deleted_ids.append(artifact_id)
+            except Exception as exc:
+                logger.exception(
+                    "Retry failed for artifact id=%s key='%s'", artifact_id, key
+                )
+                failed_updates.append((artifact_id, str(exc)[:500]))
+
+        # Phase 3: Update DB in a short transaction.
+        async with transaction() as conn:
+            if deleted_ids:
+                await conn.execute(
+                    "DELETE FROM creator_artifacts WHERE id = ANY($1::int[])",
+                    deleted_ids,
+                )
+            for artifact_id, error_msg in failed_updates:
+                await conn.execute(
+                    "UPDATE creator_artifacts "
+                    "SET delete_failed_at = NOW(), "
+                    "    delete_error = $2, "
+                    "    delete_retry_count = COALESCE(delete_retry_count, 0) + 1 "
+                    "WHERE id = $1",
+                    artifact_id,
+                    error_msg,
+                )
+            # Log rows that have exhausted all retries (#610).
+            # These rows remain in the DB with delete_retry_count >= max_retries
+            # and will not be picked up by future retry passes (the WHERE clause
+            # filters them out). Storage objects become orphaned — manual cleanup
+            # may be needed.
+            abandoned_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM creator_artifacts "
+                "WHERE COALESCE(delete_retry_count, 0) >= $1",
+                max_retries,
+            )
+            if abandoned_count and abandoned_count > 0:
+                logger.warning(
+                    "retry_failed_deletions: %d artifacts have exhausted max_retries=%d "
+                    "and will not be retried — storage orphans may need manual cleanup",
+                    abandoned_count,
+                    max_retries,
+                )
+
+        if failed_updates:
+            logger.warning(
+                "retry_failed_deletions: %d succeeded, %d failed",
+                len(deleted_ids),
+                len(failed_updates),
+            )
+
+        return len(deleted_ids)
 
 
 def _create_storage() -> ArtifactDownloadStorageBackend:

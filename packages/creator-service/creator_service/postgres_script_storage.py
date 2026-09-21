@@ -8,39 +8,56 @@ from .db import fetch_all, fetch_one, get_pool
 class PostgresScriptStorage:
     async def save_draft(self, row: dict[str, Any]) -> dict[str, Any]:
         run_id = row["run_id"]
+        idempotency_key = row.get("idempotency_key")
+        if isinstance(idempotency_key, str):
+            existing = await fetch_one(
+                "SELECT * FROM creator_script_drafts WHERE idempotency_key = $1",
+                idempotency_key,
+            )
+            if existing is not None:
+                return existing
+
         pool = await get_pool()
         async with pool.acquire() as connection, connection.transaction():
-                await connection.execute(
-                    "SELECT pg_advisory_xact_lock($1::int, $2::int)",
-                    6101,
-                    run_id,
-                )
-                await connection.fetch(
-                    "SELECT id FROM creator_script_drafts WHERE run_id = $1 FOR UPDATE",
-                    run_id,
-                )
-                version_row = await connection.fetchrow(
-                    "SELECT COALESCE(MAX(version), 0) + 1 AS next_version FROM creator_script_drafts WHERE run_id = $1",
-                    run_id,
-                )
-                next_version = int(version_row["next_version"]) if version_row is not None else 1
-                saved = await connection.fetchrow(
-                    """
+            await connection.execute(
+                "SELECT pg_advisory_xact_lock($1::int, $2::int)",
+                6101,
+                run_id,
+            )
+            await connection.fetch(
+                "SELECT id FROM creator_script_drafts WHERE run_id = $1 FOR UPDATE",
+                run_id,
+            )
+            version_row = await connection.fetchrow(
+                "SELECT COALESCE(MAX(version), 0) + 1 AS next_version FROM creator_script_drafts WHERE run_id = $1",
+                run_id,
+            )
+            next_version = int(version_row["next_version"]) if version_row is not None else 1
+            saved = await connection.fetchrow(
+                """
                     INSERT INTO creator_script_drafts (
                         run_id,
                         source_type,
                         markdown_content,
                         structured_script_json,
-                        version
+                        version,
+                        idempotency_key
                     )
-                    VALUES ($1, $2, $3, $4, $5)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                    ON CONFLICT (idempotency_key) DO NOTHING
                     RETURNING *
                     """,
-                    run_id,
-                    row.get("source_type"),
-                    row.get("markdown_content"),
-                    row.get("structured_script_json"),
-                    next_version,
+                run_id,
+                row.get("source_type"),
+                row.get("markdown_content"),
+                row.get("structured_script_json"),
+                next_version,
+                idempotency_key,
+            )
+            if saved is None and isinstance(idempotency_key, str):
+                saved = await connection.fetchrow(
+                    "SELECT * FROM creator_script_drafts WHERE idempotency_key = $1",
+                    idempotency_key,
                 )
         if saved is None:
             raise ValueError("Failed to save script draft")

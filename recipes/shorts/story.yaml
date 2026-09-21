@@ -1,0 +1,22 @@
+id: shorts_story
+content_format: short
+target_duration:
+  min_seconds: 30
+  max_seconds: 90
+structure:
+  - hook
+  - setup
+  - tension
+  - climax
+  - resolution
+visual_strategy:
+  pacing: fast
+  segment_duration:
+    min_seconds: 2.0
+    max_seconds: 7.0
+audio:
+  narration: true
+  bgm: true
+subtitles:
+  enabled: true
+  emphasis: true

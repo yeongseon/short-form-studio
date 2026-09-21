@@ -53,15 +53,15 @@ jobs:
       - name: Validate Alembic migrations
         run: |
           cd apps/api
-          # Export dummy DATABASE_URL for validation (no real DB connection needed for syntax check)
           export DATABASE_URL="postgresql://user:pass@localhost:5432/db"
-          # Verify no multiple heads (migration branches)
-          # Note: This repository has multiple migration heads (known issue).
-          # The check below is disabled until migrations are consolidated.
-          # alembic heads 2>&1 | grep -E "^[0-9a-f]+ \(head\)" | wc -l | grep -q "^1$" || (echo "ERROR: Multiple migration heads detected" && alembic heads && exit 1)
-          echo "Alembic heads count: $(alembic heads 2>&1 | grep -E '^[0-9a-f]+ \(head\)' | wc -l)"
-          # alembic check requires DB connection, so we skip it in CI
-          echo "Migration validation complete"
+          # Verify single migration head (no branches)
+          HEAD_COUNT=$(alembic heads 2>&1 | grep -E '^[0-9a-f]+' | wc -l)
+          if [ "$HEAD_COUNT" -ne 1 ]; then
+            echo "ERROR: Multiple migration heads detected ($HEAD_COUNT heads)"
+            alembic heads
+            exit 1
+          fi
+          echo "Migration validation complete (1 head)"
       - name: Install Node dependencies
         run: npm --prefix apps/studio-web ci
       - name: Test Packages (with coverage)
@@ -92,6 +92,52 @@ jobs:
         run: cp .env.example .env
       - name: Validate docker-compose config
         run: docker compose config --quiet
+      - name: Quick Start smoke check
+        run: bash scripts/quickstart_smoke.sh
+      - name: Verify celery beat service is defined
+        run: |
+          # Every beat_schedule entry needs a running beat process (#585).
+          docker compose config --services | grep -q '^beat$' \
+            || { echo 'ERROR: no beat service defined — scheduled tasks will never run'; exit 1; }
+      - name: Verify API port not exposed on 0.0.0.0
+        run: |
+          # Ensure API, Postgres, and Redis are bound to 127.0.0.1 only.
+          # `docker compose config` normalizes "127.0.0.1:8000:8000" into a
+          # per-port block with separate `host_ip:` and `published:` fields, so
+          # we resolve each published port's host_ip via a small Python parser
+          # rather than a line-oriented grep.
+          docker compose config -o /tmp/compose.resolved.yml
+          python3 - <<'PY'
+          import sys
+          import yaml
+
+          with open("/tmp/compose.resolved.yml") as handle:
+              config = yaml.safe_load(handle)
+
+          required = {"8000": "API", "5432": "Postgres", "6379": "Redis"}
+          failures = []
+          for service in (config.get("services") or {}).values():
+              for port in service.get("ports") or []:
+                  if isinstance(port, dict):
+                      published = str(port.get("published", ""))
+                      host_ip = port.get("host_ip", "")
+                  else:
+                      # "host_ip:published:target" or "published:target"
+                      parts = str(port).split(":")
+                      host_ip = parts[0] if len(parts) == 3 else ""
+                      published = parts[-2] if len(parts) >= 2 else ""
+                  if published in required and host_ip != "127.0.0.1":
+                      failures.append(
+                          f"{required[published]} port {published} must be bound to "
+                          f"127.0.0.1, got host_ip={host_ip!r}"
+                      )
+
+          if failures:
+              for message in failures:
+                  print(f"ERROR: {message}")
+              sys.exit(1)
+          print("Port exposure check passed: all backend services on 127.0.0.1")
+          PY
       - name: Build API runtime image
         run: docker build --target runtime -f apps/api/Dockerfile .
       - name: Build Studio Web runtime image
@@ -100,7 +146,7 @@ jobs:
         run: docker build --target runtime -f apps/worker-orchestrator/Dockerfile .
       - name: Smoke-test compose up
         run: |
-          docker compose up -d postgres redis api studio-web worker
+          docker compose up -d postgres redis api studio-web worker beat
           # Wait for API health endpoint
           timeout 60 bash -c 'until curl -sf http://localhost:8000/healthz; do sleep 2; done'
           # Verify API responds
@@ -111,4 +157,58 @@ jobs:
           curl -sf http://localhost:5174/
           # Verify worker container is running
           docker compose ps worker --format json | grep -q running
+          # Verify every beat_schedule task is registered on the worker (#585).
+          # Catches both missing include entries and NotRegistered at dispatch time.
+          for task in reconcile_stale_dispatches retry_failed_artifact_deletions sweep_expired_artifacts; do
+            docker compose exec -T worker celery -A celery_app.celery_app inspect registered \
+              | grep -q "$task" \
+              || { echo "ERROR: beat task '$task' not registered on worker"; exit 1; }
+            echo "OK: $task registered"
+          done
+          # --- Creator API smoke test ---
+          # Run migrations
+          docker compose exec -T api alembic upgrade head
+          # Bootstrap dev auth
+          docker compose exec -T api python scripts/create_api_key.py \
+            --email ci@example.com --workspace ci --name ci-key > /tmp/api_key_output.txt
+          API_KEY=$(grep -oP '  \K[A-Za-z0-9_-]+$' /tmp/api_key_output.txt)
+          # Verify auth: no key = 401
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/api/creator/users/me)
+          [ "$HTTP_CODE" = "401" ] || (echo "Expected 401 without key, got $HTTP_CODE" && exit 1)
+          # Verify auth: valid key = 200
+          HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' -H "X-API-Key: $API_KEY" http://localhost:8000/api/creator/users/me)
+          [ "$HTTP_CODE" = "200" ] || (echo "Expected 200 with valid key, got $HTTP_CODE" && exit 1)
+          # Create project
+          PROJECT_RESPONSE=$(curl -sf -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+            -d '{"title":"Smoke Test","source_type":"idea","idea_brief":"test short video"}' \
+            http://localhost:8000/api/creator/projects)
+          PROJECT_ID=$(echo "$PROJECT_RESPONSE" | python3 -c "import sys,json; print(json.load(sys.stdin)['id'])")
+          echo "Created project: $PROJECT_ID"
+          # Create run
+          curl -sf -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+            -d '{"style_preset":"default"}' \
+            http://localhost:8000/api/creator/projects/$PROJECT_ID/runs
+          echo "Creator API smoke test passed"
+          # --- nginx CSRF smoke test (#586) ---
+          # POST through nginx (port 5174) with a same-origin browser Origin
+          # header. The CSRF check requires Origin == scheme://host, so the
+          # Origin host must match the request host (localhost, not 127.0.0.1).
+          # Before the fix, $host didn't include the port, so the CSRF check
+          # rejected every write with 403.
+          # nginx overwrites X-API-Key with its own ${API_KEY} env (blank at the
+          # initial compose-up, since the key is bootstrapped later), so recreate
+          # only studio-web with the seeded key before exercising the proxied
+          # write. --no-deps keeps the already-running api container untouched so
+          # the proxy upstream stays up (avoids a 502 on a freshly-recreated api).
+          API_KEY="$API_KEY" docker compose up -d --no-deps --force-recreate studio-web
+          timeout 60 bash -c 'until curl -sf http://localhost:8000/healthz; do sleep 2; done'
+          timeout 60 bash -c 'until curl -sf http://localhost:5174/; do sleep 2; done'
+          NGINX_POST_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Origin: http://localhost:5174" \
+            -H "Content-Type: application/json" \
+            -d '{"title":"Nginx CSRF Smoke","source_type":"idea","idea_brief":"nginx"}' \
+            http://localhost:5174/api/creator/projects)
+          [ "$NGINX_POST_CODE" = "200" ] || [ "$NGINX_POST_CODE" = "201" ] \
+            || { echo "Expected 2xx for nginx-proxied POST with valid Origin, got $NGINX_POST_CODE"; exit 1; }
+          echo "nginx CSRF smoke passed ($NGINX_POST_CODE)"
           docker compose down

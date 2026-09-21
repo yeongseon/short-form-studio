@@ -27,7 +27,7 @@ def _normalize_content_type(content_type: str) -> str:
 
 def _spool_and_hash_stream(data: BinaryIO) -> tuple[BinaryIO, int, str]:
     size = 0
-    md5 = hashlib.md5()
+    md5 = hashlib.md5(usedforsecurity=False)
     spooled = tempfile.SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b")
     while chunk := data.read(_STREAM_CHUNK_SIZE):
         spooled.write(chunk)
@@ -116,17 +116,26 @@ class LocalStorageBackend:
         path = self._root / safe_key
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        md5 = hashlib.md5()
+        md5 = hashlib.md5(usedforsecurity=False)
         if isinstance(data, bytes):
             path.write_bytes(data)
             md5.update(data)
             size = len(data)
         else:
-            with open(path, "wb") as file_obj:
+            # Check if source file is the same as destination to avoid self-truncation
+            source_path = Path(data.name).resolve() if hasattr(data, 'name') else None
+            if source_path and source_path == path.resolve():
+                # Source and destination are the same file — just compute checksum
+                data.seek(0)
                 while chunk := data.read(8192):
-                    file_obj.write(chunk)
                     md5.update(chunk)
-            size = path.stat().st_size
+                size = path.stat().st_size
+            else:
+                with open(path, "wb") as file_obj:
+                    while chunk := data.read(8192):
+                        file_obj.write(chunk)
+                        md5.update(chunk)
+                size = path.stat().st_size
 
         return StorageResult(
             key=key,
@@ -193,7 +202,7 @@ class S3StorageBackend:
         if isinstance(data, bytes):
             body = data
             size = len(data)
-            md5 = hashlib.md5(body).hexdigest()
+            md5 = hashlib.md5(body, usedforsecurity=False).hexdigest()
             self._client.put_object(
                 Bucket=self._bucket,
                 Key=full_key,
@@ -290,7 +299,7 @@ class AzureBlobStorageBackend:
         if isinstance(data, bytes):
             body = data
             size = len(data)
-            checksum = hashlib.md5(body).hexdigest()
+            checksum = hashlib.md5(body, usedforsecurity=False).hexdigest()
             blob_client = self._container_client.get_blob_client(full_key)
             blob_client.upload_blob(
                 body,

@@ -54,6 +54,7 @@ class FakeStorage:
         run_id: int,
         updates: dict[str, object],
         expected_stages: frozenset[str],
+    rejected_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
         row = self._runs.get(run_id)
         if row is None:
@@ -116,7 +117,13 @@ class FakeVisualPlanService:
         self.error = error
         self.calls: list[tuple[int, int]] = []  # (run_id, num_scenes)
 
-    async def save_plan(self, run_id: int, scenes: list[Any]) -> SimpleNamespace:
+    async def save_plan(
+        self,
+        run_id: int,
+        scenes: list[Any],
+        *,
+        idempotency_key: str | None = None,
+    ) -> SimpleNamespace:
         self.calls.append((run_id, len(scenes)))
         if self.error is not None:
             raise self.error
@@ -141,17 +148,12 @@ class FakeRegistry:
 
 
 def _patch_registry(monkeypatch: pytest.MonkeyPatch, registry: FakeRegistry) -> None:
-    class _ProviderRegistry:
-        @staticmethod
-        def create_default() -> FakeRegistry:
-            return registry
-
-    monkeypatch.setattr(generate_visual_plan_module, "ProviderRegistry", _ProviderRegistry)
+    monkeypatch.setattr(generate_visual_plan_module, "get_default_registry", lambda: registry)
 
 
 def _patch_redis(monkeypatch: pytest.MonkeyPatch, redis_client: object) -> None:
     redis_stub = SimpleNamespace(Redis=SimpleNamespace(from_url=lambda _: redis_client))
-    monkeypatch.setattr(generate_visual_plan_module, "redis", redis_stub)
+    monkeypatch.setattr("tasks.task_runner.redis", redis_stub)
 
 
 def _patch_services(
@@ -162,9 +164,7 @@ def _patch_services(
 ) -> None:
     monkeypatch.setattr(generate_visual_plan_module, "_script_service", script_service)
     monkeypatch.setattr(generate_visual_plan_module, "_visual_plan_service", visual_plan_service)
-    monkeypatch.setattr(
-        generate_visual_plan_module, "_run_service", SimpleNamespace(storage=storage)
-    )
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
 
 
 def _invoke_task(**kwargs: Any) -> dict[str, object]:
@@ -209,14 +209,12 @@ def test_happy_path_local_model_with_gpu_lock(monkeypatch: pytest.MonkeyPatch) -
     release_calls: list[str] = []
 
     monkeypatch.setattr(
-        generate_visual_plan_module,
-        "acquire_gpu_lock",
-        lambda client, task_id: lock_calls.append(task_id),
+        "tasks.task_runner.acquire_gpu_lock",
+        lambda client, task_id: (lock_calls.append(task_id) or f"{task_id}:fake-token"),
     )
     monkeypatch.setattr(
-        generate_visual_plan_module,
-        "release_gpu_lock",
-        lambda client, task_id: release_calls.append(task_id),
+        "tasks.task_runner.release_gpu_lock",
+        lambda client, token: release_calls.append(token.split(":")[0]) or True,
     )
 
     script_service = FakeScriptService(draft=FakeScriptDraft(structured_script=sections))
@@ -235,7 +233,7 @@ def test_happy_path_local_model_with_gpu_lock(monkeypatch: pytest.MonkeyPatch) -
     assert lock_calls == ["run-101"]
     assert release_calls == ["run-101"]
     assert visual_plan_service.calls == [(101, 1)]
-    assert storage.calls == [(101, {"current_stage": "VISUAL_PLAN_REVIEW", "status": "running"})]
+    assert storage.calls == [(101, {"current_stage": "VISUAL_PLAN_REVIEW", "status": "paused"})]
     assert provider.calls[0][1] == {"temperature": 0.3}
 
 
@@ -248,13 +246,11 @@ def test_happy_path_external_model_without_gpu_lock(monkeypatch: pytest.MonkeyPa
     _patch_registry(monkeypatch, registry)
 
     monkeypatch.setattr(
-        generate_visual_plan_module,
-        "acquire_gpu_lock",
+        "tasks.task_runner.acquire_gpu_lock",
         lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")),
     )
     monkeypatch.setattr(
-        generate_visual_plan_module,
-        "release_gpu_lock",
+        "tasks.task_runner.release_gpu_lock",
         lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")),
     )
 
@@ -269,7 +265,7 @@ def test_happy_path_external_model_without_gpu_lock(monkeypatch: pytest.MonkeyPa
     assert result["provider_type"] == "openai"
     assert result["gpu_lock_acquired_at"] is None
     assert result["gpu_lock_released_at"] is None
-    assert storage.calls == [(102, {"current_stage": "VISUAL_PLAN_REVIEW", "status": "running"})]
+    assert storage.calls == [(102, {"current_stage": "VISUAL_PLAN_REVIEW", "status": "paused"})]
 
 
 def test_happy_path_multi_section_script(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -406,11 +402,10 @@ def test_gpu_lock_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_redis(monkeypatch, redis_client)
 
     monkeypatch.setattr(
-        generate_visual_plan_module,
-        "acquire_gpu_lock",
+        "tasks.task_runner.acquire_gpu_lock",
         lambda *_: (_ for _ in ()).throw(TimeoutError("lock timeout")),
     )
-    monkeypatch.setattr(generate_visual_plan_module, "release_gpu_lock", lambda *_: None)
+    monkeypatch.setattr("tasks.task_runner.release_gpu_lock", lambda *_: None)
 
     sections = [FakeSection()]
     script_service = FakeScriptService(draft=FakeScriptDraft(structured_script=sections))
@@ -435,9 +430,12 @@ def test_releases_gpu_lock_when_llm_fails(monkeypatch: pytest.MonkeyPatch) -> No
     _patch_redis(monkeypatch, redis_client)
 
     released: list[str] = []
-    monkeypatch.setattr(generate_visual_plan_module, "acquire_gpu_lock", lambda *_: True)
     monkeypatch.setattr(
-        generate_visual_plan_module, "release_gpu_lock", lambda _, task_id: released.append(task_id)
+        "tasks.task_runner.acquire_gpu_lock", lambda _, task_id: f"{task_id}:fake-token"
+    )
+    monkeypatch.setattr(
+        "tasks.task_runner.release_gpu_lock",
+        lambda _, token: released.append(token.split(":")[0]) or True,
     )
 
     sections = [FakeSection()]
@@ -659,10 +657,11 @@ def test_release_gpu_lock_failure_still_propagates_original_error(
     redis_client = object()
     _patch_redis(monkeypatch, redis_client)
 
-    monkeypatch.setattr(generate_visual_plan_module, "acquire_gpu_lock", lambda *_: True)
     monkeypatch.setattr(
-        generate_visual_plan_module,
-        "release_gpu_lock",
+        "tasks.task_runner.acquire_gpu_lock", lambda _, task_id: f"{task_id}:fake-token"
+    )
+    monkeypatch.setattr(
+        "tasks.task_runner.release_gpu_lock",
         lambda *_: (_ for _ in ()).throw(ConnectionError("redis gone")),
     )
 
@@ -733,6 +732,7 @@ class RaceConditionStorage(FakeStorage):
         run_id: int,
         updates: dict[str, object],
         expected_stages: frozenset[str],
+    rejected_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
         self._maybe_advance(run_id)
         row = self._runs.get(run_id)

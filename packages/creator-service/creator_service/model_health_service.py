@@ -14,6 +14,7 @@ _REMOTE_PROVIDERS: dict[str, str] = {
     "generativelanguage.googleapis.com": "GOOGLE_API_KEY",
     "api.stability.ai": "STABILITY_API_KEY",
     "api.elevenlabs.io": "ELEVENLABS_API_KEY",
+    "api.groq.com": "GROQ_API_KEY",
 }
 
 

@@ -65,6 +65,15 @@ class ProviderRegistry:
         from creator_provider.tts.elevenlabs_provider import ElevenLabsProvider
         from creator_provider.tts.openai_tts_provider import OpenAITTSProvider
         from creator_provider.tts.qwen_tts_provider import QwenTTSProvider
+        from creator_provider.llm.groq_provider import GroqLLMProvider
+        from creator_provider.stt.groq_stt_provider import GroqSTTProvider
+        from creator_provider.image.pollinations_provider import PollinationsProvider
+        from creator_provider.tts.edge_tts_provider import EdgeTTSProvider
+        from creator_provider.image.placeholder_provider import PlaceholderImageProvider
+        from creator_provider.image.huggingface_provider import HuggingFaceImageProvider
+        from creator_provider.image.groq_svg_provider import GroqSvgImageProvider
+        from creator_provider.image.codex_provider import CodexProvider
+        from creator_provider.tts.cosyvoice_provider import CosyVoiceProvider
 
         registry = cls()
         registry.register_provider("ollama", OllamaProvider)
@@ -79,6 +88,15 @@ class ProviderRegistry:
         registry.register_provider("openai_image", DalleProvider)
         registry.register_provider("stability_image", StabilityProvider)
         registry.register_provider("google_image", ImagenProvider)
+        registry.register_provider("groq_llm", GroqLLMProvider)
+        registry.register_provider("groq_stt", GroqSTTProvider)
+        registry.register_provider("pollinations_image", PollinationsProvider)
+        registry.register_provider("edge_tts", EdgeTTSProvider)
+        registry.register_provider("cosyvoice_tts", CosyVoiceProvider)
+        registry.register_provider("placeholder_image", PlaceholderImageProvider)
+        registry.register_provider("huggingface_image", HuggingFaceImageProvider)
+        registry.register_provider("groq_svg_image", GroqSvgImageProvider)
+        registry.register_provider("codex_image", CodexProvider)
         registry.register_model(
             ModelCatalogEntry(
                 model_key="qwen3-4b",
@@ -213,4 +231,125 @@ class ProviderRegistry:
                 default_params={"width": 1024, "height": 1792},
             )
         )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="llama-3.3-70b-versatile",
+                provider_type="groq_llm",
+                endpoint="https://api.groq.com/openai/v1",
+                category=ProviderCategory.LLM,
+                requires_gpu=False,
+                is_local=False,
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="meta-llama/llama-4-scout-17b-16e-instruct",
+                provider_type="groq_llm",
+                endpoint="https://api.groq.com/openai/v1",
+                category=ProviderCategory.LLM,
+                requires_gpu=False,
+                is_local=False,
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="groq-whisper-large-v3-turbo",
+                provider_type="groq_stt",
+                endpoint="https://api.groq.com/openai/v1",
+                category=ProviderCategory.STT,
+                requires_gpu=False,
+                is_local=False,
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="pollinations",
+                provider_type="pollinations_image",
+                endpoint="https://image.pollinations.ai",
+                category=ProviderCategory.IMAGE,
+                requires_gpu=False,
+                is_local=False,
+                default_params={"width": 1024, "height": 1792},
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="placeholder",
+                provider_type="placeholder_image",
+                endpoint="local",
+                category=ProviderCategory.IMAGE,
+                requires_gpu=False,
+                is_local=True,
+                default_params={"width": 1024, "height": 1792},
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="edge-tts",
+                provider_type="edge_tts",
+                endpoint="local",
+                category=ProviderCategory.TTS,
+                requires_gpu=False,
+                is_local=True,
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="cosyvoice-0.5b",
+                provider_type="cosyvoice_tts",
+                endpoint=os.getenv("TTS_COSYVOICE_BASE_URL", "http://tts-cosyvoice:50000"),
+                category=ProviderCategory.TTS,
+                requires_gpu=True,
+                is_local=True,
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="hf-flux-schnell",
+                provider_type="huggingface_image",
+                endpoint="https://router.huggingface.co",
+                category=ProviderCategory.IMAGE,
+                requires_gpu=False,
+                is_local=False,
+                default_params={"width": 768, "height": 1344},
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="groq-svg",
+                provider_type="groq_svg_image",
+                endpoint="https://api.groq.com",
+                category=ProviderCategory.IMAGE,
+                requires_gpu=False,
+                is_local=False,
+                default_params={"width": 1080, "height": 1920},
+            )
+        )
+        registry.register_model(
+            ModelCatalogEntry(
+                model_key="codex-gpt-image",
+                provider_type="codex_image",
+                endpoint="https://chatgpt.com/backend-api/codex",
+                category=ProviderCategory.IMAGE,
+                requires_gpu=False,
+                is_local=False,
+            )
+        )
         return registry
+
+
+_default_registry: ProviderRegistry | None = None
+
+
+def get_default_registry() -> ProviderRegistry:
+    """Return a cached default ProviderRegistry singleton.
+
+    Thread-safety note: In an async single-threaded event loop (the normal
+    FastAPI/uvicorn deployment), this is safe. If called from multiple OS threads,
+    the worst case is duplicate initialization (benign — both instances are identical
+    and one will be garbage-collected). No lock is added to avoid unnecessary overhead.
+    """
+    global _default_registry
+    if _default_registry is None:
+        _default_registry = ProviderRegistry.create_default()
+    return _default_registry

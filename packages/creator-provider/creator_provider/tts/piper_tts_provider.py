@@ -1,16 +1,28 @@
 from __future__ import annotations
 
+import logging
+import os
 import struct
 import tempfile
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
 import httpx
 
 from creator_provider.base import AudioResult, TTSProvider
+from creator_provider.exceptions import map_httpx_error
+from creator_provider.validation import MAX_TTS_TEXT_CHARS, validate_prompt_length
+
+
+logger = logging.getLogger(__name__)
 
 
 class PiperTTSProvider(TTSProvider):
+    _ALLOWED_API_KEYS = frozenset(
+        {"speaker_id", "length_scale", "noise_scale", "noise_w", "sentence_silence", "sample_rate"}
+    )
+
     def __init__(self, endpoint: str, model_key: str):
         self.endpoint = endpoint.rstrip("/")
         self.model_key = model_key
@@ -21,12 +33,20 @@ class PiperTTSProvider(TTSProvider):
         voice: str = "default",
         params: dict[str, Any] | None = None,
     ) -> AudioResult:
+        validate_prompt_length(text, MAX_TTS_TEXT_CHARS, "TTS")
         merged_params: dict[str, Any] = dict(params or {})
         payload: dict[str, Any] = {
             "text": text,
             "voice": voice,
         }
-        payload.update(merged_params)
+        filtered_keys = [
+            key for key in merged_params if key not in self._ALLOWED_API_KEYS | {"output_path"}
+        ]
+        if filtered_keys:
+            logger.warning("Filtered unsupported Piper params: %s", sorted(filtered_keys))
+        for key in self._ALLOWED_API_KEYS:
+            if key in merged_params:
+                payload[key] = merged_params[key]
 
         url = f"{self.endpoint}/api/tts"
         try:
@@ -34,12 +54,20 @@ class PiperTTSProvider(TTSProvider):
                 response = await client.post(url, json=payload)
                 response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"Failed to connect to Piper TTS provider at {url}: {exc}") from exc
+            raise map_httpx_error(exc, f"Failed to connect to Piper TTS provider at {url}") from exc
 
         audio_bytes = response.content
         requested_output = merged_params.get("output_path")
         if requested_output:
-            output_path = Path(str(requested_output))
+            candidate_output = str(requested_output)
+            artifact_root = os.getenv("ARTIFACT_ROOT")
+            # NOTE: validate-then-write race (symlink swap) is acceptable here;
+            # artifact directories are server-controlled and not user-writable.
+            validated_output = import_module("creator_domain.sanitize").validate_artifact_path(
+                candidate_output,
+                artifact_root or "data/artifacts",
+            )
+            output_path = Path(validated_output)
         else:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
                 output_path = Path(tmp.name)

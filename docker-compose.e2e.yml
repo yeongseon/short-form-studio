@@ -1,0 +1,35 @@
+# Docker Compose overlay for E2E testing
+# Usage: docker compose -f docker-compose.yml -f docker-compose.e2e.yml up --abort-on-container-exit --exit-code-from e2e-runner
+services:
+  e2e-runner:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: ["python3", "/app/scripts/e2e_test.py"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-shorts}:${POSTGRES_PASSWORD:-shorts_dev_password}@postgres:5432/${POSTGRES_DB:-shorts_studio}
+      REDIS_URL: redis://redis:6379/0
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      API_BASE_URL: http://api:8000
+      ARTIFACT_ROOT: /data/artifacts
+    volumes:
+      - ./scripts/e2e_test.py:/app/scripts/e2e_test.py:ro
+      - artifact_data:/data/artifacts
+    depends_on:
+      api:
+        condition: service_healthy
+      worker:
+        condition: service_started
+    networks:
+      - default
+
+  api:
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+
+volumes:
+  artifact_data:

@@ -37,24 +37,24 @@ Operator-facing guide for deploying and verifying the short-form-studio system.
    | `OLLAMA_BASE_URL` | Yes | Default: `http://ollama:11434` |
    | `OLLAMA_DEFAULT_MODEL` | Yes | Default: `qwen3:4b` |
    | `STABLE_DIFFUSION_BASE_URL` | Yes | Default: `http://stable-diffusion:7860` |
-| `TTS_QWEN3_BASE_URL` | Yes | Default: `http://tts-qwen3:8100` |
-| `STT_WHISPER_BASE_URL` | Yes | Default: `http://stt-whisper:8200` |
+   | `TTS_QWEN3_BASE_URL` | Yes | Default: `http://tts-qwen3:8100` |
+   | `STT_WHISPER_BASE_URL` | Yes | Default: `http://stt-whisper:8200` |
    | `GPU_LOCK_KEY` | Yes | Default: `gpu:lock` |
    | `GPU_LOCK_TIMEOUT_SECONDS` | Yes | Default: `600` |
-| `OPENAI_API_KEY` | No | External LLM/Image/TTS provider |
-| `ANTHROPIC_API_KEY` | No | External LLM provider |
-| `GOOGLE_API_KEY` | No | External LLM/Image provider |
-| `STABILITY_API_KEY` | No | External image provider |
-| `ELEVENLABS_API_KEY` | No | External TTS fallback |
+   | `OPENAI_API_KEY` | No | External LLM/Image/TTS provider |
+   | `ANTHROPIC_API_KEY` | No | External LLM provider |
+   | `GOOGLE_API_KEY` | No | External LLM/Image provider |
+   | `STABILITY_API_KEY` | No | External image provider |
+   | `ELEVENLABS_API_KEY` | No | External TTS fallback |
 
-3. **Ensure AI model images exist** (pre-built from shorts-automation project)
+3. **Ensure AI model images exist** (pre-built locally; not shipped in this repo)
 
    ```bash
-   docker images | grep shorts-automation
+   docker images | grep short-form-studio
    # Expected:
-   #   shorts-automation-stable-diffusion
-#   shorts-automation-tts-qwen3
-   #   shorts-automation-stt-whisper
+   #   short-form-studio-stable-diffusion
+   #   short-form-studio-tts-qwen3
+   #   short-form-studio-stt-whisper
    ```
 
 ---
@@ -85,21 +85,13 @@ docker compose ps  # Both should be "healthy"
 docker compose run --rm api alembic upgrade head
 ```
 
-**Migration order** (applied automatically by `upgrade head`):
+**Migrations** are applied automatically by `alembic upgrade head`. To inspect current state:
 
-| # | Migration | Creates |
-|---|---|---|
-| 001 | `create_creator_projects` | `creator_projects` table |
-| 002 | `create_creator_runs` | `creator_runs` table |
-| 003 | `create_creator_stage_reviews` | `creator_stage_reviews` table |
-| 004 | `create_creator_scene_assets` | `creator_scene_assets` table |
-| 005 | `expand_artifact_typing_and_indexes` | `creator_artifacts` table + indexes |
-| 006 | `create_creator_script_drafts` | `creator_script_drafts` table |
-| 007 | `create_creator_visual_plans` | `creator_visual_plans` table |
-| 008 | `add_paragraph_artifact_index` | Paragraph artifact index |
-| 009 | `add_active_task_id` | `active_task_id` column on runs |
-| 010 | `widen_active_task_id` | Widens `active_task_id` column type |
-| 011 | `add_pasted_json_source_type` | `pasted_json` source type + `json_script` column |
+```bash
+docker compose run --rm api alembic history
+docker compose run --rm api alembic current
+docker compose run --rm api alembic heads
+```
 
 ### Step 4: (Optional) Pull Ollama Model
 
@@ -258,11 +250,11 @@ Each `*_REVIEW` stage requires explicit approval before advancing.
 
 ## Artifact Storage
 
-- Path: `data/artifacts/{run_id}/`
-- Stored locally on host filesystem
-- Mounted into worker container via Docker volume
+- Development: local filesystem at `data/artifacts/{run_id}/`
+- Production: supports S3/Azure Blob/GCS-compatible object storage
+- Artifact access goes through `artifact_id`-based download routes
+- Path-based artifact endpoints are deprecated and blocked in production/staging
 - Types: `idea`, `script`, `visual_plan`, `visual_asset`, `audio`, `subtitle`, `video`, `render_manifest`
-
 ---
 
 ## Rollback
@@ -301,7 +293,7 @@ docker compose run --rm api alembic downgrade <revision>
 |---|---|---|
 | API fails to start | Missing env vars | Check `.env` matches `.env.example` |
 | Migration fails | DB not ready | Wait for `postgres` health check |
-| GPU lock stuck | Previous task crashed | `docker compose exec redis redis-cli DEL gpu:lock` |
+| GPU lock stuck | Previous task crashed | Check lock ownership: `docker compose exec redis redis-cli GET gpu:lock`. If orphaned (owner dead), delete with `redis-cli DEL gpu:lock`. Lock uses token-based ownership and auto-renewal; avoid deleting active locks. |
 | Ollama model not found | Model not pulled | `docker compose exec ollama ollama pull qwen3:4b` |
 | CORS errors in browser | Wrong `CORS_ORIGINS` | Set to `http://localhost:5174` |
 | Worker not processing | Celery not connected to Redis | Check `REDIS_URL` in `.env` |

@@ -8,7 +8,7 @@ def test_migration_file_compiles() -> None:
         / "api"
         / "migrations"
         / "versions"
-        / "015_create_run_tasks.py"
+        / "026_create_run_tasks.py"
     )
     source = migration_path.read_text(encoding="utf-8")
     compile(source, str(migration_path), "exec")

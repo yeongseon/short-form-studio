@@ -5,12 +5,20 @@ from datetime import datetime, timezone
 from typing import Literal, cast
 
 import pytest
+from creator_domain.exceptions import ConflictError
 from fastapi.routing import APIRoute
 from pydantic import BaseModel, ValidationError
 from shorts_api.auth import CurrentUser, require_project_access, require_run_access
 from shorts_api.main import app
 from shorts_api.main import runs_router
 from shorts_api.routes.creator_runs_core import GenerateSubtitlesRequest
+from shorts_api.routes.creator_runs_core import (
+    ApproveFinalRequest,
+    ApproveScriptRequest,
+    CreateRunRequest,
+    GenerateAudioRequest,
+    UpdateModelDefaultsRequest,
+)
 from shorts_api.routes.creator_runs_storyboard import (
     BulkParagraphSubtitlesRequest,
     ParagraphSubtitlesRequest,
@@ -35,16 +43,19 @@ class StubPipelineRun(BaseModel):
     finished_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+    workspace_id: int = 1
 
 
 class StubRunService:
     def __init__(self) -> None:
         self.create_run_calls: list[dict[str, object]] = []
         self.get_run_calls: list[int] = []
+        self.get_run_workspace_ids: list[int | None] = []
         self.restart_run_calls: list[dict[str, object]] = []
         self.advance_stage_calls: list[dict[str, object]] = []
         self.update_model_defaults_calls: list[dict[str, object]] = []
         self.runs: dict[int, StubPipelineRun] = {}
+        self.restart_errors: dict[int, Exception] = {}
         self.storage = StubRunStorage(self)
         self._next_id = 1
 
@@ -86,12 +97,18 @@ class StubRunService:
         self._next_id += 1
         return run
 
-    async def get_run(self, run_id: int) -> StubPipelineRun | None:
+    async def get_run(self, run_id: int, workspace_id: int | None = None) -> StubPipelineRun | None:
         self.get_run_calls.append(run_id)
+        self.get_run_workspace_ids.append(workspace_id)
         return self.runs.get(run_id)
 
-    async def restart_run(self, run_id: int, from_stage: str) -> StubPipelineRun:
+    async def restart_run(
+        self, run_id: int, from_stage: str, workspace_id: int | None = None
+    ) -> StubPipelineRun:
         self.restart_run_calls.append({"run_id": run_id, "from_stage": from_stage})
+        error = self.restart_errors.get(run_id)
+        if error is not None:
+            raise error
 
         run = self.runs.get(run_id)
         if run is None:
@@ -116,14 +133,31 @@ class StubRunService:
         self.runs[run_id] = updated
         return updated
 
-    async def list_runs_by_project(self, project_id: int) -> list[StubPipelineRun]:
+    async def list_runs_by_project(self, project_id: int, workspace_id: int | None = None) -> list[StubPipelineRun]:
+        self.list_runs_workspace_ids: list[int | None] = getattr(self, "list_runs_workspace_ids", [])
+        self.list_runs_workspace_ids.append(workspace_id)
         return sorted(
             [r for r in self.runs.values() if r.project_id == project_id],
             key=lambda r: r.id,
             reverse=True,
         )
 
-    async def update_model_defaults(self, run_id: int, updates: dict[str, str]) -> StubPipelineRun:
+    async def mark_completed(self, run_id: int, workspace_id: int | None = None) -> StubPipelineRun:
+        run = self.runs.get(run_id)
+        if run is None:
+            raise ValueError(f"Run {run_id} not found")
+        if workspace_id is not None and run.workspace_id != workspace_id:
+            raise ValueError(f"Run {run_id} not found")
+        if run.status == "completed":
+            return run
+        updated = run.model_copy(update={"status": "completed", "finished_at": datetime.now(timezone.utc)})
+        self.runs[run_id] = updated
+        return updated
+
+    async def update_model_defaults(
+        self, run_id: int, updates: dict[str, str], workspace_id: int | None = None
+    ) -> StubPipelineRun:
+        _ = workspace_id
         self.update_model_defaults_calls.append({"run_id": run_id, "updates": updates})
         run = self.runs.get(run_id)
         if run is None:
@@ -146,7 +180,9 @@ class StubRunStorage:
         run_id: int,
         updates: dict[str, object],
         expected_stages: frozenset[str],
+        workspace_id: int | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
+        _ = workspace_id
         self.conditional_update_calls.append(
             {
                 "run_id": run_id,
@@ -180,6 +216,8 @@ class StubStageReviewService:
         target_stage: str,
         reviewer: str = "agent",
         notes: str | None = None,
+        workspace_id: int | None = None,
+        extra_updates: dict[str, object] | None = None,
     ) -> StubPipelineRun:
         self.approve_calls.append(
             {
@@ -188,18 +226,24 @@ class StubStageReviewService:
                 "target_stage": target_stage,
                 "reviewer": reviewer,
                 "notes": notes,
+                "workspace_id": workspace_id,
             }
         )
 
         run = self._run_svc.runs.get(run_id)
         if run is None:
             raise ValueError(f"Run {run_id} not found")
+        if workspace_id is not None and run.workspace_id != workspace_id:
+            raise ValueError(f"Run {run_id} not found")
         if run.current_stage != stage_name:
             raise ValueError(
                 f"Stage conflict: run is now in '{run.current_stage}', expected '{stage_name}'"
             )
 
-        updated = run.model_copy(update={"current_stage": target_stage})
+        update_dict: dict[str, object] = {"current_stage": target_stage}
+        if extra_updates:
+            update_dict.update(extra_updates)
+        updated = run.model_copy(update=update_dict)
         self._run_svc.runs[run_id] = updated
         return updated
 
@@ -208,9 +252,11 @@ class StubProjectLookupService:
     def __init__(self, existing_project_ids: set[int] | None = None) -> None:
         self.existing_project_ids = existing_project_ids or {7, 8}
         self.get_project_calls: list[int] = []
+        self.get_project_workspace_ids: list[int | None] = []
 
-    async def get_project(self, project_id: int) -> object | None:
+    async def get_project(self, project_id: int, workspace_id: int | None = None) -> object | None:
         self.get_project_calls.append(project_id)
+        self.get_project_workspace_ids.append(workspace_id)
         if project_id in self.existing_project_ids:
             return {"id": project_id}
         return None
@@ -505,6 +551,37 @@ async def test_restart_run_not_found(client, stub_run_service: StubRunService):
     assert response.json() == {"detail": "Run not found"}
 
 
+@pytest.mark.asyncio
+async def test_restart_run_conflict_returns_409(client, stub_run_service: StubRunService):
+    now = datetime.now(timezone.utc)
+    stub_run_service.runs[4243] = StubPipelineRun(
+        id=4243,
+        project_id=2,
+        current_stage="IDEA_READY",
+        status="pending",
+        review_stage=None,
+        restart_from=None,
+        model_defaults=None,
+        metadata=None,
+        style_preset="default",
+        started_at=None,
+        finished_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    stub_run_service.restart_errors[4243] = ConflictError("Run 4243 has stale version")
+
+    response = await client.post(
+        "/api/creator/runs/4243/restart", json={"stage": "SCRIPT_GENERATING"}
+    )
+
+    assert response.status_code == 409
+    body = response.json()
+    assert body["detail"] == "Run 4243 has stale version"
+    assert body["error"]["category"] == "CONFLICT"
+    assert body["error"]["retryable"] is False
+
+
 @pytest.fixture
 def stub_approve_services(
     monkeypatch: pytest.MonkeyPatch,
@@ -548,6 +625,7 @@ def _make_run(run_id: int, stage: str = "SCRIPT_REVIEW") -> StubPipelineRun:
         finished_at=None,
         created_at=now,
         updated_at=now,
+        workspace_id=1,
     )
 
 
@@ -572,6 +650,7 @@ async def test_approve_script_success(client, stub_approve_services):
             "target_stage": "VISUAL_PLAN_SETUP",
             "reviewer": "human",
             "notes": "Looks good",
+            "workspace_id": 1,
         }
     ]
 
@@ -703,8 +782,20 @@ async def test_approve_visual_plan_success(client, stub_approve_vp_services):
             "target_stage": "VISUAL_ASSET_GENERATING",
             "reviewer": "human",
             "notes": "Visual plan approved",
+            "workspace_id": 1,
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_approve_script_returns_404_for_workspace_mismatch(client, stub_approve_services):
+    run_svc, _ = stub_approve_services
+    run_svc.runs[101] = _make_run(101, "SCRIPT_REVIEW").model_copy(update={"workspace_id": 2})
+
+    response = await client.post("/api/creator/runs/101/approve-script", json={})
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Run 101 not found"}
 
 
 @pytest.mark.asyncio
@@ -778,8 +869,12 @@ class StubProject(BaseModel):
 class StubProjectService:
     def __init__(self) -> None:
         self.projects: dict[int, StubProject] = {}
+        self.get_project_workspace_ids: list[int | None] = []
 
-    async def get_project(self, project_id: int) -> StubProject | None:
+    async def get_project(
+        self, project_id: int, workspace_id: int | None = None
+    ) -> StubProject | None:
+        self.get_project_workspace_ids.append(workspace_id)
         return self.projects.get(project_id)
 
 
@@ -788,17 +883,8 @@ class StubDispatcher:
         self.calls: list[dict[str, object]] = []
         self.task_id = "test-task-id-123"
 
-    def __call__(
-        self, run_id: int, idea_brief: str, model_key: str, instructions: str | None
-    ) -> str:
-        self.calls.append(
-            {
-                "run_id": run_id,
-                "idea_brief": idea_brief,
-                "model_key": model_key,
-                "instructions": instructions,
-            }
-        )
+    def __call__(self, **kwargs: object) -> str:
+        self.calls.append(kwargs)
         return self.task_id
 
 
@@ -876,8 +962,12 @@ async def test_generate_script_from_idea_ready(client, stub_generate_services):
             "idea_brief": "Create a cooking tutorial",
             "model_key": "qwen3-4b",
             "instructions": "Focus on pasta",
+            "niche": None,
+            "language": "ko",
         }
     ]
+    assert project_svc.get_project_workspace_ids
+    assert all(workspace_id == 1 for workspace_id in project_svc.get_project_workspace_ids)
 
 
 @pytest.mark.asyncio
@@ -996,7 +1086,8 @@ async def test_generate_script_cas_conflict(client, stub_generate_services):
     # initial get_run and the CAS call.  Because the route reads once then CAS,
     # we override conditional_update_run to simulate conflict.
 
-    async def cas_conflict(run_id, updates, expected_stages):
+    async def cas_conflict(run_id, updates, expected_stages, workspace_id=None):
+        _ = workspace_id
         # Return conflict: stage changed to SCRIPT_GENERATING
         return False, {"current_stage": "SCRIPT_GENERATING", "id": run_id}
 
@@ -1108,14 +1199,8 @@ class StubVisualPlanDispatcher:
         self.calls: list[dict[str, object]] = []
         self.task_id = "test-vp-task-id-456"
 
-    def __call__(self, run_id: int, model_key: str, style_preset: str | None) -> str:
-        self.calls.append(
-            {
-                "run_id": run_id,
-                "model_key": model_key,
-                "style_preset": style_preset,
-            }
-        )
+    def __call__(self, **kwargs: object) -> str:
+        self.calls.append(kwargs)
         return self.task_id
 
 
@@ -1131,7 +1216,9 @@ def stub_generate_visual_plan_services(
         "shorts_api.routes.creator_runs_visuals.dispatch_generate_visual_plan", dispatcher
     )
 
-    async def _get_project(_project_id: int):
+    async def _get_project(_project_id: int, workspace_id: int | None = None):
+        _ = workspace_id
+
         class _Project:
             workspace_id = 1
 
@@ -1187,6 +1274,7 @@ async def test_generate_visual_plan_from_visual_plan_setup(
             "run_id": 30,
             "model_key": "qwen3-4b",
             "style_preset": "cinematic",
+            "niche": None,
         }
     ]
 
@@ -1279,7 +1367,8 @@ async def test_generate_visual_plan_cas_conflict(client, stub_generate_visual_pl
     run_svc, dispatcher = stub_generate_visual_plan_services
     run_svc.runs[35] = _make_run(35, "VISUAL_PLAN_SETUP")
 
-    async def cas_conflict(run_id, updates, expected_stages):
+    async def cas_conflict(run_id, updates, expected_stages, workspace_id=None):
+        _ = workspace_id
         return False, {"current_stage": "VISUAL_PLAN_GENERATING", "id": run_id}
 
     run_svc.storage.conditional_update_run = cas_conflict
@@ -1373,7 +1462,9 @@ def stub_generate_visual_assets_services(
         "shorts_api.routes.creator_runs_visuals.dispatch_generate_scene_image", dispatcher
     )
 
-    async def _get_project(_project_id: int):
+    async def _get_project(_project_id: int, workspace_id: int | None = None):
+        _ = workspace_id
+
         class _Project:
             workspace_id = 1
 
@@ -1461,6 +1552,26 @@ async def test_generate_visual_assets_retry_from_generating(
     assert len(dispatcher.calls) == 1
 
 
+def test_create_run_request_rejects_long_style_preset() -> None:
+    with pytest.raises(ValidationError):
+        CreateRunRequest(style_preset="x" * 257)
+
+
+def test_approve_script_request_rejects_long_reviewer() -> None:
+    with pytest.raises(ValidationError):
+        ApproveScriptRequest(reviewer="x" * 257)
+
+
+def test_generate_audio_request_rejects_long_voice() -> None:
+    with pytest.raises(ValidationError):
+        GenerateAudioRequest(voice="x" * 257)
+
+
+def test_update_model_defaults_rejects_long_model_key() -> None:
+    with pytest.raises(ValidationError):
+        UpdateModelDefaultsRequest(script_model="x" * 257)
+
+
 @pytest.mark.asyncio
 async def test_generate_visual_assets_default_model(client, stub_generate_visual_assets_services):
     run_svc, dispatcher = stub_generate_visual_assets_services
@@ -1523,7 +1634,8 @@ async def test_generate_visual_assets_cas_conflict(client, stub_generate_visual_
     run_svc, dispatcher = stub_generate_visual_assets_services
     run_svc.runs[65] = _make_run(65, "VISUAL_PLAN_REVIEW")
 
-    async def cas_conflict(run_id, updates, expected_stages):
+    async def cas_conflict(run_id, updates, expected_stages, workspace_id=None):
+        _ = workspace_id
         return False, {"current_stage": "VISUAL_ASSET_GENERATING", "id": run_id}
 
     run_svc.storage.conditional_update_run = cas_conflict
@@ -1594,7 +1706,9 @@ def stub_single_scene_services(
         "shorts_api.routes.creator_runs_scene_assets.dispatch_generate_scene_image", dispatcher
     )
 
-    async def _get_project(_project_id: int):
+    async def _get_project(_project_id: int, workspace_id: int | None = None):
+        _ = workspace_id
+
         class _Project:
             workspace_id = 1
 
@@ -1647,6 +1761,7 @@ async def test_generate_scene_image_from_visual_plan_review(client, stub_single_
             "image_params": None,
         }
     ]
+    assert run_svc.get_run_workspace_ids == [1]
 
 
 @pytest.mark.asyncio
@@ -2220,7 +2335,9 @@ def stub_generate_audio_services(
         "shorts_api.routes.creator_runs_scene_assets.dispatch_generate_audio", dispatcher
     )
 
-    async def _get_project(_project_id: int):
+    async def _get_project(_project_id: int, workspace_id: int | None = None):
+        _ = workspace_id
+
         class _Project:
             workspace_id = 1
 
@@ -2332,7 +2449,7 @@ async def test_generate_audio_default_model(client, stub_generate_audio_services
     )
 
     assert response.status_code == 202
-    assert dispatcher.calls[0]["tts_model"] == "qwen3-tts"
+    assert dispatcher.calls[0]["tts_model"] == "edge-tts"
     assert dispatcher.calls[0]["voice"] == "default"
 
 
@@ -2382,7 +2499,8 @@ async def test_generate_audio_cas_conflict(client, stub_generate_audio_services)
     run_svc, dispatcher = stub_generate_audio_services
     run_svc.runs[115] = _make_audio_run(115, "VISUAL_ASSET_REVIEW")
 
-    async def cas_conflict(run_id, updates, expected_stages):
+    async def cas_conflict(run_id, updates, expected_stages, workspace_id=None):
+        _ = workspace_id
         return False, {"current_stage": "AUDIO_GENERATING", "id": run_id}
 
     run_svc.storage.conditional_update_run = cas_conflict
@@ -2465,7 +2583,9 @@ def stub_generate_subtitles_services(
         "shorts_api.routes.creator_runs_scene_assets.dispatch_generate_subtitles", dispatcher
     )
 
-    async def _get_project(_project_id: int):
+    async def _get_project(_project_id: int, workspace_id: int | None = None):
+        _ = workspace_id
+
         class _Project:
             workspace_id = 1
 
@@ -2627,7 +2747,8 @@ async def test_generate_subtitles_cas_conflict(client, stub_generate_subtitles_s
     run_svc, dispatcher = stub_generate_subtitles_services
     run_svc.runs[125] = _make_subtitle_run(125, "AUDIO_GENERATING")
 
-    async def cas_conflict(run_id, updates, expected_stages):
+    async def cas_conflict(run_id, updates, expected_stages, workspace_id=None):
+        _ = workspace_id
         return False, {"current_stage": "SUBTITLE_GENERATING", "id": run_id}
 
     run_svc.storage.conditional_update_run = cas_conflict
@@ -2709,7 +2830,9 @@ def stub_generate_render_services(
         "shorts_api.routes.creator_runs_scene_assets.dispatch_render_video", dispatcher
     )
 
-    async def _get_project(_project_id: int):
+    async def _get_project(_project_id: int, workspace_id: int | None = None):
+        _ = workspace_id
+
         class _Project:
             workspace_id = 1
 
@@ -2851,7 +2974,8 @@ async def test_render_cas_conflict(client, stub_generate_render_services):
     run_svc, dispatcher = stub_generate_render_services
     run_svc.runs[134] = _make_render_run(134, "SUBTITLE_GENERATING")
 
-    async def cas_conflict(run_id, updates, expected_stages):
+    async def cas_conflict(run_id, updates, expected_stages, workspace_id=None):
+        _ = workspace_id
         return False, {"current_stage": "RENDER_GENERATING", "id": run_id}
 
     run_svc.storage.conditional_update_run = cas_conflict
@@ -3078,3 +3202,205 @@ def test_subtitle_format_validation_rejects_invalid_values() -> None:
 
     assert BulkParagraphSubtitlesRequest(subtitle_format="srt").subtitle_format == "srt"
     assert BulkParagraphSubtitlesRequest(subtitle_format="vtt").subtitle_format == "vtt"
+
+
+# --- approve-final security boundary tests ---
+
+
+@pytest.fixture
+def stub_approve_final_services(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[tuple[StubRunService, StubStageReviewService]]:
+    run_svc = StubRunService()
+    review_svc = StubStageReviewService(run_svc)
+
+    for route in _iter_api_routes(app.routes):
+        if route.name == "approve_final":
+            monkeypatch.setitem(route.endpoint.__globals__, "run_service", run_svc)
+            monkeypatch.setitem(route.endpoint.__globals__, "stage_review_service", review_svc)
+
+    async def _require_run_access(run_id: int) -> tuple[CurrentUser, StubPipelineRun]:
+        run = run_svc.runs.get(run_id)
+        if run is None:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Run not found")
+        # Cross-workspace check: workspace_id=1 is the authenticated user's workspace
+        if run.workspace_id != 1:
+            from fastapi import HTTPException
+
+            raise HTTPException(status_code=404, detail="Run not found")
+        return CurrentUser(user_id=1, workspace_id=1), run
+
+    app.dependency_overrides[require_run_access] = _require_run_access
+
+    yield run_svc, review_svc
+
+    app.dependency_overrides.pop(require_run_access, None)
+
+
+def _make_final_review_run(run_id: int, workspace_id: int = 1) -> StubPipelineRun:
+    now = datetime.now(timezone.utc)
+    return StubPipelineRun(
+        id=run_id,
+        project_id=1,
+        current_stage="FINAL_REVIEW",
+        status="running",
+        review_stage="FINAL_REVIEW",
+        restart_from=None,
+        model_defaults=None,
+        metadata=None,
+        style_preset="default",
+        started_at=now,
+        finished_at=None,
+        created_at=now,
+        updated_at=now,
+        workspace_id=workspace_id,
+    )
+
+
+@pytest.mark.asyncio
+async def test_approve_final_success(client, stub_approve_final_services):
+    """approve-final transitions FINAL_REVIEW -> PUBLISHED and marks completed."""
+    run_svc, review_svc = stub_approve_final_services
+    run_svc.runs[50] = _make_final_review_run(50)
+
+    response = await client.post(
+        "/api/creator/runs/50/approve-final",
+        json={"reviewer": "human", "notes": "looks good"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["current_stage"] == "PUBLISHED"
+    assert data["status"] == "completed"
+    assert data["finished_at"] is not None
+    # Verify service was called correctly
+    assert len(review_svc.approve_calls) == 1
+    call = review_svc.approve_calls[0]
+    assert call["stage_name"] == "FINAL_REVIEW"
+    assert call["target_stage"] == "PUBLISHED"
+    assert call["reviewer"] == "human"
+    assert call["notes"] == "looks good"
+    assert call["workspace_id"] == 1
+
+
+@pytest.mark.asyncio
+async def test_approve_final_missing_run_returns_404(client, stub_approve_final_services):
+    """approve-final returns 404 for non-existent run (anti-enumeration)."""
+    _run_svc, _review_svc = stub_approve_final_services
+
+    response = await client.post(
+        "/api/creator/runs/9999/approve-final",
+        json={},
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_approve_final_cross_workspace_returns_404(client, stub_approve_final_services):
+    """approve-final returns 404 (not 403) for run in another workspace."""
+    run_svc, _review_svc = stub_approve_final_services
+    # Run belongs to workspace 99, but auth user is workspace 1
+    run_svc.runs[51] = _make_final_review_run(51, workspace_id=99)
+
+    response = await client.post(
+        "/api/creator/runs/51/approve-final",
+        json={},
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_approve_final_already_published_returns_409(client, stub_approve_final_services):
+    """Calling approve-final on already-published run returns 409 conflict (not in FINAL_REVIEW)."""
+    run_svc, _review_svc = stub_approve_final_services
+    now = datetime.now(timezone.utc)
+    # Run is already PUBLISHED + completed
+    run_svc.runs[52] = StubPipelineRun(
+        id=52,
+        project_id=1,
+        current_stage="PUBLISHED",
+        status="completed",
+        review_stage=None,
+        restart_from=None,
+        model_defaults=None,
+        metadata=None,
+        style_preset="default",
+        started_at=now,
+        finished_at=now,
+        created_at=now,
+        updated_at=now,
+        workspace_id=1,
+    )
+
+    response = await client.post(
+        "/api/creator/runs/52/approve-final",
+        json={},
+    )
+
+    # The stage_review_service will raise conflict because current_stage != FINAL_REVIEW
+    # This should return 409 (conflict)
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_approve_final_wrong_stage_returns_409(client, stub_approve_final_services):
+    """approve-final on a run not in FINAL_REVIEW returns 409 conflict."""
+    run_svc, _review_svc = stub_approve_final_services
+    now = datetime.now(timezone.utc)
+    run_svc.runs[53] = StubPipelineRun(
+        id=53,
+        project_id=1,
+        current_stage="SCRIPT_REVIEW",
+        status="running",
+        review_stage="SCRIPT_REVIEW",
+        restart_from=None,
+        model_defaults=None,
+        metadata=None,
+        style_preset="default",
+        started_at=now,
+        finished_at=None,
+        created_at=now,
+        updated_at=now,
+        workspace_id=1,
+    )
+
+    response = await client.post(
+        "/api/creator/runs/53/approve-final",
+        json={},
+    )
+
+    # StubStageReviewService raises ValueError with "Stage conflict" text
+    assert response.status_code == 409
+
+
+# --- list_runs_for_project workspace_id test ---
+
+
+@pytest.mark.asyncio
+async def test_list_runs_for_project_passes_workspace_id(client, stub_run_service):
+    """list_runs_for_project passes workspace_id from authenticated user."""
+    run_svc = stub_run_service
+    now = datetime.now(timezone.utc)
+    run_svc.runs[100] = StubPipelineRun(
+        id=100,
+        project_id=7,
+        current_stage="IDEA_READY",
+        status="pending",
+        created_at=now,
+        updated_at=now,
+        workspace_id=1,
+    )
+
+    response = await client.get("/api/creator/projects/7/runs")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 1
+    assert data["runs"][0]["id"] == 100
+    # Verify workspace_id was actually forwarded to the service
+    assert hasattr(run_svc, "list_runs_workspace_ids")
+    assert run_svc.list_runs_workspace_ids[-1] == 1

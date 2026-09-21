@@ -2,21 +2,28 @@ import logging
 import os
 import time
 
+from creator_domain.exceptions import ServiceError
+from creator_service.actionable_errors import map_service_error
 from creator_service.logging_config import setup_json_logging
 from creator_service.production_checks import validate_production_config
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette import status
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from shorts_api.auth import ApiKeyMiddleware
 from shorts_api.health import register_health_routes
 from shorts_api.lifecycle import lifespan, shutdown_state
 from shorts_api.routes.admin import router as admin_router
 from shorts_api.routes.creator_artifact_download import router as artifact_download_router
+from shorts_api.routes.creator_assets import router as assets_router
+from shorts_api.routes.creator_demo_short import router as demo_short_router
 from shorts_api.routes.creator_models import router as models_router
+from shorts_api.routes.creator_onboarding import router as onboarding_router
 from shorts_api.routes.creator_projects import router as projects_router
 from shorts_api.routes.creator_run_tasks import router as run_tasks_router
+from shorts_api.routes.creator_timeline import router as timeline_router
 from shorts_api.routes.creator_runs_core import router as runs_core_router
 from shorts_api.routes.creator_runs_lifecycle import router as runs_lifecycle_router
 from shorts_api.routes.creator_runs_scene_assets import router as runs_scene_assets_router
@@ -62,20 +69,6 @@ def create_app() -> FastAPI:
         else ["http://localhost:5174"]
     )
 
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=cors_origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
-    app.add_middleware(ApiKeyMiddleware)
-    if os.getenv("OTEL_ENABLED", "").lower() in ("true", "1", "yes", "on"):
-        from shorts_api.middleware.telemetry import TelemetryMiddleware
-
-        app.add_middleware(TelemetryMiddleware)
-
-    @app.middleware("http")
     async def request_logging_middleware(request: Request, call_next):
         shutdown_state.inflight_requests += 1
         start = time.perf_counter()
@@ -95,7 +88,6 @@ def create_app() -> FastAPI:
                 elapsed_ms,
             )
 
-    @app.middleware("http")
     async def security_headers_middleware(request: Request, call_next):
         response = await call_next(request)
         if production_hardened:
@@ -107,7 +99,6 @@ def create_app() -> FastAPI:
             response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
         return response
 
-    @app.middleware("http")
     async def shutdown_guard_middleware(request: Request, call_next):
         if "PYTEST_CURRENT_TEST" in os.environ:
             return await call_next(request)
@@ -117,6 +108,47 @@ def create_app() -> FastAPI:
                 content={"detail": "Server shutting down"},
             )
         return await call_next(request)
+
+    # add_middleware inserts at the front of the stack, so the LAST call is outermost.
+    # Order (outermost → innermost at runtime):
+    #   CORS → request_logging → security_headers → shutdown_guard → [Telemetry] → ApiKey
+    # CORS must be outermost so auth failures (401/403/404/503) still get CORS headers (#600).
+    app.add_middleware(BaseHTTPMiddleware, dispatch=request_logging_middleware)
+    app.add_middleware(BaseHTTPMiddleware, dispatch=security_headers_middleware)
+    app.add_middleware(BaseHTTPMiddleware, dispatch=shutdown_guard_middleware)
+    app.add_middleware(ApiKeyMiddleware)
+    if os.getenv("OTEL_ENABLED", "").lower() in ("true", "1", "yes", "on"):
+        from shorts_api.middleware.telemetry import TelemetryMiddleware
+
+        app.add_middleware(TelemetryMiddleware)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    @app.exception_handler(ServiceError)
+    async def service_error_handler(request: Request, exc: ServiceError) -> JSONResponse:
+        """Central mapping from typed service exceptions to HTTP responses.
+
+        Preserves the raw ``detail`` for backward compatibility and adds a static,
+        actionable ``error`` envelope (category, retryability, recovery steps) so
+        clients can recover without parsing free text.
+        """
+        actionable = map_service_error(exc)
+        error: dict[str, object] = {
+            "code": actionable.code,
+            "category": actionable.category.value,
+            "retryable": actionable.retryable,
+            "recovery_steps": list(actionable.recovery_steps),
+        }
+        if actionable.version_conflict is not None:
+            error["version_conflict"] = actionable.version_conflict
+        return JSONResponse(
+            status_code=exc.http_status_code,
+            content={"detail": exc.detail, "error": error},
+        )
 
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, _exc: Exception) -> JSONResponse:
@@ -128,6 +160,7 @@ def create_app() -> FastAPI:
 
     app.include_router(models_router, prefix="/api/creator")
     app.include_router(projects_router, prefix="/api/creator")
+    app.include_router(timeline_router, prefix="/api/creator")
     app.include_router(runs_core_router, prefix="/api/creator")
     app.include_router(runs_visuals_router, prefix="/api/creator")
     app.include_router(runs_scene_assets_router, prefix="/api/creator")
@@ -141,6 +174,9 @@ def create_app() -> FastAPI:
     app.include_router(settings_router, prefix="/api/creator")
     app.include_router(usage_router, prefix="/api/creator")
     app.include_router(workspaces_router, prefix="/api/creator")
+    app.include_router(assets_router, prefix="/api/creator")
+    app.include_router(demo_short_router, prefix="/api/creator")
+    app.include_router(onboarding_router, prefix="/api/creator")
     app.include_router(users_router, prefix="/api/creator")
     app.include_router(admin_router, prefix="/api/admin")
     register_health_routes(app)

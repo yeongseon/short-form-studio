@@ -6,6 +6,7 @@ from unittest import mock
 
 import pytest
 from creator_provider.api_keys import list_configured_providers, resolve_api_key
+from creator_provider.exceptions import ProviderAuthError, ProviderValidationError
 
 
 class TestResolveApiKey:
@@ -18,11 +19,11 @@ class TestResolveApiKey:
             assert resolve_api_key("openai") == "sk-test123"
 
     def test_resolve_missing_key_required(self):
-        with mock.patch.dict(os.environ, {}, clear=True), pytest.raises(ValueError, match="not configured"):
+        with mock.patch.dict(os.environ, {}, clear=True), pytest.raises(ProviderAuthError, match="not configured"):
             _ = resolve_api_key("openai")
 
     def test_resolve_empty_key_required(self):
-        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": ""}), pytest.raises(ValueError, match="not configured"):
+        with mock.patch.dict(os.environ, {"OPENAI_API_KEY": ""}), pytest.raises(ProviderAuthError, match="not configured"):
             _ = resolve_api_key("openai")
 
     def test_resolve_missing_key_not_required(self):
@@ -30,7 +31,7 @@ class TestResolveApiKey:
             assert resolve_api_key("openai", required=False) is None
 
     def test_resolve_unknown_provider(self):
-        with pytest.raises(ValueError, match="Unknown provider"):
+        with pytest.raises(ProviderValidationError, match="Unknown provider"):
             _ = resolve_api_key("unknown_provider")
 
     def test_resolve_case_insensitive(self):

@@ -7,6 +7,21 @@ from typing import Any
 
 import asyncpg
 
+def _int_env(name: str, default: int) -> int:
+    """Parse an integer environment variable with fallback."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+DB_POOL_MIN_SIZE = _int_env("DB_POOL_MIN_SIZE", 2)
+DB_POOL_MAX_SIZE = _int_env("DB_POOL_MAX_SIZE", 10)
+
+
 # Pool singleton with event-loop awareness.
 # Celery workers call asyncio.run() per task, creating a new event loop each
 # time.  A pool created on a previous loop is stale and unusable.  We track
@@ -56,7 +71,9 @@ async def get_pool() -> asyncpg.Pool:
         if not database_url:
             raise RuntimeError("DATABASE_URL is required for Postgres storage")
 
-        _pool = await asyncpg.create_pool(database_url, min_size=2, max_size=10)
+        _pool = await asyncpg.create_pool(
+            database_url, min_size=DB_POOL_MIN_SIZE, max_size=DB_POOL_MAX_SIZE
+        )
         _pool_loop = current_loop
         return _pool
 
@@ -91,3 +108,20 @@ async def execute(query: str, *args: Any) -> str:
     pool = await get_pool()
     async with pool.acquire() as connection:
         return await connection.execute(query, *args)
+
+
+@contextlib.asynccontextmanager
+async def transaction():
+    """Yield an asyncpg connection inside an explicit transaction.
+
+    Usage::
+
+        async with transaction() as conn:
+            rows = await conn.fetch("SELECT ... FOR UPDATE SKIP LOCKED")
+            # rows remain locked until the transaction commits
+            await conn.execute("DELETE ...")
+    """
+    pool = await get_pool()
+    async with pool.acquire() as connection:
+        async with connection.transaction():
+            yield connection

@@ -33,3 +33,15 @@ Thumbs.db
 # Artifacts
 data/artifacts/**
 !data/artifacts/.gitkeep
+
+# Agent tooling (local only — OMC run state, not project artifacts)
+.sisyphus/
+
+# Generated content (local outputs, not source)
+data/folktale_output/
+data/folktale_v2/
+data/ssul_output/
+apps/worker-orchestrator/data/
+
+# Browser automation tooling (local MCP sessions)
+.playwright-mcp/

@@ -25,7 +25,13 @@ def _load_worker_module(monkeypatch: pytest.MonkeyPatch, module_name: str):
     return module
 
 
-def test_worker_applies_memory_setrlimit_from_env(monkeypatch: pytest.MonkeyPatch):
+def test_worker_does_not_call_setrlimit(monkeypatch: pytest.MonkeyPatch):
+    """RLIMIT_AS was replaced by cgroup memory limits (#611).
+
+    The worker's _apply_resource_limits() must NOT call setrlimit, because
+    RLIMIT_AS causes MemoryError on CUDA/torch/ffmpeg which reserve large
+    virtual address ranges.
+    """
     setrlimit_mock = Mock()
     monkeypatch.setenv("MAX_MEMORY_MB", "2048")
 
@@ -34,46 +40,47 @@ def test_worker_applies_memory_setrlimit_from_env(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr(resource, "setrlimit", setrlimit_mock)
     module = _load_worker_module(monkeypatch, "worker_orchestrator_celery_app_test")
 
-    expected_bytes = 2048 * 1024 * 1024
-    setrlimit_mock.assert_called_once_with(
-        module.resource.RLIMIT_AS,
-        (expected_bytes, expected_bytes),
-    )
+    module._apply_resource_limits()
+
+    # setrlimit must NOT be called — memory is enforced via cgroup.
+    setrlimit_mock.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_cpu_monitor_triggers_shutdown_flag(monkeypatch: pytest.MonkeyPatch):
-    main_module = _load_api_module(monkeypatch)
-    main_module.shutdown_state.is_shutting_down = False
-    exit_mock = Mock(side_effect=SystemExit(1))
+    from shorts_api import lifecycle
+    lifecycle.shutdown_state.is_shutting_down = False
+    kill_mock = Mock(side_effect=SystemExit(1))
 
     async def fake_sleep(_seconds: float) -> None:
         return None
 
-    monkeypatch.setattr(main_module.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(lifecycle.asyncio, "sleep", fake_sleep)
     monkeypatch.setattr(
-        main_module,
+        lifecycle,
         "_cpu_usage_percent",
-        lambda _cpu_seconds, _wall_seconds: (float(main_module.MAX_CPU_PERCENT) + 1.0, 0.0, 0.0),
+        lambda _cpu_seconds, _wall_seconds: (float(lifecycle.MAX_CPU_PERCENT) + 1.0, 0.0, 0.0),
     )
-    monkeypatch.setattr(main_module.os, "_exit", exit_mock)
+    monkeypatch.setattr(lifecycle.os, "kill", kill_mock)
 
     with pytest.raises(SystemExit, match="1"):
-        await main_module._monitor_cpu_limit()
+        await lifecycle._monitor_cpu_limit()
 
-    assert main_module.shutdown_state.is_shutting_down is True
-    exit_mock.assert_called_once_with(1)
+    assert lifecycle.shutdown_state.is_shutting_down is True
+    # Reset to avoid polluting other tests
+    lifecycle.shutdown_state.is_shutting_down = False
 
 
 @pytest.mark.asyncio
-async def test_api_startup_fails_when_setrlimit_fails(monkeypatch: pytest.MonkeyPatch):
-    main_module = _load_api_module(monkeypatch)
+async def test_api_startup_does_not_call_setrlimit(monkeypatch: pytest.MonkeyPatch):
+    """RLIMIT_AS was replaced by cgroup memory limits (#611)."""
+    from shorts_api import lifecycle
 
-    def fail_setrlimit(_limit, _values):
-        raise OSError("setrlimit failed")
+    setrlimit_mock = Mock()
+    monkeypatch.setattr(lifecycle.resource, "setrlimit", setrlimit_mock)
 
-    monkeypatch.setattr(main_module.resource, "setrlimit", fail_setrlimit)
+    from shorts_api.main import app
+    async with lifecycle.lifespan(app):
+        pass
 
-    with pytest.raises(OSError, match="setrlimit failed"):
-        async with main_module.lifespan(main_module.app):
-            pass
+    setrlimit_mock.assert_not_called()

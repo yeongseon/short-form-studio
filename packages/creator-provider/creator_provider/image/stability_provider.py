@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import tempfile
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
@@ -8,15 +10,21 @@ import httpx
 
 from creator_provider.api_keys import resolve_api_key
 from creator_provider.base import ImageProvider, ImageResult
+from creator_provider.exceptions import ProviderError, map_httpx_error
+from creator_provider.validation import MAX_IMAGE_PROMPT_CHARS, validate_prompt_length
+from creator_provider.versioned_assets import get_loaded_asset_versions, get_schema
 
 
 class StabilityProvider(ImageProvider):
+    _ASPECT_RATIO_MAP = get_schema("stability_aspect_ratio_map")
+
     def __init__(self, endpoint: str, model_key: str):
         self.endpoint = endpoint.rstrip("/")
         self.model_key = model_key
         self.api_key = resolve_api_key("stability")
 
     async def generate(self, prompt: str, params: dict[str, Any] | None = None) -> ImageResult:
+        validate_prompt_length(prompt, MAX_IMAGE_PROMPT_CHARS, "Image")
         merged = dict(params or {})
         aspect_ratio = str(merged.get("aspect_ratio", "9:16"))
         output_format = str(merged.get("output_format", "png"))
@@ -41,15 +49,21 @@ class StabilityProvider(ImageProvider):
                 response = await client.post(url, data=form_data, headers=headers)
                 response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"Stability AI API request failed: {exc}") from exc
+            raise map_httpx_error(exc, "Stability AI API request failed") from exc
 
         image_bytes = response.content
         if not image_bytes:
-            raise RuntimeError("Stability AI API returned empty response")
+            raise ProviderError("Stability AI API returned empty response")
 
         output_path_str = merged.get("output_path")
         if output_path_str:
-            output_path = Path(str(output_path_str))
+            candidate_output = str(output_path_str)
+            artifact_root = os.getenv("ARTIFACT_ROOT")
+            validated_output = import_module("creator_domain.sanitize").validate_artifact_path(
+                candidate_output,
+                artifact_root or "data/artifacts",
+            )
+            output_path = Path(validated_output)
         else:
             with tempfile.NamedTemporaryFile(suffix=f".{output_format}", delete=False) as tmp:
                 output_path = Path(tmp.name)
@@ -62,15 +76,12 @@ class StabilityProvider(ImageProvider):
             width=width,
             height=height,
             model_key=self.model_key,
+            metadata={"asset_versions": get_loaded_asset_versions()},
         )
 
     @staticmethod
     def _parse_aspect_ratio(ratio: str) -> tuple[int, int]:
-        ratio_map = {
-            "9:16": (576, 1024),
-            "16:9": (1024, 576),
-            "1:1": (1024, 1024),
-            "3:2": (1024, 683),
-            "2:3": (683, 1024),
-        }
-        return ratio_map.get(ratio, (1024, 1024))
+        dims = StabilityProvider._ASPECT_RATIO_MAP.get(ratio)
+        if not isinstance(dims, list) or len(dims) != 2:
+            return (1024, 1024)
+        return (int(dims[0]), int(dims[1]))

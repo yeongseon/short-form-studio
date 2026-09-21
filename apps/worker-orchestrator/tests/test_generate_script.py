@@ -53,6 +53,7 @@ class FakeStorage:
         run_id: int,
         updates: dict[str, object],
         expected_stages: frozenset[str],
+    rejected_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
         row = self._runs.get(run_id)
         if row is None:
@@ -79,7 +80,12 @@ class FakeScriptService:
         self.calls: list[tuple[int, str, str | None]] = []
 
     async def save_draft(
-        self, run_id: int, source_type: str, markdown_content: str | None
+        self,
+        run_id: int,
+        source_type: str,
+        markdown_content: str | None,
+        *,
+        idempotency_key: str | None = None,
     ) -> dict[str, object]:
         self.calls.append((run_id, source_type, markdown_content))
         if self.error is not None:
@@ -105,17 +111,12 @@ class FakeRegistry:
 
 
 def _patch_registry(monkeypatch: pytest.MonkeyPatch, registry: FakeRegistry) -> None:
-    class _ProviderRegistry:
-        @staticmethod
-        def create_default() -> FakeRegistry:
-            return registry
-
-    monkeypatch.setattr(generate_script_module, "ProviderRegistry", _ProviderRegistry)
+    monkeypatch.setattr(generate_script_module, "get_default_registry", lambda: registry)
 
 
 def _patch_redis(monkeypatch: pytest.MonkeyPatch, redis_client: object) -> None:
     redis_stub = SimpleNamespace(Redis=SimpleNamespace(from_url=lambda _: redis_client))
-    monkeypatch.setattr(generate_script_module, "redis", redis_stub)
+    monkeypatch.setattr("tasks.task_runner.redis", redis_stub)
 
 
 def _patch_services(
@@ -124,7 +125,7 @@ def _patch_services(
     storage: FakeStorage,
 ) -> None:
     monkeypatch.setattr(generate_script_module, "_script_service", script_service)
-    monkeypatch.setattr(generate_script_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
 
 
 def _invoke_task(**kwargs: Any) -> dict[str, object]:
@@ -153,14 +154,12 @@ def test_generate_script_happy_path_local_model_with_gpu_lock(
     release_calls: list[str] = []
 
     monkeypatch.setattr(
-        generate_script_module,
-        "acquire_gpu_lock",
-        lambda client, task_id: lock_calls.append(task_id),
+        "tasks.task_runner.acquire_gpu_lock",
+        lambda client, task_id: (lock_calls.append(task_id) or f"{task_id}:fake-token"),
     )
     monkeypatch.setattr(
-        generate_script_module,
-        "release_gpu_lock",
-        lambda client, task_id: release_calls.append(task_id),
+        "tasks.task_runner.release_gpu_lock",
+        lambda client, token: release_calls.append(token.split(":")[0]) or True,
     )
 
     script_service = FakeScriptService()
@@ -178,7 +177,7 @@ def test_generate_script_happy_path_local_model_with_gpu_lock(
     assert release_calls == ["run-101"]
     assert script_service.calls == [(101, "generated_by_model", "# Draft")]
     # get_run (stage guard) + update_run (advance to SCRIPT_REVIEW)
-    assert storage.calls == [(101, {"current_stage": "SCRIPT_REVIEW", "status": "running"})]
+    assert storage.calls == [(101, {"current_stage": "SCRIPT_REVIEW", "status": "paused"})]
     assert provider.calls[0][1] == {"temperature": 0.2}
 
 
@@ -191,13 +190,11 @@ def test_generate_script_happy_path_external_model_without_gpu_lock(
     _patch_registry(monkeypatch, registry)
 
     monkeypatch.setattr(
-        generate_script_module,
-        "acquire_gpu_lock",
+        "tasks.task_runner.acquire_gpu_lock",
         lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")),
     )
     monkeypatch.setattr(
-        generate_script_module,
-        "release_gpu_lock",
+        "tasks.task_runner.release_gpu_lock",
         lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")),
     )
 
@@ -211,7 +208,7 @@ def test_generate_script_happy_path_external_model_without_gpu_lock(
     assert result["provider_type"] == "openai"
     assert result["gpu_lock_acquired_at"] is None
     assert result["gpu_lock_released_at"] is None
-    assert storage.calls == [(102, {"current_stage": "SCRIPT_REVIEW", "status": "running"})]
+    assert storage.calls == [(102, {"current_stage": "SCRIPT_REVIEW", "status": "paused"})]
 
 
 def test_generate_script_appends_custom_instructions_to_prompt(
@@ -294,11 +291,10 @@ def test_generate_script_gpu_lock_timeout(monkeypatch: pytest.MonkeyPatch) -> No
     _patch_redis(monkeypatch, redis_client)
 
     monkeypatch.setattr(
-        generate_script_module,
-        "acquire_gpu_lock",
+        "tasks.task_runner.acquire_gpu_lock",
         lambda *_: (_ for _ in ()).throw(TimeoutError("lock timeout")),
     )
-    monkeypatch.setattr(generate_script_module, "release_gpu_lock", lambda *_: None)
+    monkeypatch.setattr("tasks.task_runner.release_gpu_lock", lambda *_: None)
 
     script_service = FakeScriptService()
     storage = _make_storage(run_id=105, stage="IDEA_READY")
@@ -321,9 +317,10 @@ def test_generate_script_releases_gpu_lock_when_llm_fails(monkeypatch: pytest.Mo
     _patch_redis(monkeypatch, redis_client)
 
     released: list[str] = []
-    monkeypatch.setattr(generate_script_module, "acquire_gpu_lock", lambda *_: True)
+    monkeypatch.setattr("tasks.task_runner.acquire_gpu_lock", lambda *_: "run-106:fake-token")
     monkeypatch.setattr(
-        generate_script_module, "release_gpu_lock", lambda _, task_id: released.append(task_id)
+        "tasks.task_runner.release_gpu_lock",
+        lambda _, token: released.append(token.split(":")[0]) or True,
     )
 
     script_service = FakeScriptService()
@@ -459,10 +456,9 @@ def test_release_gpu_lock_failure_still_propagates_original_error(
     redis_client = object()
     _patch_redis(monkeypatch, redis_client)
 
-    monkeypatch.setattr(generate_script_module, "acquire_gpu_lock", lambda *_: True)
+    monkeypatch.setattr("tasks.task_runner.acquire_gpu_lock", lambda *_: "run-400:fake-token")
     monkeypatch.setattr(
-        generate_script_module,
-        "release_gpu_lock",
+        "tasks.task_runner.release_gpu_lock",
         lambda *_: (_ for _ in ()).throw(ConnectionError("redis gone")),
     )
 
@@ -601,6 +597,7 @@ class RaceConditionStorage(FakeStorage):
         run_id: int,
         updates: dict[str, object],
         expected_stages: frozenset[str],
+    rejected_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
         """Atomic CAS — advance happens before the check, simulating a race."""
         self._maybe_advance(run_id)

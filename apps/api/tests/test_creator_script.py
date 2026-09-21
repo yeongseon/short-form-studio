@@ -45,7 +45,9 @@ class StubProjectService:
         self.get_project_calls: list[int] = []
         self.projects: dict[int, StubProject] = {}
 
-    async def get_project(self, project_id: int) -> StubProject | None:
+    async def get_project(
+        self, project_id: int, workspace_id: int | None = None
+    ) -> StubProject | None:
         self.get_project_calls.append(project_id)
         return self.projects.get(project_id)
 

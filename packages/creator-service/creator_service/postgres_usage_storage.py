@@ -8,6 +8,15 @@ from .db import fetch_all, fetch_one, get_pool
 
 class PostgresUsageStorage:
     async def record_event(self, row: dict[str, Any]) -> dict[str, Any]:
+        idempotency_key = row.get("idempotency_key")
+        if isinstance(idempotency_key, str):
+            existing = await fetch_one(
+                "SELECT * FROM usage_events WHERE idempotency_key = $1",
+                idempotency_key,
+            )
+            if existing is not None:
+                return existing
+
         saved = await fetch_one(
             """
             INSERT INTO usage_events (
@@ -22,9 +31,11 @@ class PostgresUsageStorage:
                 image_count,
                 audio_seconds,
                 estimated_cost_usd,
-                cost_config_version
+                cost_config_version,
+                idempotency_key
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            ON CONFLICT (idempotency_key) DO NOTHING
             RETURNING *
             """,
             row.get("workspace_id"),
@@ -39,7 +50,15 @@ class PostgresUsageStorage:
             row.get("audio_seconds"),
             row.get("estimated_cost_usd"),
             row.get("cost_config_version"),
+            idempotency_key,
         )
+        if saved is None and isinstance(idempotency_key, str):
+            existing = await fetch_one(
+                "SELECT * FROM usage_events WHERE idempotency_key = $1",
+                idempotency_key,
+            )
+            if existing is not None:
+                return existing
         if saved is None:
             raise ValueError("Failed to create usage event")
         return saved

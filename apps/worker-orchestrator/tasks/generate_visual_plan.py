@@ -7,55 +7,42 @@ import json
 import logging
 from typing import Any
 
-redis: Any
-try:
-    import redis
-except ImportError:
-    redis = None
-
 from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
 from creator_domain.models.visual_plan import VisualScene
 from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
-from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
-from creator_provider.registry import ProviderRegistry
+from creator_provider.registry import get_default_registry
 from creator_service.cost_config import COST_VISUAL_PLAN
-from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
 from creator_service.telemetry import trace_task
 from creator_service.usage_service import record_provider_call
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
-from tasks import task_runner as _task_runner
 from tasks.task_runner import GpuLockContext, TaskContext, TaskResult, TaskRunnerConfig, run_task
 
 logger = logging.getLogger(__name__)
 
-
-def _sync_runner_dependencies() -> None:
-    _task_runner._run_service = _run_service
-    _task_runner.redis = redis
-    _task_runner.acquire_gpu_lock = acquire_gpu_lock
-    _task_runner.release_gpu_lock = release_gpu_lock
-
-
-def _build_system_prompt(style_preset: str | None = None) -> str:
-    base = (
-        "You are a visual planning assistant for short-form video production. "
-        "Given a script with sections, generate one visual scene per section. "
-        "For each scene, produce:\n"
-        "- A detailed image-generation prompt (describe the visual, not the narration)\n"
-        "- Style tags (e.g., cinematic, cartoon, minimalist)\n"
-        "- Mood (e.g., tense, upbeat, mysterious)\n"
-        "- Composition notes (e.g., close-up, wide shot, overhead)\n\n"
-        "Return a JSON array of objects with keys: "
-        "section_id, prompt, style_tags (array), mood, composition.\n"
-        "Only return the JSON array, no markdown fencing or extra text."
-    )
+def _build_system_prompt(style_preset: str | None = None, niche: str | None = None) -> str:
+    # Use viral visual prompt if niche provided
+    if niche:
+        from tasks.viral_prompts import build_viral_visual_prompt
+        base = build_viral_visual_prompt(niche=niche)
+    else:
+        base = (
+            "You are a visual planning assistant for short-form video production. "
+            "Given a script with sections, generate one visual scene per section. "
+            "For each scene, produce:\n"
+            "- A detailed image-generation prompt (describe the visual, not the narration)\n"
+            "- Style tags (e.g., cinematic, cartoon, minimalist)\n"
+            "- Mood (e.g., tense, upbeat, mysterious)\n"
+            "- Composition notes (e.g., close-up, wide shot, overhead)\n\n"
+            "Return a JSON array of objects with keys: "
+            "section_id, prompt, style_tags (array), mood, composition.\n"
+            "Only return the JSON array, no markdown fencing or extra text."
+        )
     if style_preset:
         base += f"\n\nStyle preset: {style_preset}"
     return base
-
 
 def _build_sections_prompt(sections: list[dict[str, Any]]) -> str:
     lines: list[str] = []
@@ -65,7 +52,6 @@ def _build_sections_prompt(sections: list[dict[str, Any]]) -> str:
         text = section.get("text", "")
         lines.append(f"[{section_id}] ({section_type}): {text}")
     return "\n".join(lines)
-
 
 def _parse_llm_response(raw: str, sections: list[dict[str, Any]]) -> list[VisualScene]:
     cleaned = raw.strip()
@@ -113,13 +99,12 @@ def _parse_llm_response(raw: str, sections: list[dict[str, Any]]) -> list[Visual
         scenes.append(scene)
     return scenes
 
-
 @celery_app.task(
     bind=True,
     autoretry_for=(ProviderTimeoutError, RateLimitError),
-    retry_backoff=True,
+    retry_backoff=30,
     retry_jitter=True,
-    max_retries=3,
+    max_retries=5,
     soft_time_limit=300,
     time_limit=360,
     name="generate_visual_plan",
@@ -130,8 +115,8 @@ def generate_visual_plan(
     run_id: int,
     model_key: str = "qwen3-4b",
     style_preset: str | None = None,
+    niche: str | None = None,
 ) -> dict[str, object]:
-    _sync_runner_dependencies()
     config = TaskRunnerConfig(
         task_name="generate_visual_plan",
         allowed_stages=frozenset({RunStage.VISUAL_PLAN_SETUP, RunStage.VISUAL_PLAN_GENERATING}),
@@ -152,7 +137,7 @@ def generate_visual_plan(
         if not sections:
             raise ValueError(f"Script draft for run {run_id} has no content")
 
-        registry = ProviderRegistry.create_default()
+        registry = get_default_registry()
         entry = registry.resolve(model_key)
         provider = registry.get_provider(model_key)
 
@@ -161,7 +146,7 @@ def generate_visual_plan(
             gpu_lock.acquire()
 
         try:
-            system_prompt = _build_system_prompt(style_preset)
+            system_prompt = _build_system_prompt(style_preset, niche=niche)
             sections_prompt = _build_sections_prompt(sections)
             full_prompt = f"{system_prompt}\n\n---\nScript sections:\n{sections_prompt}"
             params = dict(entry.default_params or {})
@@ -171,11 +156,15 @@ def generate_visual_plan(
                 raise ProviderTimeoutError(
                     f"Provider timed out during visual plan generation for run {run_id}"
                 ) from exc
+            except ProviderTimeoutError:
+                raise
+            except RateLimitError:
+                raise
             except SoftTimeLimitExceeded:
                 raise
             except Exception as exc:
                 message = str(exc).lower()
-                if "429" in message or "rate" in message:
+                if "429" in message or "rate limit" in message or "too many requests" in message:
                     raise RateLimitError(
                         f"Provider rate limited visual plan generation for run {run_id}"
                     ) from exc
@@ -195,12 +184,17 @@ def generate_visual_plan(
                 cost_usd=COST_VISUAL_PLAN,
                 workspace_id=ctx.workspace_id,
                 project_id=ctx.project_id,
+                idempotency_key=ctx.task_id,
             )
         except Exception:
             logger.warning("Failed to record provider usage", exc_info=True)
 
         visual_scenes = _parse_llm_response(raw_response, sections)
-        await _visual_plan_service.save_plan(run_id=run_id, scenes=visual_scenes)
+        await _visual_plan_service.save_plan(
+            run_id=run_id,
+            scenes=visual_scenes,
+            idempotency_key=ctx.task_id,
+        )
         return TaskResult(
             status="success",
             extra={

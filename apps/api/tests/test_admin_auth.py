@@ -1,33 +1,59 @@
-import asyncio
-from importlib import import_module
+"""Tests for authentication on admin and artifact endpoints."""
 
 import pytest
-from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
-admin = import_module("shorts_api.routes.admin")
-
-
-def test_require_admin_uses_constant_time_compare(monkeypatch: pytest.MonkeyPatch) -> None:
-    compare_called = False
-
-    def _fake_compare_digest(provided: str, expected: str) -> bool:
-        nonlocal compare_called
-        compare_called = True
-        return provided == expected
-
-    monkeypatch.setenv("ADMIN_API_KEY", "expected-key")
-    monkeypatch.setattr(admin.hmac, "compare_digest", _fake_compare_digest)
-
-    asyncio.run(admin.require_admin("expected-key"))
-
-    assert compare_called is True
+from shorts_api.main import app
 
 
-def test_require_admin_rejects_invalid_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ADMIN_API_KEY", "expected-key")
+@pytest.fixture
+def unauthenticated_client():
+    """Test client without authentication headers."""
+    return TestClient(app)
 
-    with pytest.raises(HTTPException) as exc_info:
-        asyncio.run(admin.require_admin("wrong-key"))
 
-    assert exc_info.value.status_code == 403
-    assert exc_info.value.detail == "Admin access denied"
+class TestSettingsEndpoint:
+    """Tests for /api/creator/settings/api-keys endpoint authentication."""
+    
+    def test_list_api_keys_requires_auth(self, unauthenticated_client):
+        """Test that list_api_keys returns 401 when not authenticated."""
+        response = unauthenticated_client.get("/api/creator/settings/api-keys")
+        assert response.status_code == 401, f"Expected 401, got {response.status_code}: {response.text}"
+
+
+class TestModelEndpoints:
+    """Tests for /api/creator/models endpoints authentication."""
+    
+    def test_list_models_requires_auth(self, unauthenticated_client):
+        """Test that list_models returns 401 when not authenticated."""
+        response = unauthenticated_client.get("/api/creator/models")
+        assert response.status_code == 401, f"Expected 401, got {response.status_code}: {response.text}"
+    
+    def test_get_model_status_requires_auth(self, unauthenticated_client):
+        """Test that get_model_status returns 401 when not authenticated."""
+        response = unauthenticated_client.get("/api/creator/models/status")
+        assert response.status_code == 401, f"Expected 401, got {response.status_code}: {response.text}"
+
+
+class TestArtifactEndpoints:
+    """Tests for artifact endpoints authentication and authorization."""
+    
+    def test_serve_artifact_requires_auth(self, unauthenticated_client):
+        """Test that serve_artifact returns 401 when not authenticated."""
+        response = unauthenticated_client.get("/artifacts/1/audio/audio.wav")
+        assert response.status_code == 401, f"Expected 401, got {response.status_code}: {response.text}"
+    
+    def test_serve_artifact_invalid_path(self, unauthenticated_client):
+        """Test that serve_artifact returns 401 on invalid run_id (auth checked first)."""
+        response = unauthenticated_client.get("/artifacts/invalid/audio/audio.wav")
+        assert response.status_code == 401, f"Expected 401, got {response.status_code}: {response.text}"
+    
+    def test_serve_local_artifact_file_requires_auth(self, unauthenticated_client):
+        """Test that serve_local_artifact_file returns 401 when not authenticated."""
+        response = unauthenticated_client.get("/api/artifacts/files/1/render/output.mp4")
+        assert response.status_code == 401, f"Expected 401, got {response.status_code}: {response.text}"
+    
+    def test_serve_local_artifact_file_invalid_path(self, unauthenticated_client):
+        """Test that serve_local_artifact_file returns 401 on invalid run_id (auth checked first)."""
+        response = unauthenticated_client.get("/api/artifacts/files/invalid/render/output.mp4")
+        assert response.status_code == 401, f"Expected 401, got {response.status_code}: {response.text}"

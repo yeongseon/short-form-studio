@@ -22,9 +22,15 @@ class ProjectStorageBackend(Protocol):
 
     async def insert_project(self, payload: dict[str, Any]) -> dict[str, Any]: ...
 
-    async def fetch_project(self, project_id: int) -> dict[str, Any] | None: ...
+    async def fetch_project(
+        self, project_id: int, workspace_id: int | None = None
+    ) -> dict[str, Any] | None: ...
 
     async def list_projects(
+        self, limit: int, offset: int, workspace_id: int | None = None
+    ) -> list[dict[str, Any]]: ...
+
+    async def list_projects_with_latest_run(
         self, limit: int, offset: int, workspace_id: int | None = None
     ) -> list[dict[str, Any]]: ...
 
@@ -33,12 +39,16 @@ class ProjectStorageBackend(Protocol):
     async def count_projects(self, workspace_id: int | None = None) -> int: ...
 
     async def update_project(
-        self, project_id: int, updates: dict[str, Any]
+        self,
+        project_id: int,
+        updates: dict[str, Any],
+        *,
+        workspace_id: int | None = None,
     ) -> dict[str, Any] | None:
         """Update project fields. Returns updated row or None if not found."""
         ...
 
-    async def delete_project(self, project_id: int) -> bool:
+    async def delete_project(self, project_id: int, *, workspace_id: int | None = None) -> bool:
         """Delete a project by id. Returns True if deleted."""
         ...
 
@@ -73,9 +83,13 @@ class InMemoryProjectStorage:
         self._projects[project_id] = row
         return dict(row)
 
-    async def fetch_project(self, project_id: int) -> dict[str, Any] | None:
+    async def fetch_project(
+        self, project_id: int, workspace_id: int | None = None
+    ) -> dict[str, Any] | None:
         row = self._projects.get(project_id)
         if row is None:
+            return None
+        if workspace_id is not None and row.get("workspace_id") != workspace_id:
             return None
         return dict(row)
 
@@ -91,23 +105,44 @@ class InMemoryProjectStorage:
             ordered = [row for row in ordered if row.get("workspace_id") == workspace_id]
         return [dict(row) for row in ordered[offset : offset + limit]]
 
+    async def list_projects_with_latest_run(
+        self, limit: int, offset: int, workspace_id: int | None = None
+    ) -> list[dict[str, Any]]:
+        rows = await self.list_projects(limit=limit, offset=offset, workspace_id=workspace_id)
+        enriched: list[dict[str, Any]] = []
+        for row in rows:
+            latest_run = await self.fetch_latest_run_summary(row["id"])
+            enriched.append({**row, "latest_run": latest_run})
+        return enriched
+
     async def count_projects(self, workspace_id: int | None = None) -> int:
         if workspace_id is None:
             return len(self._projects)
         return sum(1 for row in self._projects.values() if row.get("workspace_id") == workspace_id)
 
     async def update_project(
-        self, project_id: int, updates: dict[str, Any]
+        self,
+        project_id: int,
+        updates: dict[str, Any],
+        *,
+        workspace_id: int | None = None,
     ) -> dict[str, Any] | None:
         row = self._projects.get(project_id)
         if row is None:
+            return None
+        if workspace_id is not None and row.get("workspace_id") != workspace_id:
             return None
         for key, value in updates.items():
             row[key] = value
         row["updated_at"] = datetime.now(timezone.utc)
         return dict(row)
 
-    async def delete_project(self, project_id: int) -> bool:
+    async def delete_project(self, project_id: int, *, workspace_id: int | None = None) -> bool:
+        row = self._projects.get(project_id)
+        if row is None:
+            return False
+        if workspace_id is not None and row.get("workspace_id") != workspace_id:
+            return False
         if project_id in self._projects:
             del self._projects[project_id]
             # Also remove associated runs
@@ -224,8 +259,8 @@ class ProjectService:
         )
         return Project.model_validate(row)
 
-    async def get_project(self, project_id: int) -> Project | None:
-        row = await self.db.fetch_project(project_id)
+    async def get_project(self, project_id: int, workspace_id: int | None = None) -> Project | None:
+        row = await self.db.fetch_project(project_id, workspace_id=workspace_id)
         if row is None:
             return None
 
@@ -240,27 +275,42 @@ class ProjectService:
         if offset < 0:
             raise ValueError("offset must be >= 0")
 
-        rows = await self.db.list_projects(limit=limit, offset=offset, workspace_id=workspace_id)
-        projects: list[Project] = []
-        for row in rows:
-            latest_run = await self.db.fetch_latest_run_summary(row["id"])
-            projects.append(ProjectWithLatestRun.model_validate({**row, "latest_run": latest_run}))
-        return projects
+        rows = await self.db.list_projects_with_latest_run(
+            limit=limit,
+            offset=offset,
+            workspace_id=workspace_id,
+        )
+        return [ProjectWithLatestRun.model_validate(row) for row in rows]
 
     async def count_projects(self, workspace_id: int | None = None) -> int:
         return await self.db.count_projects(workspace_id=workspace_id)
 
-    async def update_project(self, project_id: int, title: str) -> Project | None:
+    async def update_project(
+        self, project_id: int, title: str, workspace_id: int | None = None
+    ) -> Project | None:
         """Update project title."""
-        row = await self.db.update_project(project_id, {"title": title})
+        row = await self.db.update_project(
+            project_id,
+            {"title": title},
+            workspace_id=workspace_id,
+        )
         if row is None:
             return None
         latest_run = await self.db.fetch_latest_run_summary(project_id)
         return ProjectWithLatestRun.model_validate({**row, "latest_run": latest_run})
 
-    async def delete_project(self, project_id: int) -> bool:
+    async def delete_project(self, project_id: int, workspace_id: int | None = None) -> bool:
         """Delete a project. FK cascade handles associated runs."""
-        return await self.db.delete_project(project_id)
+        return await self.db.delete_project(project_id, workspace_id=workspace_id)
+
+    async def mark_deleting(self, project_id: int, workspace_id: int) -> Project:
+        """Mark a project as deleting. Blocks new run creation."""
+        row = await self.db.update_project(
+            project_id, {"status": "deleting"}, workspace_id=workspace_id
+        )
+        if row is None:
+            raise ValueError(f"Project {project_id} not found")
+        return Project.model_validate(row)
 
 
 def _create_storage() -> ProjectStorageBackend:

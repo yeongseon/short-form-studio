@@ -32,3 +32,28 @@ def test_get_user_returns_none_for_missing_user() -> None:
     service = UserService(InMemoryUserStorage())
 
     assert run(service.get_user(999)) is None
+
+
+def test_create_or_get_user_api_key_blank_subject_does_not_merge_accounts() -> None:
+    service = UserService(InMemoryUserStorage())
+
+    first = run(
+        service.create_or_get_user(
+            email="first@example.com",
+            name="First",
+            auth_provider="api_key",
+            auth_subject="",
+        )
+    )
+    second = run(
+        service.create_or_get_user(
+            email="second@example.com",
+            name="Second",
+            auth_provider="api_key",
+            auth_subject="",
+        )
+    )
+
+    assert first.id != second.id
+    assert first.auth_subject != ""
+    assert second.auth_subject != ""

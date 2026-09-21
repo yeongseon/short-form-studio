@@ -19,11 +19,11 @@ class TestRenderProfile(unittest.TestCase):
         self.assertEqual(profile.fps, 30)
         self.assertEqual(profile.video_codec, Codec.H264)
         self.assertEqual(profile.audio_codec, AudioCodec.AAC)
-        self.assertEqual(profile.transition_style, TransitionStyle.KEN_BURNS)
-        self.assertEqual(profile.crf, 23)
-        self.assertEqual(profile.preset, "medium")
+        self.assertEqual(profile.transition_style, TransitionStyle.FADE)
+        self.assertEqual(profile.crf, 18)
+        self.assertEqual(profile.preset, "fast")
         self.assertTrue(profile.burn_subtitles)
-        self.assertEqual(profile.subtitle_font_size, 24)
+        self.assertEqual(profile.subtitle_font_size, 48)
 
     def test_high_quality_preset(self):
         """Test high_quality preset."""
@@ -168,46 +168,51 @@ class TestFFmpegService(unittest.TestCase):
         self.assertIn("20", cmd_str)
         self.assertIn("fast", cmd_str)
 
-    @patch("subprocess.run")
-    @patch("pathlib.Path.mkdir")
-    def test_render_success(self, mock_mkdir, mock_run):
-        """Test render method on success."""
-        mock_run.return_value = MagicMock(returncode=0)
-        
-        input_data = RenderInput(
-            image_paths=[Path("/tmp/img1.png")],
-            audio_path=None,
-            subtitle_path=None,
-            scene_durations=[5.0]
-        )
-        output_path = Path("/tmp/output.mp4")
-        
-        result = self.service.render(input_data, output_path)
-        
-        self.assertEqual(result, output_path)
-        mock_mkdir.assert_called_once_with(parents=True, exist_ok=True)
-        mock_run.assert_called_once()
+    @patch("creator_service.ffmpeg_service._run_ffmpeg")
+    @patch.object(FFmpegService, "_render_segment")
+    @patch("pathlib.Path.rename")
+    def test_render_success(self, mock_rename, mock_render_segment, mock_run_ffmpeg):
+        """render() concatenates rendered segments and returns the output path."""
+        mock_run_ffmpeg.return_value = MagicMock(returncode=0, stderr="")
 
-    @patch("subprocess.run")
-    @patch("pathlib.Path.mkdir")
-    def test_render_failure(self, mock_mkdir, mock_run):
-        """Test render method on FFmpeg failure."""
-        mock_run.return_value = MagicMock(
-            returncode=1,
-            stderr="FFmpeg error message"
-        )
-        
         input_data = RenderInput(
             image_paths=[Path("/tmp/img1.png")],
             audio_path=None,
             subtitle_path=None,
-            scene_durations=[5.0]
+            scene_durations=[5.0],
         )
         output_path = Path("/tmp/output.mp4")
-        
+
+        result = self.service.render(input_data, output_path)
+
+        self.assertEqual(result, output_path)
+        # One scene -> one segment render, then a single concat ffmpeg call.
+        mock_render_segment.assert_called_once()
+        mock_run_ffmpeg.assert_called_once()
+        # Temp output is atomically renamed to the final path on success.
+        mock_rename.assert_called_once_with(output_path)
+
+    @patch("creator_service.ffmpeg_service._run_ffmpeg")
+    @patch.object(FFmpegService, "_probe_output_valid", return_value=False)
+    @patch.object(FFmpegService, "_render_segment")
+    def test_render_failure(self, mock_render_segment, mock_probe, mock_run_ffmpeg):
+        """render() raises when ffmpeg fails and the output is not valid."""
+        mock_run_ffmpeg.return_value = MagicMock(
+            returncode=1,
+            stderr="FFmpeg error message",
+        )
+
+        input_data = RenderInput(
+            image_paths=[Path("/tmp/img1.png")],
+            audio_path=None,
+            subtitle_path=None,
+            scene_durations=[5.0],
+        )
+        output_path = Path("/tmp/output.mp4")
+
         with self.assertRaises(RuntimeError) as cm:
             self.service.render(input_data, output_path)
-        
+
         self.assertIn("FFmpeg render failed", str(cm.exception))
 
     def test_build_command_without_subtitles_no_vcat(self):

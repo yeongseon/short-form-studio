@@ -9,15 +9,20 @@ from creator_domain.models import RunStage
 from creator_domain.models.script_draft import ScriptSection
 from creator_service.json_script_parser import parse_json_scenes
 from creator_service.markdown_parser import parse_markdown
-from creator_service.project_service import project_service
-from creator_service.run_service import run_service
+from creator_service.run_service import ConflictError, run_service
 from creator_service.script_service import script_service
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import ValidationError
 
 from shorts_api.auth import CurrentUser, require_project_access, require_run_access
 from shorts_api.routes.creator_runs_utils import validate_model_defaults
-
+from shorts_api.schemas.creator_script import (
+    ImportJsonRequest,
+    ImportMarkdownRequest,
+    UpdateJsonScriptRequest,
+    UpdateMarkdownRequest,
+    UpdateStructuredRequest,
+)
 if TYPE_CHECKING:
     from creator_domain.models.pipeline_run import PipelineRun
     from creator_domain.models.project import Project
@@ -34,11 +39,6 @@ router = APIRouter(prefix="/projects/{project_id}/script", tags=["script"])
 run_script_router = APIRouter(prefix="/runs/{run_id}/script", tags=["script"])
 
 
-class ImportMarkdownRequest(BaseModel):
-    markdown: str = Field(..., max_length=500_000)
-    model_defaults: dict[str, str] | None = None
-    style_preset: str = "default"
-
 
 @router.post("/import-markdown", status_code=201)
 async def import_markdown(
@@ -49,6 +49,12 @@ async def import_markdown(
     user, project = access
     if not request.markdown.strip():
         raise HTTPException(status_code=400, detail="markdown content must not be empty")
+
+    if getattr(project, "status", None) == "deleting":
+        raise HTTPException(
+            status_code=409,
+            detail="Project is being deleted; cannot create new runs",
+        )
 
     validate_model_defaults(request.model_defaults)
 
@@ -66,6 +72,11 @@ async def import_markdown(
             source_type="pasted_markdown",
             markdown_content=request.markdown,
         )
+    except ConflictError:
+        raise HTTPException(
+            status_code=409,
+            detail="Project is being deleted; cannot create new runs",
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -75,11 +86,6 @@ async def import_markdown(
         "draft": draft.model_dump(mode="json"),
     }
 
-
-class ImportJsonRequest(BaseModel):
-    json_script: str = Field(..., max_length=500_000)
-    model_defaults: dict[str, str] | None = None
-    style_preset: str = "default"
 
 
 @router.post("/import-json", status_code=201)
@@ -91,6 +97,12 @@ async def import_json(
     user, project = access
     if not request.json_script.strip():
         raise HTTPException(status_code=400, detail="JSON content must not be empty")
+
+    if getattr(project, "status", None) == "deleting":
+        raise HTTPException(
+            status_code=409,
+            detail="Project is being deleted; cannot create new runs",
+        )
 
     validate_model_defaults(request.model_defaults)
 
@@ -119,6 +131,11 @@ async def import_json(
             markdown_content=rebuilt_markdown,
             structured_script=sections,
         )
+    except ConflictError:
+        raise HTTPException(
+            status_code=409,
+            detail="Project is being deleted; cannot create new runs",
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -127,19 +144,6 @@ async def import_json(
         "run_id": run.id,
         "draft": draft.model_dump(mode="json"),
     }
-
-
-class UpdateMarkdownRequest(BaseModel):
-    markdown: str = Field(..., max_length=500_000)
-
-
-class UpdateStructuredRequest(BaseModel):
-    sections: list[dict[str, object]] = Field(..., max_length=200)
-
-
-class UpdateJsonScriptRequest(BaseModel):
-    json_script: str = Field(..., max_length=500_000)
-
 
 @run_script_router.get("/markdown")
 async def get_script_markdown(

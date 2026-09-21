@@ -41,6 +41,7 @@ class FakeStorage:
         run_id: int,
         updates: dict[str, object],
         expected_stages: frozenset[str],
+    rejected_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
         self.cas_calls.append((run_id, updates, expected_stages))
         row = self._runs.get(run_id)
@@ -111,6 +112,9 @@ class FakeSubtitleService:
         format: str = "srt",
         model_used: str | None = None,
         provider_type: str | None = None,
+        storage_provider: str | None = None,
+        storage_key: str | None = None,
+        idempotency_key: str | None = None,
     ) -> FakeSubtitleArtifact:
         call_data = {
             "run_id": run_id,
@@ -118,6 +122,8 @@ class FakeSubtitleService:
             "format": format,
             "model_used": model_used,
             "provider_type": provider_type,
+            "storage_provider": storage_provider,
+            "storage_key": storage_key,
         }
         self.calls.append(call_data)
         return FakeSubtitleArtifact(id=self.artifact_id, path=path)
@@ -136,17 +142,12 @@ class FakeRegistry:
 
 
 def _patch_registry(monkeypatch: pytest.MonkeyPatch, registry: FakeRegistry) -> None:
-    class _ProviderRegistry:
-        @staticmethod
-        def create_default() -> FakeRegistry:
-            return registry
-
-    monkeypatch.setattr(generate_subtitles_module, "ProviderRegistry", _ProviderRegistry)
+    monkeypatch.setattr(generate_subtitles_module, "get_default_registry", lambda: registry)
 
 
 def _patch_redis(monkeypatch: pytest.MonkeyPatch, redis_client: object) -> None:
     redis_stub = SimpleNamespace(Redis=SimpleNamespace(from_url=lambda _: redis_client))
-    monkeypatch.setattr(generate_subtitles_module, "redis", redis_stub)
+    monkeypatch.setattr("tasks.task_runner.redis", redis_stub)
 
 
 def _patch_services(
@@ -159,7 +160,7 @@ def _patch_services(
     monkeypatch.setattr(generate_subtitles_module, "_script_service", script_service)
     monkeypatch.setattr(generate_subtitles_module, "_audio_service", audio_service)
     monkeypatch.setattr(generate_subtitles_module, "_subtitle_service", subtitle_service)
-    monkeypatch.setattr(generate_subtitles_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
 
 
 def _invoke_task(**kwargs: Any) -> dict[str, object]:
@@ -179,12 +180,12 @@ def test_generate_subtitles_success(monkeypatch: pytest.MonkeyPatch) -> None:
     lock_calls: list[str] = []
     release_calls: list[str] = []
     monkeypatch.setattr(
-        generate_subtitles_module, "acquire_gpu_lock", lambda _, task_id: lock_calls.append(task_id)
+        "tasks.task_runner.acquire_gpu_lock",
+        lambda _, task_id: (lock_calls.append(task_id) or f"{task_id}:fake-token"),
     )
     monkeypatch.setattr(
-        generate_subtitles_module,
-        "release_gpu_lock",
-        lambda _, task_id: release_calls.append(task_id),
+        "tasks.task_runner.release_gpu_lock",
+        lambda _, token: release_calls.append(token.split(":")[0]) or True,
     )
 
     script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Hello world script"))
@@ -219,15 +220,15 @@ def test_generate_subtitles_success(monkeypatch: pytest.MonkeyPatch) -> None:
             },
         )
     ]
-    assert subtitle_service.calls == [
-        {
-            "run_id": 101,
-            "path": "data/artifacts/101/subtitles/subtitles.srt",
-            "format": "srt",
-            "model_used": "whisper-large",
-            "provider_type": "faster-whisper",
-        }
-    ]
+    assert len(subtitle_service.calls) == 1
+    call = subtitle_service.calls[0]
+    assert call["run_id"] == 101
+    assert call["path"] == "data/artifacts/101/subtitles/subtitles.srt"
+    assert call["format"] == "srt"
+    assert call["model_used"] == "whisper-large"
+    assert call["provider_type"] == "faster-whisper"
+    assert call["storage_provider"] == "local"
+    assert "storage_key" in call
     assert storage.calls == [(101, {"current_stage": "RENDER_GENERATING", "status": "running"})]
     assert storage.cas_calls[0][2] == frozenset({"AUDIO_GENERATING", "SUBTITLE_GENERATING"})
 
@@ -376,6 +377,7 @@ class _CASSkipStorage(FakeStorage):
         run_id: int,
         updates: dict[str, object],
         expected_stages: frozenset[str],
+    rejected_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
         self.cas_calls.append((run_id, updates, expected_stages))
         row = self._runs.get(run_id)

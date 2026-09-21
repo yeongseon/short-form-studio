@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import os
 import tempfile
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
@@ -9,16 +11,18 @@ import httpx
 
 from creator_provider.api_keys import resolve_api_key
 from creator_provider.base import ImageProvider, ImageResult
+from creator_provider.exceptions import ProviderError, map_httpx_error
+from creator_provider.validation import MAX_IMAGE_PROMPT_CHARS, validate_prompt_length
 
 
 class DalleProvider(ImageProvider):
-
     def __init__(self, endpoint: str, model_key: str):
         self.endpoint = endpoint.rstrip("/")
         self.model_key = model_key
         self.api_key = resolve_api_key("openai")
 
     async def generate(self, prompt: str, params: dict[str, Any] | None = None) -> ImageResult:
+        validate_prompt_length(prompt, MAX_IMAGE_PROMPT_CHARS, "Image")
         merged = dict(params or {})
         width = int(merged.get("width", 1024))
         height = int(merged.get("height", 1792))
@@ -44,22 +48,28 @@ class DalleProvider(ImageProvider):
                 response = await client.post(url, json=payload, headers=headers)
                 response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"DALL-E API request failed: {exc}") from exc
+            raise map_httpx_error(exc, "DALL-E API request failed") from exc
 
         data = response.json()
         images = data.get("data", [])
         if not images:
-            raise RuntimeError("DALL-E API returned no images")
+            raise ProviderError("DALL-E API returned no images")
 
         image_b64 = images[0].get("b64_json", "")
         if not image_b64:
-            raise RuntimeError("DALL-E API returned empty image data")
+            raise ProviderError("DALL-E API returned empty image data")
 
         image_bytes = base64.b64decode(image_b64)
 
         output_path_str = merged.get("output_path")
         if output_path_str:
-            output_path = Path(str(output_path_str))
+            candidate_output = str(output_path_str)
+            artifact_root = os.getenv("ARTIFACT_ROOT")
+            validated_output = import_module("creator_domain.sanitize").validate_artifact_path(
+                candidate_output,
+                artifact_root or "data/artifacts",
+            )
+            output_path = Path(validated_output)
         else:
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                 output_path = Path(tmp.name)

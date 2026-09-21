@@ -304,6 +304,6 @@ describe("RunsPage", () => {
     await waitFor(() => {
       expect(screen.getByRole("alert")).toBeInTheDocument();
     });
-    expect(screen.getByRole("alert")).toHaveTextContent("Failed to load projects (502)");
+    expect(screen.getByRole("alert")).toHaveTextContent("Request failed (502)");
   });
 });

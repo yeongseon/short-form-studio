@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import os
+import urllib.parse
+import re
 import tempfile
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
@@ -9,16 +12,15 @@ import httpx
 
 from creator_provider.api_keys import resolve_api_key
 from creator_provider.base import AudioResult, TTSProvider
+from creator_provider.exceptions import ProviderError, ProviderValidationError, map_httpx_error
+from creator_provider.validation import MAX_TTS_TEXT_CHARS, validate_prompt_length
 
 
 class ElevenLabsProvider(TTSProvider):
     def __init__(self, endpoint: str, model_key: str):
         self.endpoint: str = endpoint.rstrip("/")
         self.model_key: str = model_key
-        api_key = resolve_api_key("elevenlabs")
-        if api_key is None:
-            raise ValueError("API key for 'elevenlabs' not configured")
-        self.api_key: str = api_key
+        self.api_key: str = resolve_api_key("elevenlabs")
 
     async def generate(
         self,
@@ -26,6 +28,7 @@ class ElevenLabsProvider(TTSProvider):
         voice: str = "default",
         params: dict[str, Any] | None = None,
     ) -> AudioResult:
+        validate_prompt_length(text, MAX_TTS_TEXT_CHARS, "TTS")
         merged_params = dict(params or {})
         voice_id = (
             voice
@@ -40,7 +43,12 @@ class ElevenLabsProvider(TTSProvider):
         similarity_boost = merged_params.get("similarity_boost", 0.75)
         output_format = merged_params.get("output_format", "mp3_44100_128")
 
-        url = f"{self.endpoint}/v1/text-to-speech/{voice_id}"
+        if not voice_id or not voice_id.strip():
+            raise ProviderValidationError("voice_id must not be empty")
+
+        if not re.match(r'^[a-zA-Z0-9]{10,30}$', voice_id):
+            raise ProviderValidationError(f"Invalid voice_id format: {voice_id!r}")
+        url = f"{self.endpoint}/v1/text-to-speech/{urllib.parse.quote(voice_id, safe='')}"
         headers = {
             "xi-api-key": self.api_key,
             "Content-Type": "application/json",
@@ -65,15 +73,23 @@ class ElevenLabsProvider(TTSProvider):
                 )
                 response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"ElevenLabs API request failed: {exc}") from exc
+            raise map_httpx_error(exc, "ElevenLabs API request failed") from exc
 
         audio_bytes = response.content
         if not audio_bytes:
-            raise RuntimeError("ElevenLabs API returned empty response")
+            raise ProviderError("ElevenLabs API returned empty response")
 
         output_path_str = merged_params.get("output_path")
         if output_path_str:
-            output_path = Path(str(output_path_str))
+            candidate_output = str(output_path_str)
+            artifact_root = os.getenv("ARTIFACT_ROOT")
+            # NOTE: validate-then-write race (symlink swap) is acceptable here;
+            # artifact directories are server-controlled and not user-writable.
+            validated_output = import_module("creator_domain.sanitize").validate_artifact_path(
+                candidate_output,
+                artifact_root or "data/artifacts",
+            )
+            output_path = Path(validated_output)
         else:
             with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
                 output_path = Path(tmp.name)

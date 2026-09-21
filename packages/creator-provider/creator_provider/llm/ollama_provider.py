@@ -1,13 +1,57 @@
 from __future__ import annotations
 
-from typing import Any
+import logging
+from typing import Any, cast
 
 import httpx
 
 from creator_provider.base import LLMProvider
+from creator_provider.exceptions import ProviderError, map_httpx_error
+from creator_provider.validation import MAX_LLM_PROMPT_CHARS, validate_prompt_length
+from creator_provider.versioned_assets import get_tool_definition
+
+
+logger = logging.getLogger(__name__)
 
 
 class OllamaProvider(LLMProvider):
+    _ALLOWED_API_KEYS = frozenset(
+        {
+            "stream",
+            "format",
+            "keep_alive",
+            "tools",
+            "think",
+            "temperature",
+            "top_k",
+            "top_p",
+            "repeat_penalty",
+            "seed",
+            "num_ctx",
+            "num_predict",
+            "stop",
+        }
+    )
+
+    # Keys allowed inside the nested "options" dict (Ollama modelfile params)
+    _ALLOWED_OPTION_KEYS = frozenset(
+        {
+            "temperature",
+            "top_k",
+            "top_p",
+            "repeat_penalty",
+            "seed",
+            "num_ctx",
+            "num_predict",
+            "stop",
+            "num_gpu",
+            "num_thread",
+            "mirostat",
+            "mirostat_eta",
+            "mirostat_tau",
+        }
+    )
+
     def __init__(self, endpoint: str, model_key: str):
         self.endpoint = endpoint.rstrip("/")
         # model_key is our internal catalog key (e.g. "qwen3-4b").
@@ -16,17 +60,41 @@ class OllamaProvider(LLMProvider):
         self.model_name = model_key.replace("-", ":", 1)
 
     async def generate(self, prompt: str, params: dict[str, Any] | None = None) -> str:
+        validate_prompt_length(prompt, MAX_LLM_PROMPT_CHARS, "LLM")
         # Use the /api/chat endpoint with think=false to disable Qwen3's
         # extended thinking mode, which is far too slow on consumer GPUs.
+        message_template = cast(
+            dict[str, str], get_tool_definition("llm_chat_message")["message_template"]
+        )
         payload: dict[str, Any] = {
             "model": self.model_name,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [
+                {
+                    "role": message_template["role"],
+                    "content": message_template["content"].format(prompt=prompt),
+                }
+            ],
             "stream": False,
             "think": False,
             "options": {"num_predict": 2048},
         }
         if params:
-            payload.update(params)
+            filtered_keys = [key for key in params if key not in self._ALLOWED_API_KEYS and key != "options"]
+            if filtered_keys:
+                logger.warning("Filtered unsupported Ollama params: %s", sorted(filtered_keys))
+            for key in self._ALLOWED_API_KEYS:
+                if key in params:
+                    payload[key] = params[key]
+            # Filter nested options dict if provided
+            if "options" in params and isinstance(params["options"], dict):
+                raw_opts = params["options"]
+                filtered_opts = {k: v for k, v in raw_opts.items() if k in self._ALLOWED_OPTION_KEYS}
+                rejected = sorted(set(raw_opts) - set(filtered_opts))
+                if rejected:
+                    logger.warning("Filtered unsupported Ollama options: %s", rejected)
+                if filtered_opts:
+                    payload.setdefault("options", {})
+                    payload["options"].update(filtered_opts)
 
         url = f"{self.endpoint}/api/chat"
         try:
@@ -38,7 +106,10 @@ class OllamaProvider(LLMProvider):
                 )
                 response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"Failed to connect to Ollama provider at {url}: {exc}") from exc
+            raise map_httpx_error(exc, f"Ollama at {url}") from exc
 
         data = response.json()
-        return str(data.get("message", {}).get("content", ""))
+        content = str(data.get("message", {}).get("content", ""))
+        if not content:
+            raise ProviderError("Ollama returned empty content")
+        return content

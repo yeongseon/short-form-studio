@@ -5,47 +5,30 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any
-
-redis: Any
-try:
-    import redis
-except ImportError:
-    redis = None
 
 from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
+from creator_domain.sanitize import UnsafePathComponent, validate_artifact_path
 from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
-from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
-from creator_provider.registry import ProviderRegistry
+from creator_provider.registry import get_default_registry
 from creator_service.audio_service import audio_service as _audio_service
 from creator_service.cost_config import COST_SUBTITLE_GENERATION
-from creator_service.run_service import run_service as _run_service
 from creator_service.script_service import script_service as _script_service
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
 from creator_service.telemetry import trace_task
 from creator_service.usage_service import record_provider_call
-from tasks import task_runner as _task_runner
 from tasks.task_runner import GpuLockContext, TaskContext, TaskResult, TaskRunnerConfig, run_task
 
 logger = logging.getLogger(__name__)
 _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
 
-
-def _sync_runner_dependencies() -> None:
-    _task_runner._run_service = _run_service
-    _task_runner.redis = redis
-    _task_runner.acquire_gpu_lock = acquire_gpu_lock
-    _task_runner.release_gpu_lock = release_gpu_lock
-
-
 @celery_app.task(
     bind=True,
     autoretry_for=(ProviderTimeoutError, RateLimitError),
-    retry_backoff=True,
+    retry_backoff=30,
     retry_jitter=True,
-    max_retries=3,
+    max_retries=5,
     soft_time_limit=300,
     time_limit=360,
     name="generate_subtitles",
@@ -57,7 +40,6 @@ def generate_subtitles(
     subtitle_model: str = "whisper-small",
     subtitle_format: str = "srt",
 ) -> dict[str, object]:
-    _sync_runner_dependencies()
     config = TaskRunnerConfig(
         task_name="generate_subtitles",
         allowed_stages=frozenset({RunStage.AUDIO_GENERATING, RunStage.SUBTITLE_GENERATING}),
@@ -91,8 +73,14 @@ def generate_subtitles(
         audio_path = audio_artifact.path if audio_artifact else None
         if not audio_path:
             raise RuntimeError(f"No audio artifact found for run {run_id}; cannot transcribe")
+        try:
+            validate_artifact_path(audio_path, _ARTIFACT_ROOT)
+        except UnsafePathComponent as exc:
+            raise RuntimeError(
+                f"Unsafe audio artifact path for run {run_id}: {audio_path!r}"
+            ) from exc
 
-        registry = ProviderRegistry.create_default()
+        registry = get_default_registry()
         entry = registry.resolve(subtitle_model)
         provider = registry.get_provider(subtitle_model)
 
@@ -112,11 +100,15 @@ def generate_subtitles(
                 raise ProviderTimeoutError(
                     f"Provider timed out during subtitle generation for run {run_id}"
                 ) from exc
+            except ProviderTimeoutError:
+                raise
+            except RateLimitError:
+                raise
             except SoftTimeLimitExceeded:
                 raise
             except Exception as exc:
                 message = str(exc).lower()
-                if "429" in message or "rate" in message:
+                if "429" in message or "rate limit" in message or "too many requests" in message:
                     raise RateLimitError(
                         f"Provider rate limited subtitle generation for run {run_id}"
                     ) from exc
@@ -136,6 +128,7 @@ def generate_subtitles(
                 cost_usd=COST_SUBTITLE_GENERATION,
                 workspace_id=ctx.workspace_id,
                 project_id=ctx.project_id,
+                idempotency_key=ctx.task_id,
             )
         except Exception:
             logger.warning("Failed to record provider usage", exc_info=True)
@@ -143,24 +136,16 @@ def generate_subtitles(
         from creator_service.artifact_storage_integration import store_artifact_file
 
         uploaded = store_artifact_file(run_id, subtitle_path, f"application/{subtitle_format}")
-        try:
-            artifact = await _subtitle_service.create_artifact(
-                run_id=run_id,
-                path=subtitle_path,
-                format=subtitle_format,
-                model_used=subtitle_model,
-                provider_type=entry.provider_type,
-                storage_provider=uploaded.storage_provider,
-                storage_key=uploaded.key,
-            )
-        except TypeError:
-            artifact = await _subtitle_service.create_artifact(
-                run_id=run_id,
-                path=subtitle_path,
-                format=subtitle_format,
-                model_used=subtitle_model,
-                provider_type=entry.provider_type,
-            )
+        artifact = await _subtitle_service.create_artifact(
+            run_id=run_id,
+            path=subtitle_path,
+            format=subtitle_format,
+            model_used=subtitle_model,
+            provider_type=entry.provider_type,
+            storage_provider=uploaded.storage_provider,
+            storage_key=uploaded.key,
+            idempotency_key=ctx.task_id,
+        )
 
         return TaskResult(
             status="success",

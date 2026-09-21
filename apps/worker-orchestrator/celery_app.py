@@ -13,6 +13,7 @@ See DLQ_MONITORING.md for operational procedures, alerting setup, and task recov
 import logging
 import os
 import json
+import signal
 from datetime import datetime, timezone
 import resource
 from typing import Any
@@ -20,6 +21,12 @@ from typing import Any
 from celery import Celery
 from celery.signals import after_setup_logger, task_failure, worker_process_init
 from importlib import import_module
+# Only import worker_loop (signal handlers) when running as a worker process,
+# not when imported by the API for task dispatch.
+try:
+    import worker_loop as _worker_loop_module  # noqa: F401 — register signal handlers
+except ImportError:
+    _worker_loop_module = None  # API context — worker_loop not available
 from creator_service.logging_config import setup_json_logging
 from kombu import Exchange, Queue
 
@@ -44,15 +51,50 @@ def _parse_int_env(name: str, default: int) -> int:
     return parsed
 
 
-MAX_MEMORY_MB = _parse_int_env("MAX_MEMORY_MB", 1024)
+MAX_MEMORY_MB = _parse_int_env("MAX_MEMORY_MB", 4096)
+_SHUTDOWN_REQUESTED = False
+_previous_sigterm_handler: object | None = None
+_previous_sigint_handler: object | None = None
 
+
+def _handle_sigterm(_signum: int, _frame: object | None) -> None:
+    global _SHUTDOWN_REQUESTED
+    if _SHUTDOWN_REQUESTED:
+        return
+    _SHUTDOWN_REQUESTED = True
+    logging.getLogger(__name__).info("SIGTERM received; beginning Celery graceful shutdown")
+    # Chain to previous handler
+    prev = _previous_sigterm_handler
+    if callable(prev):
+        prev(_signum, _frame)
+
+
+def _handle_sigint(_signum: int, _frame: object | None) -> None:
+    global _SHUTDOWN_REQUESTED
+    if _SHUTDOWN_REQUESTED:
+        return
+    _SHUTDOWN_REQUESTED = True
+    logging.getLogger(__name__).info("SIGINT received; beginning Celery graceful shutdown")
+    # Chain to previous handler
+    prev = _previous_sigint_handler
+    if callable(prev):
+        prev(_signum, _frame)
+
+
+def is_shutting_down() -> bool:
+    """Check if a graceful shutdown has been requested."""
+    return _SHUTDOWN_REQUESTED
 
 def _apply_resource_limits() -> None:
-    memory_limit_bytes = MAX_MEMORY_MB * 1024 * 1024
-    resource.setrlimit(resource.RLIMIT_AS, (memory_limit_bytes, memory_limit_bytes))
+    """Memory limits are now enforced via cgroup (Docker deploy.resources.limits.memory).
 
+    RLIMIT_AS was previously used but caused MemoryError on CUDA/torch/ffmpeg
+    which reserve large virtual address ranges even when RSS is low (#611).
+    The function is kept as a no-op for backward compatibility — callers still
+    invoke it during startup.
+    """
+    logging.getLogger(__name__).info("Memory limit: MAX_MEMORY_MB=%d (enforced via cgroup, not RLIMIT_AS)", MAX_MEMORY_MB)
 
-_apply_resource_limits()
 
 redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
 dlq_max_size = max(1, int(os.getenv("DLQ_MAX_SIZE", "10000")))
@@ -71,20 +113,64 @@ celery_app = Celery(
         "tasks.render_video",
         "tasks.generate_paragraph_audio",
         "tasks.generate_paragraph_subtitles",
+        "tasks.reconcile_stale_dispatches",
+        "tasks.retry_failed_artifact_deletions",
+        "tasks.sweep_expired_artifacts",
     ],
 )
 celery_app.conf.task_default_queue = "creator"
+
+# Queue definitions: separate queues per pipeline stage for independent scaling.
+# Run workers with: celery -A celery_app worker -Q creator,script,image,audio,render
+# Or scale specific stages: celery -A celery_app worker -Q image --concurrency=2
 celery_app.conf.task_queues = (
-    Queue(
-        "creator",
-        Exchange("creator", type="direct"),
-        routing_key="creator",
-    ),
+    Queue("creator", Exchange("creator", type="direct"), routing_key="creator"),
+    Queue("script", Exchange("creator", type="direct"), routing_key="script"),
+    Queue("image", Exchange("creator", type="direct"), routing_key="image"),
+    Queue("audio", Exchange("creator", type="direct"), routing_key="audio"),
+    Queue("render", Exchange("creator", type="direct"), routing_key="render"),
 )
+
+# Route tasks to stage-specific queues.
+# Override with CELERY_TASK_ROUTES env (JSON) for custom routing.
+_default_task_routes = {
+    "tasks.generate_script.*": {"queue": "script"},
+    "tasks.generate_visual_plan.*": {"queue": "script"},
+    "tasks.generate_scene_image.*": {"queue": "image"},
+    "tasks.generate_audio.*": {"queue": "audio"},
+    "tasks.generate_paragraph_audio.*": {"queue": "audio"},
+    "tasks.generate_subtitles.*": {"queue": "audio"},
+    "tasks.generate_paragraph_subtitles.*": {"queue": "audio"},
+    "tasks.render_video.*": {"queue": "render"},
+}
+_custom_routes_raw = os.getenv("CELERY_TASK_ROUTES")
+if _custom_routes_raw:
+    try:
+        _custom_routes = json.loads(_custom_routes_raw)
+        _default_task_routes.update(_custom_routes)
+    except (json.JSONDecodeError, TypeError):
+        logging.getLogger(__name__).warning(
+            "Invalid CELERY_TASK_ROUTES JSON; using defaults"
+        )
+celery_app.conf.task_routes = _default_task_routes
 # DLQ Configuration: Controls message acknowledgment and failure handling
 # - task_acks_late=True ensures at-least-once delivery by acknowledging AFTER execution
 # - task_reject_on_worker_lost=True prevents message loss if worker dies
 # This ensures failed tasks are not lost and can be replayed from the DLQ.
+celery_app.conf.beat_schedule = {
+    "reconcile-stale-dispatches": {
+        "task": "reconcile_stale_dispatches",
+        "schedule": 60.0,
+    },
+    "retry-failed-artifact-deletions": {
+        "task": "retry_failed_artifact_deletions",
+        "schedule": 300.0,  # every 5 minutes
+    },
+    "sweep-expired-artifacts": {
+        "task": "sweep_expired_artifacts",
+        "schedule": 600.0,  # every 10 minutes
+    },
+}
 celery_app.conf.update(
     # Prefetch only 1 task per worker to prevent queue saturation
     worker_prefetch_multiplier=1,
@@ -97,6 +183,16 @@ celery_app.conf.update(
 )
 
 validate_production_config(service_kind="worker")
+def _register_signal_handlers() -> None:
+    """Register shutdown signal handlers. Only safe in main thread of worker process."""
+    global _previous_sigterm_handler, _previous_sigint_handler
+    try:
+        _previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
+        signal.signal(signal.SIGTERM, _handle_sigterm)
+        _previous_sigint_handler = signal.getsignal(signal.SIGINT)
+        signal.signal(signal.SIGINT, _handle_sigint)
+    except ValueError:
+        logging.getLogger(__name__).debug("Skipping signal handler registration: not in main thread")
 
 
 @after_setup_logger.connect
@@ -115,10 +211,35 @@ def setup_worker_process_telemetry(**kwargs: object) -> None:
     independently. The idempotency guard in init_telemetry() ensures that
     multiple calls within the same process are no-ops.
     """
+    _ = kwargs
+    _register_signal_handlers()
+    _apply_resource_limits()
     telemetry_module = import_module("telemetry")
     telemetry_module.init_telemetry(service_name="worker")
 
 
+
+_DLQ_MAX_STRING_LEN = 1024
+_SENSITIVE_KEY_PATTERNS = frozenset({"key", "secret", "token", "password", "credential"})
+
+
+def _sanitize_for_dlq(data: Any, depth: int = 0) -> Any:
+    """Sanitize data before writing to DLQ: truncate strings, redact secrets."""
+    if depth > 10:
+        return "<nested>"
+    if isinstance(data, str):
+        return data[:_DLQ_MAX_STRING_LEN] if len(data) > _DLQ_MAX_STRING_LEN else data
+    if isinstance(data, dict):
+        result = {}
+        for k, v in data.items():
+            if any(p in str(k).lower() for p in _SENSITIVE_KEY_PATTERNS):
+                result[k] = "<redacted>"
+            else:
+                result[k] = _sanitize_for_dlq(v, depth + 1)
+        return result
+    if isinstance(data, (list, tuple)):
+        return [_sanitize_for_dlq(item, depth + 1) for item in data[:50]]
+    return data
 def _record_failed_task_to_dlq(
     task_id: str | None,
     task_name: str,
@@ -126,14 +247,14 @@ def _record_failed_task_to_dlq(
     kwargs: dict[str, Any],
     exception: BaseException,
 ) -> None:
-    payload = {
+    payload = _sanitize_for_dlq({
         "task_id": task_id,
         "task_name": task_name,
         "args": args,
         "kwargs": kwargs,
         "exception": repr(exception),
         "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
+    })
 
     def _write_dlq_fallback(entry: dict[str, Any], error: BaseException | None = None) -> None:
         logger = logging.getLogger(__name__)
@@ -169,6 +290,20 @@ def _record_failed_task_to_dlq(
         _write_dlq_fallback(payload, redis_error)
 
 
+def _should_record_to_dlq(sender: Any, exception: BaseException | None = None) -> bool:
+    from creator_provider.exceptions import ProviderTimeoutError, RateLimitError
+
+    if not isinstance(exception, (ProviderTimeoutError, RateLimitError)):
+        return True
+
+    request = getattr(sender, "request", None)
+    retries = getattr(request, "retries", None)
+    max_retries = getattr(sender, "max_retries", None)
+    if isinstance(retries, int) and isinstance(max_retries, int):
+        return retries >= max_retries
+    return True
+
+
 @task_failure.connect
 def handle_task_failure(
     sender: Any = None,
@@ -179,6 +314,8 @@ def handle_task_failure(
     **_: Any,
 ) -> None:
     if exception is None:
+        return
+    if not _should_record_to_dlq(sender, exception):
         return
 
     task_name = getattr(sender, "name", "unknown_task")

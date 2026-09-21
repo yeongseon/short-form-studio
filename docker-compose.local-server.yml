@@ -1,0 +1,25 @@
+# Override for local server access from other machines on the LAN.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f docker-compose.local-server.yml up -d
+#
+# This exposes studio-web on all interfaces (0.0.0.0) so other devices
+# on the same network can reach the UI.  API, Postgres, and Redis remain
+# bound to 127.0.0.1 for security.
+
+services:
+  studio-web:
+    ports:
+      - "${STUDIO_WEB_BIND:-0.0.0.0}:${STUDIO_WEB_PORT:-5174}:8080"
+
+  api:
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  postgres:
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  redis:
+    ports:
+      - "127.0.0.1:6379:6379"

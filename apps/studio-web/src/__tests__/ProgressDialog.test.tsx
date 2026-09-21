@@ -316,7 +316,11 @@ describe("ProgressDialog", () => {
     const onComplete = vi.fn();
     let callNum = 0;
 
-    globalThis.fetch = vi.fn(async () => {
+    globalThis.fetch = vi.fn(async (url: string) => {
+      // Skip tasks endpoint from call counting
+      if (typeof url === "string" && url.includes("/tasks")) {
+        return { ok: true, status: 200, json: async () => [] };
+      }
       callNum++;
       // First 2 calls: still generating. Call 3+: review stage.
       const stage = callNum <= 2 ? "SCRIPT_GENERATING" : "SCRIPT_REVIEW";

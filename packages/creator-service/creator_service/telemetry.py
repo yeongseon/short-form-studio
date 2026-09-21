@@ -175,6 +175,17 @@ def init_telemetry(service_name: str) -> None:
         _STATE.enabled = False
         return
 
+    try:
+        _init_otel_providers(otel, service_name, logger, root_logger)
+    except Exception:
+        logger.exception("OpenTelemetry initialization failed; telemetry disabled")
+        _STATE.enabled = False
+        return
+
+    _STATE.enabled = True
+
+
+def _init_otel_providers(otel: dict, service_name: str, logger: logging.Logger, root_logger: logging.Logger) -> None:
     environment = os.getenv("OTEL_ENVIRONMENT", "development")
     configured_service_name = os.getenv("OTEL_SERVICE_NAME", service_name)
     service_version = os.getenv("OTEL_SERVICE_VERSION", "unknown")
@@ -256,7 +267,6 @@ def init_telemetry(service_name: str) -> None:
             logging_handler_type(level=logging.NOTSET, logger_provider=logger_provider)
         )
 
-    _STATE.enabled = True
 
 
 def get_tracer(name: str):

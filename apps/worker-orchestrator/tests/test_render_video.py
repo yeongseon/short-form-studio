@@ -1,12 +1,31 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from creator_service.quality_profile import get_quality_profile
 from tasks import render_video as render_video_module
+
+
+@pytest.fixture
+def no_pacing_split(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Neutralize the pacing sub-beat split so scene counts stay 1:1.
+
+    render_video splits scenes longer than the profile's max_scene_duration
+    into two sub-beats. These orchestration tests predate that feature and
+    assert one image path per scene, so raise the threshold above any test
+    duration to keep the mapping 1:1.
+    """
+
+    def _profile(name: str = "ssul_v2"):
+        return replace(get_quality_profile(name), max_scene_duration=1_000_000.0)
+
+    monkeypatch.setattr(
+        "creator_service.quality_profile.get_quality_profile", _profile
+    )
 
 
 class FakeStorage:
@@ -23,6 +42,7 @@ class FakeStorage:
         run_id: int,
         updates: dict[str, object],
         expected_stages: frozenset[str],
+    rejected_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
         self.cas_calls.append((run_id, updates, expected_stages))
         row = self._runs.get(run_id)
@@ -181,12 +201,17 @@ class FakeRenderService:
         path: str,
         *,
         render_profile: str | None = None,
+        storage_provider: str | None = None,
+        storage_key: str | None = None,
+        idempotency_key: str | None = None,
     ) -> FakeVideoArtifact:
         self.create_calls.append(
             {
                 "run_id": run_id,
                 "path": path,
                 "render_profile": render_profile,
+                "storage_provider": storage_provider,
+                "storage_key": storage_key,
             }
         )
         return self.artifact
@@ -270,7 +295,7 @@ def _patch_services(
     fake_visual_plan: FakeVisualPlanService | None = None,
     fake_script: FakeScriptService | None = None,
 ) -> None:
-    monkeypatch.setattr(render_video_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
     monkeypatch.setattr(render_video_module, "_render_service", fake_render_service)
     monkeypatch.setattr(render_video_module, "_visual_asset_service", fake_vas)
     monkeypatch.setattr(render_video_module, "_audio_service", fake_audio)
@@ -294,7 +319,9 @@ def _invoke_task(**kwargs: Any) -> dict[str, object]:
     return run_callable(**kwargs)
 
 
-def test_render_video_success(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_render_video_success(
+    monkeypatch: pytest.MonkeyPatch, no_pacing_split: None
+) -> None:
     run_id = 201
     storage = _make_storage(run_id=run_id, stage="RENDER_GENERATING")
     fake_render_service = FakeRenderService(manifest=_manifest(run_id=run_id), artifact_id=77)
@@ -324,13 +351,13 @@ def test_render_video_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result["subtitle_path"] == "data/artifacts/201/subtitles/subtitles.srt"
 
     assert fake_render_service.manifest_calls[0]["render_profile_name"] == "high_quality"
-    assert fake_render_service.create_calls == [
-        {
-            "run_id": 201,
-            "path": "data/artifacts/201/render/output.mp4",
-            "render_profile": "high_quality",
-        }
-    ]
+    assert len(fake_render_service.create_calls) == 1
+    call = fake_render_service.create_calls[0]
+    assert call["run_id"] == 201
+    assert call["path"] == "data/artifacts/201/render/output.mp4"
+    assert call["render_profile"] == "high_quality"
+    assert call["storage_provider"] == "local"
+    assert "storage_key" in call
 
     render_input, output = fake_ffmpeg.calls[0]
     assert output == Path("data/artifacts/201/render/output.mp4")
@@ -342,8 +369,70 @@ def test_render_video_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert render_input.subtitle_path == Path("data/artifacts/201/subtitles/subtitles.srt")
     assert render_input.scene_durations == [15.0, 15.0]
 
-    assert storage.calls == [(201, {"current_stage": "FINAL_REVIEW", "status": "running"})]
+    assert storage.calls == [(201, {"current_stage": "FINAL_REVIEW", "status": "paused"})]
     assert storage.cas_calls[0][2] == frozenset({"RENDER_GENERATING"})
+
+
+def test_render_video_routes_final_inputs_through_render_plan_adapter(
+    monkeypatch: pytest.MonkeyPatch, no_pacing_split: None
+) -> None:
+    run_id = 213
+    storage = _make_storage(run_id=run_id, stage="RENDER_GENERATING")
+    fake_render_service = FakeRenderService(
+        manifest=_manifest(run_id=run_id),
+        artifact_path="data/artifacts/213/render/output.mp4",
+    )
+    fake_ffmpeg = FakeFFmpegService()
+    _patch_services(
+        monkeypatch,
+        storage=storage,
+        fake_render_service=fake_render_service,
+        fake_vas=FakeVisualAssetService(),
+        fake_audio=FakeAudioService(),
+        fake_subtitle=FakeSubtitleService(),
+        fake_ffmpeg=fake_ffmpeg,
+    )
+
+    adapter_calls: list[dict[str, Any]] = []
+    real_adapter = render_video_module.render_input_from_plan
+
+    def spy_adapter(plan: Any, **kwargs: Any) -> Any:
+        adapter_calls.append({"plan": plan, "kwargs": kwargs})
+        return real_adapter(plan, **kwargs)
+
+    monkeypatch.setattr(render_video_module, "render_input_from_plan", spy_adapter)
+
+    result = _invoke_task(run_id=run_id)
+
+    assert result["status"] == "success"
+    assert len(adapter_calls) == 1
+    plan = adapter_calls[0]["plan"]
+    assert [seg.source for seg in plan.segments] == [
+        "data/artifacts/201/visual/scene-1.png",
+        "data/artifacts/201/visual/scene-2.png",
+    ]
+    assert [seg.duration_seconds for seg in plan.segments] == [15.0, 15.0]
+    assert [seg.timeline_start_seconds for seg in plan.segments] == [0.0, 15.0]
+    assert adapter_calls[0]["kwargs"]["audio_path"] == Path(
+        "data/artifacts/201/audio/audio.wav"
+    )
+    render_input, _ = fake_ffmpeg.calls[0]
+    assert render_input.image_paths == [
+        Path("data/artifacts/201/visual/scene-1.png"),
+        Path("data/artifacts/201/visual/scene-2.png"),
+    ]
+
+
+def test_build_render_plan_rejects_length_mismatch() -> None:
+    from creator_service.render_profile import RenderProfile
+
+    with pytest.raises(ValueError, match="must have equal length"):
+        render_video_module._build_render_plan(
+            [Path("a.png"), Path("b.png")],
+            [1.0],
+            None,
+            RenderProfile.default(),
+        )
 
 
 def test_render_video_run_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -489,6 +578,7 @@ class _CASSkipStorage(FakeStorage):
         run_id: int,
         updates: dict[str, object],
         expected_stages: frozenset[str],
+    rejected_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
         self.cas_calls.append((run_id, updates, expected_stages))
         row = self._runs.get(run_id)
@@ -524,7 +614,7 @@ def test_render_video_cas_skip_on_stage_change(monkeypatch: pytest.MonkeyPatch) 
     assert len(fake_ffmpeg.calls) == 1
     assert len(fake_render_service.create_calls) == 1
     assert len(storage.cas_calls) == 1
-    assert storage.cas_calls[0][1] == {"current_stage": "FINAL_REVIEW", "status": "running"}
+    assert storage.cas_calls[0][1] == {"current_stage": "FINAL_REVIEW", "status": "paused"}
     assert storage.calls == []
 
 
@@ -576,7 +666,7 @@ def test_render_video_profile_propagated_to_ffmpeg(monkeypatch: pytest.MonkeyPat
         captured_profiles.append(profile)
         return fake_ffmpeg
 
-    monkeypatch.setattr(render_video_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
     monkeypatch.setattr(render_video_module, "_render_service", fake_render_service)
     monkeypatch.setattr(render_video_module, "_visual_asset_service", fake_vas)
     monkeypatch.setattr(render_video_module, "_audio_service", fake_audio)
@@ -595,7 +685,7 @@ def test_render_video_profile_propagated_to_ffmpeg(monkeypatch: pytest.MonkeyPat
 
 
 def test_render_video_reorders_scenes_from_active_visual_plan(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, no_pacing_split: None
 ) -> None:
     run_id = 209
     storage = _make_storage(run_id=run_id, stage="RENDER_GENERATING")
@@ -643,7 +733,7 @@ def test_render_video_reorders_scenes_from_active_visual_plan(
 
 
 def test_render_video_handles_sparse_paragraph_artifacts(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, no_pacing_split: None
 ) -> None:
     run_id = 210
     storage = _make_storage(run_id=run_id, stage="RENDER_GENERATING")
@@ -705,3 +795,63 @@ def test_render_video_handles_sparse_paragraph_artifacts(
     assert render_input.scene_durations == [15.0, 15.0]
     assert fake_ffmpeg.concatenate_calls == []
     assert fake_ffmpeg.merge_calls == []
+
+
+def test_render_video_rejects_non_dict_manifest_render_profile(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = 211
+    storage = _make_storage(run_id=run_id, stage="RENDER_GENERATING")
+    manifest = _manifest(run_id=run_id)
+    manifest["render_profile"] = "shorts_default"
+    fake_render_service = FakeRenderService(
+        manifest=manifest,
+        artifact_path="data/artifacts/211/render/output.mp4",
+    )
+    fake_vas = FakeVisualAssetService()
+    fake_audio = FakeAudioService()
+    fake_subtitle = FakeSubtitleService()
+    fake_ffmpeg = FakeFFmpegService()
+    _patch_services(
+        monkeypatch,
+        storage=storage,
+        fake_render_service=fake_render_service,
+        fake_vas=fake_vas,
+        fake_audio=fake_audio,
+        fake_subtitle=fake_subtitle,
+        fake_ffmpeg=fake_ffmpeg,
+    )
+
+    with pytest.raises(RuntimeError, match="Invalid render_profile"):
+        _invoke_task(run_id=run_id)
+
+
+def test_render_video_rejects_unknown_manifest_render_profile_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run_id = 212
+    storage = _make_storage(run_id=run_id, stage="RENDER_GENERATING")
+    manifest = _manifest(run_id=run_id)
+    profile = dict(manifest["render_profile"])
+    profile["unexpected_key"] = True
+    manifest["render_profile"] = profile
+    fake_render_service = FakeRenderService(
+        manifest=manifest,
+        artifact_path="data/artifacts/212/render/output.mp4",
+    )
+    fake_vas = FakeVisualAssetService()
+    fake_audio = FakeAudioService()
+    fake_subtitle = FakeSubtitleService()
+    fake_ffmpeg = FakeFFmpegService()
+    _patch_services(
+        monkeypatch,
+        storage=storage,
+        fake_render_service=fake_render_service,
+        fake_vas=fake_vas,
+        fake_audio=fake_audio,
+        fake_subtitle=fake_subtitle,
+        fake_ffmpeg=fake_ffmpeg,
+    )
+
+    with pytest.raises(RuntimeError, match="Invalid render_profile"):
+        _invoke_task(run_id=run_id)

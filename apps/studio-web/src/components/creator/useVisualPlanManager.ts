@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { apiFetch, API_BASE } from "../../api/client";
+import { apiFetch, apiJson, API_BASE } from "../../api/client";
 import { type VisualScene } from "../../types/api";
 
 export type { VisualScene } from "../../types/api";
@@ -145,17 +145,12 @@ export function useVisualPlanManager(
       setSavingVisualSceneId(sceneId);
       setVisualError(null);
       try {
-        const res = await apiFetch(`${API_BASE}/runs/${runId}/visual-plan/scenes/${sceneId}`, {
+        const data = await apiJson<{ scenes?: VisualScene[]; version?: number }>(`${API_BASE}/runs/${runId}/visual-plan/scenes/${sceneId}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(updates),
         });
-        if (!res.ok) {
-          const body = await res.json().catch(() => null);
-          throw new Error(body?.detail ?? `Failed to save scene (${res.status})`);
-        }
 
-        const data = await res.json();
         const next: Record<string, VisualScene> = {};
         for (const visualScene of (data.scenes ?? []) as VisualScene[]) {
           next[visualScene.scene_id] = { ...visualScene };

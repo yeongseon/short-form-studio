@@ -6,7 +6,7 @@ from .db import fetch_all, fetch_one
 
 
 class PostgresTaskTrackingStorage:
-    async def create_task(self, row: dict[str, Any]) -> dict[str, Any]:
+    async def create_task(self, row: dict[str, Any]) -> dict[str, Any] | None:
         saved = await fetch_one(
             """
             INSERT INTO creator_run_tasks (
@@ -45,6 +45,7 @@ class PostgresTaskTrackingStorage:
                     WHEN EXCLUDED.status IN ('queued', 'running') THEN NULL
                     ELSE creator_run_tasks.error_message
                 END
+            WHERE creator_run_tasks.status NOT IN ('success', 'running')
             RETURNING *
             """,
             row.get("run_id"),
@@ -57,8 +58,6 @@ class PostgresTaskTrackingStorage:
             row.get("error_code"),
             row.get("error_message"),
         )
-        if saved is None:
-            raise ValueError("Failed to create run task")
         return saved
 
     async def update_task_status(
@@ -72,7 +71,7 @@ class PostgresTaskTrackingStorage:
                 finished_at = COALESCE($4, finished_at),
                 error_code = $5,
                 error_message = $6
-            WHERE id = $1
+            WHERE id = $1 AND status != 'success'
             RETURNING *
             """,
             task_id,
@@ -83,6 +82,52 @@ class PostgresTaskTrackingStorage:
             kwargs.get("error_message"),
         )
         return updated
+
+
+    async def update_task_status_if_running(
+        self, task_id: int, status: str, **kwargs: Any
+    ) -> dict[str, Any] | None:
+        """Atomically transition only if current status is running."""
+        updated = await fetch_one(
+            """
+            UPDATE creator_run_tasks
+            SET status = $2,
+                started_at = COALESCE($3, started_at),
+                finished_at = COALESCE($4, finished_at),
+                error_code = $5,
+                error_message = $6
+            WHERE id = $1 AND status = 'running'
+            RETURNING *
+            """,
+            task_id,
+            status,
+            kwargs.get("started_at"),
+            kwargs.get("finished_at"),
+            kwargs.get("error_code"),
+            kwargs.get("error_message"),
+        )
+        return updated
+
+    async def claim_running(self, task_id: int, **kwargs: Any) -> dict[str, Any] | None:
+        """Atomically claim: only transition from queued/failed to running.
+
+        Uses WHERE status IN ('queued', 'failed') so only one concurrent caller wins.
+        """
+        claimed = await fetch_one(
+            """
+            UPDATE creator_run_tasks
+            SET status = 'running',
+                started_at = $2,
+                finished_at = NULL,
+                error_code = NULL,
+                error_message = NULL
+            WHERE id = $1 AND status IN ('pending', 'queued', 'failed')
+            RETURNING *
+            """,
+            task_id,
+            kwargs.get("started_at"),
+        )
+        return claimed
 
     async def get_by_celery_id(self, celery_task_id: str) -> dict[str, Any] | None:
         return await fetch_one(
@@ -107,6 +152,35 @@ class PostgresTaskTrackingStorage:
             ORDER BY started_at ASC
             """,
             threshold_seconds,
+        )
+
+
+    async def list_stale_pending_tasks(self, threshold_seconds: int) -> list[dict[str, Any]]:
+        """Find tasks stuck in 'pending' state longer than threshold_seconds."""
+        return await fetch_all(
+            """
+            SELECT *
+            FROM creator_run_tasks
+            WHERE status = 'pending'
+              AND created_at < (NOW() - make_interval(secs => $1))
+            ORDER BY created_at ASC
+            """,
+            threshold_seconds,
+        )
+
+    async def promote_pending_to_queued(self, celery_task_id: str) -> dict[str, Any] | None:
+        """Atomically promote a task from 'pending' to 'queued'.
+
+        Uses WHERE status = 'pending' to prevent clobbering a concurrent claim_running.
+        """
+        return await fetch_one(
+            """
+            UPDATE creator_run_tasks
+            SET status = 'queued'
+            WHERE celery_task_id = $1 AND status = 'pending'
+            RETURNING *
+            """,
+            celery_task_id,
         )
 
     async def get_active_celery_ids(self, run_id: int) -> list[str]:

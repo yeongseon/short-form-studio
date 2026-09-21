@@ -9,26 +9,18 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-redis: Any
-try:
-    import redis
-except ImportError:
-    redis = None
-
 from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
 from creator_domain.sanitize import sanitize_path_component
 from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
-from creator_provider.gpu_lock import acquire_gpu_lock, release_gpu_lock
-from creator_provider.registry import ProviderRegistry
+from creator_provider.registry import get_default_registry
 from creator_service.cost_config import COST_SCENE_IMAGE
 from creator_service.run_service import run_service as _run_service
 from creator_service.telemetry import trace_task
 from creator_service.usage_service import record_provider_call
 from creator_service.visual_asset_service import visual_asset_service as _visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
-from tasks import task_runner as _task_runner
 from tasks.task_runner import GpuLockContext, TaskContext, TaskResult, TaskRunnerConfig, run_task
 
 logger = logging.getLogger(__name__)
@@ -47,24 +39,15 @@ _SAFE_FAILURE_STAGES = frozenset(
     }
 )
 
-
-def _sync_runner_dependencies() -> None:
-    _task_runner._run_service = _run_service
-    _task_runner.redis = redis
-    _task_runner.acquire_gpu_lock = acquire_gpu_lock
-    _task_runner.release_gpu_lock = release_gpu_lock
-
-
 def _asset_dir(run_id: int) -> Path:
     return Path(_ARTIFACTS_BASE) / str(run_id) / "scenes"
-
 
 @celery_app.task(
     bind=True,
     autoretry_for=(ProviderTimeoutError, RateLimitError),
-    retry_backoff=True,
+    retry_backoff=30,
     retry_jitter=True,
-    max_retries=3,
+    max_retries=5,
     soft_time_limit=600,
     time_limit=660,
     name="generate_scene_image",
@@ -79,7 +62,6 @@ def generate_scene_image(
     is_active: bool = True,
     image_params: dict[str, Any] | None = None,
 ) -> dict[str, object]:
-    _sync_runner_dependencies()
     config = TaskRunnerConfig(
         task_name="generate_scene_image",
         allowed_stages=frozenset(
@@ -108,7 +90,7 @@ def generate_scene_image(
         if not target_scenes:
             raise ValueError(f"Visual plan for run {run_id} has no scenes")
 
-        registry = ProviderRegistry.create_default()
+        registry = get_default_registry()
         entry = registry.resolve(model_key)
         provider = registry.get_provider(model_key)
         asset_dir = _asset_dir(run_id)
@@ -117,7 +99,12 @@ def generate_scene_image(
         results: list[dict[str, object]] = []
         failed_scenes: list[dict[str, object]] = []
 
-        for target_scene in target_scenes:
+        for idx, target_scene in enumerate(target_scenes):
+            # Rate limit protection: add delay between scenes for API-based providers
+            if idx > 0 and model_key in ("groq-svg", "pollinations", "hf-flux-schnell"):
+                import asyncio
+                logger.info("Inter-scene delay (16s) for rate limit protection")
+                await asyncio.sleep(16)
             scene_result: dict[str, object] = {
                 "scene_id": target_scene.scene_id,
                 "status": "pending",
@@ -127,6 +114,15 @@ def generate_scene_image(
                 if prompt_override is not None and scene_id is not None
                 else target_scene.prompt
             )
+            # Apply quality profile image style prefix for photo-quality providers
+            if model_key in ("pollinations", "hf-flux-schnell"):
+                try:
+                    from creator_service.recipe_profile import resolve_quality_profile
+                    qp = resolve_quality_profile("shorts_default")
+                    if qp.image_style_prefix and not effective_prompt.startswith(qp.image_style_prefix):
+                        effective_prompt = qp.image_style_prefix + effective_prompt
+                except Exception:
+                    pass  # Non-critical enhancement
             gpu_lock = GpuLockContext(f"{ctx.task_id}:{target_scene.scene_id}")
 
             try:
@@ -139,26 +135,58 @@ def generate_scene_image(
                     safe_scene_id = sanitize_path_component(target_scene.scene_id, label="scene_id")
                     target_path = str(asset_dir / f"{safe_scene_id}-{uuid4().hex}.png")
                     params["output_path"] = target_path
-                    try:
-                        await provider.generate(effective_prompt, params)
-                    except (TimeoutError, ConnectionError) as exc:
-                        raise ProviderTimeoutError(
-                            "Provider timed out during scene image generation "
-                            f"for run {run_id} scene {target_scene.scene_id}"
-                        ) from exc
-                    except SoftTimeLimitExceeded:
-                        raise
-                    except Exception as exc:
-                        message = str(exc).lower()
-                        if "429" in message or "rate" in message:
-                            raise RateLimitError(
-                                "Provider rate limited scene image generation "
+                    # Per-scene retry for SVG/XML parse errors (up to 3 attempts for groq-svg)
+                    _scene_max_attempts = 3 if model_key == "groq-svg" else 1
+                    for _scene_attempt in range(_scene_max_attempts):
+                        try:
+                            await provider.generate(effective_prompt, params)
+                            break  # Success — exit retry loop
+                        except (TimeoutError, ConnectionError) as exc:
+                            raise ProviderTimeoutError(
+                                "Provider timed out during scene image generation "
                                 f"for run {run_id} scene {target_scene.scene_id}"
                             ) from exc
-                        raise ProviderError(
-                            "Provider failed scene image generation "
-                            f"for run {run_id} scene {target_scene.scene_id}"
-                        ) from exc
+                        except ProviderTimeoutError:
+                            raise
+                        except RateLimitError:
+                            raise
+                        except SoftTimeLimitExceeded:
+                            raise
+                        except Exception as exc:
+                            logger.error(
+                                "Image generation exception for run %d scene %s (attempt %d/%d): %s: %s",
+                                run_id, target_scene.scene_id,
+                                _scene_attempt + 1, _scene_max_attempts,
+                                type(exc).__name__, exc,
+                                exc_info=True,
+                            )
+                            message = str(exc).lower()
+                            if "429" in message or "rate limit" in message or "too many requests" in message:
+                                raise RateLimitError(
+                                    "Provider rate limited scene image generation "
+                                    f"for run {run_id} scene {target_scene.scene_id}"
+                                ) from exc
+                            # Retry on parse/SVG/XML errors
+                            is_parse_error = any(
+                                kw in message for kw in ("parse", "xml", "svg", "valid")
+                            )
+                            if _scene_attempt < _scene_max_attempts - 1 and is_parse_error:
+                                import asyncio
+                                logger.warning(
+                                    "Scene %s SVG error on attempt %d, retrying in 5s...",
+                                    target_scene.scene_id, _scene_attempt + 1,
+                                )
+                                await asyncio.sleep(5)
+                                # Regenerate output path for retry
+                                target_path = str(
+                                    asset_dir / f"{safe_scene_id}-{uuid4().hex}.png"
+                                )
+                                params["output_path"] = target_path
+                                continue
+                            raise ProviderError(
+                                "Provider failed scene image generation "
+                                f"for run {run_id} scene {target_scene.scene_id}"
+                            ) from exc
                 finally:
                     if entry.requires_gpu:
                         gpu_lock.release()
@@ -172,6 +200,7 @@ def generate_scene_image(
                         cost_usd=COST_SCENE_IMAGE,
                         workspace_id=ctx.workspace_id,
                         project_id=ctx.project_id,
+                        idempotency_key=f"{ctx.task_id}:{target_scene.scene_id}",
                     )
                 except Exception:
                     logger.warning("Failed to record provider usage", exc_info=True)
@@ -179,28 +208,18 @@ def generate_scene_image(
                 from creator_service.artifact_storage_integration import store_artifact_file
 
                 uploaded = store_artifact_file(run_id, target_path, "image/png")
-                try:
-                    asset = await _visual_asset_service.create_asset(
-                        run_id=run_id,
-                        scene_id=target_scene.scene_id,
-                        asset_path=target_path,
-                        prompt_snapshot=effective_prompt,
-                        model_used=model_key,
-                        provider_type=entry.provider_type,
-                        storage_provider=uploaded.storage_provider,
-                        storage_key=uploaded.key,
-                        is_active=is_active,
-                    )
-                except TypeError:
-                    asset = await _visual_asset_service.create_asset(
-                        run_id=run_id,
-                        scene_id=target_scene.scene_id,
-                        asset_path=target_path,
-                        prompt_snapshot=effective_prompt,
-                        model_used=model_key,
-                        provider_type=entry.provider_type,
-                        is_active=is_active,
-                    )
+                asset = await _visual_asset_service.create_asset(
+                    run_id=run_id,
+                    scene_id=target_scene.scene_id,
+                    asset_path=target_path,
+                    prompt_snapshot=effective_prompt,
+                    model_used=model_key,
+                    provider_type=entry.provider_type,
+                    storage_provider=uploaded.storage_provider,
+                    storage_key=uploaded.key,
+                    is_active=is_active,
+                    idempotency_key=f"{ctx.task_id}:{target_scene.scene_id}",
+                )
 
                 scene_result.update(
                     {
@@ -214,6 +233,10 @@ def generate_scene_image(
                 )
                 results.append(scene_result)
             except SoftTimeLimitExceeded:
+                raise
+            except ProviderTimeoutError:
+                raise
+            except RateLimitError:
                 raise
             except Exception as exc:
                 scene_result.update({"status": "failed", "error": str(exc)})

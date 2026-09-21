@@ -2,6 +2,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 from importlib import import_module
+from unittest.mock import MagicMock
 
 
 admin_routes = import_module("shorts_api.routes.admin")
@@ -97,7 +98,7 @@ def test_admin_clear_cache_logs_sanitized_pattern_without_newlines(caplog) -> No
         return {
             "ok": True,
             "deleted_keys": 0,
-            "key_pattern": key_pattern or "cache:*",
+            "key_pattern": key_pattern or "cache:test:*",
             "dry_run": dry_run,
             "matched_keys": [],
         }
@@ -105,11 +106,16 @@ def test_admin_clear_cache_logs_sanitized_pattern_without_newlines(caplog) -> No
     malicious_pattern = "cache:test:*\nFORGED_LOG\rLINE"
     caplog.set_level(logging.WARNING)
 
+    # Create a fake request object
+    fake_request = MagicMock()
+    fake_request.headers = {}
+    fake_request.client.host = "127.0.0.1"
+
     original = admin_routes.admin_service.clear_cache
     admin_routes.admin_service.clear_cache = _fake_clear_cache
     try:
         result = asyncio.run(
-            admin_routes.admin_clear_cache(key_pattern=malicious_pattern, dry_run=True)
+            admin_routes.admin_clear_cache(request=fake_request, key_pattern=malicious_pattern, dry_run=True)
         )
     finally:
         admin_routes.admin_service.clear_cache = original
@@ -152,7 +158,7 @@ def test_clear_cache_returns_generic_internal_error(monkeypatch) -> None:
     service = admin_service_module.AdminService(task_broker=_FakeTaskBroker())
     monkeypatch.setattr(service, "_redis_client", lambda: _FailingRedisClient())
 
-    result = asyncio.run(service.clear_cache(key_pattern="cache:*", dry_run=False))
+    result = asyncio.run(service.clear_cache(key_pattern="cache:test:*", dry_run=False))
 
     assert result["ok"] is False
     assert result["error"] == "Internal error during cache operation"

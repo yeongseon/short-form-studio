@@ -34,6 +34,9 @@ services:
       context: .
       dockerfile: apps/api/Dockerfile
     ports:
+      # SECURITY: Bound to 127.0.0.1 — NEVER change to 0.0.0.0 in production.
+      # The API has no TLS and relies on a reverse proxy for security.
+      # See docs/SECURITY.md "Network Exposure Policy" for details.
       - "127.0.0.1:8000:8000"
     volumes:
       - ./data/artifacts:/app/data/artifacts
@@ -47,11 +50,17 @@ services:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: ${MAX_MEMORY_MB:-1024}M
 
   worker:
     build:
       context: .
       dockerfile: apps/worker-orchestrator/Dockerfile
+      target: runtime
+    command: ["celery", "-A", "celery_app.celery_app", "worker", "--loglevel=info", "--pool=solo", "--concurrency=1"]
     volumes:
       - ./data/artifacts:/app/data/artifacts
     env_file:
@@ -59,6 +68,27 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: ${MAX_MEMORY_MB:-4096}M
+
+  # Celery Beat scheduler
+
+  # Celery Beat scheduler — required for any beat_schedule entry to actually fire.
+  # Without this, reconcile_stale_dispatches / retry_failed_artifact_deletions never run (#585).
+  beat:
+    build:
+      context: .
+      dockerfile: apps/worker-orchestrator/Dockerfile
+      target: runtime
+    command: ["celery", "-A", "celery_app.celery_app", "beat", "--loglevel=info"]
+    env_file:
+      - .env
+    depends_on:
       redis:
         condition: service_healthy
     restart: unless-stopped
@@ -101,10 +131,10 @@ services:
     restart: unless-stopped
 
   stable-diffusion:
-    image: shorts-automation-stable-diffusion:latest
+    image: short-form-studio-stable-diffusion:latest
     # Optional GPU profile service: requires a pre-built local image.
     # Dockerfile is expected at docker/stable-diffusion/Dockerfile once model code is available.
-    # Example local build/tag: shorts-automation-stable-diffusion:1.0.0
+    # Example local build/tag: short-form-studio-stable-diffusion:1.0.0
     command: ["python", "launch.py", "--api", "--nowebui", "--listen", "--port", "7860", "--medvram", "--xformers", "--no-half", "--no-half-vae", "--skip-torch-cuda-test", "--skip-version-check", "--skip-python-version-check", "--skip-install"]
     ports:
       - "127.0.0.1:7860:7860"
@@ -126,10 +156,10 @@ services:
     restart: unless-stopped
 
   tts-qwen3:
-    image: shorts-automation-tts-qwen3:latest
+    image: short-form-studio-tts-qwen3:latest
     # Optional GPU profile service: requires a pre-built local image.
     # Dockerfile is expected at docker/tts-qwen3/Dockerfile once model code is available.
-    # Example local build/tag: shorts-automation-tts-qwen3:1.0.0
+    # Example local build/tag: short-form-studio-tts-qwen3:1.0.0
     ports:
       - "127.0.0.1:8100:8100"
     deploy:
@@ -150,10 +180,10 @@ services:
     restart: unless-stopped
 
   stt-whisper:
-    image: shorts-automation-stt-whisper:latest
+    image: short-form-studio-stt-whisper:latest
     # Optional GPU profile service: requires a pre-built local image.
     # Dockerfile is expected at docker/stt-whisper/Dockerfile once model code is available.
-    # Example local build/tag: shorts-automation-stt-whisper:1.0.0
+    # Example local build/tag: short-form-studio-stt-whisper:1.0.0
     ports:
       - "127.0.0.1:9000:8200"
     deploy:
@@ -169,6 +199,34 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+    profiles:
+      - gpu
+    restart: unless-stopped
+
+  tts-cosyvoice:
+    image: short-form-studio-tts-cosyvoice:latest
+    # Optional GPU profile service: CosyVoice 3.0 (Fun-CosyVoice3-0.5B-2512).
+    # Dockerfile is expected at docker/tts-cosyvoice/Dockerfile.
+    # Model downloads automatically on first start from ModelScope/HuggingFace.
+    # Example local build/tag: short-form-studio-tts-cosyvoice:1.0.0
+    ports:
+      - "127.0.0.1:50000:50000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    environment:
+      MODEL_DIR: /app/pretrained_models
+      COSYVOICE_MODEL: Fun-CosyVoice3-0.5B-2512
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:50000/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
     profiles:
       - gpu
     restart: unless-stopped

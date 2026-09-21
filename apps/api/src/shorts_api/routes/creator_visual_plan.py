@@ -1,35 +1,37 @@
 """Routes for creator visual plan management."""
+
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 from creator_domain.models import RunStage
 from creator_domain.models.visual_plan import VisualScene
-from creator_service.run_service import run_service
 from creator_service.visual_plan_service import VersionConflictError, visual_plan_service
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import ValidationError
 
 from shorts_api.auth import CurrentUser, require_run_access
+from shorts_api.routes.creator_runs_utils import validate_path_id
+from shorts_api.schemas.creator_visuals import PatchSceneRequest, ReplaceVisualPlanRequest
 
 if TYPE_CHECKING:
     from creator_domain.models.pipeline_run import PipelineRun
 
 router = APIRouter(prefix="/runs/{run_id}/visual-plan", tags=["visual-plan"])
 
-_VISUAL_PLAN_EDIT_STAGES = frozenset({
-    RunStage.VISUAL_PLAN_SETUP.value,
-    RunStage.VISUAL_PLAN_REVIEW.value,
-    RunStage.VISUAL_PLAN_GENERATING.value,
-})
-
-
-class ReplaceVisualPlanRequest(BaseModel):
-    scenes: list[dict[str, object]] = Field(min_length=1, max_length=200)
+_VISUAL_PLAN_EDIT_STAGES = frozenset(
+    {
+        RunStage.VISUAL_PLAN_SETUP.value,
+        RunStage.VISUAL_PLAN_REVIEW.value,
+        RunStage.VISUAL_PLAN_GENERATING.value,
+    }
+)
 
 
 @router.get("")
-async def get_visual_plan(run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)) -> dict[str, object]:
+async def get_visual_plan(
+    run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
+) -> dict[str, object]:
     _, run = access
     if run.current_stage not in _VISUAL_PLAN_EDIT_STAGES:
         raise HTTPException(
@@ -42,9 +44,7 @@ async def get_visual_plan(run_id: int, access: tuple[CurrentUser, PipelineRun] =
 
     plan = await visual_plan_service.get_active_plan(run_id)
     if plan is None:
-        raise HTTPException(
-            status_code=404, detail="No visual plan found for this run"
-        )
+        raise HTTPException(status_code=404, detail="No visual plan found for this run")
 
     return {
         "run_id": run_id,
@@ -55,7 +55,8 @@ async def get_visual_plan(run_id: int, access: tuple[CurrentUser, PipelineRun] =
 
 @router.put("")
 async def replace_visual_plan(
-    run_id: int, request: ReplaceVisualPlanRequest,
+    run_id: int,
+    request: ReplaceVisualPlanRequest,
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
     _, run = access
@@ -82,24 +83,16 @@ async def replace_visual_plan(
     }
 
 
-class PatchSceneRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    prompt: str | None = None
-    prompt_edited: bool | None = None
-    prompt_source: Literal["auto_generated", "user_edited", "model_suggested"] | None = None
-    style_tags: list[str] | None = None
-    mood: str | None = None
-    composition: str | None = None
-    expected_version: int | None = None
-
 
 @router.patch("/scenes/{scene_id}")
 async def patch_scene(
-    run_id: int, scene_id: str, request: PatchSceneRequest,
+    run_id: int,
+    scene_id: str,
+    request: PatchSceneRequest,
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
     _, run = access
+    validate_path_id(scene_id, "scene_id")
     if run.current_stage not in _VISUAL_PLAN_EDIT_STAGES:
         raise HTTPException(
             status_code=409,
@@ -111,9 +104,7 @@ async def patch_scene(
 
     # Build updates dict from non-None fields (exclude expected_version)
     updates = {
-        k: v
-        for k, v in request.model_dump(exclude={"expected_version"}).items()
-        if v is not None
+        k: v for k, v in request.model_dump(exclude={"expected_version"}).items() if v is not None
     }
     if not updates:
         raise HTTPException(status_code=400, detail="No patchable fields provided")

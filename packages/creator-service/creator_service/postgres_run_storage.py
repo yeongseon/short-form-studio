@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .db import fetch_all, fetch_one
+from .run_service import ConflictError
 
 _UPDATABLE_COLUMNS = {
     "project_id",
@@ -23,6 +24,11 @@ class PostgresRunStorage:
     async def create_run(self, row: dict[str, Any]) -> dict[str, Any]:
         saved = await fetch_one(
             """
+            WITH proj AS (
+                SELECT id FROM creator_projects
+                WHERE id = $1 AND workspace_id = $2 AND status <> 'deleting'
+                FOR UPDATE
+            )
             INSERT INTO creator_runs (
                 project_id,
                 workspace_id,
@@ -36,7 +42,8 @@ class PostgresRunStorage:
                 started_at,
                 finished_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+            SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+            FROM proj
             RETURNING *
             """,
             row.get("project_id"),
@@ -52,15 +59,30 @@ class PostgresRunStorage:
             row.get("finished_at"),
         )
         if saved is None:
-            raise ValueError("Failed to create run")
+            raise ConflictError(
+                f"Project {row.get('project_id')} is being deleted; cannot create new runs"
+            )
         return saved
 
-    async def get_run(self, run_id: int) -> dict[str, Any] | None:
-        return await fetch_one("SELECT * FROM creator_runs WHERE id = $1", run_id)
+    async def get_run(self, run_id: int, workspace_id: int | None = None) -> dict[str, Any] | None:
+        if workspace_id is None:
+            return await fetch_one("SELECT * FROM creator_runs WHERE id = $1", run_id)
+        return await fetch_one(
+            "SELECT * FROM creator_runs WHERE id = $1 AND workspace_id = $2",
+            run_id,
+            workspace_id,
+        )
 
-    async def update_run(self, run_id: int, updates: dict[str, Any]) -> dict[str, Any]:
+    async def update_run(
+        self,
+        run_id: int,
+        updates: dict[str, Any],
+        *,
+        workspace_id: int | None = None,
+        expected_version: int | None = None,
+    ) -> dict[str, Any] | None:
         if not updates:
-            current = await self.get_run(run_id)
+            current = await self.get_run(run_id, workspace_id=workspace_id)
             if current is None:
                 raise ValueError(f"Run {run_id} not found")
             return current
@@ -71,11 +93,24 @@ class PostgresRunStorage:
             raise ValueError(f"Invalid update columns: {invalid_list}")
 
         keys = list(updates.keys())
-        assignments = ", ".join(f"{key} = ${idx}" for idx, key in enumerate(keys, start=2))
-        values = [run_id, *[updates[key] for key in keys]]
-        query = f"UPDATE creator_runs SET {assignments} WHERE id = $1 RETURNING *"
+        assignments_parts = [f"{key} = ${idx}" for idx, key in enumerate(keys, start=2)]
+        values: list[Any] = [run_id, *[updates[key] for key in keys]]
+        where_clauses = ["id = $1"]
+        next_index = len(values) + 1
+        if workspace_id is not None:
+            where_clauses.append(f"workspace_id = ${next_index}")
+            values.append(workspace_id)
+            next_index += 1
+        if expected_version is not None:
+            where_clauses.append(f"version = ${next_index}")
+            values.append(expected_version)
+            assignments_parts.append("version = version + 1")
+        assignments = ", ".join(assignments_parts)
+        query = (
+            f"UPDATE creator_runs SET {assignments} WHERE {' AND '.join(where_clauses)} RETURNING *"
+        )
         updated = await fetch_one(query, *values)
-        if updated is None:
+        if updated is None and expected_version is None:
             raise ValueError(f"Run {run_id} not found")
         return updated
 
@@ -84,9 +119,11 @@ class PostgresRunStorage:
         run_id: int,
         updates: dict[str, Any],
         expected_stages: frozenset[str],
+        workspace_id: int | None = None,
+        rejected_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, Any] | None]:
         if not updates:
-            current = await self.get_run(run_id)
+            current = await self.get_run(run_id, workspace_id=workspace_id)
             if current is None:
                 return False, None
             if current.get("current_stage") in expected_stages:
@@ -100,36 +137,66 @@ class PostgresRunStorage:
 
         keys = list(updates.keys())
         assignments = ", ".join(f"{key} = ${idx}" for idx, key in enumerate(keys, start=3))
+        assignments = f"{assignments}, version = version + 1"
         values = [run_id, list(expected_stages), *[updates[key] for key in keys]]
+        where_clauses = ["id = $1", "current_stage = ANY($2::text[])"]
+        if rejected_statuses is not None:
+            where_clauses.append(f"status != ALL(${len(values) + 1}::text[])")
+            values.append(list(rejected_statuses))
+        if workspace_id is not None:
+            where_clauses.append(f"workspace_id = ${len(values) + 1}")
+            values.append(workspace_id)
         query = (
-            f"UPDATE creator_runs SET {assignments} "
-            "WHERE id = $1 AND current_stage = ANY($2::text[]) RETURNING *"
+            f"UPDATE creator_runs SET {assignments} WHERE {' AND '.join(where_clauses)} RETURNING *"
         )
         updated = await fetch_one(query, *values)
         if updated is not None:
             return True, updated
-        current = await self.get_run(run_id)
+        current = await self.get_run(run_id, workspace_id=workspace_id)
         if current is None:
             return False, None
         return False, current
 
-    async def merge_model_defaults(self, run_id: int, updates_json: str) -> dict[str, Any]:
+    async def merge_model_defaults(
+        self,
+        run_id: int,
+        updates_json: str,
+        workspace_id: int | None = None,
+    ) -> dict[str, Any]:
         """Atomically merge JSON updates into model_defaults_json using PostgreSQL jsonb."""
-        row = await fetch_one(
-            "UPDATE creator_runs "
-            "SET model_defaults_json = (COALESCE(model_defaults_json, '{}')::jsonb || $2::jsonb)::text "
-            "WHERE id = $1 RETURNING *",
-            run_id,
-            updates_json,
-        )
+        if workspace_id is None:
+            row = await fetch_one(
+                "UPDATE creator_runs "
+                "SET model_defaults_json = (COALESCE(model_defaults_json, '{}')::jsonb || $2::jsonb)::text "
+                "WHERE id = $1 RETURNING *",
+                run_id,
+                updates_json,
+            )
+        else:
+            row = await fetch_one(
+                "UPDATE creator_runs "
+                "SET model_defaults_json = (COALESCE(model_defaults_json, '{}')::jsonb || $2::jsonb)::text "
+                "WHERE id = $1 AND workspace_id = $3 RETURNING *",
+                run_id,
+                updates_json,
+                workspace_id,
+            )
         if row is None:
             raise ValueError(f"Run {run_id} not found")
         return row
 
-    async def list_runs_by_project(self, project_id: int) -> list[dict[str, Any]]:
+    async def list_runs_by_project(
+        self, project_id: int, workspace_id: int | None = None
+    ) -> list[dict[str, Any]]:
+        if workspace_id is None:
+            return await fetch_all(
+                "SELECT * FROM creator_runs WHERE project_id = $1 ORDER BY id DESC",
+                project_id,
+            )
         return await fetch_all(
-            "SELECT * FROM creator_runs WHERE project_id = $1 ORDER BY id DESC",
+            "SELECT * FROM creator_runs WHERE project_id = $1 AND workspace_id = $2 ORDER BY id DESC",
             project_id,
+            workspace_id,
         )
 
     async def list_runs_by_workspace(self, workspace_id: int) -> list[dict[str, Any]]:
@@ -138,12 +205,19 @@ class PostgresRunStorage:
             workspace_id,
         )
 
-    async def delete_run(self, run_id: int) -> bool:
+    async def delete_run(self, run_id: int, workspace_id: int | None = None) -> bool:
         """Delete a run by id. Returns True if deleted."""
-        result = await fetch_one(
-            "DELETE FROM creator_runs WHERE id = $1 RETURNING id",
-            run_id,
-        )
+        if workspace_id is None:
+            result = await fetch_one(
+                "DELETE FROM creator_runs WHERE id = $1 RETURNING id",
+                run_id,
+            )
+        else:
+            result = await fetch_one(
+                "DELETE FROM creator_runs WHERE id = $1 AND workspace_id = $2 RETURNING id",
+                run_id,
+                workspace_id,
+            )
         return result is not None
 
     async def delete_runs_by_project(self, project_id: int) -> int:

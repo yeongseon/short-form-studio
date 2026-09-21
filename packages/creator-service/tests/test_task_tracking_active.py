@@ -31,11 +31,11 @@ async def test_has_active_tasks_true_and_false() -> None:
 
 
 @pytest.mark.asyncio
-async def test_revoke_active_tasks_marks_active_as_revoked() -> None:
+async def test_revoke_active_tasks_returns_active_ids_without_marking_revoked() -> None:
     service = TaskTrackingService(InMemoryTaskTrackingStorage())
     await _seed(service)
 
     revoked = await service.revoke_active_tasks(1)
 
     assert sorted(revoked) == ["t-queued", "t-running"]
-    assert await service.has_active_tasks(1) is False
+    assert await service.has_active_tasks(1) is True

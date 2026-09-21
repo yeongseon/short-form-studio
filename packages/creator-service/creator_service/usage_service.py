@@ -49,6 +49,7 @@ class UsageStorageBackend(Protocol):
 class InMemoryUsageStorage:
     def __init__(self) -> None:
         self._events: dict[int, dict[str, Any]] = {}
+        self._events_by_idempotency_key: dict[str, dict[str, Any]] = {}
         self._quotas: dict[int, dict[str, Any]] = {}
         self._reservations: dict[tuple[int, datetime], dict[str, int]] = {}
         self._locks: dict[int, asyncio.Lock] = {}
@@ -63,12 +64,17 @@ class InMemoryUsageStorage:
         return lock
 
     async def record_event(self, row: dict[str, Any]) -> dict[str, Any]:
+        idem_key = row.get("idempotency_key")
+        if isinstance(idem_key, str) and idem_key in self._events_by_idempotency_key:
+            return dict(self._events_by_idempotency_key[idem_key])
         saved = {
             "id": self._next_event_id,
             "created_at": datetime.now(timezone.utc),
             **row,
         }
         self._events[self._next_event_id] = saved
+        if isinstance(idem_key, str):
+            self._events_by_idempotency_key[idem_key] = saved
         self._next_event_id += 1
         return dict(saved)
 
@@ -235,6 +241,7 @@ class UsageService:
         estimated_cost_usd: float | None = None,
         cost_config_version: str | None = None,
         project_id: int | None = None,
+        idempotency_key: str | None = None,
     ) -> UsageEvent:
         row = await self.storage.record_event(
             {
@@ -250,6 +257,7 @@ class UsageService:
                 "audio_seconds": audio_seconds,
                 "estimated_cost_usd": estimated_cost_usd,
                 "cost_config_version": cost_config_version,
+                "idempotency_key": idempotency_key,
             }
         )
         if workspace_id is not None:
@@ -397,6 +405,7 @@ async def record_provider_call(
     cost_config_version: str | None = None,
     workspace_id: int | None = None,
     project_id: int | None = None,
+    idempotency_key: str | None = None,
 ) -> UsageEvent:
     """Record a provider call from a worker task.
 
@@ -445,6 +454,7 @@ async def record_provider_call(
         estimated_cost_usd=cost_usd,
         cost_config_version=cost_config_version,
         project_id=project_id,
+        idempotency_key=idempotency_key,
     )
 
 

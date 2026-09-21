@@ -56,8 +56,12 @@ class InMemoryRenderStorage:
     def __init__(self) -> None:
         self._artifacts: list[dict[str, Any]] = []
         self._next_id = 1
+        self._by_idempotency_key: dict[str, dict[str, Any]] = {}
 
     async def save_artifact(self, row: dict[str, Any]) -> dict[str, Any]:
+        idem_key = row.get("idempotency_key")
+        if isinstance(idem_key, str) and idem_key in self._by_idempotency_key:
+            return dict(self._by_idempotency_key[idem_key])
         now = datetime.now(timezone.utc)
         saved = {
             "id": self._next_id,
@@ -66,6 +70,8 @@ class InMemoryRenderStorage:
         }
         self._next_id += 1
         self._artifacts.append(saved)
+        if isinstance(idem_key, str):
+            self._by_idempotency_key[idem_key] = saved
         return dict(saved)
 
     async def get_artifact(self, artifact_id: int) -> dict[str, Any] | None:
@@ -102,6 +108,7 @@ class RenderService:
         render_profile: str | None = None,
         storage_provider: str | None = None,
         storage_key: str | None = None,
+        idempotency_key: str | None = None,
     ) -> VideoArtifact:
         """Create a new render artifact for a run.
 
@@ -120,6 +127,7 @@ class RenderService:
             "run_id": run_id,
             "file_path": path,
             "metadata_json": metadata,
+            "idempotency_key": idempotency_key,
         }
         saved = await self.storage.save_artifact(row)
 

@@ -1,3 +1,4 @@
+import hmac
 import mimetypes
 import os
 from importlib import import_module
@@ -6,11 +7,12 @@ from creator_domain.sanitize import UnsafePathComponent, sanitize_path_component
 from creator_service.artifact_download_service import read_artifact_bytes
 from creator_service.db import get_pool
 from creator_service.model_health_service import ModelHealthService, ModelStatus
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from redis.asyncio import Redis
 from starlette import status
 from starlette.responses import Response
 
+from shorts_api.auth import CurrentUser, get_current_user
 from shorts_api.lifecycle import REDIS_URL, shutdown_state
 
 model_health = ModelHealthService()
@@ -52,12 +54,32 @@ def _resolve_redis_from_url():
         return Redis.from_url
 
 
+async def _validate_artifact_access(run_id: int, user: CurrentUser) -> None:
+    """Validate that the user has access to the run's artifacts.
+    
+    Raises 404 if the run doesn't exist or belongs to a different workspace (anti-enumeration).
+    """
+    from shorts_api.auth import check_run_ownership
+    
+    # This will raise HTTPException(404) if access is denied
+    await check_run_ownership(run_id, user.workspace_id, user.user_id)
+
+
 async def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
-async def health() -> dict[str, object]:
+def _is_admin_request(request: Request) -> bool:
+    """Check if request carries a valid admin key."""
+    admin_key = os.getenv("ADMIN_API_KEY", "")
+    if not admin_key:
+        return False
+    provided = request.headers.get("X-Admin-Key", "")
+    return hmac.compare_digest(provided, admin_key)
+
+async def health(request: Request) -> dict[str, object]:
     environment = os.getenv("ENVIRONMENT", "development").lower()
+    is_admin = _is_admin_request(request)
     if environment in {"production", "staging"}:
         db_ok = False
         redis_ok = False
@@ -82,14 +104,16 @@ async def health() -> dict[str, object]:
             shutdown_state.is_shutting_down and "PYTEST_CURRENT_TEST" not in os.environ
         )
         overall_ok = db_ok and redis_ok and not shutdown_blocking
+
         response_payload: dict[str, object] = {
             "status": "ok" if overall_ok else "unavailable",
-            "checks": {
+        }
+        if is_admin:
+            response_payload["checks"] = {
                 "database": {"status": "ok" if db_ok else "down"},
                 "redis": {"status": "ok" if redis_ok else "down"},
-            },
-            "shutdown": shutdown_state.is_shutting_down,
-        }
+            }
+            response_payload["shutdown"] = shutdown_state.is_shutting_down
 
         if not overall_ok:
             raise HTTPException(
@@ -103,19 +127,19 @@ async def health() -> dict[str, object]:
     all_healthy = len(definitive) > 0 and all(
         r.status in (ModelStatus.HEALTHY, ModelStatus.CONFIGURED) for r in definitive
     )
-    return {
-        "status": "ok" if all_healthy else "degraded",
-        "models": {
+    payload: dict[str, object] = {"status": "ok" if all_healthy else "degraded"}
+    if is_admin:
+        payload["models"] = {
             r.model_name: {
                 "status": r.status.value,
                 "response_time_ms": r.response_time_ms,
             }
             for r in results
-        },
-    }
+        }
+    return payload
 
 
-async def serve_artifact(artifact_path: str):
+async def serve_artifact(artifact_path: str, user: CurrentUser = Depends(get_current_user)):
     environment = os.getenv("ENVIRONMENT", "development").lower()
     if environment in ("production", "staging"):
         raise HTTPException(status_code=404, detail="Not found")
@@ -123,6 +147,15 @@ async def serve_artifact(artifact_path: str):
     path_components = artifact_path.split("/")
     if not artifact_path or any(component in {"", ".", ".."} for component in path_components):
         raise HTTPException(status_code=400, detail="Invalid artifact path")
+
+    # Extract and validate run_id from path (format: {run_id}/... where run_id should be numeric)
+    try:
+        run_id_str = path_components[0]
+        run_id = int(run_id_str)
+        # Validate user has access to this run's artifacts
+        await _validate_artifact_access(run_id, user)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Not found")
 
     try:
         safe_components = [
@@ -147,7 +180,7 @@ async def serve_artifact(artifact_path: str):
         raise HTTPException(status_code=500, detail="Artifact read failed") from exc
 
 
-async def serve_local_artifact_file(path: str) -> Response:
+async def serve_local_artifact_file(path: str, user: CurrentUser = Depends(get_current_user)) -> Response:
     environment = os.getenv("ENVIRONMENT", "development").lower()
     if environment in ("production", "staging"):
         raise HTTPException(status_code=404, detail="Not found")
@@ -159,6 +192,15 @@ async def serve_local_artifact_file(path: str) -> Response:
         or any(component in {"", ".", ".."} for component in path_components)
     ):
         raise HTTPException(status_code=400, detail="Invalid artifact path")
+
+    # Extract and validate run_id from path (format: {run_id}/... where run_id should be numeric)
+    try:
+        run_id_str = path_components[0]
+        run_id = int(run_id_str)
+        # Validate user has access to this run's artifacts
+        await _validate_artifact_access(run_id, user)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Not found")
 
     try:
         safe_components = [

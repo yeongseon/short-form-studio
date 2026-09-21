@@ -12,6 +12,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
+from creator_domain.exceptions import DataIntegrityError, VersionConflictError
 from creator_domain.models.visual_plan import VisualPlan, VisualScene
 
 # ---------------------------------------------------------------------------
@@ -21,31 +22,16 @@ from creator_domain.models.visual_plan import VisualPlan, VisualScene
 # Fields that patch_scene is allowed to modify.  Immutable identity fields
 # (scene_id, section_id, scene_index, section_type, original_text) and
 # system-managed fields (latest_asset_id, generation_status) are excluded.
-_PATCHABLE_SCENE_FIELDS: frozenset[str] = frozenset({
-    "prompt",
-    "prompt_edited",
-    "prompt_source",
-    "style_tags",
-    "mood",
-    "composition",
-})
-
-
-class VersionConflictError(Exception):
-    """Raised when a patch targets a stale plan version."""
-
-    def __init__(self, run_id: int, expected: int, actual: int) -> None:
-        self.run_id = run_id
-        self.expected_version = expected
-        self.actual_version = actual
-        super().__init__(
-            f"Version conflict for run {run_id}: "
-            f"expected version {expected}, active is {actual}"
-        )
-
-
-class DataIntegrityError(Exception):
-    """Raised when stored scenes_json is malformed or unparseable."""
+_PATCHABLE_SCENE_FIELDS: frozenset[str] = frozenset(
+    {
+        "prompt",
+        "prompt_edited",
+        "prompt_source",
+        "style_tags",
+        "mood",
+        "composition",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -93,11 +79,15 @@ class InMemoryVisualPlanStorage:
         self._plans: dict[int, list[dict[str, Any]]] = {}
         self._next_id = 1
         self._run_locks: dict[int, asyncio.Lock] = {}
+        self._by_idempotency_key: dict[str, dict[str, Any]] = {}
 
     async def save_plan(self, row: dict[str, Any]) -> dict[str, Any]:
         run_id = row["run_id"]
         lock = self._run_locks.setdefault(run_id, asyncio.Lock())
         async with lock:
+            idem_key = row.get("idempotency_key")
+            if isinstance(idem_key, str) and idem_key in self._by_idempotency_key:
+                return dict(self._by_idempotency_key[idem_key])
             plans = self._plans.setdefault(run_id, [])
             next_version = max((p["version"] for p in plans), default=0) + 1
             now = datetime.now(timezone.utc)
@@ -109,6 +99,8 @@ class InMemoryVisualPlanStorage:
             }
             self._next_id += 1
             plans.append(saved)
+            if isinstance(idem_key, str):
+                self._by_idempotency_key[idem_key] = saved
         return dict(saved)
 
     async def get_active_plan(self, run_id: int) -> dict[str, Any] | None:
@@ -162,6 +154,8 @@ class VisualPlanService:
         self,
         run_id: int,
         scenes: list[VisualScene],
+        *,
+        idempotency_key: str | None = None,
     ) -> VisualPlan:
         """Save a new visual plan version (full replace).
 
@@ -169,14 +163,13 @@ class VisualPlanService:
         guarantee atomicity regardless of how many service instances
         share the same backend.
         """
-        scenes_json = json.dumps(
-            [scene.model_dump(mode="json") for scene in scenes]
-        )
+        scenes_json = json.dumps([scene.model_dump(mode="json") for scene in scenes])
 
         row = await self.storage.save_plan(
             {
                 "run_id": run_id,
                 "scenes_json": scenes_json,
+                "idempotency_key": idempotency_key,
             }
         )
 
@@ -205,9 +198,7 @@ class VisualPlanService:
         # Validate update keys against allowlist
         unknown_keys = set(updates.keys()) - _PATCHABLE_SCENE_FIELDS
         if unknown_keys:
-            raise ValueError(
-                f"Cannot patch immutable/unknown fields: {sorted(unknown_keys)}"
-            )
+            raise ValueError(f"Cannot patch immutable/unknown fields: {sorted(unknown_keys)}")
 
         active_row = await self.storage.get_active_plan(run_id)
         if active_row is None:
@@ -229,13 +220,9 @@ class VisualPlanService:
                 break
 
         if not patched:
-            raise ValueError(
-                f"Scene '{scene_id}' not found in visual plan for run {run_id}"
-            )
+            raise ValueError(f"Scene '{scene_id}' not found in visual plan for run {run_id}")
 
-        scenes_json = json.dumps(
-            [scene.model_dump(mode="json") for scene in scenes]
-        )
+        scenes_json = json.dumps([scene.model_dump(mode="json") for scene in scenes])
         if expected_version is None:
             row = await self.storage.save_plan(
                 {
@@ -297,9 +284,7 @@ class VisualPlanService:
             ) from exc
 
         if not isinstance(data, list):
-            raise DataIntegrityError(
-                f"scenes_json for run {row.get('run_id')} is not a JSON array"
-            )
+            raise DataIntegrityError(f"scenes_json for run {row.get('run_id')} is not a JSON array")
 
         try:
             return [VisualScene.model_validate(s) for s in data]

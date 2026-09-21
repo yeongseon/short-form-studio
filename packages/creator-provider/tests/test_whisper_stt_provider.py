@@ -43,6 +43,7 @@ class TestWhisperSTTProviderTranscribe(unittest.TestCase):
 
         # Create a temp audio file for the test
         import tempfile
+
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             f.write(b"\x00" * 44)
             audio_path = f.name
@@ -54,7 +55,9 @@ class TestWhisperSTTProviderTranscribe(unittest.TestCase):
         self.assertEqual(call_args.args[0], "http://stt:8200/transcribe")
 
     @patch("creator_provider.stt.whisper_provider.httpx.AsyncClient")
-    def test_returns_subtitle_result_with_segments_and_text(self, mock_client_cls: MagicMock) -> None:
+    def test_returns_subtitle_result_with_segments_and_text(
+        self, mock_client_cls: MagicMock
+    ) -> None:
         mock_response = MagicMock()
         mock_response.json.return_value = {
             "segments": [
@@ -75,6 +78,7 @@ class TestWhisperSTTProviderTranscribe(unittest.TestCase):
         provider = WhisperSTTProvider(endpoint="http://stt:8200", model_key="whisper-small")
 
         import tempfile
+
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             f.write(b"\x00" * 44)
             audio_path = f.name
@@ -100,6 +104,7 @@ class TestWhisperSTTProviderTranscribe(unittest.TestCase):
         provider = WhisperSTTProvider(endpoint="http://stt:8200", model_key="whisper-small")
 
         import tempfile
+
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             f.write(b"\x00" * 44)
             audio_path = f.name
@@ -112,12 +117,15 @@ class TestWhisperSTTProviderTranscribe(unittest.TestCase):
         self.assertEqual(data.get("language"), "ko")
 
     @patch("creator_provider.stt.whisper_provider.httpx.AsyncClient")
-    def test_http_error_raises_runtime_error(self, mock_client_cls: MagicMock) -> None:
-        import httpx
+    def test_filters_unallowlisted_params_and_logs_warning(
+        self, mock_client_cls: MagicMock
+    ) -> None:
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"segments": [], "text": "", "language": "en"}
+        mock_response.raise_for_status = MagicMock()
 
         mock_client = AsyncMock()
-        request = httpx.Request("POST", "http://stt:8200/transcribe")
-        mock_client.post = AsyncMock(side_effect=httpx.ConnectError("Connection refused", request=request))
+        mock_client.post = AsyncMock(return_value=mock_response)
         mock_ctx = AsyncMock()
         mock_ctx.__aenter__.return_value = mock_client
         mock_client_cls.return_value = mock_ctx
@@ -125,6 +133,37 @@ class TestWhisperSTTProviderTranscribe(unittest.TestCase):
         provider = WhisperSTTProvider(endpoint="http://stt:8200", model_key="whisper-small")
 
         import tempfile
+
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+            f.write(b"\x00" * 44)
+            audio_path = f.name
+
+        with patch("creator_provider.stt.whisper_provider.logger.warning") as mock_warning:
+            self._run(provider.transcribe(audio_path, params={"task": "transcribe", "bad": "x"}))
+
+        call_args = mock_client.post.call_args
+        data = call_args.kwargs.get("data") or {}
+        self.assertEqual(data.get("task"), "transcribe")
+        self.assertNotIn("bad", data)
+        mock_warning.assert_called_once()
+
+    @patch("creator_provider.stt.whisper_provider.httpx.AsyncClient")
+    def test_http_error_raises_runtime_error(self, mock_client_cls: MagicMock) -> None:
+        import httpx
+
+        mock_client = AsyncMock()
+        request = httpx.Request("POST", "http://stt:8200/transcribe")
+        mock_client.post = AsyncMock(
+            side_effect=httpx.ConnectError("Connection refused", request=request)
+        )
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__.return_value = mock_client
+        mock_client_cls.return_value = mock_ctx
+
+        provider = WhisperSTTProvider(endpoint="http://stt:8200", model_key="whisper-small")
+
+        import tempfile
+
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             f.write(b"\x00" * 44)
             audio_path = f.name

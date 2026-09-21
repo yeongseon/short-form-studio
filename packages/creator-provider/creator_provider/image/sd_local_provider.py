@@ -1,53 +1,47 @@
 from __future__ import annotations
 
 import base64
+import os
 import tempfile
+from importlib import import_module
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
 from creator_provider.base import ImageProvider, ImageResult
+from creator_provider.exceptions import ProviderError, map_httpx_error
+from creator_provider.validation import MAX_IMAGE_PROMPT_CHARS, validate_prompt_length
+from creator_provider.versioned_assets import get_loaded_asset_versions, get_prompt, get_schema
 
 
 class SDLocalProvider(ImageProvider):
-    # Quality keywords prepended to all prompts to improve SD 1.5 output.
-    _QUALITY_PREFIX = (
-        "masterpiece, best quality, highly detailed, "
-        "sharp focus, professional, 8k uhd"
-    )
-
-    # Only these keys from caller-provided params are forwarded to the
-    # AUTOMATIC1111 /sdapi/v1/txt2img endpoint.  This allowlist prevents
-    # injection of dangerous keys like `prompt`, `alwayson_scripts`,
-    # `script_args`, or `override_settings`.
-    _ALLOWED_API_KEYS = frozenset({
-        "steps", "cfg_scale", "sampler_name", "negative_prompt", "seed",
-    })
+    _SD_LOCAL_SCHEMA = get_schema("sd_local_image_request")
+    _QUALITY_PREFIX = get_prompt("sd_local_quality_prefix").strip()
+    _ALLOWED_API_KEYS = frozenset(cast(list[str], _SD_LOCAL_SCHEMA["allowed_api_keys"]))
 
     def __init__(self, endpoint: str, model_key: str):
         self.endpoint = endpoint.rstrip("/")
         self.model_key = model_key
 
     async def generate(self, prompt: str, params: dict[str, Any] | None = None) -> ImageResult:
+        validate_prompt_length(prompt, MAX_IMAGE_PROMPT_CHARS, "Image")
         merged_params: dict[str, Any] = dict(params or {})
-        width = int(merged_params.get("width", 512))
-        height = int(merged_params.get("height", 768))
+        width = int(merged_params.get("width", self._SD_LOCAL_SCHEMA["default_width"]))
+        height = int(merged_params.get("height", self._SD_LOCAL_SCHEMA["default_height"]))
 
         # Auto-prepend quality keywords unless the caller explicitly
         # passed skip_quality_prefix=True.
         skip_prefix = merged_params.pop("skip_quality_prefix", False)
-        effective_prompt = (
-            prompt if skip_prefix else f"{self._QUALITY_PREFIX}, {prompt}"
-        )
+        effective_prompt = prompt if skip_prefix else f"{self._QUALITY_PREFIX}, {prompt}"
 
         payload: dict[str, Any] = {
             "prompt": effective_prompt,
             "width": width,
             "height": height,
-            "steps": 25,
-            "cfg_scale": 7,
-            "sampler_name": "DPM++ 2M Karras",
+            "steps": self._SD_LOCAL_SCHEMA["default_steps"],
+            "cfg_scale": self._SD_LOCAL_SCHEMA["default_cfg_scale"],
+            "sampler_name": self._SD_LOCAL_SCHEMA["default_sampler_name"],
         }
 
         # Merge caller-provided params — only allowlisted keys are forwarded
@@ -63,15 +57,26 @@ class SDLocalProvider(ImageProvider):
                 response = await client.post(url, json=payload)
                 response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"Failed to connect to SD Local provider at {url}: {exc}") from exc
+            raise map_httpx_error(exc, f"Failed to connect to SD Local provider at {url}") from exc
 
         data = response.json()
-        image_base64 = str(data["images"][0]).split(",", 1)[-1]
+        images = data.get("images", [])
+        if not images:
+            raise ProviderError("SD Local provider returned no images")
+        image_base64 = str(images[0]).split(",", 1)[-1]
         image_bytes = base64.b64decode(image_base64)
 
         requested_output = merged_params.get("output_path")
         if requested_output:
-            output_path = Path(str(requested_output))
+            candidate_output = str(requested_output)
+            artifact_root = os.getenv("ARTIFACT_ROOT")
+            # NOTE: validate-then-write race (symlink swap) is acceptable here;
+            # artifact directories are server-controlled and not user-writable.
+            validated_output = import_module("creator_domain.sanitize").validate_artifact_path(
+                candidate_output,
+                artifact_root or "data/artifacts",
+            )
+            output_path = Path(validated_output)
         else:
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
                 output_path = Path(tmp.name)
@@ -84,4 +89,5 @@ class SDLocalProvider(ImageProvider):
             width=width,
             height=height,
             model_key=self.model_key,
+            metadata={"asset_versions": get_loaded_asset_versions()},
         )

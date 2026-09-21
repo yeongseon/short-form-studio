@@ -66,8 +66,12 @@ class InMemorySubtitleStorage:
     def __init__(self) -> None:
         self._artifacts: list[dict[str, Any]] = []
         self._next_id = 1
+        self._by_idempotency_key: dict[str, dict[str, Any]] = {}
 
     async def save_artifact(self, row: dict[str, Any]) -> dict[str, Any]:
+        idem_key = row.get("idempotency_key")
+        if isinstance(idem_key, str) and idem_key in self._by_idempotency_key:
+            return dict(self._by_idempotency_key[idem_key])
         now = datetime.now(timezone.utc)
         saved = {
             "id": self._next_id,
@@ -76,6 +80,8 @@ class InMemorySubtitleStorage:
         }
         self._next_id += 1
         self._artifacts.append(saved)
+        if isinstance(idem_key, str):
+            self._by_idempotency_key[idem_key] = saved
         return dict(saved)
 
     async def get_artifact(self, artifact_id: int) -> dict[str, Any] | None:
@@ -138,6 +144,7 @@ class SubtitleService:
         provider_type: str | None = None,
         storage_provider: str | None = None,
         storage_key: str | None = None,
+        idempotency_key: str | None = None,
     ) -> SubtitleArtifact:
         """Create a new subtitle artifact for a run.
 
@@ -160,6 +167,7 @@ class SubtitleService:
             "run_id": run_id,
             "file_path": path,
             "metadata_json": metadata,
+            "idempotency_key": idempotency_key,
         }
         saved = await self.storage.save_artifact(row)
 
@@ -199,6 +207,7 @@ class SubtitleService:
         provider_type: str | None = None,
         storage_provider: str | None = None,
         storage_key: str | None = None,
+        idempotency_key: str | None = None,
     ) -> SubtitleArtifact:
         """Create a subtitle artifact for a specific paragraph/section."""
         metadata: dict[str, object] = {}
@@ -218,6 +227,7 @@ class SubtitleService:
             "scene_id": section_id,
             "file_path": path,
             "metadata_json": metadata,
+            "idempotency_key": idempotency_key,
         }
         saved = await self.storage.save_artifact(row)
         return self._row_to_artifact(saved)

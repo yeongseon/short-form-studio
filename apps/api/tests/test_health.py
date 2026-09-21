@@ -37,23 +37,7 @@ async def test_health_returns_ok_when_all_healthy(client):
     assert response.status_code == 200
     body = response.json()
     # Endpoint and error are stripped from the public response
-    assert body == {
-        "status": "ok",
-        "models": {
-            "ollama": {
-                "status": "healthy",
-                "response_time_ms": 12.3,
-            },
-            "stable-diffusion": {
-                "status": "healthy",
-                "response_time_ms": 45.6,
-            },
-        },
-    }
-    # Ensure no endpoint or error fields leak
-    for model_info in body["models"].values():
-        assert "endpoint" not in model_info
-        assert "error" not in model_info
+    assert body == {"status": "ok"}
 
 
 @pytest.mark.asyncio
@@ -81,7 +65,5 @@ async def test_health_returns_degraded_when_model_unhealthy(client):
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "degraded"
-    assert body["models"]["ollama"]["status"] == "healthy"
-    assert body["models"]["stable-diffusion"]["status"] == "unhealthy"
-    # Error details should NOT be exposed publicly
-    assert "error" not in body["models"]["stable-diffusion"]
+    # models detail not exposed without admin key
+    assert "models" not in body

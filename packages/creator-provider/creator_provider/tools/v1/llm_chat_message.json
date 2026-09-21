@@ -1,0 +1,6 @@
+{
+  "message_template": {
+    "role": "user",
+    "content": "{prompt}"
+  }
+}

@@ -64,3 +64,24 @@ app.dependency_overrides[require_run_access] = _require_run_access
 yield ...
 app.dependency_overrides.pop(require_run_access, None)
 ```
+
+## External Access (File Serving)
+
+When the user needs to view generated artifacts (videos, images, audio):
+
+1. Start an HTTP server bound to **loopback only**, scoped to the artifact directory:
+   `python3 -m http.server <port> --bind 127.0.0.1 --directory <artifact_dir>`
+2. Give the user the loopback URL (e.g. `http://127.0.0.1:<port>/<file>`). This is the default path — no external exposure is performed automatically.
+3. **External exposure requires explicit user confirmation.** If (and only if) the user asks to expose an artifact beyond the local machine, offer ONE of:
+   - **localtunnel** (no auth): `npx -y localtunnel --port <port>`
+   - **ngrok** (needs authtoken in `~/.config/ngrok/ngrok.yml`): `ngrok http <port>`
+   - **serveo.net** (unreliable): `ssh -R 80:localhost:<port> serveo.net`
+4. (Only if Step 3 was followed) Verify the public URL returns 200 before handing it over: `curl -s -H "Bypass-Tunnel-Reminder: true" <url> -o /dev/null -w "%{http_code}"`
+5. Serve ONLY the artifact directory — never the repository root or any directory containing source, secrets, or `.env`.
+
+**IMPORTANT RULES (security):**
+- **ALWAYS bind to `127.0.0.1`** (loopback). NEVER use `--bind 0.0.0.0`. This aligns with the loopback policy in `docs/SECURITY.md`.
+- **NEVER expose externally without asking the user first.** Do not run localtunnel/ngrok/serveo automatically.
+- When exposing, prefer localtunnel (no signup/authtoken required); if it fails, ask the user before trying the next method.
+- Always verify a public URL returns 200 before giving it to the user.
+- localtunnel requires header `Bypass-Tunnel-Reminder: true` for programmatic access.

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from creator_domain.models.stage import RunStage
 from tasks import generate_scene_image as generate_scene_image_module
 
 
@@ -19,6 +20,7 @@ class FakeEntry:
 @dataclass
 class FakeImageResult:
     """Mimics base.ImageResult returned by ImageProvider.generate()."""
+
     image_path: str = ""
     width: int = 512
     height: int = 512
@@ -38,7 +40,9 @@ class FakeImageProvider:
         self.per_scene_errors = per_scene_errors or {}
         self.calls: list[tuple[str, dict[str, object] | None]] = []
 
-    async def generate(self, prompt: str, params: dict[str, object] | None = None) -> FakeImageResult:
+    async def generate(
+        self, prompt: str, params: dict[str, object] | None = None
+    ) -> FakeImageResult:
         self.calls.append((prompt, params))
         # Check per-scene errors based on prompt content
         for scene_key, exc in self.per_scene_errors.items():
@@ -76,6 +80,7 @@ class FakeStorage:
         run_id: int,
         updates: dict[str, object],
         expected_stages: frozenset[str],
+    rejected_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
         row = self._runs.get(run_id)
         if row is None:
@@ -90,7 +95,9 @@ class FakeStorage:
         return True, dict(row)
 
 
-def _make_storage(run_id: int = 101, stage: str = "VISUAL_PLAN_REVIEW", **extra: Any) -> FakeStorage:
+def _make_storage(
+    run_id: int = 101, stage: str = "VISUAL_PLAN_REVIEW", **extra: Any
+) -> FakeStorage:
     run_row: dict[str, object] = {"id": run_id, "current_stage": stage, **extra}
     return FakeStorage(runs={run_id: run_row})
 
@@ -160,13 +167,16 @@ class FakeVisualAssetService:
     async def create_asset(
         self,
         run_id: int,
-        scene_id: str,
+        scene_id: int,
         asset_path: str,
         *,
         prompt_snapshot: str | None = None,
         model_used: str | None = None,
         provider_type: str | None = None,
-        is_active: bool = True,
+        storage_provider: str | None = None,
+        storage_key: str | None = None,
+        is_active: bool | None = None,
+        idempotency_key: str | None = None,
     ) -> FakeVisualAsset:
         call_data = {
             "run_id": run_id,
@@ -175,6 +185,8 @@ class FakeVisualAssetService:
             "prompt_snapshot": prompt_snapshot,
             "model_used": model_used,
             "provider_type": provider_type,
+            "storage_provider": storage_provider,
+            "storage_key": storage_key,
             "is_active": is_active,
         }
         self.calls.append(call_data)
@@ -219,17 +231,12 @@ class FakeRegistry:
 
 
 def _patch_registry(monkeypatch: pytest.MonkeyPatch, registry: FakeRegistry) -> None:
-    class _ProviderRegistry:
-        @staticmethod
-        def create_default() -> FakeRegistry:
-            return registry
-
-    monkeypatch.setattr(generate_scene_image_module, "ProviderRegistry", _ProviderRegistry)
+    monkeypatch.setattr(generate_scene_image_module, "get_default_registry", lambda: registry)
 
 
 def _patch_redis(monkeypatch: pytest.MonkeyPatch, redis_client: object) -> None:
     redis_stub = SimpleNamespace(Redis=SimpleNamespace(from_url=lambda _: redis_client))
-    monkeypatch.setattr(generate_scene_image_module, "redis", redis_stub)
+    monkeypatch.setattr("tasks.task_runner.redis", redis_stub)
 
 
 def _patch_services(
@@ -240,7 +247,10 @@ def _patch_services(
 ) -> None:
     monkeypatch.setattr(generate_scene_image_module, "_visual_plan_service", visual_plan_service)
     monkeypatch.setattr(generate_scene_image_module, "_visual_asset_service", visual_asset_service)
-    monkeypatch.setattr(generate_scene_image_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr(
+        generate_scene_image_module, "_run_service", SimpleNamespace(storage=storage)
+    )
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
 
 
 def _invoke_task(**kwargs: Any) -> dict[str, object]:
@@ -265,10 +275,18 @@ def test_happy_path_single_scene_with_gpu_lock(monkeypatch: pytest.MonkeyPatch) 
 
     lock_calls: list[str] = []
     release_calls: list[str] = []
-    monkeypatch.setattr(generate_scene_image_module, "acquire_gpu_lock", lambda client, task_id: lock_calls.append(task_id))
-    monkeypatch.setattr(generate_scene_image_module, "release_gpu_lock", lambda client, task_id: release_calls.append(task_id))
+    monkeypatch.setattr(
+        "tasks.task_runner.acquire_gpu_lock",
+        lambda client, task_id: (lock_calls.append(task_id) or f"{task_id}:fake-token"),
+    )
+    monkeypatch.setattr(
+        "tasks.task_runner.release_gpu_lock",
+        lambda client, token: release_calls.append(token.split(":")[0]) or True,
+    )
 
-    plan = FakeVisualPlan(run_id=101, scenes=[FakeVisualScene(scene_id="scene-sec-0", prompt="A hook shot")])
+    plan = FakeVisualPlan(
+        run_id=101, scenes=[FakeVisualScene(scene_id="scene-sec-0", prompt="A hook shot")]
+    )
     vp_service = FakeVisualPlanService(plan=plan)
     va_service = FakeVisualAssetService()
     storage = _make_storage(run_id=101, stage="VISUAL_PLAN_REVIEW")
@@ -284,7 +302,9 @@ def test_happy_path_single_scene_with_gpu_lock(monkeypatch: pytest.MonkeyPatch) 
     assert len(release_calls) == 1
     assert va_service.calls[0]["scene_id"] == "scene-sec-0"
     assert va_service.calls[0]["prompt_snapshot"] == "A hook shot"
-    assert storage.calls == [(101, {"current_stage": "VISUAL_ASSET_REVIEW", "status": "running"})]
+    assert storage.calls == [(101, {"current_stage": RunStage.VISUAL_ASSET_REVIEW, "status": "running"})]
+    assert va_service.calls[0]["storage_provider"] == "local"
+    assert va_service.calls[0]["storage_key"] is not None
 
 
 def test_happy_path_all_scenes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -313,18 +333,26 @@ def test_happy_path_all_scenes(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result["scene_id"] is None  # All scenes mode
     assert len(va_service.calls) == 3
     assert len(provider.calls) == 3
-    assert storage.calls == [(102, {"current_stage": "VISUAL_ASSET_REVIEW", "status": "running"})]
+    assert storage.calls == [(102, {"current_stage": RunStage.VISUAL_ASSET_REVIEW, "status": "running"})]
 
 
 def test_happy_path_without_gpu_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = FakeImageProvider()
-    entry = FakeEntry(provider_type="external_image", endpoint="https://api.example.com", requires_gpu=False)
+    entry = FakeEntry(
+        provider_type="external_image", endpoint="https://api.example.com", requires_gpu=False
+    )
     registry = FakeRegistry(entry=entry, provider=provider)
     _patch_registry(monkeypatch, registry)
 
     # GPU lock should NOT be called
-    monkeypatch.setattr(generate_scene_image_module, "acquire_gpu_lock", lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")))
-    monkeypatch.setattr(generate_scene_image_module, "release_gpu_lock", lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")))
+    monkeypatch.setattr(
+        "tasks.task_runner.acquire_gpu_lock",
+        lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")),
+    )
+    monkeypatch.setattr(
+        "tasks.task_runner.release_gpu_lock",
+        lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")),
+    )
 
     plan = FakeVisualPlan(run_id=103, scenes=[FakeVisualScene()])
     vp_service = FakeVisualPlanService(plan=plan)
@@ -344,13 +372,17 @@ def test_prompt_override_single_scene(monkeypatch: pytest.MonkeyPatch) -> None:
     registry = FakeRegistry(entry=entry, provider=provider)
     _patch_registry(monkeypatch, registry)
 
-    plan = FakeVisualPlan(run_id=104, scenes=[FakeVisualScene(scene_id="scene-sec-0", prompt="Original prompt")])
+    plan = FakeVisualPlan(
+        run_id=104, scenes=[FakeVisualScene(scene_id="scene-sec-0", prompt="Original prompt")]
+    )
     vp_service = FakeVisualPlanService(plan=plan)
     va_service = FakeVisualAssetService()
     storage = _make_storage(run_id=104, stage="VISUAL_PLAN_REVIEW")
     _patch_services(monkeypatch, vp_service, va_service, storage)
 
-    result = _invoke_task(run_id=104, scene_id="scene-sec-0", prompt_override="Custom override prompt")
+    result = _invoke_task(
+        run_id=104, scene_id="scene-sec-0", prompt_override="Custom override prompt"
+    )
 
     assert result["status"] == "success"
     assert provider.calls[0][0] == "Custom override prompt"
@@ -364,7 +396,9 @@ def test_prompt_override_ignored_in_all_scene_mode(monkeypatch: pytest.MonkeyPat
     registry = FakeRegistry(entry=entry, provider=provider)
     _patch_registry(monkeypatch, registry)
 
-    plan = FakeVisualPlan(run_id=105, scenes=[FakeVisualScene(scene_id="scene-sec-0", prompt="Original prompt")])
+    plan = FakeVisualPlan(
+        run_id=105, scenes=[FakeVisualScene(scene_id="scene-sec-0", prompt="Original prompt")]
+    )
     vp_service = FakeVisualPlanService(plan=plan)
     va_service = FakeVisualAssetService()
     storage = _make_storage(run_id=105, stage="VISUAL_PLAN_REVIEW")
@@ -402,9 +436,7 @@ def test_inactive_asset_creation(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_partial_failure_advances_to_review(monkeypatch: pytest.MonkeyPatch) -> None:
     """If some scenes succeed and some fail, still advance to VISUAL_ASSET_REVIEW."""
-    provider = FakeImageProvider(
-        per_scene_errors={"Body shot": RuntimeError("GPU OOM")}
-    )
+    provider = FakeImageProvider(per_scene_errors={"Body shot": RuntimeError("GPU OOM")})
     entry = FakeEntry(requires_gpu=False)
     registry = FakeRegistry(entry=entry, provider=provider)
     _patch_registry(monkeypatch, registry)
@@ -426,7 +458,7 @@ def test_partial_failure_advances_to_review(monkeypatch: pytest.MonkeyPatch) -> 
     assert result["succeeded"] == 2
     assert result["failed"] == 1
     # Should still advance to review
-    assert storage.calls == [(201, {"current_stage": "VISUAL_ASSET_REVIEW", "status": "running"})]
+    assert storage.calls == [(201, {"current_stage": RunStage.VISUAL_ASSET_REVIEW, "status": "running"})]
     # Only 2 assets saved (the successful ones)
     assert len(va_service.calls) == 2
 
@@ -481,6 +513,7 @@ def test_all_scenes_fail_and_cas_raises_propagates_error(monkeypatch: pytest.Mon
 
     with pytest.raises(ConnectionError, match="Redis down"):
         _invoke_task(run_id=203)
+
 
 # ──────────────────────────────────────────────────────────────────────
 # Stage guard tests
@@ -643,11 +676,10 @@ def test_gpu_lock_timeout_single_scene(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_redis(monkeypatch, redis_client)
 
     monkeypatch.setattr(
-        generate_scene_image_module,
-        "acquire_gpu_lock",
+        "tasks.task_runner.acquire_gpu_lock",
         lambda *_: (_ for _ in ()).throw(TimeoutError("lock timeout")),
     )
-    monkeypatch.setattr(generate_scene_image_module, "release_gpu_lock", lambda *_: None)
+    monkeypatch.setattr("tasks.task_runner.release_gpu_lock", lambda *_: None)
 
     plan = FakeVisualPlan(run_id=501, scenes=[FakeVisualScene()])
     vp_service = FakeVisualPlanService(plan=plan)
@@ -673,8 +705,11 @@ def test_releases_gpu_lock_when_provider_fails(monkeypatch: pytest.MonkeyPatch) 
     _patch_redis(monkeypatch, redis_client)
 
     released: list[str] = []
-    monkeypatch.setattr(generate_scene_image_module, "acquire_gpu_lock", lambda *_: True)
-    monkeypatch.setattr(generate_scene_image_module, "release_gpu_lock", lambda _, task_id: released.append(task_id))
+    monkeypatch.setattr("tasks.task_runner.acquire_gpu_lock", lambda *_: True)
+    monkeypatch.setattr(
+        "tasks.task_runner.release_gpu_lock",
+        lambda _, task_id: released.append(task_id) or True,
+    )
 
     plan = FakeVisualPlan(run_id=502, scenes=[FakeVisualScene()])
     vp_service = FakeVisualPlanService(plan=plan)
@@ -688,7 +723,9 @@ def test_releases_gpu_lock_when_provider_fails(monkeypatch: pytest.MonkeyPatch) 
     assert len(released) == 1  # GPU lock released even on failure
 
 
-def test_release_gpu_lock_failure_does_not_mask_scene_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_release_gpu_lock_failure_does_not_mask_scene_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """If release_gpu_lock raises, the scene is still recorded as failed."""
     provider = FakeImageProvider(error=RuntimeError("generation boom"))
     entry = FakeEntry(requires_gpu=True)
@@ -698,10 +735,9 @@ def test_release_gpu_lock_failure_does_not_mask_scene_error(monkeypatch: pytest.
     redis_client = object()
     _patch_redis(monkeypatch, redis_client)
 
-    monkeypatch.setattr(generate_scene_image_module, "acquire_gpu_lock", lambda *_: True)
+    monkeypatch.setattr("tasks.task_runner.acquire_gpu_lock", lambda *_: True)
     monkeypatch.setattr(
-        generate_scene_image_module,
-        "release_gpu_lock",
+        "tasks.task_runner.release_gpu_lock",
         lambda *_: (_ for _ in ()).throw(ConnectionError("redis gone")),
     )
 
@@ -725,7 +761,9 @@ def test_release_gpu_lock_failure_does_not_mask_scene_error(monkeypatch: pytest.
 class RaceConditionStorage(FakeStorage):
     """Storage that simulates a competing task advancing the run between operations."""
 
-    def __init__(self, run_id: int, initial_stage: str, advanced_stage: str, advance_after: int = 1) -> None:
+    def __init__(
+        self, run_id: int, initial_stage: str, advanced_stage: str, advance_after: int = 1
+    ) -> None:
         super().__init__(runs={run_id: {"id": run_id, "current_stage": initial_stage}})
         self._target_id = run_id
         self._advanced_stage = advanced_stage
@@ -747,6 +785,7 @@ class RaceConditionStorage(FakeStorage):
         run_id: int,
         updates: dict[str, object],
         expected_stages: frozenset[str],
+    rejected_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
         self._maybe_advance(run_id)
         row = self._runs.get(run_id)
@@ -760,7 +799,9 @@ class RaceConditionStorage(FakeStorage):
         return True, dict(row)
 
 
-def test_success_transition_skips_when_run_already_advanced(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_success_transition_skips_when_run_already_advanced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """If run has advanced past image generation, skip the VISUAL_ASSET_REVIEW write."""
     provider = FakeImageProvider()
     entry = FakeEntry(requires_gpu=False)
@@ -782,7 +823,9 @@ def test_success_transition_skips_when_run_already_advanced(monkeypatch: pytest.
     assert storage._runs[601]["current_stage"] == "AUDIO_GENERATING"
 
 
-def test_failure_transition_skips_when_run_already_advanced(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_failure_transition_skips_when_run_already_advanced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """If run has advanced and all scenes fail, FAILED write must be skipped."""
     provider = FakeImageProvider(error=RuntimeError("fail"))
     entry = FakeEntry(requires_gpu=False)

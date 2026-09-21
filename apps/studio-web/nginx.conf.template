@@ -1,3 +1,12 @@
+# Recover the client-visible scheme from X-Forwarded-Proto so the CSRF
+# origin check works behind a TLS-terminating reverse proxy (#598).
+# When no proxy sets the header, fall back to the connection scheme.
+map $http_x_forwarded_proto $client_scheme {
+    default $scheme;
+    https   https;
+    http    http;
+}
+
 server {
     listen 8080;
     root /usr/share/nginx/html;
@@ -16,7 +25,7 @@ server {
     # Proxy API requests to the backend
     location /api/ {
         set $csrf_check 0;
-        if ($http_origin = "$scheme://$host") {
+        if ($http_origin = "$client_scheme://$http_host") {
             set $csrf_check 1;
         }
         if ($request_method !~ ^(GET|HEAD|OPTIONS)$) {
@@ -32,14 +41,6 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
         # Inject API key when configured (set via envsubst at container startup)
-        proxy_set_header X-API-Key "${API_KEY}";
-    }
-
-    # Proxy artifact requests to the backend
-    location /artifacts/ {
-        proxy_pass http://api:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-API-Key "${API_KEY}";
     }
 

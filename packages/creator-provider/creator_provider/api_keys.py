@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import os
 
+from creator_provider.exceptions import ProviderAuthError, ProviderValidationError
+
 # Canonical mapping: provider_name -> env var name
 _KEY_MAP: dict[str, str] = {
     "openai": "OPENAI_API_KEY",
@@ -19,6 +21,7 @@ _KEY_MAP: dict[str, str] = {
     "google": "GOOGLE_API_KEY",
     "stability": "STABILITY_API_KEY",
     "elevenlabs": "ELEVENLABS_API_KEY",
+    "groq": "GROQ_API_KEY",
 }
 
 
@@ -37,14 +40,14 @@ def resolve_api_key(provider_name: str, *, required: bool = True) -> str | None:
     """
     env_var = _KEY_MAP.get(provider_name.lower())
     if env_var is None:
-        raise ValueError(
+        raise ProviderValidationError(
             f"Unknown provider '{provider_name}'. Known providers: {', '.join(sorted(_KEY_MAP.keys()))}"
         )
 
     value = os.getenv(env_var, "").strip()
     if not value:
         if required:
-            raise ValueError(
+            raise ProviderAuthError(
                 f"API key for '{provider_name}' not configured. Set the {env_var} environment variable."
             )
         return None

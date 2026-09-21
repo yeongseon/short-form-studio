@@ -1,7 +1,7 @@
 # pyright: reportMissingImports=false
 
 from creator_service.db import get_pool
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 
 from shorts_api.auth import CurrentUser, require_current_user
 
@@ -12,9 +12,6 @@ router = APIRouter(prefix="/workspaces", tags=["workspaces"])
 async def list_workspaces(
     user: CurrentUser = Depends(require_current_user),
 ) -> dict[str, list[dict[str, int | str]]]:
-    if user.user_id is None:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
     user_id = user.user_id
     pool = await get_pool()
     async with pool.acquire() as connection:

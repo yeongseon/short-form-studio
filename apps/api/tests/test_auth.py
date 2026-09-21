@@ -3,6 +3,7 @@
 """Tests for API key authentication middleware."""
 
 import hashlib
+from datetime import datetime, timezone
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -17,7 +18,7 @@ from shorts_api.auth import (
 from starlette.requests import Request
 
 
-def _make_app(api_key: str | None = None) -> FastAPI:
+def _make_app() -> FastAPI:
     """Create a minimal FastAPI app with the auth middleware."""
     test_app = FastAPI()
     test_app.add_middleware(
@@ -27,7 +28,7 @@ def _make_app(api_key: str | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    test_app.add_middleware(ApiKeyMiddleware, api_key=api_key)
+    test_app.add_middleware(ApiKeyMiddleware)
 
     @test_app.get("/health")
     async def health():
@@ -106,7 +107,7 @@ async def authed_client(api_key, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("shorts_api.auth.fetch_one", _fetch_one_stub)
     monkeypatch.setattr("shorts_api.auth.ApiKeyMiddleware._get_pool", _get_pool_stub)
 
-    app = _make_app(api_key=api_key)
+    app = _make_app()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
@@ -189,7 +190,7 @@ async def test_query_param_api_key_rejected(authed_client, api_key):
 
 @pytest.mark.asyncio
 async def test_empty_string_api_key_requires_auth():
-    app = _make_app(api_key="")
+    app = _make_app()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         response = await ac.get("/api/creator/data")
@@ -259,6 +260,144 @@ async def test_options_without_origin_requires_auth(authed_client):
 
 
 @pytest.mark.asyncio
+async def test_middleware_without_workspace_membership_returns_404(api_key, monkeypatch):
+    expected_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+
+    class _Conn:
+        async def fetchrow(self, _query: str, key_hash: str):
+            if key_hash == expected_hash:
+                return {"user_id": 1}
+            return None
+
+        async def fetch(self, _query: str, _user_id: int):
+            return []
+
+    class _Acquire:
+        async def __aenter__(self):
+            return _Conn()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            _ = (exc_type, exc, tb)
+            return False
+
+    class _Pool:
+        def acquire(self):
+            return _Acquire()
+
+    async def _get_pool_stub(self):
+        _ = self
+        return _Pool()
+
+    monkeypatch.setattr("shorts_api.auth.ApiKeyMiddleware._get_pool", _get_pool_stub)
+
+    app = _make_app()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        response = await ac.get("/api/creator/data", headers={"X-API-Key": api_key})
+        assert response.status_code == 404
+        assert response.json() == {"detail": "Not found"}
+
+
+@pytest.mark.asyncio
+async def test_db_error_during_workspace_resolution_returns_503(api_key, monkeypatch: pytest.MonkeyPatch):
+    """DB failure in workspace resolution must return 503, not 404 (#601).
+
+    _resolve_member_workspaces previously had a bare except that returned [],
+    which dispatch() mapped to 404. A transient DB outage made every user look
+    like they had zero memberships.
+    """
+    expected_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+
+    class _Conn:
+        async def fetchrow(self, query: str, key_hash: str):
+            if key_hash != expected_hash:
+                return None
+            return {"user_id": 1}
+
+        async def fetch(self, _query: str, user_id: int):
+            raise RuntimeError("DB connection lost")
+
+    class _Acquire:
+        async def __aenter__(self):
+            return _Conn()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            _ = (exc_type, exc, tb)
+            return False
+
+    class _Pool:
+        def acquire(self):
+            return _Acquire()
+
+    async def _get_pool_stub(self):
+        _ = self
+        return _Pool()
+
+    monkeypatch.setattr("shorts_api.auth.ApiKeyMiddleware._get_pool", _get_pool_stub)
+
+    app = _make_app()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        response = await ac.get("/api/creator/data", headers={"X-API-Key": api_key})
+        assert response.status_code == 503
+        assert response.json() == {"detail": "Service unavailable"}
+
+
+@pytest.mark.asyncio
+async def test_revoked_api_key_returns_401(api_key, monkeypatch: pytest.MonkeyPatch):
+    """A revoked key (revoked_at set in the DB) must NOT authenticate.
+
+    Reproduces #583: the middleware adapter discarded the ``revoked_at IS NULL``
+    filter from the SQL, so revoked keys kept authenticating. The stub below
+    faithfully models a real asyncpg connection — it applies the WHERE clause
+    as written, so a query that omits the filter returns the row (the bug),
+    while a query that includes ``revoked_at IS NULL`` excludes the revoked row.
+    """
+    expected_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+    revoked_at = datetime.now(timezone.utc)
+
+    class _Conn:
+        # Models the real api_keys row: key exists but revoked_at is set.
+        async def fetchrow(self, query: str, key_hash: str):
+            if key_hash != expected_hash:
+                return None
+            # Real DB applies the WHERE clause verbatim.
+            if "revoked_at IS NULL" in query:
+                return None  # revoked row is filtered out
+            # Query without the filter still returns the row — this is the bug.
+            return {"user_id": 1, "revoked_at": revoked_at}
+
+        async def fetch(self, _query: str, user_id: int):
+            if user_id == 1:
+                return [{"workspace_id": 1}]
+            return []
+
+    class _Acquire:
+        async def __aenter__(self):
+            return _Conn()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            _ = (exc_type, exc, tb)
+            return False
+
+    class _Pool:
+        def acquire(self):
+            return _Acquire()
+
+    async def _get_pool_stub(self):
+        _ = self
+        return _Pool()
+
+    monkeypatch.setattr("shorts_api.auth.ApiKeyMiddleware._get_pool", _get_pool_stub)
+
+    app = _make_app()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        response = await ac.get("/api/creator/data", headers={"X-API-Key": api_key})
+        assert response.status_code == 401
+        assert response.json() == {"detail": "API key is not associated with any user"}
+
+@pytest.mark.asyncio
 async def test_get_current_user_without_api_key_returns_401():
     request = Request({"type": "http", "headers": []})
     with pytest.raises(HTTPException) as exc_info:
@@ -288,11 +427,16 @@ async def test_get_current_user_resolves_from_api_keys_and_membership(monkeypatc
         calls.append((query, args))
         if "FROM api_keys" in query:
             return {"user_id": 123}
-        if "FROM workspace_members" in query:
-            return {"workspace_id": 10}
         return None
 
+    async def _fetch_all(query: str, *args):
+        calls.append((query, args))
+        if "FROM workspace_members" in query:
+            return [{"workspace_id": 10}]
+        return []
+
     monkeypatch.setattr("shorts_api.auth.fetch_one", _fetch_one)
+    monkeypatch.setattr("shorts_api.auth.fetch_all", _fetch_all)
     request = Request({"type": "http", "headers": [(b"x-api-key", b"valid-key")]})
     result = await get_current_user(request)
 
@@ -303,12 +447,34 @@ async def test_get_current_user_resolves_from_api_keys_and_membership(monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_get_current_user_without_workspace_membership_returns_404(monkeypatch):
+    async def _fetch_one(query: str, *args):
+        if "FROM api_keys" in query:
+            return {"user_id": 123}
+        return None
+
+    async def _fetch_all(query: str, *args):
+        if "FROM workspace_members" in query:
+            return []
+        return []
+
+    monkeypatch.setattr("shorts_api.auth.fetch_one", _fetch_one)
+    monkeypatch.setattr("shorts_api.auth.fetch_all", _fetch_all)
+    request = Request({"type": "http", "headers": [(b"x-api-key", b"valid-key")]})
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_current_user(request)
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Not found"
+
+
+@pytest.mark.asyncio
 async def test_require_workspace_access_denies_without_membership(monkeypatch):
     async def _no_access(_workspace_id: int, _user_id: int) -> bool:
         return False
 
     monkeypatch.setattr("shorts_api.auth.workspace_service.check_access", _no_access)
-    user = CurrentUser(user_id=1, workspace_id=None)
+    user = CurrentUser(user_id=1, workspace_id=1)
 
     with pytest.raises(HTTPException) as exc_info:
         await require_workspace_access(99, user)
@@ -326,3 +492,129 @@ async def test_require_workspace_access_allows_with_membership(monkeypatch):
     result = await require_workspace_access(100, user)
     assert isinstance(result, CurrentUser)
     assert result.user_id == 2
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_with_valid_workspace_id_header(monkeypatch):
+    """Test that X-Workspace-Id header selects the correct workspace."""
+    calls: list[tuple[str, tuple[object, ...]]] = []
+
+    async def _fetch_one(query: str, *args):
+        calls.append((query, args))
+        if "FROM api_keys" in query:
+            return {"user_id": 456}
+        return None
+
+    async def _fetch_all(query: str, *args):
+        calls.append((query, args))
+        if "FROM workspace_members" in query:
+            # User is a member of workspaces 10, 20, 30
+            return [
+                {"workspace_id": 10},
+                {"workspace_id": 20},
+                {"workspace_id": 30},
+            ]
+        return []
+
+    monkeypatch.setattr("shorts_api.auth.fetch_one", _fetch_one)
+    monkeypatch.setattr("shorts_api.auth.fetch_all", _fetch_all)
+    request = Request(
+        {
+            "type": "http",
+            "headers": [
+                (b"x-api-key", b"valid-key"),
+                (b"x-workspace-id", b"20"),
+            ],
+        }
+    )
+    result = await get_current_user(request)
+
+    assert isinstance(result, CurrentUser)
+    assert result.user_id == 456
+    assert result.workspace_id == 20
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_with_invalid_workspace_id_header_returns_404(monkeypatch):
+    """Test that non-numeric X-Workspace-Id header returns 404."""
+    async def _fetch_one(query: str, *args):
+        if "FROM api_keys" in query:
+            return {"user_id": 456}
+        return None
+
+    async def _fetch_all(query: str, *args):
+        if "FROM workspace_members" in query:
+            return [{"workspace_id": 10}, {"workspace_id": 20}]
+        return []
+
+    monkeypatch.setattr("shorts_api.auth.fetch_one", _fetch_one)
+    monkeypatch.setattr("shorts_api.auth.fetch_all", _fetch_all)
+    request = Request(
+        {
+            "type": "http",
+            "headers": [
+                (b"x-api-key", b"valid-key"),
+                (b"x-workspace-id", b"not-a-number"),
+            ],
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_current_user(request)
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Not found"
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_with_non_member_workspace_id_returns_404(monkeypatch):
+    """Test that X-Workspace-Id for non-member workspace returns 404."""
+    async def _fetch_one(query: str, *args):
+        if "FROM api_keys" in query:
+            return {"user_id": 456}
+        return None
+
+    async def _fetch_all(query: str, *args):
+        if "FROM workspace_members" in query:
+            # User is only a member of workspaces 10 and 20, not 999
+            return [{"workspace_id": 10}, {"workspace_id": 20}]
+        return []
+
+    monkeypatch.setattr("shorts_api.auth.fetch_one", _fetch_one)
+    monkeypatch.setattr("shorts_api.auth.fetch_all", _fetch_all)
+    request = Request(
+        {
+            "type": "http",
+            "headers": [
+                (b"x-api-key", b"valid-key"),
+                (b"x-workspace-id", b"999"),
+            ],
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_current_user(request)
+    assert exc_info.value.status_code == 404
+    assert exc_info.value.detail == "Not found"
+
+
+
+@pytest.mark.asyncio
+async def test_get_current_user_returns_early_from_request_state_user():
+    """Verify get_current_user() returns request.state.user without DB queries.
+    
+    When middleware has already resolved the user and set request.state.user,
+    get_current_user() should return it immediately WITHOUT making any DB queries.
+    This is the key optimization: eliminate 1 DB round-trip per authenticated request.
+    """
+    # Set up a request with request.state.user already populated by middleware
+    request = Request({"type": "http", "headers": []})
+    expected_user = CurrentUser(user_id=42, workspace_id=99)
+    request.state.user = expected_user
+    
+    # Call get_current_user and verify it returns the same user
+    result = await get_current_user(request)
+    
+    # Assert: same object returned, no DB queries needed
+    assert result is expected_user
+    assert result.user_id == 42
+    assert result.workspace_id == 99

@@ -6,26 +6,35 @@ import logging
 from typing import TYPE_CHECKING, Any, Literal
 
 from creator_service.audio_service import audio_service
-from creator_service.run_service import run_service
 from creator_service.script_service import script_service
 from creator_service.subtitle_service import subtitle_service
-from creator_service.task_tracking_service import task_tracking_service
+from creator_service.usage_service import check_workspace_quota
 from creator_service.visual_asset_service import visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from creator_domain.models.pipeline_run import PipelineRun
 
 
+from shorts_api.routes.storyboard_dispatch import (
+    dispatch_storyboard_task_bulk,
+    dispatch_storyboard_task_with_tracking,
+)
 from shorts_api.routes.creator_runs_utils import (
     _has_active_tasks_for_run,
     dispatch_paragraph_audio,
     dispatch_paragraph_subtitles,
     validate_model_key,
+    validate_path_id,
 )
 from shorts_api.auth import CurrentUser, require_run_access
+from shorts_api.schemas.creator_storyboard import (
+    BulkParagraphAudioRequest,
+    BulkParagraphSubtitlesRequest,
+    ParagraphAudioRequest,
+    ParagraphSubtitlesRequest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,24 +51,7 @@ STORYBOARD_ALLOWED_STAGES = frozenset(
 router = APIRouter(tags=["runs"])
 
 
-class ParagraphAudioRequest(BaseModel):
-    tts_model: str = "qwen3-tts"
-    voice: str = "default"
 
-
-class ParagraphSubtitlesRequest(BaseModel):
-    subtitle_model: str = "whisper-small"
-    subtitle_format: Literal["srt", "vtt"] = "srt"
-
-
-class BulkParagraphAudioRequest(BaseModel):
-    tts_model: str = "qwen3-tts"
-    voice: str = "default"
-
-
-class BulkParagraphSubtitlesRequest(BaseModel):
-    subtitle_model: str = "whisper-small"
-    subtitle_format: Literal["srt", "vtt"] = "srt"
 
 
 @router.get("/runs/{run_id}/storyboard")
@@ -210,7 +202,8 @@ async def generate_paragraph_audio_endpoint(
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
     effective = request or ParagraphAudioRequest()
-    _, run = access
+    user, run = access
+    validate_path_id(section_id, "section_id")
     if run.current_stage not in STORYBOARD_ALLOWED_STAGES:
         raise HTTPException(
             status_code=409,
@@ -218,6 +211,12 @@ async def generate_paragraph_audio_endpoint(
                 f"Cannot generate storyboard assets in stage '{run.current_stage}'. "
                 "Pipeline must be past visual asset review."
             ),
+        )
+
+    if getattr(run, "status", None) == "cancelled":
+        raise HTTPException(
+            status_code=409,
+            detail="Run is cancelled; cannot dispatch new tasks",
         )
 
     draft = await script_service.get_active_draft(run_id)
@@ -233,22 +232,25 @@ async def generate_paragraph_audio_endpoint(
     if section_text is None:
         raise HTTPException(status_code=404, detail=f"Section '{section_id}' not found")
 
-    validate_model_key(effective.tts_model)
+    validate_model_key(effective.tts_model, expected_category="tts")
+    allowed, reason = await check_workspace_quota(user.workspace_id, operation_type="tts")
+    if not allowed:
+        raise HTTPException(status_code=429, detail=reason)
 
-    try:
-        task_id = dispatch_paragraph_audio(
+    task_id = await dispatch_storyboard_task_with_tracking(
+        run_id=run_id,
+        workspace_id=user.workspace_id,
+        operation_type="tts",
+        task_type="generate_paragraph_audio",
+        dispatch=lambda: dispatch_paragraph_audio(
             run_id=run_id,
             section_id=section_id,
-            section_text=section_text,
             tts_model=effective.tts_model,
             voice=effective.voice,
-        )
-        await task_tracking_service.record_task_queued(run_id, "generate_paragraph_audio", task_id)
-    except Exception:
-        raise HTTPException(
-            status_code=503,
-            detail="Failed to enqueue paragraph audio task",
-        ) from None
+        ),
+        error_detail="Failed to enqueue paragraph audio task",
+    )
+
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -267,7 +269,8 @@ async def generate_paragraph_subtitles_endpoint(
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
     effective = request or ParagraphSubtitlesRequest()
-    _, run = access
+    user, run = access
+    validate_path_id(section_id, "section_id")
     if run.current_stage not in STORYBOARD_ALLOWED_STAGES:
         raise HTTPException(
             status_code=409,
@@ -277,6 +280,12 @@ async def generate_paragraph_subtitles_endpoint(
             ),
         )
 
+    if getattr(run, "status", None) == "cancelled":
+        raise HTTPException(
+            status_code=409,
+            detail="Run is cancelled; cannot dispatch new tasks",
+        )
+
     audio = await audio_service.get_paragraph_audio(run_id, section_id)
     if audio is None:
         raise HTTPException(
@@ -284,24 +293,25 @@ async def generate_paragraph_subtitles_endpoint(
             detail=f"No audio found for section '{section_id}'. Generate audio first.",
         )
 
-    validate_model_key(effective.subtitle_model)
+    validate_model_key(effective.subtitle_model, expected_category="stt")
+    allowed, reason = await check_workspace_quota(user.workspace_id, operation_type="stt")
+    if not allowed:
+        raise HTTPException(status_code=429, detail=reason)
 
-    try:
-        task_id = dispatch_paragraph_subtitles(
+    task_id = await dispatch_storyboard_task_with_tracking(
+        run_id=run_id,
+        workspace_id=user.workspace_id,
+        operation_type="stt",
+        task_type="generate_paragraph_subtitles",
+        dispatch=lambda: dispatch_paragraph_subtitles(
             run_id=run_id,
             section_id=section_id,
-            audio_path=audio.path,
             subtitle_model=effective.subtitle_model,
             subtitle_format=effective.subtitle_format,
-        )
-        await task_tracking_service.record_task_queued(
-            run_id, "generate_paragraph_subtitles", task_id
-        )
-    except Exception:
-        raise HTTPException(
-            status_code=503,
-            detail="Failed to enqueue paragraph subtitle task",
-        ) from None
+        ),
+        error_detail="Failed to enqueue paragraph subtitle task",
+    )
+
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -316,7 +326,7 @@ async def generate_all_paragraph_audio(
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
     effective = request or BulkParagraphAudioRequest()
-    _, run = access
+    user, run = access
     if run.current_stage not in STORYBOARD_ALLOWED_STAGES:
         raise HTTPException(
             status_code=409,
@@ -326,11 +336,17 @@ async def generate_all_paragraph_audio(
             ),
         )
 
+    if getattr(run, "status", None) == "cancelled":
+        raise HTTPException(
+            status_code=409,
+            detail="Run is cancelled; cannot dispatch new tasks",
+        )
+
     draft = await script_service.get_active_draft(run_id)
     if draft is None or not draft.structured_script:
         raise HTTPException(status_code=400, detail="No script available")
 
-    validate_model_key(effective.tts_model)
+    validate_model_key(effective.tts_model, expected_category="tts")
 
     # Skip sections that already have audio artifacts.
     existing_audio = await audio_service.list_paragraph_audio(run_id)
@@ -343,23 +359,21 @@ async def generate_all_paragraph_audio(
     for section in draft.structured_script:
         if section.section_id in sections_with_audio:
             continue
-        try:
-            tid = dispatch_paragraph_audio(
+        task_ids.append(
+            await dispatch_storyboard_task_bulk(
                 run_id=run_id,
+                workspace_id=user.workspace_id,
+                operation_type="tts",
+                task_type="generate_paragraph_audio",
                 section_id=section.section_id,
-                section_text=section.text,
-                tts_model=effective.tts_model,
-                voice=effective.voice,
+                dispatch=lambda: dispatch_paragraph_audio(
+                    run_id=run_id,
+                    section_id=section.section_id,
+                    tts_model=effective.tts_model,
+                    voice=effective.voice,
+                ),
             )
-            await task_tracking_service.record_task_queued(run_id, "generate_paragraph_audio", tid)
-            task_ids.append({"section_id": section.section_id, "task_id": tid})
-        except Exception:
-            logger.exception(
-                "Failed to dispatch audio task for section %s of run %s", section.section_id, run_id
-            )
-            task_ids.append(
-                {"section_id": section.section_id, "task_id": "", "error": "dispatch_failed"}
-            )
+        )
     failed_count = sum(1 for t in task_ids if "error" in t)
     return {
         "run_id": run_id,
@@ -376,7 +390,7 @@ async def generate_all_paragraph_subtitles(
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
     effective = request or BulkParagraphSubtitlesRequest()
-    _, run = access
+    user, run = access
     if run.current_stage not in STORYBOARD_ALLOWED_STAGES:
         raise HTTPException(
             status_code=409,
@@ -386,13 +400,19 @@ async def generate_all_paragraph_subtitles(
             ),
         )
 
+    if getattr(run, "status", None) == "cancelled":
+        raise HTTPException(
+            status_code=409,
+            detail="Run is cancelled; cannot dispatch new tasks",
+        )
+
     audio_artifacts = await audio_service.list_paragraph_audio(run_id)
     if not audio_artifacts:
         raise HTTPException(
             status_code=400, detail="No paragraph audio found. Generate audio first."
         )
 
-    validate_model_key(effective.subtitle_model)
+    validate_model_key(effective.subtitle_model, expected_category="stt")
 
     # Deduplicate by section_id — only dispatch for the first (latest) audio
     # artifact per section to avoid redundant subtitle generation on regeneration.
@@ -406,32 +426,27 @@ async def generate_all_paragraph_subtitles(
     seen_sections: set[str] = set()
     task_ids: list[dict[str, str]] = []
     for audio in audio_artifacts:
-        if not audio.section_id or audio.section_id in seen_sections:
+        section_id = audio.section_id
+        if not section_id or section_id in seen_sections:
             continue
-        seen_sections.add(audio.section_id)
-        if audio.section_id in sections_with_subtitles:
+        seen_sections.add(section_id)
+        if section_id in sections_with_subtitles:
             continue
-        try:
-            tid = dispatch_paragraph_subtitles(
+        task_ids.append(
+            await dispatch_storyboard_task_bulk(
                 run_id=run_id,
-                section_id=audio.section_id,
-                audio_path=audio.path,
-                subtitle_model=effective.subtitle_model,
-                subtitle_format=effective.subtitle_format,
+                workspace_id=user.workspace_id,
+                operation_type="stt",
+                task_type="generate_paragraph_subtitles",
+                section_id=section_id,
+                dispatch=lambda section_id=section_id: dispatch_paragraph_subtitles(
+                    run_id=run_id,
+                    section_id=section_id,
+                    subtitle_model=effective.subtitle_model,
+                    subtitle_format=effective.subtitle_format,
+                ),
             )
-            await task_tracking_service.record_task_queued(
-                run_id, "generate_paragraph_subtitles", tid
-            )
-            task_ids.append({"section_id": audio.section_id, "task_id": tid})
-        except Exception:
-            logger.exception(
-                "Failed to dispatch subtitle task for section %s of run %s",
-                audio.section_id,
-                run_id,
-            )
-            task_ids.append(
-                {"section_id": audio.section_id, "task_id": "", "error": "dispatch_failed"}
-            )
+        )
     failed_count = sum(1 for t in task_ids if "error" in t)
     return {
         "run_id": run_id,

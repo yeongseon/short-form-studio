@@ -208,6 +208,11 @@ You can use external APIs for higher-quality results instead of (or in addition 
 The Settings page is currently a **read-only status page** — it does not support editing or saving API keys.
 You can check whether each provider key is configured at `/settings`, but actual key values are managed via server environment variables.
 
+This is a deliberate security decision: the API never writes `.env` from a request, never returns key values
+(not even masked), never logs keys, and the browser never stores them. See
+[Provider API Key Configuration](SECURITY.md#provider-api-key-configuration) in the Security Model for the full
+supported deployment model, rotation procedure, and CSRF applicability.
+
 #### Editing the .env File
 
 Add your API keys to the `.env` file:
@@ -230,6 +235,21 @@ When creating a project, select between local and remote models in the **Model D
 
 If a ⚠️ icon appears next to a remote model, the corresponding provider API key is not configured.
 
+#### Model Key vs Provider Model Name
+
+The Studio uses **model keys** (logical identifiers) that map to provider-specific model names:
+
+| Model Key (API/UI) | Provider | Actual Model Name |
+|---|---|---|
+| `qwen3-4b` | Ollama | `qwen3:4b` |
+| `sd15` | Stable Diffusion | SD 1.5 |
+| `whisper-small` | Whisper | `small` |
+| `gpt-4o-mini` | OpenAI | `gpt-4o-mini` |
+| `claude-sonnet` | Anthropic | `claude-sonnet-4-20250514` |
+| `dalle-3` | OpenAI | `dall-e-3` |
+
+Model keys use hyphens (not colons) and are always lowercase.
+
 ---
 
 ## Generated File Locations
@@ -249,6 +269,24 @@ data/artifacts/<run_id>/
 └── render/
     └── output.mp4              # Final rendered video (1080x1920, H.264, 30fps)
 ```
+
+### Artifact retention
+
+By default, artifacts are automatically deleted **90 days** after creation.
+Configure the window with the `ARTIFACT_RETENTION_DAYS` env var (values
+<= 0 fall back to the default of 90 days):
+
+- The `sweep_expired_artifacts` beat task (every 10 minutes) marks rows
+  whose `expires_at` has passed by setting `delete_requested_at = NOW()`.
+- The `retry_failed_artifact_deletions` task (every 5 minutes) then removes
+  the file from storage and deletes the DB row, retrying transient failures
+  with `FOR UPDATE SKIP LOCKED`.
+
+To exempt a specific artifact from expiry, set `expires_at = NULL`
+explicitly on its row (e.g. for a published/keep-forever artifact).
+
+Requires Celery Beat to be running (see the `beat` service in
+`docker-compose.yml`). Downloads return `410 Gone` once `expires_at` passes.
 
 ---
 

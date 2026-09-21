@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated
+from typing import TYPE_CHECKING
 
 from creator_domain.models import TRIGGER_POLICY
 from creator_service.run_service import run_service
@@ -12,57 +12,23 @@ from creator_service.task_dispatch_service import (
     dispatch_generate_visual_plan,
 )
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, ConfigDict, Field
 
 if TYPE_CHECKING:
     from creator_domain.models.pipeline_run import PipelineRun
 
 
-from shorts_api.routes.creator_runs_core import GenerateVisualPlanRequest
 from shorts_api.routes.creator_runs_utils import (
     _has_active_tasks_for_run,
     validate_model_key,
 )
 from shorts_api.auth import CurrentUser, require_run_access
-
-router = APIRouter(tags=["runs"])
-
-_VALID_SAMPLERS = frozenset(
-    {
-        "Euler a",
-        "Euler",
-        "LMS",
-        "Heun",
-        "DPM2",
-        "DPM2 a",
-        "DPM++ 2S a",
-        "DPM++ 2M",
-        "DPM++ SDE",
-        "DPM++ 2M Karras",
-        "DPM++ SDE Karras",
-        "DPM++ 2M SDE Karras",
-    }
+from shorts_api.schemas.creator_runs import GenerateVisualPlanRequest
+from shorts_api.schemas.creator_visuals import (
+    GenerateVisualAssetsRequest,
+    ImageTuningParams,
 )
 
-
-class ImageTuningParams(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    steps: Annotated[int, Field(ge=10, le=50, description="Denoising steps")] = 25
-    cfg_scale: Annotated[int | float, Field(ge=1, le=20, description="CFG scale")] = 7
-    sampler_name: Annotated[
-        str,
-        Field(max_length=40, description="Sampler algorithm"),
-    ] = "DPM++ 2M Karras"
-    negative_prompt: Annotated[
-        str,
-        Field(max_length=1000, description="Negative prompt"),
-    ] = ""
-
-
-class GenerateVisualAssetsRequest(BaseModel):
-    model_key: str = "sd15"
-    image_params: ImageTuningParams | None = None
+router = APIRouter(tags=["runs"])
 
 
 @router.post("/runs/{run_id}/generate-visual-plan", status_code=202)
@@ -71,7 +37,7 @@ async def generate_visual_plan_trigger(
     request: GenerateVisualPlanRequest,
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
-    _, run = access
+    user, run = access
     if run.current_stage == "VISUAL_PLAN_GENERATING" and await _has_active_tasks_for_run(run.id):
         raise HTTPException(status_code=409, detail="Visual plan generation already in progress")
 
@@ -83,7 +49,7 @@ async def generate_visual_plan_trigger(
             f"expected one of {sorted(allowed_stages)}",
         )
 
-    validate_model_key(request.model_key)
+    validate_model_key(request.model_key, expected_category="llm")
     return await cas_dispatch_with_rollback(
         run_id=run_id,
         expected_stages=allowed_stages,
@@ -93,12 +59,14 @@ async def generate_visual_plan_trigger(
             "run_id": run_id,
             "model_key": request.model_key,
             "style_preset": request.style_preset,
+            "niche": request.niche,
         },
         run_service=run_service,
         rollback_stage=run.current_stage,
         rollback_restart_from=run.restart_from,
         enqueue_error_detail="Failed to enqueue visual plan generation task",
         quota_operation_type="llm",
+        workspace_id=user.workspace_id,
     )
 
 
@@ -108,7 +76,7 @@ async def generate_visual_assets_trigger(
     request: GenerateVisualAssetsRequest,
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
-    _, run = access
+    user, run = access
     if run.current_stage == "VISUAL_ASSET_GENERATING" and await _has_active_tasks_for_run(run.id):
         raise HTTPException(status_code=409, detail="Visual asset generation already in progress")
 
@@ -120,7 +88,7 @@ async def generate_visual_assets_trigger(
             f"expected one of {sorted(allowed_stages)}",
         )
 
-    validate_model_key(request.model_key)
+    validate_model_key(request.model_key, expected_category="image")
     return await cas_dispatch_with_rollback(
         run_id=run_id,
         expected_stages=allowed_stages,
@@ -139,4 +107,5 @@ async def generate_visual_assets_trigger(
         rollback_restart_from=run.restart_from,
         enqueue_error_detail="Failed to enqueue image generation task",
         quota_operation_type="image_gen",
+        workspace_id=user.workspace_id,
     )

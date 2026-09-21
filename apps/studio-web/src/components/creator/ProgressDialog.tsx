@@ -52,6 +52,24 @@ const STAGE_LABELS: Record<string, string> = {
   RENDER_GENERATING: "Rendering video…",
 };
 
+// Error code to human-readable label mapping
+const ERROR_LABELS: Record<string, string> = {
+  provider_timeout: "Timed out",
+  rate_limit: "Rate limited",
+  provider_error: "Provider error",
+  validation_error: "Invalid input",
+  revoked: "Cancelled",
+  soft_time_limit: "Timed out",
+};
+
+interface RunTaskInfo {
+  task_type: string;
+  status: string;
+  attempt: number;
+  error_code: string | null;
+  error_message: string | null;
+}
+
 // --------------- component ---------------
 
 export default function ProgressDialog({
@@ -68,6 +86,7 @@ export default function ProgressDialog({
   const [outcome, setOutcome] = useState<Outcome>("running");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [pollCount, setPollCount] = useState(0);
+  const [taskInfo, setTaskInfo] = useState<RunTaskInfo | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
@@ -99,6 +118,7 @@ export default function ProgressDialog({
       setOutcome("running");
       setErrorMsg(null);
       setPollCount(0);
+      setTaskInfo(null);
       if (timerRef.current) {
         clearInterval(timerRef.current);
         timerRef.current = null;
@@ -123,6 +143,19 @@ export default function ProgressDialog({
         setSnapshot(data);
         setPollCount((c) => c + 1);
         setErrorMsg(null);
+
+        // Fetch task-level detail (retry count, error info)
+        try {
+          const taskRes = await apiFetch(`${apiBase}/runs/${runId}/tasks`);
+          if (!cancelled && taskRes.ok) {
+            const tasks: RunTaskInfo[] = await taskRes.json();
+            // Get the latest task (most recent by attempt/creation)
+            const latest = tasks.length > 0 ? tasks[tasks.length - 1] : null;
+            setTaskInfo(latest);
+          }
+        } catch {
+          // Task fetch is non-critical — don't block on failure
+        }
 
         const result = classify(data);
         if (result === "completed") {
@@ -288,6 +321,16 @@ export default function ProgressDialog({
           />
         )}
 
+        {/* Retry attempt info (shown during running state) */}
+        {outcome === "running" && taskInfo && taskInfo.attempt > 1 && (
+          <p
+            data-testid="progress-retry"
+            style={{ margin: "0 0 12px", fontSize: 12, color: "#d97706", fontWeight: 500 }}
+          >
+            Retry attempt {taskInfo.attempt} — {taskInfo.error_code ? (ERROR_LABELS[taskInfo.error_code] ?? taskInfo.error_code) : "retrying"}…
+          </p>
+        )}
+
         {/* Success state */}
         {outcome === "completed" && (
           <div
@@ -321,9 +364,22 @@ export default function ProgressDialog({
             }}
           >
             Generation failed
+            {taskInfo?.error_code && (
+              <span style={{ display: "block", marginTop: 4, fontSize: 12, opacity: 0.85 }}>
+                {ERROR_LABELS[taskInfo.error_code] ?? taskInfo.error_code}
+                {taskInfo.attempt > 1 && ` (after ${taskInfo.attempt} attempts)`}
+              </span>
+            )}
+            {taskInfo?.error_message && (
+              <span
+                style={{ display: "block", marginTop: 4, fontSize: 11, opacity: 0.7, maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                title={taskInfo.error_message}
+              >
+                {taskInfo.error_message}
+              </span>
+            )}
           </div>
         )}
-
         {/* Network error state */}
         {outcome === "error" && errorMsg && (
           <div

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+import logging
 
 from creator_domain.models import TRIGGER_POLICY
 from creator_service.audio_service import audio_service
@@ -20,56 +21,54 @@ from creator_service.task_dispatch_service import (
 from creator_service.task_tracking_service import task_tracking_service
 from creator_service.visual_asset_service import visual_asset_service
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 
 if TYPE_CHECKING:
     from creator_domain.models.pipeline_run import PipelineRun
 
 
-from shorts_api.routes.creator_runs_core import (
+from shorts_api.routes.creator_runs_utils import (
+    _has_active_tasks_for_run,
+    validate_model_key,
+    validate_path_id,
+    validate_render_profile,
+)
+from shorts_api.auth import CurrentUser, require_run_access
+from shorts_api.schemas.creator_runs import (
     GenerateAudioRequest,
     GenerateSubtitlesRequest,
     RenderRequest,
 )
-from shorts_api.routes.creator_runs_utils import (
-    _has_active_tasks_for_run,
-    validate_model_key,
-    validate_render_profile,
+from shorts_api.schemas.creator_visuals import (
+    GenerateSceneImageRequest,
+    ImageTuningParams,
+    RegenerateSceneImageRequest,
 )
-from shorts_api.routes.creator_runs_visuals import ImageTuningParams
-from shorts_api.auth import CurrentUser, require_run_access
 
 router = APIRouter(tags=["runs"])
 
 
-async def _enforce_run_quota(run_id: int, operation_type: str) -> int:
+logger = logging.getLogger(__name__)
+
+async def _enforce_run_quota(run_id: int, operation_type: str, workspace_id: int) -> int:
     from creator_service.usage_service import check_workspace_quota
 
-    run = await run_service.get_run(run_id)
+    run = await run_service.get_run(run_id, workspace_id=workspace_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    project = await project_service.get_project(run.project_id)
+    project = await project_service.get_project(run.project_id, workspace_id=workspace_id)
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
-    workspace_id = getattr(project, "workspace_id", None)
-    if workspace_id is None:
+    project_workspace_id = getattr(project, "workspace_id", None)
+    if project_workspace_id is None:
         raise HTTPException(status_code=400, detail="Project workspace is not configured")
 
-    allowed, reason = await check_workspace_quota(int(workspace_id), operation_type=operation_type)
+    allowed, reason = await check_workspace_quota(
+        int(project_workspace_id), operation_type=operation_type
+    )
     if not allowed:
         raise HTTPException(status_code=429, detail=reason)
-    return int(workspace_id)
+    return int(project_workspace_id)
 
-
-class RegenerateSceneImageRequest(BaseModel):
-    model_key: str = "sd15"
-    prompt_override: str | None = None
-    image_params: ImageTuningParams | None = None
-
-
-class GenerateSceneImageRequest(BaseModel):
-    model_key: str = "sd15"
-    image_params: ImageTuningParams | None = None
 
 
 @router.post(
@@ -84,6 +83,7 @@ async def generate_scene_image_endpoint(
 ) -> dict[str, object]:
     effective_request = request or GenerateSceneImageRequest()
     _, run = access
+    validate_path_id(scene_id, "scene_id")
 
     allowed_stages = frozenset(
         {"VISUAL_PLAN_REVIEW", "VISUAL_ASSET_GENERATING", "VISUAL_ASSET_REVIEW"}
@@ -95,8 +95,10 @@ async def generate_scene_image_endpoint(
             f"expected one of {sorted(allowed_stages)}",
         )
 
-    validate_model_key(effective_request.model_key)
-    workspace_id = await _enforce_run_quota(run_id, "image_gen")
+    validate_model_key(effective_request.model_key, expected_category="image")
+    workspace_id = await _enforce_run_quota(
+        run_id, "image_gen", workspace_id=access[0].workspace_id
+    )
     try:
         task_id = dispatch_generate_scene_image(
             run_id=run_id,
@@ -117,7 +119,17 @@ async def generate_scene_image_endpoint(
             detail="Failed to enqueue image generation task",
         ) from None
 
-    await task_tracking_service.record_task_queued(run_id, "generate_scene_image", task_id)
+    try:
+        await task_tracking_service.record_task_queued(run_id, "generate_scene_image", task_id)
+    except Exception:
+        logger.error("Failed to track task %s for run %d — revoking orphan", task_id, run_id, exc_info=True)
+        try:
+            __import__("celery_app").celery_app.control.revoke(task_id, terminate=True)
+        except Exception:
+            logger.error("Failed to revoke orphan task %s", task_id, exc_info=True)
+        from creator_service.usage_service import cancel_workspace_quota_reservation
+        await cancel_workspace_quota_reservation(workspace_id, "image_gen")
+        raise HTTPException(status_code=503, detail="Task tracking failed") from None
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -137,6 +149,7 @@ async def regenerate_scene_image_endpoint(
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
     _, run = access
+    validate_path_id(scene_id, "scene_id")
 
     allowed_stages = frozenset({"VISUAL_ASSET_REVIEW", "VISUAL_ASSET_GENERATING"})
     if run.current_stage not in allowed_stages:
@@ -146,8 +159,10 @@ async def regenerate_scene_image_endpoint(
             f"expected one of {sorted(allowed_stages)}",
         )
 
-    validate_model_key(request.model_key)
-    workspace_id = await _enforce_run_quota(run_id, "image_gen")
+    validate_model_key(request.model_key, expected_category="image")
+    workspace_id = await _enforce_run_quota(
+        run_id, "image_gen", workspace_id=access[0].workspace_id
+    )
     try:
         task_id = dispatch_generate_scene_image(
             run_id=run_id,
@@ -166,7 +181,17 @@ async def regenerate_scene_image_endpoint(
             detail="Failed to enqueue image generation task",
         ) from None
 
-    await task_tracking_service.record_task_queued(run_id, "generate_scene_image", task_id)
+    try:
+        await task_tracking_service.record_task_queued(run_id, "generate_scene_image", task_id)
+    except Exception:
+        logger.error("Failed to track task %s for run %d — revoking orphan", task_id, run_id, exc_info=True)
+        try:
+            __import__("celery_app").celery_app.control.revoke(task_id, terminate=True)
+        except Exception:
+            logger.error("Failed to revoke orphan task %s", task_id, exc_info=True)
+        from creator_service.usage_service import cancel_workspace_quota_reservation
+        await cancel_workspace_quota_reservation(workspace_id, "image_gen")
+        raise HTTPException(status_code=503, detail="Task tracking failed") from None
     return {
         "task_id": task_id,
         "run_id": run_id,
@@ -179,7 +204,7 @@ async def regenerate_scene_image_endpoint(
 async def list_visual_assets_by_run(
     run_id: int, access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access)
 ) -> dict[str, object]:
-    _, run = access
+    _ = access
 
     grouped = await visual_asset_service.list_by_run(run_id)
     return {
@@ -199,7 +224,8 @@ async def list_visual_assets_by_scene(
     scene_id: str,
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
-    _, run = access
+    _ = access
+    validate_path_id(scene_id, "scene_id")
 
     assets = await visual_asset_service.list_by_scene(run_id, scene_id)
     return {
@@ -218,6 +244,7 @@ async def select_active_asset(
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
     _, run = access
+    validate_path_id(scene_id, "scene_id")
 
     allowed_stages = frozenset({"VISUAL_ASSET_REVIEW", "VISUAL_ASSET_GENERATING"})
     if run.current_stage not in allowed_stages:
@@ -244,7 +271,7 @@ async def generate_audio_trigger(
     request: GenerateAudioRequest,
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
-    _, run = access
+    user, run = access
     if run.current_stage == "AUDIO_GENERATING" and await _has_active_tasks_for_run(run.id):
         raise HTTPException(status_code=409, detail="Audio generation already in progress")
 
@@ -256,7 +283,7 @@ async def generate_audio_trigger(
             f"expected one of {sorted(allowed_stages)}",
         )
 
-    validate_model_key(request.tts_model)
+    validate_model_key(request.tts_model, expected_category="tts")
     return await cas_dispatch_with_rollback(
         run_id=run_id,
         expected_stages=allowed_stages,
@@ -272,6 +299,7 @@ async def generate_audio_trigger(
         rollback_restart_from=run.restart_from,
         enqueue_error_detail="Failed to enqueue audio generation task",
         quota_operation_type="tts",
+        workspace_id=user.workspace_id,
     )
 
 
@@ -281,7 +309,7 @@ async def generate_subtitles_trigger(
     request: GenerateSubtitlesRequest,
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
-    _, run = access
+    user, run = access
     if run.current_stage == "SUBTITLE_GENERATING" and await _has_active_tasks_for_run(run.id):
         raise HTTPException(status_code=409, detail="Subtitle generation already in progress")
 
@@ -293,7 +321,7 @@ async def generate_subtitles_trigger(
             f"expected one of {sorted(allowed_stages)}",
         )
 
-    validate_model_key(request.subtitle_model)
+    validate_model_key(request.subtitle_model, expected_category="stt")
     return await cas_dispatch_with_rollback(
         run_id=run_id,
         expected_stages=allowed_stages,
@@ -309,6 +337,7 @@ async def generate_subtitles_trigger(
         rollback_restart_from=run.restart_from,
         enqueue_error_detail="Failed to enqueue subtitle generation task",
         quota_operation_type="stt",
+        workspace_id=user.workspace_id,
     )
 
 
@@ -318,7 +347,7 @@ async def render_trigger(
     request: RenderRequest,
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
-    _, run = access
+    user, run = access
     if run.current_stage == "RENDER_GENERATING" and await _has_active_tasks_for_run(run.id):
         raise HTTPException(status_code=409, detail="Render already in progress")
 
@@ -345,6 +374,7 @@ async def render_trigger(
         rollback_restart_from=run.restart_from,
         enqueue_error_detail="Failed to enqueue render task",
         quota_operation_type="render",
+        workspace_id=user.workspace_id,
     )
 
 

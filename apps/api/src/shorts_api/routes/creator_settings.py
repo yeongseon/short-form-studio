@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import os
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
+
+from shorts_api.auth import CurrentUser, get_current_user
 
 router = APIRouter(tags=["settings"])
 
@@ -13,6 +15,7 @@ _PROVIDER_ENV_MAP: dict[str, str] = {
     "google": "GOOGLE_API_KEY",
     "stability": "STABILITY_API_KEY",
     "elevenlabs": "ELEVENLABS_API_KEY",
+    "groq": "GROQ_API_KEY",
 }
 
 _PROVIDER_LABELS: dict[str, str] = {
@@ -21,6 +24,7 @@ _PROVIDER_LABELS: dict[str, str] = {
     "google": "Google (Gemini / Imagen)",
     "stability": "Stability AI",
     "elevenlabs": "ElevenLabs",
+    "groq": "Groq",
 }
 
 
@@ -31,7 +35,8 @@ class ApiKeyStatus(BaseModel):
 
 
 @router.get("/settings/api-keys")
-async def list_api_keys() -> list[ApiKeyStatus]:
+async def list_api_keys(user: CurrentUser = Depends(get_current_user)) -> list[ApiKeyStatus]:
+    # No resource-scoped access helper: this endpoint reports process-level provider key presence only.
     result: list[ApiKeyStatus] = []
     for provider, env_var in _PROVIDER_ENV_MAP.items():
         value = os.getenv(env_var, "").strip()
@@ -43,5 +48,3 @@ async def list_api_keys() -> list[ApiKeyStatus]:
             )
         )
     return result
-
-

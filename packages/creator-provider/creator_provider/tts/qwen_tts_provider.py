@@ -3,12 +3,15 @@ from __future__ import annotations
 import os
 import struct
 import tempfile
+from importlib import import_module
 from pathlib import Path
 from typing import Any
 
 import httpx
 
 from creator_provider.base import AudioResult, TTSProvider
+from creator_provider.exceptions import map_httpx_error
+from creator_provider.validation import MAX_TTS_TEXT_CHARS, validate_prompt_length
 
 
 class QwenTTSProvider(TTSProvider):
@@ -22,6 +25,7 @@ class QwenTTSProvider(TTSProvider):
         voice: str = "default",
         params: dict[str, Any] | None = None,
     ) -> AudioResult:
+        validate_prompt_length(text, MAX_TTS_TEXT_CHARS, "TTS")
         merged_params: dict[str, Any] = dict(params or {})
         payload: dict[str, Any] = {
             "text": text,
@@ -36,12 +40,20 @@ class QwenTTSProvider(TTSProvider):
                 response = await client.post(url, json=payload)
                 response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise RuntimeError(f"Failed to connect to Qwen3 TTS provider at {url}: {exc}") from exc
+            raise map_httpx_error(exc, f"Failed to connect to Qwen3 TTS provider at {url}") from exc
 
         audio_bytes = response.content
         requested_output = merged_params.get("output_path")
         if requested_output:
-            output_path = Path(str(requested_output))
+            candidate_output = str(requested_output)
+            artifact_root = os.getenv("ARTIFACT_ROOT")
+            # NOTE: validate-then-write race (symlink swap) is acceptable here;
+            # artifact directories are server-controlled and not user-writable.
+            validated_output = import_module("creator_domain.sanitize").validate_artifact_path(
+                candidate_output,
+                artifact_root or "data/artifacts",
+            )
+            output_path = Path(validated_output)
         else:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
                 output_path = Path(tmp.name)

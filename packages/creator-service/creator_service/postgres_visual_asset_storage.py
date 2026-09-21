@@ -10,6 +10,15 @@ class PostgresVisualAssetStorage:
         run_id = row["run_id"]
         scene_id = row["scene_id"]
         is_active = bool(row.get("is_active", False))
+        idempotency_key = row.get("idempotency_key")
+
+        if isinstance(idempotency_key, str):
+            existing = await fetch_one(
+                "SELECT * FROM creator_scene_assets WHERE idempotency_key = $1",
+                idempotency_key,
+            )
+            if existing is not None:
+                return existing
 
         pool = await get_pool()
         async with pool.acquire() as connection, connection.transaction():
@@ -52,9 +61,11 @@ class PostgresVisualAssetStorage:
                         provider,
                         storage_provider,
                         storage_key,
-                        is_active
+                        is_active,
+                        idempotency_key
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                    ON CONFLICT (idempotency_key) DO NOTHING
                     RETURNING *
                     """,
                 run_id,
@@ -67,7 +78,13 @@ class PostgresVisualAssetStorage:
                 row.get("storage_provider"),
                 row.get("storage_key"),
                 is_active,
+                idempotency_key,
             )
+            if saved is None and isinstance(idempotency_key, str):
+                saved = await connection.fetchrow(
+                    "SELECT * FROM creator_scene_assets WHERE idempotency_key = $1",
+                    idempotency_key,
+                )
         if saved is None:
             raise ValueError("Failed to save visual asset")
         return dict(saved)

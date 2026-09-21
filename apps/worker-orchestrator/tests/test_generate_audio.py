@@ -46,6 +46,7 @@ class FakeStorage:
         run_id: int,
         updates: dict[str, object],
         expected_stages: frozenset[str],
+    rejected_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
         self.cas_calls.append((run_id, updates, expected_stages))
         row = self._runs.get(run_id)
@@ -103,6 +104,9 @@ class FakeAudioService:
         model_used: str | None = None,
         provider_type: str | None = None,
         voice: str | None = None,
+        storage_provider: str | None = None,
+        storage_key: str | None = None,
+        idempotency_key: str | None = None,
     ) -> FakeAudioArtifact:
         call_data = {
             "run_id": run_id,
@@ -110,6 +114,8 @@ class FakeAudioService:
             "model_used": model_used,
             "provider_type": provider_type,
             "voice": voice,
+            "storage_provider": storage_provider,
+            "storage_key": storage_key,
         }
         self.calls.append(call_data)
         return FakeAudioArtifact(id=self.artifact_id, path=path)
@@ -128,17 +134,12 @@ class FakeRegistry:
 
 
 def _patch_registry(monkeypatch: pytest.MonkeyPatch, registry: FakeRegistry) -> None:
-    class _ProviderRegistry:
-        @staticmethod
-        def create_default() -> FakeRegistry:
-            return registry
-
-    monkeypatch.setattr(generate_audio_module, "ProviderRegistry", _ProviderRegistry)
+    monkeypatch.setattr(generate_audio_module, "get_default_registry", lambda: registry)
 
 
 def _patch_redis(monkeypatch: pytest.MonkeyPatch, redis_client: object) -> None:
     redis_stub = SimpleNamespace(Redis=SimpleNamespace(from_url=lambda _: redis_client))
-    monkeypatch.setattr(generate_audio_module, "redis", redis_stub)
+    monkeypatch.setattr("tasks.task_runner.redis", redis_stub)
 
 
 def _patch_services(
@@ -149,7 +150,7 @@ def _patch_services(
 ) -> None:
     monkeypatch.setattr(generate_audio_module, "_script_service", script_service)
     monkeypatch.setattr(generate_audio_module, "_audio_service", audio_service)
-    monkeypatch.setattr(generate_audio_module, "_run_service", SimpleNamespace(storage=storage))
+    monkeypatch.setattr("tasks.task_runner._run_service", SimpleNamespace(storage=storage))
 
 
 def _invoke_task(**kwargs: Any) -> dict[str, object]:
@@ -190,15 +191,15 @@ def test_generate_audio_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert params is not None
     assert "voice" not in params
 
-    assert audio_service.calls == [
-        {
-            "run_id": 101,
-            "path": "data/artifacts/101/audio/audio.wav",
-            "model_used": "qwen3-tts",
-            "provider_type": "qwen_tts",
-            "voice": "en_US-lessac-medium",
-        }
-    ]
+    assert len(audio_service.calls) == 1
+    call = audio_service.calls[0]
+    assert call["run_id"] == 101
+    assert call["path"] == "data/artifacts/101/audio/audio.wav"
+    assert call["model_used"] == "qwen3-tts"
+    assert call["provider_type"] == "qwen_tts"
+    assert call["voice"] == "en_US-lessac-medium"
+    assert call["storage_provider"] == "local"
+    assert "storage_key" in call
     assert storage.calls == [(101, {"current_stage": "SUBTITLE_GENERATING", "status": "running"})]
     assert storage.cas_calls[0][2] == frozenset({"VISUAL_ASSET_REVIEW", "AUDIO_GENERATING"})
 
@@ -281,6 +282,26 @@ def test_generate_audio_provider_failure_marks_failed(monkeypatch: pytest.Monkey
     assert storage.cas_calls[0][2] == frozenset({"VISUAL_ASSET_REVIEW", "AUDIO_GENERATING"})
 
 
+def test_generate_audio_preserves_provider_timeout_retryable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = FakeProvider(error=generate_audio_module.ProviderTimeoutError("provider timeout"))
+    _patch_registry(
+        monkeypatch, FakeRegistry(entry=FakeEntry(requires_gpu=False), provider=provider)
+    )
+
+    script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Some script"))
+    audio_service = FakeAudioService()
+    storage = _make_storage(run_id=108, stage="VISUAL_ASSET_REVIEW")
+    _patch_services(monkeypatch, script_service, audio_service, storage)
+
+    with pytest.raises(generate_audio_module.ProviderTimeoutError, match="provider timeout"):
+        _invoke_task(run_id=108)
+
+    assert audio_service.calls == []
+    assert storage.calls == []
+
+
 def test_generate_audio_with_gpu_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     provider = FakeProvider()
     entry = FakeEntry(requires_gpu=True)
@@ -292,10 +313,12 @@ def test_generate_audio_with_gpu_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     lock_calls: list[str] = []
     release_calls: list[str] = []
     monkeypatch.setattr(
-        generate_audio_module, "acquire_gpu_lock", lambda _, task_id: lock_calls.append(task_id)
+        "tasks.task_runner.acquire_gpu_lock",
+        lambda _, task_id: (lock_calls.append(task_id) or f"{task_id}:fake-token"),
     )
     monkeypatch.setattr(
-        generate_audio_module, "release_gpu_lock", lambda _, task_id: release_calls.append(task_id)
+        "tasks.task_runner.release_gpu_lock",
+        lambda _, token: release_calls.append(token.split(":")[0]) or True,
     )
 
     script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Lock script"))
@@ -318,13 +341,11 @@ def test_generate_audio_without_gpu_lock(monkeypatch: pytest.MonkeyPatch) -> Non
     _patch_registry(monkeypatch, FakeRegistry(entry=entry, provider=provider))
 
     monkeypatch.setattr(
-        generate_audio_module,
-        "acquire_gpu_lock",
+        "tasks.task_runner.acquire_gpu_lock",
         lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")),
     )
     monkeypatch.setattr(
-        generate_audio_module,
-        "release_gpu_lock",
+        "tasks.task_runner.release_gpu_lock",
         lambda *_: (_ for _ in ()).throw(RuntimeError("unexpected")),
     )
 
@@ -347,6 +368,7 @@ class _CASSkipStorage(FakeStorage):
         run_id: int,
         updates: dict[str, object],
         expected_stages: frozenset[str],
+    rejected_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, object] | None]:
         self.cas_calls.append((run_id, updates, expected_stages))
         row = self._runs.get(run_id)
