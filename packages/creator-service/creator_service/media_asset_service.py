@@ -12,10 +12,13 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
+import subprocess
+import tempfile
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, BinaryIO, Protocol
 
 from creator_domain.models import MediaAsset, MediaOrigin, MediaType
@@ -38,6 +41,19 @@ _PIL_FORMAT_TO_MIME = {
     "JPEG": "image/jpeg",
     "WEBP": "image/webp",
     "GIF": "image/gif",
+}
+
+# ffprobe format_name token -> canonical MIME. ffprobe reports comma-separated
+# format families (e.g. "mov,mp4,m4a,3gp,3g2,mj2"), so each token is matched.
+_FFPROBE_FORMAT_TO_MIME = {
+    "mp4": "video/mp4",
+    "webm": "video/webm",
+    "matroska": "video/webm",
+    "mov": "video/quicktime",
+    "mp3": "audio/mpeg",
+    "wav": "audio/wav",
+    "ogg": "audio/ogg",
+    "m4a": "audio/mp4",
 }
 
 _EXTENSION_BY_MIME = {
@@ -162,6 +178,133 @@ class _ProbedMetadata:
     duration_seconds: float | None
 
 
+@dataclass(frozen=True)
+class ProbeResult:
+    """Unified probed metadata for any media kind."""
+
+    width: int | None
+    height: int | None
+    duration_seconds: float | None
+    mime_type: str | None
+    size_bytes: int
+
+
+def _run_ffprobe(data: bytes) -> dict[str, Any]:
+    """Run ffprobe on the bytes via a bounded temp file, returning parsed JSON.
+
+    ffprobe requires a path, so the bytes are written to a temp dir that is
+    always cleaned up. The subprocess runs with an argument list (no shell) and a
+    hard timeout; any failure means the content is not valid media.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        probe_path = Path(tmp) / "probe"
+        probe_path.write_bytes(data)
+        cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-print_format",
+            "json",
+            "-show_streams",
+            "-show_format",
+            str(probe_path),
+        ]
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=_PROBE_TIMEOUT_SECONDS,
+            )
+        except (subprocess.TimeoutExpired, OSError) as error:
+            raise MediaUploadRejected("Failed to probe media file") from error
+
+    if proc.returncode != 0:
+        raise MediaUploadRejected("File content is not a recognized media file")
+
+    try:
+        parsed = json.loads(proc.stdout)
+    except (json.JSONDecodeError, ValueError) as error:
+        raise MediaUploadRejected("Failed to parse media metadata") from error
+    if not isinstance(parsed, dict):
+        raise MediaUploadRejected("Failed to parse media metadata")
+    return parsed
+
+
+def probe_media_metadata(
+    data: bytes,
+    *,
+    kind: str,
+    max_bytes: int | None = None,
+) -> ProbeResult:
+    """Probe width/height/duration/MIME/size for image, video, or audio bytes.
+
+    Images use Pillow; video/audio use a bounded, shell-free ffprobe. Empty,
+    oversized, or unrecognized content is rejected. ``kind`` must be one of
+    ``image``, ``video``, or ``audio``.
+    """
+    if kind not in ("image", "video", "audio"):
+        raise ValueError(f"Unsupported probe kind: {kind!r}")
+    if not data:
+        raise MediaUploadRejected("Empty upload")
+    if max_bytes is not None and len(data) > max_bytes:
+        raise MediaUploadRejected("Upload exceeds maximum allowed size")
+
+    size_bytes = len(data)
+
+    if kind == "image":
+        mime = _detect_image_mime(data)
+        if mime is None:
+            raise MediaUploadRejected("File content is not a recognized image")
+        width, height = _probe_image_dimensions(data)
+        return ProbeResult(
+            width=width,
+            height=height,
+            duration_seconds=None,
+            mime_type=mime,
+            size_bytes=size_bytes,
+        )
+
+    parsed = _run_ffprobe(data)
+    streams = parsed.get("streams") or []
+    matching = [s for s in streams if s.get("codec_type") == kind]
+    if not matching:
+        raise MediaUploadRejected(f"No {kind} stream found in upload")
+
+    stream = matching[0]
+    width = stream.get("width")
+    height = stream.get("height")
+
+    duration_raw = stream.get("duration")
+    if duration_raw is None:
+        duration_raw = (parsed.get("format") or {}).get("duration")
+    duration: float | None
+    try:
+        duration = float(duration_raw) if duration_raw is not None else None
+    except (TypeError, ValueError):
+        duration = None
+    if duration is not None and duration <= 0:
+        duration = None
+
+    return ProbeResult(
+        width=int(width) if isinstance(width, int) else None,
+        height=int(height) if isinstance(height, int) else None,
+        duration_seconds=duration,
+        mime_type=_ffprobe_mime(parsed, kind),
+        size_bytes=size_bytes,
+    )
+
+
+def _ffprobe_mime(parsed: dict[str, Any], kind: str) -> str | None:
+    """Map ffprobe's format_name to a canonical MIME for the media kind."""
+    fmt = (parsed.get("format") or {}).get("format_name") or ""
+    names = {part.strip() for part in fmt.split(",") if part.strip()}
+    for format_name, mime in _FFPROBE_FORMAT_TO_MIME.items():
+        if format_name in names and mime.startswith(f"{kind}/"):
+            return mime
+    return None
+
+
 def _validate_video_upload(
     data: bytes,
     *,
@@ -195,73 +338,17 @@ def _validate_audio_upload(
 
 
 def _probe_media_metadata(data: bytes, *, kind: str) -> _ProbedMetadata:
-    """Probe media dimensions/duration via ffprobe on a temp file.
+    """Probe video/audio dimensions and duration via the unified probe.
 
-    ffprobe requires a path, so the bytes are spooled to a bounded temp file and
-    the subprocess runs with an argument list (no shell) and a hard timeout. Any
-    probe failure means the content is not a valid media file and is rejected.
+    Retained for existing callers that only need the dimensions/duration triple;
+    delegates to ``probe_media_metadata`` so the bounded, shell-free ffprobe
+    logic lives in one place.
     """
-    import json
-    import subprocess
-    import tempfile
-    from pathlib import Path
-
-    with tempfile.TemporaryDirectory() as tmp:
-        probe_path = Path(tmp) / "probe"
-        probe_path.write_bytes(data)
-        cmd = [
-            "ffprobe",
-            "-v",
-            "error",
-            "-print_format",
-            "json",
-            "-show_streams",
-            "-show_format",
-            str(probe_path),
-        ]
-        try:
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=_PROBE_TIMEOUT_SECONDS,
-            )
-        except (subprocess.TimeoutExpired, OSError) as error:
-            raise MediaUploadRejected("Failed to probe media file") from error
-
-    if proc.returncode != 0:
-        raise MediaUploadRejected("File content is not a recognized media file")
-
-    try:
-        parsed = json.loads(proc.stdout)
-    except (json.JSONDecodeError, ValueError) as error:
-        raise MediaUploadRejected("Failed to parse media metadata") from error
-
-    streams = parsed.get("streams") or []
-    want = "video" if kind == "video" else "audio"
-    matching = [s for s in streams if s.get("codec_type") == want]
-    if not matching:
-        raise MediaUploadRejected(f"No {want} stream found in upload")
-
-    stream = matching[0]
-    width = stream.get("width")
-    height = stream.get("height")
-
-    duration_raw = stream.get("duration")
-    if duration_raw is None:
-        duration_raw = (parsed.get("format") or {}).get("duration")
-    duration: float | None
-    try:
-        duration = float(duration_raw) if duration_raw is not None else None
-    except (TypeError, ValueError):
-        duration = None
-    if duration is not None and duration <= 0:
-        duration = None
-
+    result = probe_media_metadata(data, kind=kind)
     return _ProbedMetadata(
-        width=int(width) if isinstance(width, int) else None,
-        height=int(height) if isinstance(height, int) else None,
-        duration_seconds=duration,
+        width=result.width,
+        height=result.height,
+        duration_seconds=result.duration_seconds,
     )
 
 
