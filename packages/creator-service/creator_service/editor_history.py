@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
-from creator_domain.exceptions import NoHistoryError
+from creator_domain.exceptions import NoHistoryError, ValidationError
 from creator_domain.models import Timeline
 
 from creator_service.editor_command_applier import (
@@ -51,7 +51,7 @@ class EditorHistory:
             base_revision=self._present.revision,
             asset_lookup=self._asset_lookup,
         )
-        self._past.append(self._present)
+        self._past.append(self._present.model_copy(deep=True))
         self._present = result
         return result
 
@@ -61,7 +61,11 @@ class EditorHistory:
         The batch is applied against a working copy; if any command fails the
         whole batch is discarded and history is untouched (the accepted AI edit
         never partially lands). On success a single prior snapshot is recorded.
+        An empty batch is not an accepted change, so it is rejected rather than
+        recording a no-op undo boundary.
         """
+        if not commands:
+            raise ValidationError("cannot apply an empty command batch")
         working = self._present
         for command in commands:
             working = await apply_editor_command(
@@ -71,7 +75,7 @@ class EditorHistory:
                 base_revision=working.revision,
                 asset_lookup=self._asset_lookup,
             )
-        self._past.append(self._present)
+        self._past.append(self._present.model_copy(deep=True))
         self._present = working
         return working
 

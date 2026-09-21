@@ -154,3 +154,26 @@ async def test_failed_batch_is_atomic_and_not_recorded() -> None:
         )
     assert h.can_undo is False
     assert h.present.model_dump(mode="json") == before
+
+
+@pytest.mark.asyncio
+async def test_empty_batch_is_rejected_and_not_recorded() -> None:
+    h = _history()
+    with pytest.raises(ValidationError):
+        await h.apply_batch([])
+    assert h.can_undo is False
+
+
+@pytest.mark.asyncio
+async def test_snapshot_is_defensively_copied_so_mutating_present_cannot_corrupt_history() -> None:
+    # A caller holding the present reference and mutating it in place must not
+    # change the recorded snapshot, so undo still restores the exact accepted
+    # pre-change state.
+    h = _history()
+    held = h.present
+    before = h.present.model_dump(mode="json")
+    await h.apply(TrimSegmentCommand(segment_id="s1", trim_start_seconds=1.0, trim_end_seconds=3.0))
+    # mutate the object that was present before the apply (now the recorded snapshot's source)
+    held.segments[0].trim_start_seconds = 99.0
+    h.undo()
+    assert h.present.model_dump(mode="json") == before
