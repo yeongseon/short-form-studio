@@ -60,9 +60,9 @@ class EditorHistory:
             asset_lookup=self._asset_lookup,
         )
         self._past.append(self._present.model_copy(deep=True))
-        self._present = result
+        self._present = self._bump_revision(result)
         self._future.clear()
-        return result
+        return self._present
 
     async def apply_batch(self, commands: Sequence[object]) -> Timeline:
         """Apply commands atomically as one undoable step.
@@ -85,9 +85,22 @@ class EditorHistory:
                 asset_lookup=self._asset_lookup,
             )
         self._past.append(self._present.model_copy(deep=True))
-        self._present = working
+        self._present = self._bump_revision(working)
         self._future.clear()
-        return working
+        return self._present
+
+    @staticmethod
+    def _bump_revision(timeline: Timeline) -> Timeline:
+        """Advance the in-memory revision on an accepted edit.
+
+        The applier deliberately returns a Timeline with the revision unchanged
+        (the persistence layer owns the DB counter). The history is the session's
+        source of truth, so it advances the revision per accepted edit — this is
+        what lets a later proposal built against an earlier revision be detected
+        as stale even before it is persisted.
+        """
+        return timeline.model_copy(update={"revision": timeline.revision + 1})
+
 
     def undo(self) -> Timeline:
         """Restore the prior snapshot; move the current state onto the redo stack."""

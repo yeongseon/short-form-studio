@@ -81,7 +81,7 @@ async def test_applies_a_valid_proposal_atomically() -> None:
             {"type": "deleteSegment", "segment_id": "s2", "policy": "ripple"},
         ]
     )
-    result = await apply_ai_proposal(h, proposal, workspace_id=1)
+    result = await apply_ai_proposal(h, proposal)
     assert [s.id for s in result.segments] == ["s1"]
     assert h.can_undo is True
 
@@ -94,7 +94,7 @@ async def test_rejects_a_stale_proposal_without_mutating() -> None:
         [{"type": "deleteSegment", "segment_id": "s1"}], base_revision=2
     )
     with pytest.raises(VersionConflictError):
-        await apply_ai_proposal(h, proposal, workspace_id=1)
+        await apply_ai_proposal(h, proposal)
     assert h.can_undo is False
     assert h.present.model_dump(mode="json") == before
 
@@ -105,7 +105,7 @@ async def test_rejects_a_hallucinated_segment_id_without_mutating() -> None:
     before = h.present.model_dump(mode="json")
     proposal = _proposal([{"type": "deleteSegment", "segment_id": "ghost"}])
     with pytest.raises(ValidationError):
-        await apply_ai_proposal(h, proposal, workspace_id=1)
+        await apply_ai_proposal(h, proposal)
     assert h.can_undo is False
     assert h.present.model_dump(mode="json") == before
 
@@ -116,7 +116,7 @@ async def test_rejects_a_cross_project_replacement_asset() -> None:
     before = h.present.model_dump(mode="json")
     proposal = _proposal([{"type": "replaceAsset", "segment_id": "s1", "asset_id": 20}])
     with pytest.raises(ValidationError):
-        await apply_ai_proposal(h, proposal, workspace_id=1)
+        await apply_ai_proposal(h, proposal)
     assert h.present.model_dump(mode="json") == before
 
 
@@ -126,7 +126,7 @@ async def test_rejects_a_cross_workspace_asset_as_unavailable() -> None:
     h = _history({10: _ref(10), 11: _ref(11)})
     proposal = _proposal([{"type": "replaceAsset", "segment_id": "s1", "asset_id": 20}])
     with pytest.raises(ValidationError):
-        await apply_ai_proposal(h, proposal, workspace_id=1)
+        await apply_ai_proposal(h, proposal)
 
 
 @pytest.mark.asyncio
@@ -137,7 +137,7 @@ async def test_rejects_invalid_timing_trim_beyond_source() -> None:
         [{"type": "trimSegment", "segment_id": "s1", "trim_start_seconds": 0.0, "trim_end_seconds": 5.0}]
     )
     with pytest.raises(ValidationError):
-        await apply_ai_proposal(h, proposal, workspace_id=1)
+        await apply_ai_proposal(h, proposal)
     assert h.present.model_dump(mode="json") == before
 
 
@@ -152,18 +152,37 @@ async def test_a_partially_invalid_batch_lands_nothing() -> None:
         ]
     )
     with pytest.raises(ValidationError):
-        await apply_ai_proposal(h, proposal, workspace_id=1)
+        await apply_ai_proposal(h, proposal)
     assert h.can_undo is False
     assert h.present.model_dump(mode="json") == before
 
 
 @pytest.mark.asyncio
 async def test_revalidates_against_moved_current_revision_not_proposal_claim() -> None:
-    # If the timeline advanced since the proposal was generated, the proposal is
-    # stale even though its own base_revision field is internally consistent.
+    # A proposal generated against an older revision is stale even though its own
+    # base_revision field is internally consistent.
     h = _history()
-    # advance the timeline via a real accepted edit -> revision stays 3 in-memory
-    # (save layer bumps), so simulate divergence by proposing an older revision.
     proposal = _proposal([{"type": "deleteSegment", "segment_id": "s1"}], base_revision=1)
     with pytest.raises(VersionConflictError):
-        await apply_ai_proposal(h, proposal, workspace_id=1)
+        await apply_ai_proposal(h, proposal)
+
+
+@pytest.mark.asyncio
+async def test_second_proposal_with_same_base_revision_is_stale_after_a_mutation() -> None:
+    # Applying proposal A advances the in-memory revision (3 -> 4), so a second
+    # proposal B still claiming base_revision 3 is stale and must be rejected
+    # without mutating the timeline further.
+    h = _history()
+    proposal_a = _proposal(
+        [{"type": "deleteSegment", "segment_id": "s2", "policy": "ripple"}], base_revision=3
+    )
+    await apply_ai_proposal(h, proposal_a)
+    after_a = h.present.model_dump(mode="json")
+    assert h.present.revision == 4
+
+    proposal_b = _proposal(
+        [{"type": "deleteSegment", "segment_id": "s1", "policy": "ripple"}], base_revision=3
+    )
+    with pytest.raises(VersionConflictError):
+        await apply_ai_proposal(h, proposal_b)
+    assert h.present.model_dump(mode="json") == after_a

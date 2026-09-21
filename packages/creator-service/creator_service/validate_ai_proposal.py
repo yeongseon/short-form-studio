@@ -22,10 +22,14 @@ from creator_service.editor_history import EditorHistory
 async def apply_ai_proposal(
     history: EditorHistory,
     proposal: CommandProposal,
-    *,
-    workspace_id: int,
 ) -> Timeline:
-    """Revalidate and apply an untrusted AI proposal atomically at Apply time."""
+    """Revalidate and apply an untrusted AI proposal atomically at Apply time.
+
+    Asset ownership and workspace scoping are enforced by the EditorHistory the
+    proposal is applied to (its workspace_id drives the per-command validation),
+    so this function does not take a separate workspace_id — the history is the
+    trust boundary.
+    """
     current = history.present
     if proposal.base_revision != current.revision:
         raise VersionConflictError(
