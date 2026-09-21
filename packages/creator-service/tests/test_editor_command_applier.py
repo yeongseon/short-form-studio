@@ -204,8 +204,38 @@ async def test_resize_rejects_beyond_source() -> None:
 
 @pytest.mark.asyncio
 async def test_set_transition_applies() -> None:
-    result = await _apply(SetTransitionCommand(segment_id="s2", transition="fade", duration_seconds=0.5))
+    result = await _apply(SetTransitionCommand(segment_id="s2", transition="fade"))
     assert next(s for s in result.segments if s.id == "s2").transition == "fade"
+
+
+@pytest.mark.asyncio
+async def test_set_transition_rejects_unsupported_duration() -> None:
+    # Timeline has no transition-duration field; accepting a duration would
+    # silently drop it, so it must be rejected until the domain supports it.
+    with pytest.raises(ValidationError):
+        await _apply(
+            SetTransitionCommand(segment_id="s2", transition="fade", duration_seconds=0.5)
+        )
+
+
+@pytest.mark.asyncio
+async def test_replace_clamps_duration_when_new_source_shorter_without_trim_end() -> None:
+    # s2 has no trim_end and duration 3; replacing its 30s source with a 2s one
+    # must clamp the visible duration to fit the new source.
+    lookup = _FakeAssetLookup(
+        {10: _ref(10), 11: _ref(11), 21: _ref(21, media_type="VIDEO", duration_seconds=2.0)}
+    )
+    result = await _apply(ReplaceAssetCommand(segment_id="s2", asset_id=21), lookup=lookup)
+    seg = next(s for s in result.segments if s.id.startswith("s2"))
+    assert seg.duration_seconds <= 2.0 + 1e-6
+
+
+@pytest.mark.asyncio
+async def test_set_style_typed_but_not_applicable() -> None:
+    from creator_domain.models import SetStyleCommand
+
+    with pytest.raises(ValidationError):
+        await _apply(SetStyleCommand(style="cinematic"))
 
 
 @pytest.mark.asyncio

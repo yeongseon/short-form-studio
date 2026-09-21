@@ -186,16 +186,22 @@ async def _apply_replace(
         raise ValidationError("replacement asset media kind is incompatible")
 
     update: dict[str, object] = {"asset_id": command.asset_id}
-    if (
-        _broad_kind(new.media_type) != "image"
-        and target.trim_end_seconds is not None
-        and target.trim_end_seconds > new.duration_seconds
-    ):
-        trim_end = new.duration_seconds
-        trim_start = min(target.trim_start_seconds or 0.0, max(0.0, trim_end - 1e-3))
-        update["trim_start_seconds"] = trim_start
-        update["trim_end_seconds"] = trim_end
-        update["duration_seconds"] = trim_end - trim_start
+    if _broad_kind(new.media_type) != "image":
+        trim_start = min(target.trim_start_seconds or 0.0, max(0.0, new.duration_seconds - 1e-3))
+        window_end = (
+            target.trim_end_seconds
+            if target.trim_end_seconds is not None
+            else trim_start + target.duration_seconds
+        )
+        trim_end = min(window_end, new.duration_seconds)
+        if (
+            trim_end < window_end
+            or (target.trim_start_seconds or 0.0) != trim_start
+            or target.duration_seconds > trim_end - trim_start
+        ):
+            update["trim_start_seconds"] = trim_start
+            update["trim_end_seconds"] = trim_end
+            update["duration_seconds"] = trim_end - trim_start
     return [
         s.model_copy(update=update) if s.id == command.segment_id else s for s in segments
     ]
@@ -249,6 +255,10 @@ async def _apply_resize(
 def _apply_transition(
     segments: list[MediaSegment], command: SetTransitionCommand,
 ) -> list[MediaSegment]:
+    if command.duration_seconds is not None:
+        raise ValidationError(
+            "transition duration is not yet supported by the Timeline model"
+        )
     _find(segments, command.segment_id)
     return [
         s.model_copy(update={"transition": command.transition})
