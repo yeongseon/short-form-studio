@@ -6,6 +6,7 @@ from .content_recipe import (
     SubtitleSettings,
     VisualStrategy,
 )
+from .creative_profile import CreativeProfile
 from .media_asset import MediaAsset
 from .media_type import MediaOrigin, MediaType
 from .output_spec import (
@@ -43,6 +44,7 @@ from .visual_plan import VisualPlan, VisualScene
 __all__ = [
     "MediaAsset",
     "ContentRecipe",
+    "CreativeProfile",
     "DurationRange",
     "VisualStrategy",
     "AudioSettings",
