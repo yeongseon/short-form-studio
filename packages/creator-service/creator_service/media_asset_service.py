@@ -189,6 +189,16 @@ class ProbeResult:
     size_bytes: int
 
 
+@dataclass(frozen=True)
+class AssetPage:
+    """A workspace-scoped page of media assets with its total match count."""
+
+    items: list[MediaAsset]
+    total: int
+    limit: int
+    offset: int
+
+
 def _run_ffprobe(data: bytes) -> dict[str, Any]:
     """Run ffprobe on the bytes via a bounded temp file, returning parsed JSON.
 
@@ -363,6 +373,46 @@ class MediaAssetStorageBackend(Protocol):
         """Fetch an asset by id scoped to a workspace (anti-enumeration)."""
         ...
 
+    async def list_assets(
+        self,
+        workspace_id: int,
+        *,
+        media_type: str | None = None,
+        project_id: int | None = None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        """Return a workspace-scoped ``(rows, total)`` page.
+
+        Rows are ordered uploaded-origin first, then newest-created first, then
+        by descending id, so pagination is stable. ``total`` is the full match
+        count before limit/offset.
+        """
+        ...
+
+
+# Origin ordering for the asset library: uploaded and existing project media are
+# surfaced before generated/external so reuse is prioritized over regeneration.
+_ORIGIN_SORT_RANK = {
+    MediaOrigin.UPLOADED.value: 0,
+    MediaOrigin.IMPORTED.value: 1,
+    MediaOrigin.EXTERNAL_URL.value: 2,
+    MediaOrigin.STOCK.value: 3,
+    MediaOrigin.GENERATED.value: 4,
+}
+
+
+def _asset_sort_key(row: dict[str, Any]) -> tuple[int, float, int]:
+    """Sort key: uploaded-origin first, then newest-created, then highest id.
+
+    Rank ascends (uploaded before generated); created/id are negated so the
+    newest and highest-id rows come first within a rank, giving stable ordering.
+    """
+    rank = _ORIGIN_SORT_RANK.get(str(row.get("origin")), len(_ORIGIN_SORT_RANK))
+    created = row.get("created_at")
+    created_ts = created.timestamp() if isinstance(created, datetime) else 0.0
+    return (rank, -created_ts, -int(row.get("id", 0)))
+
 
 class InMemoryMediaAssetStorage:
     """In-memory MediaAsset persistence with atomic id allocation."""
@@ -384,6 +434,28 @@ class InMemoryMediaAssetStorage:
             if asset["id"] == asset_id and asset["workspace_id"] == workspace_id:
                 return dict(asset)
         return None
+
+    async def list_assets(
+        self,
+        workspace_id: int,
+        *,
+        media_type: str | None = None,
+        project_id: int | None = None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[dict[str, Any]], int]:
+        matched = [
+            asset
+            for asset in self._assets
+            if asset["workspace_id"] == workspace_id
+            and (media_type is None or asset.get("media_type") == media_type)
+            and (project_id is None or asset.get("project_id") == project_id)
+        ]
+        total = len(matched)
+        ordered = sorted(matched, key=_asset_sort_key)
+        window = ordered[offset : offset + limit]
+        return [dict(row) for row in window], total
+
 
 
 def _safe_filename(filename: str) -> str:
@@ -566,6 +638,40 @@ class MediaAssetService:
         if row is None:
             return None
         return MediaAsset.model_validate(row)
+
+    async def list_assets(
+        self,
+        *,
+        workspace_id: int,
+        media_type: MediaType | None = None,
+        project_id: int | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> AssetPage:
+        """Return a workspace-scoped, filterable, paginated page of assets.
+
+        Ordered uploaded-origin first (reuse over regeneration), then newest.
+        Only assets in ``workspace_id`` are ever returned, so a cross-workspace
+        lookup yields an empty page rather than leaking existence.
+        """
+        if limit < 1:
+            raise ValueError("limit must be >= 1")
+        if offset < 0:
+            raise ValueError("offset must be >= 0")
+
+        rows, total = await self._asset_storage.list_assets(
+            workspace_id,
+            media_type=media_type.value if media_type is not None else None,
+            project_id=project_id,
+            limit=limit,
+            offset=offset,
+        )
+        return AssetPage(
+            items=[MediaAsset.model_validate(row) for row in rows],
+            total=total,
+            limit=limit,
+            offset=offset,
+        )
 
 
 def _create_service() -> MediaAssetService:
