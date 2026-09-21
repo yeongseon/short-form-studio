@@ -8,6 +8,7 @@ can move toward segments without changing ``FFmpegService.render`` internals.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -18,6 +19,17 @@ from creator_service.render_profile import AudioCodec, Codec, RenderProfile
 
 _PROBE_TIMEOUT_SECONDS = 30
 _RENDER_TIMEOUT_SECONDS = 180
+_CONCAT_TIMEOUT_SECONDS = 300
+
+
+def _fit_filter(profile: RenderProfile) -> str:
+    """Scale-and-pad video filter fitting any source into the profile geometry."""
+    return (
+        f"scale={profile.width}:{profile.height}"
+        f":force_original_aspect_ratio=decrease,"
+        f"pad={profile.width}:{profile.height}:(ow-iw)/2:(oh-ih)/2,"
+        f"format=yuv420p,setsar=1"
+    )
 
 
 class UnsupportedSegmentKindError(ValueError):
@@ -174,12 +186,7 @@ def render_video_segment(
         )
     clip_duration = trim_end - trim_start
 
-    vf = (
-        f"scale={profile.width}:{profile.height}"
-        f":force_original_aspect_ratio=decrease,"
-        f"pad={profile.width}:{profile.height}:(ow-iw)/2:(oh-ih)/2,"
-        f"format=yuv420p,setsar=1"
-    )
+    vf = _fit_filter(profile)
 
     cmd = [
         "ffmpeg",
@@ -214,3 +221,117 @@ def render_video_segment(
             f"failed to render video segment {source}: {result.stderr[-500:]}"
         )
     return output_path
+
+
+def render_image_segment(
+    segment: RenderSegment,
+    output_path: Path,
+    *,
+    profile: RenderProfile,
+) -> Path:
+    """Render an image segment to a self-contained ``.ts`` clip.
+
+    Holds the still for ``duration_seconds``, scaling/padding it to the profile
+    geometry, producing a clip concat-compatible with video segments.
+    """
+    if segment.kind is not RenderSegmentKind.IMAGE:
+        raise ValueError(
+            f"render_image_segment requires an image segment, got {segment.kind.value!r}"
+        )
+    source = Path(segment.source)
+    if not source.is_file():
+        raise SegmentSourceError(f"segment source not found: {source}")
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-nostdin",
+        "-loop",
+        "1",
+        "-t",
+        f"{segment.duration_seconds:.3f}",
+        "-i",
+        str(source),
+        "-vf",
+        _fit_filter(profile),
+        "-c:v",
+        profile.video_codec.value,
+        "-crf",
+        str(profile.crf),
+        "-preset",
+        profile.preset,
+        "-pix_fmt",
+        "yuv420p",
+        "-r",
+        str(profile.fps),
+        "-force_key_frames",
+        "expr:eq(n,0)",
+        str(output_path),
+    ]
+    result = _run_ffmpeg(cmd, timeout=_RENDER_TIMEOUT_SECONDS)
+    if result.returncode != 0:
+        raise SegmentSourceError(
+            f"failed to render image segment {source}: {result.stderr[-500:]}"
+        )
+    return output_path
+
+
+def render_plan(plan: RenderPlan, output_path: Path) -> Path:
+    """Render a mixed image/video plan to a single video.
+
+    Each segment is rendered to an individual ``.ts`` clip by kind (image or
+    video) fitted to the plan geometry, then the clips are concatenated in
+    timeline order via the concat demuxer. Image-only and video-only plans are
+    supported as special cases of the same path.
+    """
+    if not plan.segments:
+        raise ValueError("plan has no segments to render")
+
+    profile = render_profile_from_plan(plan)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    tmp_dir = output_path.parent / f".render_plan_{os.getpid()}_{os.urandom(4).hex()}"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        segment_paths: list[Path] = []
+        for index, segment in enumerate(plan.segments):
+            seg_path = tmp_dir / f"seg_{index:04d}.ts"
+            if segment.kind is RenderSegmentKind.IMAGE:
+                render_image_segment(segment, seg_path, profile=profile)
+            elif segment.kind is RenderSegmentKind.VIDEO:
+                render_video_segment(segment, seg_path, profile=profile)
+            else:
+                raise UnsupportedSegmentKindError(
+                    f"unsupported segment kind: {segment.kind.value!r}"
+                )
+            segment_paths.append(seg_path)
+
+        concat_list = tmp_dir / "concat.txt"
+        concat_list.write_text("".join(f"file '{p.name}'\n" for p in segment_paths))
+
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-nostdin",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            str(concat_list),
+            "-c:v",
+            "copy",
+            "-map",
+            "0:v",
+            str(output_path),
+        ]
+        result = _run_ffmpeg(cmd, timeout=_CONCAT_TIMEOUT_SECONDS)
+        if result.returncode != 0:
+            raise SegmentSourceError(
+                f"failed to concatenate plan segments: {result.stderr[-500:]}"
+            )
+        return output_path
+    finally:
+        for leftover in tmp_dir.glob("*"):
+            leftover.unlink(missing_ok=True)
+        tmp_dir.rmdir()
