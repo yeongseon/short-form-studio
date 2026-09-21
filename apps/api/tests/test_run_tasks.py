@@ -47,8 +47,8 @@ class StubTaskTrackingService:
                 celery_task_id="celery-1",
                 status="failed",
                 attempt=1,
-                error_code="RuntimeError",
-                error_message="boom",
+                error_code="UNAVAILABLE",
+                error_message="The provider was temporarily unavailable",
                 created_at=now,
             ),
         ]
@@ -91,7 +91,24 @@ async def test_get_run_tasks_returns_task_list(client, stub_services) -> None:
     body = response.json()
     assert len(body) == 2
     assert body[0]["celery_task_id"] == "celery-2"
-    assert body[1]["error_code"] == "RuntimeError"
+    assert body[1]["error_code"] == "UNAVAILABLE"
+
+
+@pytest.mark.asyncio
+async def test_failed_task_exposes_full_actionable_failure_summary(client, stub_services) -> None:
+    _ = stub_services
+    response = await client.get("/api/creator/runs/1/tasks")
+    body = response.json()
+    failed = body[1]
+    assert failed["failure"] == {
+        "code": "UNAVAILABLE",
+        "category": "UNAVAILABLE",
+        "retryable": True,
+        "recovery_steps": ["Retry in a moment", "If it persists, check provider status"],
+        "message": "The provider was temporarily unavailable",
+    }
+    # Successful task carries no failure summary.
+    assert "failure" not in body[0]
 
 
 @pytest.mark.asyncio

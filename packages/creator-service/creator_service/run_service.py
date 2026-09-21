@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from creator_domain.exceptions import ConflictError
+from creator_domain.exceptions import ConflictError, NotFoundError, ValidationError
 from creator_domain.models import (
     GENERATING_STAGES,
     STAGE_BACK,
@@ -270,25 +270,25 @@ class RunService:
     ) -> PipelineRun:
         run = await self.get_run(run_id, workspace_id=workspace_id)
         if run is None:
-            raise ValueError(f"Run {run_id} not found")
+            raise NotFoundError(f"Run {run_id} not found")
 
         try:
             target_stage = RunStage(from_stage)
         except ValueError as exc:
-            raise ValueError(f"Invalid stage '{from_stage}'") from exc
+            raise ValidationError(f"Invalid stage '{from_stage}'") from exc
 
         if run.current_stage is None:
-            raise ValueError(f"Run {run_id} has no current stage")
+            raise ValidationError(f"Run {run_id} has no current stage")
 
         try:
             current_stage = RunStage(run.current_stage)
         except ValueError as exc:
-            raise ValueError(
+            raise ValidationError(
                 f"Invalid current stage '{run.current_stage}' for run {run_id}"
             ) from exc
 
         if not can_transition(current_stage, target_stage):
-            raise ValueError(
+            raise ValidationError(
                 f"Cannot transition from {current_stage.value} to {target_stage.value}"
             )
 
@@ -304,7 +304,7 @@ class RunService:
         if row is None:
             latest_run = await self.get_run(run_id, workspace_id=workspace_id)
             if latest_run is None:
-                raise ValueError(f"Run {run_id} not found")
+                raise NotFoundError(f"Run {run_id} not found")
             raise ConflictError(f"Run {run_id} has stale version")
         return PipelineRun.from_row(row)
 
@@ -317,25 +317,25 @@ class RunService:
         """
         run = await self.get_run(run_id, workspace_id=workspace_id)
         if run is None:
-            raise ValueError(f"Run {run_id} not found")
+            raise NotFoundError(f"Run {run_id} not found")
 
         try:
             target = RunStage(target_stage)
         except ValueError as exc:
-            raise ValueError(f"Invalid stage '{target_stage}'") from exc
+            raise ValidationError(f"Invalid stage '{target_stage}'") from exc
 
         if run.current_stage is None:
-            raise ValueError(f"Run {run_id} has no current stage")
+            raise ValidationError(f"Run {run_id} has no current stage")
 
         try:
             current = RunStage(run.current_stage)
         except ValueError as exc:
-            raise ValueError(
+            raise ValidationError(
                 f"Invalid current stage '{run.current_stage}' for run {run_id}"
             ) from exc
 
         if not can_transition(current, target):
-            raise ValueError(f"Cannot transition from {current.value} to {target.value}")
+            raise ValidationError(f"Cannot transition from {current.value} to {target.value}")
 
         row = await self.storage.update_run(
             run_id,
@@ -346,7 +346,7 @@ class RunService:
         if row is None:
             latest_run = await self.get_run(run_id, workspace_id=workspace_id)
             if latest_run is None:
-                raise ValueError(f"Run {run_id} not found")
+                raise NotFoundError(f"Run {run_id} not found")
             raise ConflictError(f"Run {run_id} has stale version")
         return PipelineRun.from_row(row)
 
@@ -378,15 +378,15 @@ class RunService:
         """
         run = await self.get_run(run_id, workspace_id=workspace_id)
         if run is None:
-            raise ValueError(f"Run {run_id} not found")
+            raise NotFoundError(f"Run {run_id} not found")
 
         if run.status == "cancelled":
-            raise ValueError(f"Run {run_id} is already stopped")
+            raise ValidationError(f"Run {run_id} is already stopped")
 
         # Only allow stopping during generating stages
         generating_stage_values = frozenset(s.value for s in GENERATING_STAGES)
         if run.current_stage not in generating_stage_values:
-            raise ValueError(
+            raise ValidationError(
                 f"Run {run_id} is in stage '{run.current_stage}', "
                 f"can only stop during generating stages"
             )
@@ -407,7 +407,7 @@ class RunService:
         if row is None:
             latest_run = await self.get_run(run_id, workspace_id=workspace_id)
             if latest_run is None:
-                raise ValueError(f"Run {run_id} not found")
+                raise NotFoundError(f"Run {run_id} not found")
             raise ConflictError(f"Run {run_id} has stale version")
         return PipelineRun.from_row(row)
 
@@ -419,10 +419,10 @@ class RunService:
         """
         run = await self.get_run(run_id, workspace_id=workspace_id)
         if run is None:
-            raise ValueError(f"Run {run_id} not found")
+            raise NotFoundError(f"Run {run_id} not found")
 
         if run.status not in ("cancelled", "failed"):
-            raise ValueError(
+            raise ValidationError(
                 f"Run {run_id} has status '{run.status}', can only resume cancelled or failed runs"
             )
 
@@ -435,7 +435,7 @@ class RunService:
         if row is None:
             latest_run = await self.get_run(run_id, workspace_id=workspace_id)
             if latest_run is None:
-                raise ValueError(f"Run {run_id} not found")
+                raise NotFoundError(f"Run {run_id} not found")
             raise ConflictError(f"Run {run_id} has stale version")
         return PipelineRun.from_row(row)
 

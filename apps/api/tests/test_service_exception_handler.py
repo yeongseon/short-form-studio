@@ -130,3 +130,69 @@ class TestServiceExceptionHandler:
             assert resp.status_code == 500
             body = resp.json()
             assert body["detail"] == "Internal server error"
+            # Opaque global handler: no actionable envelope for unexpected errors.
+            assert "error" not in body
+
+
+@pytest.mark.asyncio
+class TestActionableErrorEnvelope:
+    """Each ServiceError response carries a static actionable `error` envelope."""
+
+    @pytest.mark.parametrize(
+        "path,category,retryable",
+        [
+            ("/test/not-found", "NOT_FOUND", False),
+            ("/test/validation", "VALIDATION", False),
+            ("/test/conflict", "CONFLICT", False),
+            ("/test/version-conflict", "VERSION_CONFLICT", False),
+            ("/test/quota", "QUOTA", True),
+            ("/test/unavailable", "UNAVAILABLE", True),
+            ("/test/data-integrity", "DATA_INTEGRITY", False),
+            ("/test/base-service-error", "INTERNAL", False),
+        ],
+    )
+    async def test_error_envelope_category_and_retryable(
+        self,
+        app_with_exception_routes,
+        path: str,
+        category: str,
+        retryable: bool,
+    ) -> None:
+        async with AsyncClient(
+            transport=ASGITransport(app=app_with_exception_routes),
+            base_url="http://test",
+        ) as client:
+            resp = await client.get(path)
+            body = resp.json()
+            err = body["error"]
+            assert err["category"] == category
+            assert err["retryable"] is retryable
+            assert err["recovery_steps"]
+            assert err["code"] == category
+
+    async def test_version_conflict_exposes_structured_versions(
+        self,
+        app_with_exception_routes,
+    ) -> None:
+        async with AsyncClient(
+            transport=ASGITransport(app=app_with_exception_routes),
+            base_url="http://test",
+        ) as client:
+            resp = await client.get("/test/version-conflict")
+            body = resp.json()
+            assert body["error"]["version_conflict"] == {
+                "resource_id": 7,
+                "expected_version": 3,
+                "actual_version": 5,
+            }
+
+    async def test_generic_conflict_has_no_version_fields(
+        self,
+        app_with_exception_routes,
+    ) -> None:
+        async with AsyncClient(
+            transport=ASGITransport(app=app_with_exception_routes),
+            base_url="http://test",
+        ) as client:
+            resp = await client.get("/test/conflict")
+            assert "version_conflict" not in resp.json()["error"]

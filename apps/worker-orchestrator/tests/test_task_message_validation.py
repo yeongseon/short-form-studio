@@ -221,7 +221,12 @@ def test_run_task_value_error_marks_task_failed_without_run_failed_transition(
     with pytest.raises(ValueError, match="bad payload"):
         run_task(_CelerySelfStub(), 1, config, _raise_value_error)
 
-    assert tracking.failed_calls == [("task-1", "ValueError", "bad payload")]
+    # SF-78: the persisted failure record is the safe categorized summary, never
+    # the raw exception text (which could embed paths/tokens).
+    assert tracking.failed_calls == [
+        ("task-1", "INTERNAL", "The operation failed unexpectedly")
+    ]
+    assert all("bad payload" not in message for _, _, message in tracking.failed_calls)
     assert storage.failed_transition_calls == 0
 
 
@@ -242,3 +247,65 @@ def test_validate_task_message_rejects_oversized_string_kwarg() -> None:
     msg = {"run_id": 1, "task_name": "generate_script", "args": [], "kwargs": {"prompt": oversized}}
     with pytest.raises(ValueError, match="exceeds maximum length"):
         validate_task_message(msg)
+
+
+def test_run_task_provider_error_records_redacted_retryable_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SF-78: a provider failure records a safe, categorized, retryable summary.
+
+    The raw provider message embeds a URL and a token; neither may reach the
+    persisted failure record.
+    """
+    from creator_provider.exceptions import ProviderTimeoutError
+
+    class _TrackingServiceStub:
+        def __init__(self) -> None:
+            self.failed_calls: list[tuple[str, str, str]] = []
+
+        async def record_task_start(self, run_id, task_name, task_id):
+            return SimpleNamespace(status="running")
+
+        async def mark_running(self, task_id):
+            return None
+
+        async def mark_failed(self, task_id, error_code, error_message):
+            self.failed_calls.append((task_id, error_code, error_message))
+
+    class _StorageStub:
+        def __init__(self) -> None:
+            self.failed_transition_calls = 0
+
+        async def get_run(self, run_id):
+            return {"id": run_id, "current_stage": task_runner.RunStage.IDEA_READY.value}
+
+        async def conditional_update_run(self, *args, **kwargs):
+            self.failed_transition_calls += 1
+            return True, None
+
+    leaky = "https://api.openai.com/v1: timed out token=sk-abcdef1234567890abcdef"
+
+    async def _raise_provider(_ctx):
+        raise ProviderTimeoutError(leaky)
+
+    tracking = _TrackingServiceStub()
+    storage = _StorageStub()
+    monkeypatch.setattr(task_runner, "_task_tracking_service", tracking)
+    monkeypatch.setattr(task_runner, "_run_service", SimpleNamespace(storage=storage))
+
+    config = TaskRunnerConfig(
+        task_name="generate_script",
+        allowed_stages=frozenset({task_runner.RunStage.IDEA_READY}),
+        safe_stages=frozenset({task_runner.RunStage.IDEA_READY.value}),
+        no_fail_transition_exceptions=(ProviderTimeoutError,),
+    )
+
+    with pytest.raises(ProviderTimeoutError):
+        run_task(_CelerySelfStub(), 1, config, _raise_provider)
+
+    assert len(tracking.failed_calls) == 1
+    _, code, message = tracking.failed_calls[0]
+    assert code == "UNAVAILABLE"
+    blob = f"{code} {message}"
+    assert "sk-" not in blob
+    assert "api.openai.com" not in blob

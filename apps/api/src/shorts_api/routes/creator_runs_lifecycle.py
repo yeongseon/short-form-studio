@@ -29,15 +29,7 @@ async def stop_run(
 ) -> dict[str, object]:
     user, run = access
 
-    try:
-        updated = await run_service.stop_run(run_id, workspace_id=user.workspace_id)
-    except ConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        detail = str(exc)
-        if "not found" in detail.lower():
-            raise HTTPException(status_code=404, detail=detail) from exc
-        raise HTTPException(status_code=400, detail=detail) from exc
+    updated = await run_service.stop_run(run_id, workspace_id=user.workspace_id)
 
     await _revoke_active_tasks_for_run(run.id)
 
