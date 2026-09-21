@@ -20,6 +20,7 @@ from shorts_api.routes.creator_assets import router as assets_router
 from shorts_api.routes.creator_models import router as models_router
 from shorts_api.routes.creator_projects import router as projects_router
 from shorts_api.routes.creator_run_tasks import router as run_tasks_router
+from shorts_api.routes.creator_timeline import router as timeline_router
 from shorts_api.routes.creator_runs_core import router as runs_core_router
 from shorts_api.routes.creator_runs_lifecycle import router as runs_lifecycle_router
 from shorts_api.routes.creator_runs_scene_assets import router as runs_scene_assets_router
@@ -142,6 +143,7 @@ def create_app() -> FastAPI:
 
     app.include_router(models_router, prefix="/api/creator")
     app.include_router(projects_router, prefix="/api/creator")
+    app.include_router(timeline_router, prefix="/api/creator")
     app.include_router(runs_core_router, prefix="/api/creator")
     app.include_router(runs_visuals_router, prefix="/api/creator")
     app.include_router(runs_scene_assets_router, prefix="/api/creator")
