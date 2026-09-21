@@ -116,3 +116,61 @@ def test_render_input_from_plan_uses_plan_layers() -> None:
     assert result.scene_durations == [3.0, 2.0]
     assert result.audio_path == Path("data/artifacts/1/audio/n.wav")
     assert result.subtitle_path == Path("data/artifacts/1/subtitles/s.srt")
+
+
+def test_render_input_from_plan_accepts_absolute_audio_subtitle_overrides() -> None:
+    from creator_domain.models import EncodingProfile, OutputSpec
+
+    plan = RenderPlan.model_validate(
+        {
+            "segments": [_img("a.png", 0.0, 3.0), _img("b.png", 3.0, 2.0)],
+            "output_spec": OutputSpec.short_vertical(),
+            "encoding_profile": EncodingProfile.standard(),
+        }
+    )
+
+    audio = Path("/artifact-root/1/render/audio_mixed.mp3")
+    subs = Path("/artifact-root/1/render/subtitles.ass")
+    result = render_input_from_plan(plan, audio_path=audio, subtitle_path=subs)
+
+    assert result.audio_path == audio
+    assert result.subtitle_path == subs
+
+
+def test_render_input_from_plan_overrides_take_precedence_over_plan_layers() -> None:
+    from creator_domain.models import EncodingProfile, OutputSpec
+
+    plan = RenderPlan.model_validate(
+        {
+            "segments": [_img("a.png", 0.0, 3.0)],
+            "output_spec": OutputSpec.short_vertical(),
+            "encoding_profile": EncodingProfile.standard(),
+            "narration_path": "data/artifacts/1/audio/n.wav",
+            "subtitle_path": "data/artifacts/1/subtitles/s.srt",
+        }
+    )
+
+    audio = Path("/artifact-root/1/render/final.mp3")
+    result = render_input_from_plan(plan, audio_path=audio)
+
+    assert result.audio_path == audio
+    assert result.subtitle_path == Path("data/artifacts/1/subtitles/s.srt")
+
+
+def test_render_input_from_plan_preserves_transitions() -> None:
+    from creator_domain.models import EncodingProfile, OutputSpec
+
+    plan = RenderPlan.model_validate(
+        {
+            "segments": [
+                _img("a.png", 0.0, 3.0, transition="fade"),
+                _img("b.png", 3.0, 2.0, transition="cut"),
+            ],
+            "output_spec": OutputSpec.short_vertical(),
+            "encoding_profile": EncodingProfile.standard(),
+        }
+    )
+
+    result = render_input_from_plan(plan)
+
+    assert result.scene_transitions == ["fade", "cut"]

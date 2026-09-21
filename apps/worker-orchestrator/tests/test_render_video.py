@@ -373,6 +373,68 @@ def test_render_video_success(
     assert storage.cas_calls[0][2] == frozenset({"RENDER_GENERATING"})
 
 
+def test_render_video_routes_final_inputs_through_render_plan_adapter(
+    monkeypatch: pytest.MonkeyPatch, no_pacing_split: None
+) -> None:
+    run_id = 213
+    storage = _make_storage(run_id=run_id, stage="RENDER_GENERATING")
+    fake_render_service = FakeRenderService(
+        manifest=_manifest(run_id=run_id),
+        artifact_path="data/artifacts/213/render/output.mp4",
+    )
+    fake_ffmpeg = FakeFFmpegService()
+    _patch_services(
+        monkeypatch,
+        storage=storage,
+        fake_render_service=fake_render_service,
+        fake_vas=FakeVisualAssetService(),
+        fake_audio=FakeAudioService(),
+        fake_subtitle=FakeSubtitleService(),
+        fake_ffmpeg=fake_ffmpeg,
+    )
+
+    adapter_calls: list[dict[str, Any]] = []
+    real_adapter = render_video_module.render_input_from_plan
+
+    def spy_adapter(plan: Any, **kwargs: Any) -> Any:
+        adapter_calls.append({"plan": plan, "kwargs": kwargs})
+        return real_adapter(plan, **kwargs)
+
+    monkeypatch.setattr(render_video_module, "render_input_from_plan", spy_adapter)
+
+    result = _invoke_task(run_id=run_id)
+
+    assert result["status"] == "success"
+    assert len(adapter_calls) == 1
+    plan = adapter_calls[0]["plan"]
+    assert [seg.source for seg in plan.segments] == [
+        "data/artifacts/201/visual/scene-1.png",
+        "data/artifacts/201/visual/scene-2.png",
+    ]
+    assert [seg.duration_seconds for seg in plan.segments] == [15.0, 15.0]
+    assert [seg.timeline_start_seconds for seg in plan.segments] == [0.0, 15.0]
+    assert adapter_calls[0]["kwargs"]["audio_path"] == Path(
+        "data/artifacts/201/audio/audio.wav"
+    )
+    render_input, _ = fake_ffmpeg.calls[0]
+    assert render_input.image_paths == [
+        Path("data/artifacts/201/visual/scene-1.png"),
+        Path("data/artifacts/201/visual/scene-2.png"),
+    ]
+
+
+def test_build_render_plan_rejects_length_mismatch() -> None:
+    from creator_service.render_profile import RenderProfile
+
+    with pytest.raises(ValueError, match="must have equal length"):
+        render_video_module._build_render_plan(
+            [Path("a.png"), Path("b.png")],
+            [1.0],
+            None,
+            RenderProfile.default(),
+        )
+
+
 def test_render_video_run_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     storage = FakeStorage()
     fake_render_service = FakeRenderService(manifest=_manifest(run_id=999))

@@ -10,13 +10,21 @@ from typing import Any
 
 from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
+from creator_domain.models import (
+    EncodingProfile,
+    OutputSpec,
+    RenderPlan,
+    RenderSegment,
+    RenderSegmentKind,
+)
 from creator_domain.models.stage import RunStage
 from creator_domain.sanitize import UnsafePathComponent, validate_artifact_path
 from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
 from creator_service.audio_service import audio_service as _audio_service
 from creator_service.cost_config import COST_RENDER_VIDEO
-from creator_service.ffmpeg_service import FFmpegService, RenderInput
+from creator_service.ffmpeg_service import FFmpegService
 from creator_service.render_profile import RenderProfile
+from creator_service.render_segments import render_input_from_plan
 from creator_service.render_service import render_service as _render_service
 from creator_service.script_service import script_service as _script_service
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
@@ -78,6 +86,51 @@ def _resolve_profile(name: str) -> RenderProfile:
         logger.warning("Unknown render profile %r, falling back to default", name)
         return RenderProfile.default()
     return factory()
+
+def _build_render_plan(
+    image_paths: list[Path],
+    scene_durations: list[float],
+    scene_transitions: list[str] | None,
+    profile: RenderProfile,
+) -> RenderPlan:
+    """Express the finalized image scenes as a generic RenderPlan.
+
+    Cumulative timeline positions are derived from the already-final, ordered
+    duration list so the plan mirrors the legacy parallel arrays exactly (order,
+    durations, per-scene transitions). Absolute audio/subtitle artifact paths are
+    supplied separately at the adapter seam, not on the plan.
+    """
+    segments: list[RenderSegment] = []
+    timeline = 0.0
+    if len(image_paths) != len(scene_durations):
+        raise ValueError(
+            f"image_paths ({len(image_paths)}) and scene_durations "
+            f"({len(scene_durations)}) must have equal length"
+        )
+    for index, (image_path, duration) in enumerate(
+        zip(image_paths, scene_durations, strict=True)
+    ):
+        transition = (
+            scene_transitions[index]
+            if scene_transitions is not None and index < len(scene_transitions)
+            else None
+        )
+        segments.append(
+            RenderSegment(
+                kind=RenderSegmentKind.IMAGE,
+                source=str(image_path),
+                timeline_start_seconds=timeline,
+                duration_seconds=duration,
+                transition=transition or None,
+            )
+        )
+        timeline += duration
+    return RenderPlan(
+        segments=segments,
+        output_spec=OutputSpec.from_render_profile(profile),
+        encoding_profile=EncodingProfile.from_render_profile(profile),
+    )
+
 
 def _validate_manifest_render_profile(raw_profile: Any) -> dict[str, Any]:
     if not isinstance(raw_profile, dict):
@@ -419,17 +472,15 @@ def render_video(self, run_id: int, render_profile: str = "shorts_default") -> d
         except Exception:
             pass
 
+        render_plan = _build_render_plan(
+            image_paths, scene_durations, scene_transitions, resolved_profile
+        )
+        render_input = render_input_from_plan(
+            render_plan, audio_path=audio_path, subtitle_path=subtitle_path
+        )
+
         try:
-            ffmpeg.render(
-                RenderInput(
-                    image_paths=image_paths,
-                    audio_path=audio_path,
-                    subtitle_path=subtitle_path,
-                    scene_durations=scene_durations,
-                    scene_transitions=scene_transitions,
-                ),
-                Path(output_path),
-            )
+            ffmpeg.render(render_input, Path(output_path))
         except (TimeoutError, ConnectionError) as exc:
             raise ProviderTimeoutError(
                 f"Provider timed out during video render for run {run_id}"

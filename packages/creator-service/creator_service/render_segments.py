@@ -81,12 +81,30 @@ def render_input_from_segments(
     )
 
 
-def render_input_from_plan(plan: RenderPlan) -> RenderInput:
-    """Adapt a RenderPlan's segments and compiled layers into a RenderInput."""
+def render_input_from_plan(
+    plan: RenderPlan,
+    *,
+    audio_path: Path | None = None,
+    subtitle_path: Path | None = None,
+) -> RenderInput:
+    """Adapt a RenderPlan's segments and compiled layers into a RenderInput.
+
+    ``audio_path`` / ``subtitle_path`` override the plan's relative layer paths;
+    callers holding absolute artifact paths (which the domain model's
+    narration_path/subtitle_path reject) pass them here.
+    """
     return render_input_from_segments(
         plan.segments,
-        audio_path=Path(plan.narration_path) if plan.narration_path else None,
-        subtitle_path=Path(plan.subtitle_path) if plan.subtitle_path else None,
+        audio_path=(
+            audio_path
+            if audio_path is not None
+            else Path(plan.narration_path) if plan.narration_path else None
+        ),
+        subtitle_path=(
+            subtitle_path
+            if subtitle_path is not None
+            else Path(plan.subtitle_path) if plan.subtitle_path else None
+        ),
     )
 
 
