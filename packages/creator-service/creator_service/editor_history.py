@@ -1,4 +1,4 @@
-"""SF-49/50: Undo and Redo for accepted editor changes.
+"""SF-49/50/56: Undo, Redo, and edit-generation for accepted editor changes.
 
 EditorHistory wraps ``apply_editor_command`` and records the pre-command Timeline
 snapshot ONLY when a command (or an accepted batch of commands) succeeds, so a
@@ -9,11 +9,19 @@ redo never replays a change a later edit diverged from. A batch — e.g. an acce
 AI edit — is applied atomically and recorded as one undo/redo step, so undo/redo
 revert or replay the whole batch. Manual single commands and accepted AI batches
 therefore undo/redo consistently.
+
+``generation`` is a session-local edit epoch, distinct from ``Timeline.revision``
+(which stays the persistence optimistic-concurrency token owned by the save
+layer). It starts at the loaded revision and advances on every accepted edit, and
+undo/redo restore it alongside the snapshot. AI proposals carry the generation
+they were built against so a proposal built before a later accepted edit is
+detected as stale without disturbing the persisted revision.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from creator_domain.exceptions import NoHistoryError, ValidationError
 from creator_domain.models import Timeline
@@ -22,6 +30,12 @@ from creator_service.editor_command_applier import (
     EditorAssetLookup,
     apply_editor_command,
 )
+
+
+@dataclass(frozen=True)
+class _HistoryEntry:
+    timeline: Timeline
+    generation: int
 
 
 class EditorHistory:
@@ -35,12 +49,17 @@ class EditorHistory:
         self._present = timeline
         self._workspace_id = workspace_id
         self._asset_lookup = asset_lookup
-        self._past: list[Timeline] = []
-        self._future: list[Timeline] = []
+        self._generation = timeline.revision
+        self._past: list[_HistoryEntry] = []
+        self._future: list[_HistoryEntry] = []
 
     @property
     def present(self) -> Timeline:
         return self._present
+
+    @property
+    def generation(self) -> int:
+        return self._generation
 
     @property
     def can_undo(self) -> bool:
@@ -59,10 +78,11 @@ class EditorHistory:
             base_revision=self._present.revision,
             asset_lookup=self._asset_lookup,
         )
-        self._past.append(self._present.model_copy(deep=True))
-        self._present = self._bump_revision(result)
+        self._past.append(self._snapshot())
+        self._present = result
+        self._generation += 1
         self._future.clear()
-        return self._present
+        return result
 
     async def apply_batch(self, commands: Sequence[object]) -> Timeline:
         """Apply commands atomically as one undoable step.
@@ -84,36 +104,33 @@ class EditorHistory:
                 base_revision=working.revision,
                 asset_lookup=self._asset_lookup,
             )
-        self._past.append(self._present.model_copy(deep=True))
-        self._present = self._bump_revision(working)
+        self._past.append(self._snapshot())
+        self._present = working
+        self._generation += 1
         self._future.clear()
-        return self._present
-
-    @staticmethod
-    def _bump_revision(timeline: Timeline) -> Timeline:
-        """Advance the in-memory revision on an accepted edit.
-
-        The applier deliberately returns a Timeline with the revision unchanged
-        (the persistence layer owns the DB counter). The history is the session's
-        source of truth, so it advances the revision per accepted edit — this is
-        what lets a later proposal built against an earlier revision be detected
-        as stale even before it is persisted.
-        """
-        return timeline.model_copy(update={"revision": timeline.revision + 1})
-
+        return working
 
     def undo(self) -> Timeline:
         """Restore the prior snapshot; move the current state onto the redo stack."""
         if not self._past:
             raise NoHistoryError("nothing to undo")
-        self._future.append(self._present.model_copy(deep=True))
-        self._present = self._past.pop()
+        self._future.append(self._snapshot())
+        entry = self._past.pop()
+        self._present = entry.timeline
+        self._generation = entry.generation
         return self._present
 
     def redo(self) -> Timeline:
         """Deterministically replay the last undone change."""
         if not self._future:
             raise NoHistoryError("nothing to redo")
-        self._past.append(self._present.model_copy(deep=True))
-        self._present = self._future.pop()
+        self._past.append(self._snapshot())
+        entry = self._future.pop()
+        self._present = entry.timeline
+        self._generation = entry.generation
         return self._present
+
+    def _snapshot(self) -> _HistoryEntry:
+        return _HistoryEntry(
+            timeline=self._present.model_copy(deep=True), generation=self._generation
+        )

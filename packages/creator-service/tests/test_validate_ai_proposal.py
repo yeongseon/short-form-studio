@@ -169,16 +169,17 @@ async def test_revalidates_against_moved_current_revision_not_proposal_claim() -
 
 @pytest.mark.asyncio
 async def test_second_proposal_with_same_base_revision_is_stale_after_a_mutation() -> None:
-    # Applying proposal A advances the in-memory revision (3 -> 4), so a second
-    # proposal B still claiming base_revision 3 is stale and must be rejected
-    # without mutating the timeline further.
+    # Applying proposal A advances the history's edit generation (3 -> 4), so a
+    # second proposal B still claiming base_revision 3 is stale and must be
+    # rejected without mutating the timeline further. Timeline.revision itself
+    # stays the persistence token (unchanged in-memory).
     h = _history()
     proposal_a = _proposal(
         [{"type": "deleteSegment", "segment_id": "s2", "policy": "ripple"}], base_revision=3
     )
     await apply_ai_proposal(h, proposal_a)
     after_a = h.present.model_dump(mode="json")
-    assert h.present.revision == 4
+    assert h.generation == 4
 
     proposal_b = _proposal(
         [{"type": "deleteSegment", "segment_id": "s1", "policy": "ripple"}], base_revision=3
