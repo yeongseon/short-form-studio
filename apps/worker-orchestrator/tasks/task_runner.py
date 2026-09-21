@@ -52,6 +52,7 @@ from creator_provider.gpu_lock import (
     renew_gpu_lock,
 )
 from creator_provider.versioned_assets import clear_loaded_asset_versions, get_loaded_asset_versions
+from creator_service.actionable_errors import build_run_failure_summary
 from creator_service.run_service import run_service as _run_service
 from creator_service.task_tracking_service import task_tracking_service as _task_tracking_service
 from creator_service.usage_service import resolve_workspace_id_from_run
@@ -316,6 +317,16 @@ async def _run_task_inner(
     }
 
 
+def _safe_failure_record(exc: Exception) -> tuple[str, str]:
+    """Redacted, categorized (error_code, error_message) for a failed task.
+
+    Uses the SF-78 actionable-error policy so no raw exception text — which may
+    embed provider URLs, tokens, or filesystem paths — is persisted or exposed.
+    """
+    summary = build_run_failure_summary(exc)
+    return str(summary["code"]), str(summary["message"])
+
+
 async def _handle_general_failure(
     task_id: str,
     run_id: int,
@@ -325,7 +336,8 @@ async def _handle_general_failure(
 ) -> None:
     """Consolidate error-handler async work into a single coroutine."""
     try:
-        await _task_tracking_service.mark_failed(task_id, type(exc).__name__, str(exc)[:500])
+        code, message = _safe_failure_record(exc)
+        await _task_tracking_service.mark_failed(task_id, code, message)
     except Exception:
         logger.warning("Failed to record task failure", exc_info=True)
     try:
@@ -415,8 +427,9 @@ def run_task(
     except Exception as exc:
         if isinstance(exc, config.no_fail_transition_exceptions):
             try:
+                code, message = _safe_failure_record(exc)
                 run_in_worker_loop(
-                    _task_tracking_service.mark_failed(task_id, type(exc).__name__, str(exc)[:500])
+                    _task_tracking_service.mark_failed(task_id, code, message)
                 )
             except Exception:
                 logger.warning("Failed to record task failure", exc_info=True)
@@ -428,8 +441,9 @@ def run_task(
             # Mark task as failed before Celery retry so idempotent guard
             # allows the retried delivery to re-claim the task.
             try:
+                code, message = _safe_failure_record(exc)
                 run_in_worker_loop(
-                    _task_tracking_service.mark_failed(task_id, type(exc).__name__, str(exc)[:500])
+                    _task_tracking_service.mark_failed(task_id, code, message)
                 )
             except Exception:
                 logger.warning("Failed to mark task as failed before retry", exc_info=True)

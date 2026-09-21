@@ -3,7 +3,7 @@ import json
 
 import pytest
 from creator_domain.models import ModelSelection, RunStage
-from creator_domain.exceptions import ConflictError
+from creator_domain.exceptions import ConflictError, NotFoundError, ValidationError
 from creator_service.run_service import InMemoryRunStorage, RunService
 
 
@@ -131,7 +131,7 @@ def test_restart_run_rejects_invalid_stage_transition() -> None:
         )
     )
 
-    with pytest.raises(ValueError, match="Cannot transition"):
+    with pytest.raises(ValidationError, match="Cannot transition"):
         asyncio.run(service.restart_run(created.id, RunStage.PUBLISHED.value))
 
 
@@ -146,7 +146,7 @@ def test_restart_run_rejects_review_stage_from_non_review_stage() -> None:
         )
     )
 
-    with pytest.raises(ValueError, match="Cannot transition"):
+    with pytest.raises(ValidationError, match="Cannot transition"):
         asyncio.run(service.restart_run(created.id, RunStage.SCRIPT_REVIEW.value))
 
 
@@ -315,7 +315,7 @@ def test_lifecycle_cas_miss_raises_not_found_when_run_deleted(
     storage.update_run = deleting_update_run  # type: ignore[method-assign]
     method = getattr(service, method_name)
 
-    with pytest.raises(ValueError, match=f"Run {created.id} not found"):
+    with pytest.raises(NotFoundError, match=f"Run {created.id} not found"):
         asyncio.run(method(created.id, *args, workspace_id=5))
 
 

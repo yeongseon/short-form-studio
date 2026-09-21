@@ -3,6 +3,7 @@ import os
 import time
 
 from creator_domain.exceptions import ServiceError
+from creator_service.actionable_errors import map_service_error
 from creator_service.logging_config import setup_json_logging
 from creator_service.production_checks import validate_production_config
 from fastapi import APIRouter, FastAPI, Request
@@ -129,10 +130,24 @@ def create_app() -> FastAPI:
     )
     @app.exception_handler(ServiceError)
     async def service_error_handler(request: Request, exc: ServiceError) -> JSONResponse:
-        """Central mapping from typed service exceptions to HTTP responses."""
+        """Central mapping from typed service exceptions to HTTP responses.
+
+        Preserves the raw ``detail`` for backward compatibility and adds a static,
+        actionable ``error`` envelope (category, retryability, recovery steps) so
+        clients can recover without parsing free text.
+        """
+        actionable = map_service_error(exc)
+        error: dict[str, object] = {
+            "code": actionable.code,
+            "category": actionable.category.value,
+            "retryable": actionable.retryable,
+            "recovery_steps": list(actionable.recovery_steps),
+        }
+        if actionable.version_conflict is not None:
+            error["version_conflict"] = actionable.version_conflict
         return JSONResponse(
             status_code=exc.http_status_code,
-            content={"detail": exc.detail},
+            content={"detail": exc.detail, "error": error},
         )
 
     @app.exception_handler(Exception)

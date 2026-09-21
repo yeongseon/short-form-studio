@@ -106,20 +106,11 @@ async def restart_run(
     access: tuple[CurrentUser, PipelineRun] = Depends(require_run_access),
 ) -> dict[str, object]:
     user, _ = access
-    try:
-        run = await run_service.restart_run(
-            run_id=run_id,
-            from_stage=request.stage,
-            workspace_id=user.workspace_id,
-        )
-    except ConflictError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
-        detail = str(exc)
-        if "not found" in detail.lower():
-            raise HTTPException(status_code=404, detail=detail) from exc
-        raise HTTPException(status_code=400, detail=detail) from exc
-
+    run = await run_service.restart_run(
+        run_id=run_id,
+        from_stage=request.stage,
+        workspace_id=user.workspace_id,
+    )
     return run.model_dump(mode="json")
 
 

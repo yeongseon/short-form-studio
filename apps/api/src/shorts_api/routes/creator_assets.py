@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from creator_domain.exceptions import ValidationError
 from creator_domain.models import MediaType
 from creator_service.media_asset_service import (
     MediaUploadRejected,
@@ -33,7 +34,7 @@ async def upload_image_asset(
     """
     data = await file.read(_MAX_IMAGE_BYTES + 1)
     if len(data) > _MAX_IMAGE_BYTES:
-        raise HTTPException(status_code=400, detail="Upload exceeds maximum allowed size")
+        raise ValidationError("Upload exceeds maximum allowed size")
 
     try:
         asset = await media_asset_service.create_image_asset(
@@ -44,7 +45,7 @@ async def upload_image_asset(
             max_bytes=_MAX_IMAGE_BYTES,
         )
     except MediaUploadRejected as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        raise ValidationError(str(error)) from error
 
     return asset.model_dump(mode="json")
 
@@ -63,7 +64,7 @@ async def upload_audio_asset(
     """
     data = await file.read(_MAX_AUDIO_BYTES + 1)
     if len(data) > _MAX_AUDIO_BYTES:
-        raise HTTPException(status_code=400, detail="Upload exceeds maximum allowed size")
+        raise ValidationError("Upload exceeds maximum allowed size")
 
     try:
         asset = await media_asset_service.create_audio_asset(
@@ -74,7 +75,7 @@ async def upload_audio_asset(
             max_bytes=_MAX_AUDIO_BYTES,
         )
     except MediaUploadRejected as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        raise ValidationError(str(error)) from error
 
     return asset.model_dump(mode="json")
 
@@ -93,7 +94,7 @@ async def upload_video_asset(
     """
     data = await file.read(_MAX_VIDEO_BYTES + 1)
     if len(data) > _MAX_VIDEO_BYTES:
-        raise HTTPException(status_code=400, detail="Upload exceeds maximum allowed size")
+        raise ValidationError("Upload exceeds maximum allowed size")
 
     try:
         asset = await media_asset_service.create_video_asset(
@@ -104,7 +105,7 @@ async def upload_video_asset(
             max_bytes=_MAX_VIDEO_BYTES,
         )
     except MediaUploadRejected as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        raise ValidationError(str(error)) from error
 
     return asset.model_dump(mode="json")
 

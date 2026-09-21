@@ -576,7 +576,10 @@ async def test_restart_run_conflict_returns_409(client, stub_run_service: StubRu
     )
 
     assert response.status_code == 409
-    assert response.json() == {"detail": "Run 4243 has stale version"}
+    body = response.json()
+    assert body["detail"] == "Run 4243 has stale version"
+    assert body["error"]["category"] == "CONFLICT"
+    assert body["error"]["retryable"] is False
 
 
 @pytest.fixture

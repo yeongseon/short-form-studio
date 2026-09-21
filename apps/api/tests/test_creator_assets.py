@@ -61,6 +61,10 @@ async def test_upload_image_rejects_non_image(client, override_workspace_access)
         files={"file": ("note.txt", b"hello", "text/plain")},
     )
     assert response.status_code == 400
+    body = response.json()
+    assert body["error"]["category"] == "VALIDATION"
+    assert body["error"]["retryable"] is False
+    assert body["error"]["recovery_steps"]
 
 
 @pytest.mark.asyncio
