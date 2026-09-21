@@ -147,3 +147,92 @@ async def test_model_status_returns_provider_and_gpu_lock(client, stub_catalog_s
             f"Provider '{provider_entry.get('name')}' leaks 'endpoint' field"
         )
     assert stub_catalog_service.status_calls == 1
+
+
+# ------------------------- provider-config route (SF-73) -------------------------
+
+
+class _StubEntry:
+    def __init__(self, provider_type, endpoint, category, is_local, requires_gpu=False):
+        self.provider_type = provider_type
+        self.endpoint = endpoint
+        self.category = category
+        self.is_local = is_local
+        self.requires_gpu = requires_gpu
+
+
+class _StubCategory:
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+
+class _StubRegistry:
+    def list_models(self):
+        return [
+            _StubEntry("openai_llm", "https://api.openai.com", _StubCategory("llm"), False),
+            _StubEntry("groq_stt", "https://api.groq.com/openai/v1", _StubCategory("stt"), False),
+            _StubEntry("ollama", "http://ollama:11434", _StubCategory("llm"), True),
+            _StubEntry("sd_local", "http://stable-diffusion:7860", _StubCategory("image"), True),
+        ]
+
+
+class _StubResult:
+    def __init__(self, status):
+        self.status = status
+
+
+class _StubHealthService:
+    async def check_model(self, model_name):
+        from creator_service.model_health_service import ModelStatus
+
+        return _StubResult(ModelStatus.HEALTHY)
+
+
+@pytest.fixture
+def stub_provider_config(monkeypatch: pytest.MonkeyPatch):
+    for route in _iter_api_routes(models_router.routes):
+        if route.name == "get_provider_config":
+            monkeypatch.setitem(
+                route.endpoint.__globals__, "get_default_registry", lambda: _StubRegistry()
+            )
+            monkeypatch.setitem(route.endpoint.__globals__, "_health_service", _StubHealthService())
+            monkeypatch.setitem(
+                route.endpoint.__globals__,
+                "list_configured_providers",
+                lambda: ["openai", "groq"],
+            )
+
+
+@pytest.mark.asyncio
+async def test_provider_config_requires_authentication(stub_provider_config):
+    from httpx import ASGITransport, AsyncClient
+    from shorts_api.main import app
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        response = await ac.get("/api/creator/models/provider-config")
+
+    assert response.status_code in {401, 403}
+
+
+@pytest.mark.asyncio
+async def test_provider_config_returns_states_without_leaking_endpoints_or_secrets(
+    client, stub_provider_config
+):
+    response = await client.get("/api/creator/models/provider-config")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "providers" in body
+    providers = {p["provider"] for p in body["providers"]}
+    assert {"openai", "groq", "ollama"} <= providers
+
+    import json as _json
+
+    blob = _json.dumps(body)
+    # Raw registry entries carried real endpoints; the route must never surface them.
+    for leak in ("api.openai.com", "api.groq.com", "ollama:11434", "stable-diffusion", ":7860", "http://", "https://"):
+        assert leak not in blob
+    for state in body["providers"]:
+        for forbidden in ("endpoint", "url", "base_url", "hostname", "api_key", "secret", "value"):
+            assert forbidden not in state
