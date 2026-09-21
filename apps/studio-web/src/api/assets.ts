@@ -70,3 +70,44 @@ export async function listWorkspaceAssets(
     `${API_BASE}/workspaces/${workspaceId}/assets?${params.toString()}`,
   );
 }
+
+/** The three upload kinds map to distinct backend routes. */
+export type UploadKind = "image" | "video" | "audio";
+
+const _UPLOAD_PATH: Record<UploadKind, string> = {
+  image: "assets",
+  video: "assets/videos",
+  audio: "assets/audio",
+};
+
+/** Classify a File by its MIME type into an upload kind, or null if unsupported. */
+export function uploadKindForFile(file: File): UploadKind | null {
+  if (file.type.startsWith("image/")) {
+    return "image";
+  }
+  if (file.type.startsWith("video/")) {
+    return "video";
+  }
+  if (file.type.startsWith("audio/")) {
+    return "audio";
+  }
+  return null;
+}
+
+/**
+ * Upload a file to the caller's workspace via the validated upload API. Routes
+ * to the image/video/audio endpoint by ``kind``; the backend re-validates and
+ * probes the content, so an unsupported or oversized file is rejected there.
+ */
+export async function uploadAsset(
+  workspaceId: number,
+  kind: UploadKind,
+  file: File,
+): Promise<MediaAsset> {
+  const form = new FormData();
+  form.append("file", file);
+  return apiJson<MediaAsset>(
+    `${API_BASE}/workspaces/${workspaceId}/${_UPLOAD_PATH[kind]}`,
+    { method: "POST", body: form },
+  );
+}
