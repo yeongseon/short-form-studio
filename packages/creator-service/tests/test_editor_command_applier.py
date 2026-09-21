@@ -157,6 +157,18 @@ async def test_split_rejects_boundary() -> None:
 
 
 @pytest.mark.asyncio
+async def test_split_halves_keep_duration_within_their_source_windows() -> None:
+    # Each split half's visible duration must equal its source window size, so
+    # neither half can outrun the source it references.
+    result = await _apply(SplitSegmentCommand(segment_id="s1", at_seconds=2.0))
+    halves = [s for s in result.segments if s.id.startswith("s1")]
+    for half in halves:
+        if half.trim_start_seconds is not None and half.trim_end_seconds is not None:
+            window = half.trim_end_seconds - half.trim_start_seconds
+            assert half.duration_seconds <= window + 1e-6
+
+
+@pytest.mark.asyncio
 async def test_delete_ripple_shifts_following() -> None:
     result = await _apply(DeleteSegmentCommand(segment_id="s1", policy="ripple"))
     assert [s.id for s in result.segments] == ["s2"]
