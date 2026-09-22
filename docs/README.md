@@ -2,6 +2,8 @@
 
 | Document | Description |
 |---|---|
+| [FIRST_SHORT_WALKTHROUGH.md](FIRST_SHORT_WALKTHROUGH.md) | Offline demo, Timeline review, render and download |
+| [QUICKSTART.md](QUICKSTART.md) | Local bootstrap and proxy authentication |
 | [USAGE.md](USAGE.md) | Detailed usage guide and feature walkthrough |
 | [SECURITY.md](SECURITY.md) | Authentication model, trust boundaries, network exposure policy |
 | [CUTOVER.md](CUTOVER.md) | Deployment checklist and operational guide |
