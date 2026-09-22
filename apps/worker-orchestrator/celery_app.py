@@ -198,7 +198,7 @@ def _register_signal_handlers() -> None:
 
 
 @after_setup_logger.connect
-def setup_celery_logger(_logger: logging.Logger, **_kwargs: object) -> None:
+def setup_celery_logger(logger: logging.Logger, **_kwargs: object) -> None:
     """Configure Celery logger with JSON formatting."""
     setup_json_logging(service_name="worker", level="INFO")
 
@@ -216,7 +216,7 @@ def setup_worker_process_telemetry(**kwargs: object) -> None:
     _ = kwargs
     _register_signal_handlers()
     _apply_resource_limits()
-    telemetry_module = import_module("telemetry")
+    telemetry_module = import_module("creator_service.telemetry")
     telemetry_module.init_telemetry(service_name="worker")
 
 
