@@ -6,6 +6,9 @@ cross-asset validation (400 on unavailable asset). Access is gated by
 require_project_access, which returns 404 for cross-tenant access.
 """
 
+import os
+from pathlib import Path, PurePosixPath
+
 from creator_domain.models import EncodingProfile, OutputSpec, Timeline
 from creator_domain.models.project import Project
 from creator_service.media_asset_service import media_asset_service
@@ -13,6 +16,7 @@ from creator_service.timeline_compiler import compile_timeline_to_render_plan
 from creator_service.timeline_service import timeline_service
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
+from starlette.responses import FileResponse
 
 from shorts_api.auth import CurrentUser, require_project_access
 
@@ -87,4 +91,36 @@ async def preview_project_timeline(
         encoding_profile=encoding_profile,
         asset_resolver=media_asset_service,
     )
-    return plan.model_dump(mode="json")
+    payload = plan.model_dump(mode="json")
+    ordered = sorted(timeline.segments, key=lambda segment: segment.timeline_start_seconds)
+    for segment, source in zip(payload["segments"], ordered, strict=True):
+        segment["media_url"] = f"/api/creator/projects/{project_id}/assets/{source.asset_id}/content"
+    payload["timeline_revision"] = timeline.revision
+    return payload
+
+
+@router.get("/{project_id}/assets/{asset_id}/content")
+async def get_project_asset_content(
+    project_id: int,
+    asset_id: int,
+    access: tuple[CurrentUser, Project] = Depends(require_project_access),
+) -> FileResponse:
+    user, _project = access
+    asset = await media_asset_service.get_asset(asset_id, user.workspace_id)
+    if asset is None or asset.project_id != project_id or not asset.storage_key:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    if asset.metadata.get("storage_provider", "local") != "local":
+        raise HTTPException(status_code=409, detail="Remote media preview is not available")
+    key = PurePosixPath(asset.storage_key)
+    if key.is_absolute() or ".." in key.parts or "\\" in asset.storage_key:
+        raise HTTPException(status_code=404, detail="Asset not found")
+    root = Path(os.getenv("ARTIFACT_ROOT", "data/artifacts")).resolve()
+    path = (root / key).resolve()
+    if not path.is_relative_to(root) or not path.is_file():
+        raise HTTPException(status_code=404, detail="Asset not found")
+    allowed = {"image/png", "image/jpeg", "image/webp", "video/mp4", "video/webm"}
+    if asset.mime_type not in allowed:
+        raise HTTPException(status_code=415, detail="Media cannot be previewed")
+    return FileResponse(path, media_type=asset.mime_type, headers={
+        "X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store",
+    })
