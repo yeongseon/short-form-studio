@@ -4,6 +4,7 @@ import { ERROR_CATEGORY_LABELS, categoryLabel } from "../api/errorLabels";
 const ALL_CATEGORIES = [
   "NOT_FOUND",
   "VALIDATION",
+  "PROVIDER_AUTH",
   "CONFLICT",
   "VERSION_CONFLICT",
   "QUOTA",

@@ -124,6 +124,44 @@ def test_provider_auth_error_does_not_leak_upstream_body() -> None:
     assert "401" not in mapped.detail
 
 
+def test_provider_auth_maps_to_distinct_provider_auth_category_not_validation() -> None:
+    # V4: an auth/config failure is not user INPUT validation — it must carry a
+    # distinct PROVIDER_AUTH category (non-retryable) so the root cause survives.
+    from creator_domain.exceptions import ProviderConfigError
+
+    mapped_exc = map_provider_error(ProviderAuthError("api.x.com: 401 token=sk-secret"))
+    assert isinstance(mapped_exc, ProviderConfigError)
+    actionable = map_service_error(mapped_exc)
+    assert actionable.category is ErrorCategory.PROVIDER_AUTH
+    assert actionable.retryable is False
+    joined = " ".join(actionable.recovery_steps).lower()
+    assert "provider" in joined and ("configur" in joined or "credential" in joined)
+
+
+def test_generic_validation_stays_validation_category() -> None:
+    # A plain ValidationError must remain VALIDATION (only ProviderConfigError is
+    # PROVIDER_AUTH) so we don't over-broaden the new category.
+    assert map_service_error(ValidationError("bad input")).category is ErrorCategory.VALIDATION
+
+
+def test_worker_failure_summary_preserves_provider_auth_root_cause() -> None:
+    summary = build_run_failure_summary(
+        ProviderAuthError("https://api.openai.com/v1: 401 token=sk-abcdef1234567890abcdef")
+    )
+    assert summary["category"] == ErrorCategory.PROVIDER_AUTH.value
+    assert summary["retryable"] is False
+    blob = str(summary)
+    assert "sk-" not in blob
+    assert "api.openai.com" not in blob
+
+
+def test_provider_auth_failure_summary_reconstructs_from_code() -> None:
+    reconstructed = failure_summary_from_code(ErrorCategory.PROVIDER_AUTH.value)
+    assert reconstructed is not None
+    assert reconstructed["category"] == ErrorCategory.PROVIDER_AUTH.value
+    assert reconstructed["retryable"] is False
+
+
 # --- redact_error_message ---
 
 
