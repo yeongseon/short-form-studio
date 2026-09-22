@@ -1,8 +1,11 @@
-"""SF-76: one-click demo Short flow routes (plan disclosure + normal-run seed).
+"""SF-76 + P0-3: one-click demo Short flow routes.
 
-Both routes are workspace-isolated via require_project_access (404, never 403,
-on unauthorized/cross-workspace access). The seed creates only a normal
-IDEA_READY run; it never advances stages, approves reviews, renders, or exposes
+GET /projects/{id}/demo-short/plan is a pure, project-scoped disclosure (costs,
+required approvals, readiness) via require_project_access — it persists nothing.
+POST /workspaces/{id}/demo-short/runs is workspace-scoped via
+require_workspace_access because it CREATES a new workspace-owned "Demo Short"
+project (real sample-backed assets + timeline) and a normal IDEA_READY run; it
+never mutates an existing project, advances stages, approves reviews, or exposes
 artifacts externally.
 """
 
@@ -12,20 +15,22 @@ from typing import TYPE_CHECKING
 
 from creator_provider.api_keys import list_configured_providers
 from creator_provider.registry import get_default_registry
+from creator_service.demo_seed import seed_demo_short
 from creator_service.demo_short_flow import (
     build_demo_short_plan,
-    create_demo_run,
     resolve_demo_short_plan,
 )
+from creator_service.media_asset_service import media_asset_service
 from creator_service.model_health_service import ModelHealthService
+from creator_service.project_service import project_service
 from creator_service.provider_readiness import resolve_setup_provider_facts
-from creator_service.run_service import ConflictError, run_service
+from creator_service.run_service import run_service
 from creator_service.sample_project import build_sample_project_bundle
 from creator_service.setup_wizard import ModelCategory, resolve_setup_state
 from creator_service.timeline_service import timeline_service
 from fastapi import APIRouter, Depends, HTTPException
 
-from shorts_api.auth import CurrentUser, require_project_access
+from shorts_api.auth import CurrentUser, require_project_access, require_workspace_access
 
 if TYPE_CHECKING:
     from creator_domain.models.project import Project
@@ -60,6 +65,29 @@ async def _demo_setup_state(project_id: int, workspace_id: int):
         category_status_source=_category_status,
         unhealthy_source=_unhealthy,
         has_first_draft=await _project_has_first_draft(project_id, workspace_id),
+    )
+
+
+async def _workspace_demo_setup_state(workspace_id: int):
+    # The seed route creates the first draft itself, so readiness only needs the
+    # required providers configured — has_first_draft stays False honestly.
+    facts = await resolve_setup_provider_facts(
+        registry=get_default_registry(),
+        health_service=_health_service,
+        configured_remote_providers=list_configured_providers(),
+    )
+
+    async def _category_status() -> dict[ModelCategory, tuple[str, ...]]:
+        return facts.category_status
+
+    async def _unhealthy() -> tuple[str, ...]:
+        return facts.unhealthy_providers
+
+    return await resolve_setup_state(
+        configured_providers_source=lambda: list(facts.configured_providers),
+        category_status_source=_category_status,
+        unhealthy_source=_unhealthy,
+        has_first_draft=False,
     )
 
 
@@ -107,20 +135,14 @@ async def get_demo_short_plan(
     return _plan_to_response(plan)
 
 
-@router.post("/projects/{project_id}/demo-short/runs", status_code=201)
+@router.post("/workspaces/{workspace_id}/demo-short/runs", status_code=201)
 async def create_demo_short_run(
-    project_id: int,
-    access: tuple[CurrentUser, Project] = Depends(require_project_access),
+    workspace_id: int,
+    _user: CurrentUser = Depends(require_workspace_access),
 ) -> dict[str, object]:
-    user, project = access
-
-    if getattr(project, "status", None) == "deleting":
-        raise HTTPException(
-            status_code=409,
-            detail="Project is being deleted; cannot create new runs",
-        )
-
-    setup_state = await _demo_setup_state(project_id, user.workspace_id)
+    # The demo creates a NEW workspace-owned "Demo Short" project (it does not
+    # mutate a user's existing project), so the route is workspace-scoped.
+    setup_state = await _workspace_demo_setup_state(workspace_id)
     plan = await resolve_demo_short_plan(
         setup_state=setup_state, bundle=build_sample_project_bundle()
     )
@@ -131,16 +153,17 @@ async def create_demo_short_run(
             detail={"error": "demo prerequisites not configured", "plan": _plan_to_response(plan)},
         )
 
-    try:
-        run = await create_demo_run(
-            run_service=run_service,
-            project_id=project_id,
-            workspace_id=user.workspace_id,
-        )
-    except ConflictError:
-        raise HTTPException(
-            status_code=409,
-            detail="Project is being deleted; cannot create new runs",
-        )
+    result = await seed_demo_short(
+        workspace_id=workspace_id,
+        project_service=project_service,
+        media_asset_service=media_asset_service,
+        timeline_service=timeline_service,
+        run_service=run_service,
+    )
 
-    return {"run": run.model_dump(mode="json"), "plan": _plan_to_response(plan)}
+    return {
+        "run": result.run.model_dump(mode="json"),
+        "seeded_project_id": result.project_id,
+        "timeline_id": result.timeline_id,
+        "plan": _plan_to_response(plan),
+    }

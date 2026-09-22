@@ -60,10 +60,12 @@ approvals it will _not_ bypass:
 
 - `GET /api/creator/projects/{project_id}/demo-short/plan`
 
-Then seed the run. This creates a normal run at the `IDEA_READY` stage; it does
-**not** auto-advance or auto-approve anything:
+Then seed the run. This creates a **new, workspace-owned "Demo Short" project**
+with a real sample-backed timeline, plus a normal run at the `IDEA_READY` stage;
+it does **not** mutate your existing project and does **not** auto-advance or
+auto-approve anything:
 
-- `POST /api/creator/projects/{project_id}/demo-short/runs`
+- `POST /api/creator/workspaces/{workspace_id}/demo-short/runs`
 
 The Short then moves through the normal pipeline, which has **four human review
 gates that are surfaced, never bypassed**: `SCRIPT` review, `VISUAL_PLAN` review,
