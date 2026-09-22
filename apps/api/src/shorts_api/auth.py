@@ -5,9 +5,7 @@ from __future__ import annotations
 import contextvars
 import hashlib
 import hmac
-import logging
 import os
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
@@ -21,19 +19,19 @@ from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 
+from shorts_api.auth_lookup import (
+    CurrentUser,
+    KeyIdentity,
+    authentication_database_boundary,
+    resolve_api_key,
+    resolve_workspace_id as _resolve_workspace_id,
+)
+
 _PUBLIC_PATHS = frozenset({"/healthz"})
-logger = logging.getLogger(__name__)
 _current_user_ctx: contextvars.ContextVar["CurrentUser | None"] = contextvars.ContextVar(
     "current_user",
     default=None,
 )
-
-
-@dataclass(frozen=True)
-class CurrentUser:
-    user_id: int
-    workspace_id: int
-    workspace_name: str | None = None
 
 
 class RunAccessContext(NamedTuple):
@@ -58,59 +56,7 @@ def _extract_api_key(request: Request) -> str | None:
     return None
 
 
-async def _resolve_user_id_from_api_key(api_key: str, connection) -> str | None:
-    """Resolve a user_id from an API key, rejecting revoked keys.
-
-    Runs the asyncpg query directly against ``connection`` so the
-    ``revoked_at IS NULL`` filter cannot be silently dropped (the bug fixed
-    in #583 — the previous _AsyncpgSessionAdapter discarded the query and ran
-    its own filter-less SQL).
-    """
-    key_hash = hashlib.sha256(api_key.encode()).hexdigest()
-    row = await connection.fetchrow(
-        "SELECT user_id FROM api_keys WHERE key_hash = $1 AND revoked_at IS NULL",
-        key_hash,
-    )
-    if row is None:
-        return None
-    return row["user_id"]
-
-
 _ADMIN_PATH_PREFIX = "/api/admin"
-
-
-def _resolve_workspace_id(
-    workspace_header: str | None,
-    member_workspace_ids: list[int],
-) -> int:
-    """Resolve the workspace_id from header or default to first workspace.
-    
-    Args:
-        workspace_header: Value of X-Workspace-Id header (or None if not provided)
-        member_workspace_ids: List of workspace IDs the user is a member of
-        
-    Returns:
-        The resolved workspace_id
-        
-    Raises:
-        HTTPException(404) if header is invalid or user is not a member
-    """
-    if workspace_header is None:
-        return member_workspace_ids[0]
-    
-    # Try to parse the header as an integer
-    try:
-        requested_workspace_id = int(workspace_header)
-    except (TypeError, ValueError):
-        raise HTTPException(status_code=404, detail="Not found")
-    
-    # Verify user is a member of the requested workspace
-    if requested_workspace_id not in member_workspace_ids:
-        raise HTTPException(status_code=404, detail="Not found")
-    
-    return requested_workspace_id
-
-
 
 
 class ApiKeyMiddleware(BaseHTTPMiddleware):
@@ -129,21 +75,13 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
     async def _resolve_member_workspaces(self, user_id: int) -> list[int]:
         pool = await self._get_pool()
         if pool is None:
-            return []
+            raise HTTPException(status_code=503, detail="Service unavailable")
 
         query = (
             "SELECT workspace_id FROM workspace_members WHERE user_id = $1 ORDER BY workspace_id"
         )
         async with pool.acquire() as connection:
-            try:
-                rows = await connection.fetch(query, user_id)
-            except Exception:
-                logger.exception("DB error resolving member workspaces for user_id=%s", user_id)
-                raise
-            try:
-                rows = await connection.fetch(query, user_id)
-            except Exception:
-                return []
+            rows = await connection.fetch(query, user_id)
 
         workspace_ids: list[int] = []
         for row in rows:
@@ -199,26 +137,23 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         if pool is None:
             return JSONResponse(status_code=503, content={"detail": "Service unavailable"})
 
-        async with pool.acquire() as connection:
-            user_id = await _resolve_user_id_from_api_key(provided, connection)
-        if user_id is None:
+        try:
+            with authentication_database_boundary():
+                async with pool.acquire() as connection:
+                    identity = await resolve_api_key(provided, connection)
+        except HTTPException as exc:
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
+        if identity is None:
             return JSONResponse(
                 status_code=401,
                 content={"detail": "API key is not associated with any user"},
             )
 
         try:
-            user_id_int = int(user_id)
-        except (TypeError, ValueError):
-            return JSONResponse(
-                status_code=401,
-                content={"detail": "API key is not associated with any user"},
-            )
-
-        try:
-            member_workspace_ids = await self._resolve_member_workspaces(user_id_int)
-        except Exception:
-            return JSONResponse(status_code=503, content={"detail": "Service unavailable"})
+            with authentication_database_boundary():
+                member_workspace_ids = await self._resolve_member_workspaces(identity.user_id)
+        except HTTPException as exc:
+            return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
         if not member_workspace_ids:
             return JSONResponse(status_code=404, content={"detail": "Not found"})
 
@@ -229,7 +164,9 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         except HTTPException as exc:
             return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
-        user = CurrentUser(user_id=user_id_int, workspace_id=selected_workspace_id)
+        user = CurrentUser(
+            user_id=identity.user_id, workspace_id=selected_workspace_id, key_id=identity.key_id
+        )
         request.state.user = user
         token = _current_user_ctx.set(user)
         try:
@@ -252,30 +189,32 @@ async def get_current_user(request: Request) -> CurrentUser:
         raise HTTPException(status_code=401, detail="API key required")
 
     key_hash = hashlib.sha256(api_key.encode()).hexdigest()
-    key_row = await fetch_one(
-        """
-        SELECT user_id
-        FROM api_keys
-        WHERE key_hash = $1 AND revoked_at IS NULL
-        LIMIT 1
-        """,
-        key_hash,
-    )
+    with authentication_database_boundary():
+        key_row = await fetch_one(
+            """
+            SELECT id, user_id
+            FROM api_keys
+            WHERE key_hash = $1 AND revoked_at IS NULL
+            LIMIT 1
+            """,
+            key_hash,
+        )
     if key_row is None:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-    user_id = key_row["user_id"]
+    identity = KeyIdentity.model_validate(key_row)
     
     # Fetch all workspace memberships for this user
-    membership_rows = await fetch_all(
-        """
-        SELECT workspace_id
-        FROM workspace_members
-        WHERE user_id = $1
-        ORDER BY workspace_id ASC
-        """,
-        user_id,
-    )
+    with authentication_database_boundary():
+        membership_rows = await fetch_all(
+            """
+            SELECT workspace_id
+            FROM workspace_members
+            WHERE user_id = $1
+            ORDER BY workspace_id ASC
+            """,
+            identity.user_id,
+        )
     if not membership_rows:
         raise HTTPException(status_code=404, detail="Not found")
     
@@ -285,7 +224,11 @@ async def get_current_user(request: Request) -> CurrentUser:
     workspace_header = request.headers.get("X-Workspace-Id")
     selected_workspace_id = _resolve_workspace_id(workspace_header, member_workspace_ids)
 
-    return CurrentUser(user_id=user_id, workspace_id=selected_workspace_id)
+    user = CurrentUser(
+        user_id=identity.user_id, workspace_id=selected_workspace_id, key_id=identity.key_id
+    )
+    request.state.user = user
+    return user
 
 
 async def require_current_user(request: Request) -> CurrentUser:
