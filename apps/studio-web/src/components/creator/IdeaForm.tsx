@@ -16,10 +16,13 @@ interface IdeaFormProps {
 export default function IdeaForm({ onSubmit, submitting = false, error = null }: IdeaFormProps) {
   const [title, setTitle] = useState("");
   const [ideaBrief, setIdeaBrief] = useState("");
-  const [targetDuration, setTargetDuration] = useState(60);
+  const [durationSelection, setDurationSelection] = useState("60");
+  const [customDuration, setCustomDuration] = useState("60");
   const [contentGoal, setContentGoal] = useState("");
 
-  const canSubmit = title.trim() !== "" && ideaBrief.trim() !== "" && !submitting;
+  const targetDuration = Number(durationSelection === "custom" ? customDuration : durationSelection);
+  const durationValid = Number.isFinite(targetDuration) && targetDuration > 0;
+  const canSubmit = title.trim() !== "" && ideaBrief.trim() !== "" && durationValid && !submitting;
 
   const handleSubmit = useCallback(
     (e: FormEvent) => {
@@ -82,23 +85,53 @@ export default function IdeaForm({ onSubmit, submitting = false, error = null }:
         />
       </div>
 
-      <div style={{ display: "flex", gap: 16, marginBottom: 16 }}>
-        <div style={{ flex: 1 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 16, marginBottom: 16 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <label htmlFor="target-duration" style={{ display: "block", fontWeight: 600, marginBottom: 4, fontSize: 13 }}>
             Target Duration (seconds)
           </label>
-          <input
+          <select
             id="target-duration"
-            type="number"
-            min={10}
-            max={180}
-            value={targetDuration}
-            onChange={(e) => setTargetDuration(Number(e.target.value))}
+            value={durationSelection}
+            onChange={(e) => setDurationSelection(e.target.value)}
             disabled={submitting}
+            aria-describedby="duration-guidance"
             style={{ width: "100%", padding: "8px 12px", border: "1px solid #ccc", borderRadius: 4, fontSize: 14, boxSizing: "border-box" }}
-          />
+          >
+            {[15, 30, 45, 60, 90].map((seconds) => (
+              <option key={seconds} value={seconds}>{seconds} seconds</option>
+            ))}
+            <option value="custom">Custom</option>
+          </select>
+          {durationSelection === "custom" && (
+            <div style={{ marginTop: 12 }}>
+              <label htmlFor="custom-duration" style={{ display: "block", fontWeight: 600, marginBottom: 4, fontSize: 13 }}>
+                Custom duration (seconds)
+              </label>
+              <input
+                id="custom-duration"
+                type="number"
+                required
+                step="any"
+                value={customDuration}
+                onChange={(e) => setCustomDuration(e.target.value)}
+                disabled={submitting}
+                aria-invalid={!durationValid}
+                aria-describedby={durationValid ? "duration-guidance" : "duration-error duration-guidance"}
+                style={{ width: "100%", padding: "8px 12px", border: "1px solid #ccc", borderRadius: 4, fontSize: 14, boxSizing: "border-box" }}
+              />
+              {!durationValid && (
+                <p id="duration-error" role="alert" style={{ color: "#b91c1c", margin: "8px 0", fontSize: 13 }}>
+                  Enter a positive, finite duration in seconds.
+                </p>
+              )}
+            </div>
+          )}
+          <p id="duration-guidance" style={{ margin: "8px 0 0", color: "#666", fontSize: 13 }}>
+            Aim for approximately 3 minutes or less for a short. This is guidance, not a duration limit.
+          </p>
         </div>
-        <div style={{ flex: 1 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <label htmlFor="content-goal" style={{ display: "block", fontWeight: 600, marginBottom: 4, fontSize: 13 }}>
             Content Goal
           </label>
