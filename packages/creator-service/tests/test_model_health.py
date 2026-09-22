@@ -118,13 +118,14 @@ class TestModelHealthService:
             results = await health_service.check_all()
         
         assert isinstance(results, list)
-        assert len(results) == 10
+        assert len(results) == 11
         
         model_names = {result.model_name for result in results}
         expected_models = {
             "ollama",
             "stable-diffusion",
             "tts-qwen3",
+            "tts-cosyvoice",
             "stt-whisper",
             "api.openai.com",
             "api.anthropic.com",
