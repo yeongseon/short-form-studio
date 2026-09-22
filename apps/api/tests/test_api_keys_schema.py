@@ -81,12 +81,12 @@ def _record_op_calls(module: ModuleType) -> list[tuple[str, tuple[object, ...]]]
     return recorded
 
 
-def test_migration_018_creates_api_keys_without_name_or_revoked_at() -> None:
-    """Migration 018 is the historical source of the bug — it omits name and revoked_at.
+def test_migration_018_preserves_historical_schema_before_029_repair() -> None:
+    """Characterize deployed revision 018, not the desired current schema.
 
-    This test pins the original broken state so the regression test below is
-    meaningful: if migration 018 is ever rewritten to include the columns,
-    this test fails and reminds the author that migration 029 should be squashed.
+    Preserve historical migrations: databases already at 018 receive the missing
+    columns through additive revision 029. The next test guards that repair;
+    this baseline must not be used as a reason to rewrite or squash either revision.
     """
     module = _load_migration_module(
         "018_api_keys_and_quota_unit_rename.py",
@@ -108,11 +108,8 @@ def test_migration_018_creates_api_keys_without_name_or_revoked_at() -> None:
 def test_migration_029_adds_name_and_revoked_at_to_api_keys() -> None:
     """Migration 029 must add both name and revoked_at columns to api_keys.
 
-    This is the regression guard: if migration 029 is later squashed, dropped, or
-    renamed, this test will fail and remind the author that auth.py and
-    create_api_key.py still depend on these columns.
-
-    FAILS RIGHT NOW because migration 029 does not exist yet.
+    This guards the additive repair for databases already at revision 018.
+    auth.py and create_api_key.py depend on these columns after upgrade.
     """
     path = _MIGRATIONS_DIR / "029_api_keys_add_name_and_revoked_at.py"
     if not path.exists():
