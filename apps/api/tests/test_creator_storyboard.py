@@ -79,8 +79,11 @@ class StubTaskTrackingService:
     def __init__(self) -> None:
         self.calls: list[tuple[int, str, str]] = []
 
-    async def record_task_queued(self, run_id: int, task_type: str, task_id: str) -> None:
+    async def record_task_pending(self, run_id: int, task_type: str, task_id: str) -> None:
         self.calls.append((run_id, task_type, task_id))
+
+    async def promote_pending_to_queued(self, task_id: str) -> None:
+        assert any(call[2] == task_id for call in self.calls)
 
 
 def _patch_storyboard_dispatch_and_tracking(
@@ -92,7 +95,7 @@ def _patch_storyboard_dispatch_and_tracking(
         "tracking": StubTaskTrackingService(),
     }
 
-    def _dispatch_paragraph_audio(run_id: int, section_id: str, tts_model: str, voice: str) -> str:
+    def _dispatch_paragraph_audio(run_id: int, section_id: str, tts_model: str, voice: str, task_id: str | None = None) -> str:
         audio_calls = calls["audio"]
         assert isinstance(audio_calls, list)
         audio_calls.append(
@@ -103,10 +106,11 @@ def _patch_storyboard_dispatch_and_tracking(
                 "voice": voice,
             }
         )
-        return f"audio-task-{section_id}"
+        assert task_id is not None
+        return task_id
 
     def _dispatch_paragraph_subtitles(
-        run_id: int, section_id: str, subtitle_model: str, subtitle_format: str
+        run_id: int, section_id: str, subtitle_model: str, subtitle_format: str, task_id: str | None = None,
     ) -> str:
         subtitle_calls = calls["subtitles"]
         assert isinstance(subtitle_calls, list)
@@ -118,7 +122,8 @@ def _patch_storyboard_dispatch_and_tracking(
                 "subtitle_format": subtitle_format,
             }
         )
-        return f"subtitle-task-{section_id}"
+        assert task_id is not None
+        return task_id
 
     for route in _iter_api_routes(runs_router.routes):
         if route.name in {
@@ -138,8 +143,12 @@ def _patch_storyboard_dispatch_and_tracking(
     tracking = calls["tracking"]
     assert isinstance(tracking, StubTaskTrackingService)
     monkeypatch.setattr(
-        "shorts_api.routes.storyboard_dispatch.task_tracking_service.record_task_queued",
-        tracking.record_task_queued,
+        "shorts_api.routes.storyboard_dispatch.task_tracking_service.record_task_pending",
+        tracking.record_task_pending,
+    )
+    monkeypatch.setattr(
+        "shorts_api.routes.storyboard_dispatch.task_tracking_service.promote_pending_to_queued",
+        tracking.promote_pending_to_queued,
     )
 
     return calls
@@ -565,15 +574,14 @@ async def test_generate_paragraph_audio_cancels_reservation_when_tracking_fails(
     quota = _patch_quota_functions(monkeypatch, {"generate_paragraph_audio_endpoint"})
 
     class _FailingTrackingService:
-        async def record_task_queued(self, run_id: int, task_type: str, task_id: str) -> None:
-            _ = (run_id, task_type, task_id)
+        async def promote_pending_to_queued(self, task_id: str) -> None:
             raise RuntimeError("tracking failure")
 
     for route in _iter_api_routes(runs_router.routes):
         if route.name == "generate_paragraph_audio_endpoint":
             monkeypatch.setattr(
-                "shorts_api.routes.storyboard_dispatch.task_tracking_service.record_task_queued",
-                _FailingTrackingService().record_task_queued,
+                "shorts_api.routes.storyboard_dispatch.task_tracking_service.promote_pending_to_queued",
+                _FailingTrackingService().promote_pending_to_queued,
             )
 
     response = await client.post(
@@ -626,15 +634,14 @@ async def test_generate_paragraph_subtitles_cancels_reservation_when_tracking_fa
     quota = _patch_quota_functions(monkeypatch, {"generate_paragraph_subtitles_endpoint"})
 
     class _FailingTrackingService:
-        async def record_task_queued(self, run_id: int, task_type: str, task_id: str) -> None:
-            _ = (run_id, task_type, task_id)
+        async def promote_pending_to_queued(self, task_id: str) -> None:
             raise RuntimeError("tracking failure")
 
     for route in _iter_api_routes(runs_router.routes):
         if route.name == "generate_paragraph_subtitles_endpoint":
             monkeypatch.setattr(
-                "shorts_api.routes.storyboard_dispatch.task_tracking_service.record_task_queued",
-                _FailingTrackingService().record_task_queued,
+                "shorts_api.routes.storyboard_dispatch.task_tracking_service.promote_pending_to_queued",
+                _FailingTrackingService().promote_pending_to_queued,
             )
 
     response = await client.post(
@@ -659,11 +666,12 @@ async def test_generate_all_audio_cancels_reservation_when_dispatch_fails(
     )
     quota = _patch_quota_functions(monkeypatch, {"generate_all_paragraph_audio"})
 
-    def _dispatch_paragraph_audio(run_id: int, section_id: str, tts_model: str, voice: str) -> str:
+    def _dispatch_paragraph_audio(run_id: int, section_id: str, tts_model: str, voice: str, task_id: str | None = None) -> str:
         _ = (run_id, tts_model, voice)
         if section_id == "sec-2":
             raise RuntimeError("dispatch failure")
-        return f"audio-task-{section_id}"
+        assert task_id is not None
+        return task_id
 
     for route in _iter_api_routes(runs_router.routes):
         if route.name == "generate_all_paragraph_audio":
@@ -693,16 +701,19 @@ async def test_generate_all_audio_cancels_reservation_when_tracking_fails(
     quota = _patch_quota_functions(monkeypatch, {"generate_all_paragraph_audio"})
 
     class _FailingTrackingService:
-        async def record_task_queued(self, run_id: int, task_type: str, task_id: str) -> None:
-            _ = (run_id, task_type)
-            if task_id.endswith("sec-2"):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def promote_pending_to_queued(self, task_id: str) -> None:
+            self.calls += 1
+            if self.calls == 2:
                 raise RuntimeError("tracking failure")
 
     for route in _iter_api_routes(runs_router.routes):
         if route.name == "generate_all_paragraph_audio":
             monkeypatch.setattr(
-                "shorts_api.routes.storyboard_dispatch.task_tracking_service.record_task_queued",
-                _FailingTrackingService().record_task_queued,
+                "shorts_api.routes.storyboard_dispatch.task_tracking_service.promote_pending_to_queued",
+                _FailingTrackingService().promote_pending_to_queued,
             )
 
     response = await client.post("/api/creator/runs/33/storyboard/generate-all-audio", json={})
@@ -724,12 +735,13 @@ async def test_generate_all_subtitles_cancels_reservation_when_dispatch_fails(
     quota = _patch_quota_functions(monkeypatch, {"generate_all_paragraph_subtitles"})
 
     def _dispatch_paragraph_subtitles(
-        run_id: int, section_id: str, subtitle_model: str, subtitle_format: str
+        run_id: int, section_id: str, subtitle_model: str, subtitle_format: str, task_id: str | None = None,
     ) -> str:
         _ = (run_id, subtitle_model, subtitle_format)
         if section_id == "sec-2":
             raise RuntimeError("dispatch failure")
-        return f"subtitle-task-{section_id}"
+        assert task_id is not None
+        return task_id
 
     for route in _iter_api_routes(runs_router.routes):
         if route.name == "generate_all_paragraph_subtitles":
@@ -759,16 +771,19 @@ async def test_generate_all_subtitles_cancels_reservation_when_tracking_fails(
     quota = _patch_quota_functions(monkeypatch, {"generate_all_paragraph_subtitles"})
 
     class _FailingTrackingService:
-        async def record_task_queued(self, run_id: int, task_type: str, task_id: str) -> None:
-            _ = (run_id, task_type)
-            if task_id.endswith("sec-2"):
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def promote_pending_to_queued(self, task_id: str) -> None:
+            self.calls += 1
+            if self.calls == 2:
                 raise RuntimeError("tracking failure")
 
     for route in _iter_api_routes(runs_router.routes):
         if route.name == "generate_all_paragraph_subtitles":
             monkeypatch.setattr(
-                "shorts_api.routes.storyboard_dispatch.task_tracking_service.record_task_queued",
-                _FailingTrackingService().record_task_queued,
+                "shorts_api.routes.storyboard_dispatch.task_tracking_service.promote_pending_to_queued",
+                _FailingTrackingService().promote_pending_to_queued,
             )
 
     response = await client.post("/api/creator/runs/35/storyboard/generate-all-subtitles", json={})
