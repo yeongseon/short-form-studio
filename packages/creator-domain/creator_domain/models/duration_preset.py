@@ -9,6 +9,9 @@ valid at the domain layer.
 
 from __future__ import annotations
 
+import math
+from types import MappingProxyType
+
 from creator_domain.exceptions import ValidationError
 from creator_domain.models.content_recipe import DurationRange
 
@@ -27,9 +30,9 @@ def _band(nominal: float) -> DurationRange:
         raise ValidationError(str(error)) from error
 
 
-DURATION_PRESETS: dict[str, DurationRange] = {
+DURATION_PRESETS = MappingProxyType({
     str(nominal): _band(float(nominal)) for nominal in _NOMINAL_SECONDS
-}
+})
 
 
 def duration_preset_ids() -> tuple[str, ...]:
@@ -44,6 +47,6 @@ def resolve_duration_preset(preset_id: str) -> DurationRange:
 
 
 def resolve_custom_duration(target_seconds: float) -> DurationRange:
-    if target_seconds <= 0:
-        raise ValidationError("custom duration target_seconds must be > 0")
+    if not math.isfinite(target_seconds) or target_seconds <= 0:
+        raise ValidationError("custom duration target_seconds must be finite and > 0")
     return _band(target_seconds)
