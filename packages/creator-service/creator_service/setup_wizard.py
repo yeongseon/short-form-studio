@@ -90,6 +90,7 @@ class SetupState:
     next_action: str
     can_generate_first_draft: bool
     full_render_ready: bool
+    has_first_draft: bool
 
 
 def evaluate_setup_state(
@@ -157,6 +158,7 @@ def evaluate_setup_state(
         next_action=next_action,
         can_generate_first_draft=can_generate_first_draft,
         full_render_ready=full_render_ready,
+        has_first_draft=has_first_draft,
     )
 
 

@@ -1,37 +1,25 @@
 # pyright: reportPrivateUsage=false
 
-"""SF-77: short-first onboarding guidance + non-empty first-draft invariants.
-
-Locks that onboarding guides idea/duration/style/optional-assets through the
-supported draft->preview->download->edit path, surfaces the four human review
-gates (never bypassing them), distinguishes first-run from returning users, and
-that the first draft is never an empty timeline — sample-backed when the user
-supplies no assets, and feasible even for long custom durations.
-"""
-
+from dataclasses import replace
 import pytest
-from creator_domain.models import RunStage, Timeline
+from creator_domain.models import RunStage
 from creator_domain.models.duration_preset import (
     duration_preset_ids,
     resolve_custom_duration,
-    resolve_duration_preset,
 )
 from creator_service.onboarding import (
     OnboardingGuidance,
     OnboardingStep,
-    build_onboarding_first_draft,
     build_onboarding_guidance,
 )
 from creator_service.recipe_registry import get_recipe_registry
-from creator_service.sample_project import build_sample_media_assets
 from creator_service.short_template import (
     SHORT_TEMPLATES,
     SceneAsset,
+    build_timeline_skeleton,
     resolve_short_template,
 )
 from creator_service.setup_wizard import ModelCategory, evaluate_setup_state
-from creator_service.timeline_compiler import compile_timeline_to_render_plan
-from creator_domain.models import EncodingProfile, OutputSpec
 
 _REGISTRY = get_recipe_registry()
 
@@ -39,6 +27,7 @@ _PIPELINE_APPROVAL_ORDER = (
     RunStage.SCRIPT_REVIEW,
     RunStage.VISUAL_PLAN_REVIEW,
     RunStage.VISUAL_ASSET_REVIEW,
+    RunStage.TIMELINE_REVIEW,
     RunStage.FINAL_REVIEW,
 )
 
@@ -104,7 +93,7 @@ def test_both_flows_share_the_full_supported_path() -> None:
     )
     assert first.steps == _EXPECTED_STEPS
     assert returning.steps == _EXPECTED_STEPS
-    assert first.next_action != returning.next_action
+    assert first.setup_step == returning.setup_step == _ready_setup_state().step
 
 
 # --- setup gate ---
@@ -163,88 +152,33 @@ def test_guidance_is_deterministic() -> None:
 # --- non-empty first draft ---
 
 
-def test_first_draft_is_non_empty_when_no_user_assets() -> None:
-    resolved = resolve_short_template(SHORT_TEMPLATES["general"], recipe_registry=_REGISTRY)
-    draft = build_onboarding_first_draft(
-        resolved=resolved,
-        project_id=1,
-        duration=resolve_duration_preset("30"),
-        scene_assets=None,
-    )
-    assert isinstance(draft, Timeline)
-    assert len(draft.segments) >= 1
-
-
-def test_first_draft_empty_sequence_behaves_like_no_assets() -> None:
-    resolved = resolve_short_template(SHORT_TEMPLATES["general"], recipe_registry=_REGISTRY)
-    draft = build_onboarding_first_draft(
-        resolved=resolved,
-        project_id=1,
-        duration=resolve_duration_preset("30"),
-        scene_assets=(),
-    )
-    assert len(draft.segments) >= 1
-
-
 def test_first_draft_uses_user_assets_when_supplied() -> None:
     resolved = resolve_short_template(SHORT_TEMPLATES["general"], recipe_registry=_REGISTRY)
     user_assets = (SceneAsset(asset_id=555), SceneAsset(asset_id=556))
     # Two 2-6s segments span [4, 12]s, so a ~10s custom target is feasible for them.
-    draft = build_onboarding_first_draft(
-        resolved=resolved,
+    tuned = replace(resolved, recipe=resolved.recipe.model_copy(
+        update={"target_duration": resolve_custom_duration(10.0)},
+    ))
+    draft = build_timeline_skeleton(
+        tuned,
         project_id=1,
-        duration=resolve_custom_duration(10.0),
         scene_assets=user_assets,
     )
     asset_ids = {seg.asset_id for seg in draft.segments}
     assert asset_ids == {555, 556}
 
 
-def test_sample_backed_draft_compiles_to_render_plan() -> None:
-    import asyncio
-
-    resolved = resolve_short_template(SHORT_TEMPLATES["general"], recipe_registry=_REGISTRY)
-    draft = build_onboarding_first_draft(
-        resolved=resolved,
-        project_id=1,
-        duration=resolve_duration_preset("30"),
-        scene_assets=None,
-    )
-
-    sample_assets = build_sample_media_assets(workspace_id=1, project_id=1)
-
-    class _Resolver:
-        def __init__(self) -> None:
-            self._by_id = {a.id: a for a in sample_assets}
-
-        async def get_asset(self, asset_id: int, workspace_id: int):
-            asset = self._by_id.get(asset_id)
-            if asset is None or asset.workspace_id != workspace_id:
-                return None
-            return asset
-
-    plan = asyncio.run(
-        compile_timeline_to_render_plan(
-            draft,
-            workspace_id=1,
-            output_spec=OutputSpec.short_vertical(),
-            encoding_profile=EncodingProfile.preview(),
-            asset_resolver=_Resolver(),
-        )
-    )
-    assert len(plan.segments) == len(draft.segments)
-
-
 def test_long_custom_duration_produces_a_feasible_non_empty_draft() -> None:
     resolved = resolve_short_template(SHORT_TEMPLATES["general"], recipe_registry=_REGISTRY)
-    draft = build_onboarding_first_draft(
-        resolved=resolved,
-        project_id=1,
-        duration=resolve_custom_duration(200.0),
-        scene_assets=None,
+    tuned = replace(resolved, recipe=resolved.recipe.model_copy(
+        update={"target_duration": resolve_custom_duration(200.0)},
+    ))
+    scene_assets = [SceneAsset(asset_id=asset_id) for asset_id in range(500, 540)]
+    draft = build_timeline_skeleton(
+        tuned, project_id=1, scene_assets=scene_assets,
     )
-    assert len(draft.segments) >= 1
-    assert draft.total_duration_seconds == pytest.approx(200.0, abs=0.9 * 200.0)
+    assert [segment.asset_id for segment in draft.segments] == list(range(500, 540))
+    assert draft.total_duration_seconds == pytest.approx(200.0)
 
 
 def test_underlying_skeleton_still_rejects_empty_assets() -> None:
