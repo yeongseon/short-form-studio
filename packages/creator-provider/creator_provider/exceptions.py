@@ -5,24 +5,13 @@ from __future__ import annotations
 import httpx
 
 
-class ProviderError(RuntimeError):
-    """Base exception for all provider errors."""
-
-
-class ProviderTimeoutError(ProviderError):
-    """Provider request timed out - retryable."""
-
-
-class RateLimitError(ProviderError):
-    """Provider rate limit exceeded - retryable with longer backoff."""
-
-
-class ProviderValidationError(ProviderError):
-    """Invalid input to provider - non-retryable."""
-
-
-class ProviderAuthError(ProviderError):
-    """Authentication/authorization failure - non-retryable."""
+from creator_domain.provider_errors import (
+    ProviderAuthError as ProviderAuthError,
+    ProviderError as ProviderError,
+    ProviderTimeoutError as ProviderTimeoutError,
+    ProviderValidationError as ProviderValidationError,
+    RateLimitError as RateLimitError,
+)
 
 
 def map_httpx_error(exc: httpx.HTTPError, prefix: str) -> ProviderError:
