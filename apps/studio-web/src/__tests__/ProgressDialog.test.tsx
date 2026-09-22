@@ -585,4 +585,69 @@ describe("ProgressDialog accessibility", () => {
     expect(document.activeElement).toBe(trigger);
     document.body.removeChild(trigger);
   });
+
+  it("renders the P0-3 failure summary (category, retryable, recovery steps)", async () => {
+    let stageCall = 0;
+    globalThis.fetch = vi.fn(async (url: string) => {
+      if (typeof url === "string" && url.includes("/tasks")) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => [
+            {
+              task_type: "generate_audio",
+              status: "failed",
+              attempt: 1,
+              error_code: "UNAVAILABLE",
+              error_message: "The provider was temporarily unavailable",
+              failure: {
+                code: "UNAVAILABLE",
+                category: "UNAVAILABLE",
+                retryable: true,
+                recovery_steps: ["Retry in a moment", "If it persists, check provider status"],
+                message: "The provider was temporarily unavailable",
+              },
+            },
+          ],
+        };
+      }
+      stageCall++;
+      const status = stageCall <= 1 ? "running" : "failed";
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ current_stage: "SCRIPT_GENERATING", status }),
+      };
+    }) as unknown as typeof fetch;
+
+    render(
+      <ProgressDialog
+        open={true}
+        runId={RUN_ID}
+        expectedStage="SCRIPT_GENERATING"
+        apiBase={API}
+        pollInterval={1000}
+      />,
+    );
+
+    // First poll — running
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // Second poll — failed (triggers the /tasks fetch)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1000);
+    });
+    // Let the non-blocking /tasks fetch resolve.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    const failure = screen.getByTestId("task-failure");
+    expect(failure).toHaveTextContent("Temporarily unavailable");
+    expect(failure).toHaveTextContent("you can retry");
+    const steps = screen.getByTestId("task-recovery-steps");
+    expect(steps).toHaveTextContent("Retry in a moment");
+    expect(steps).toHaveTextContent("check provider status");
+  });
 });

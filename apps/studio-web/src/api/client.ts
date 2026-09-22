@@ -16,16 +16,53 @@ export function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
 
 /**
  * Error thrown when the API returns a non-2xx response.
- * Exposes the HTTP status and parsed detail message for structured error handling.
+ * Exposes the HTTP status and parsed detail message, plus the optional SF-78
+ * structured `error` envelope (category / retryability / recovery steps) when
+ * the backend provides it, for structured error handling and recovery UX.
  */
 export class ApiError extends Error {
+  public readonly code?: string;
+  public readonly category?: string;
+  public readonly retryable?: boolean;
+  public readonly recoverySteps?: string[];
+
   constructor(
     public readonly status: number,
     public readonly detail: string,
+    structured?: {
+      code?: string;
+      category?: string;
+      retryable?: boolean;
+      recoverySteps?: string[];
+    },
   ) {
     super(detail);
     this.name = "ApiError";
+    this.code = structured?.code;
+    this.category = structured?.category;
+    this.retryable = structured?.retryable;
+    this.recoverySteps = structured?.recoverySteps;
   }
+}
+
+/**
+ * Build an ApiError from a parsed (or null) error body, reading the SF-78
+ * `error` envelope when present and always preserving the legacy `detail`.
+ */
+function toApiError(status: number, body: unknown): ApiError {
+  const record = (body ?? null) as Record<string, unknown> | null;
+  const detail = (record?.detail as string) ?? `Request failed (${status})`;
+  const envelope = record?.error as Record<string, unknown> | undefined;
+  if (envelope && typeof envelope === "object") {
+    const steps = envelope.recovery_steps;
+    return new ApiError(status, detail, {
+      code: typeof envelope.code === "string" ? envelope.code : undefined,
+      category: typeof envelope.category === "string" ? envelope.category : undefined,
+      retryable: typeof envelope.retryable === "boolean" ? envelope.retryable : undefined,
+      recoverySteps: Array.isArray(steps) ? (steps as string[]) : undefined,
+    });
+  }
+  return new ApiError(status, detail);
 }
 
 /**
@@ -42,8 +79,7 @@ export async function apiJson<T>(input: RequestInfo | URL, init?: RequestInit): 
   const res = await apiFetch(input, init);
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    const detail = (body?.detail as string) ?? `Request failed (${res.status})`;
-    throw new ApiError(res.status, detail);
+    throw toApiError(res.status, body);
   }
   return res.json() as Promise<T>;
 }
@@ -58,7 +94,6 @@ export async function apiVoid(input: RequestInfo | URL, init?: RequestInit): Pro
   const res = await apiFetch(input, init);
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    const detail = (body?.detail as string) ?? `Request failed (${res.status})`;
-    throw new ApiError(res.status, detail);
+    throw toApiError(res.status, body);
   }
 }

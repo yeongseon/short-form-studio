@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { apiFetch, API_BASE } from "../api/client";
+import { apiFetch, API_BASE, ApiError } from "../api/client";
+import { startDemoShort } from "../api/demo";
 import ModelSelector from "../components/creator/ModelSelector";
 import IdeaForm, { type IdeaFormData } from "../components/creator/IdeaForm";
 
@@ -83,6 +84,30 @@ export default function CreatePage() {
   // Submission state
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Demo Short state (one-click sample-backed run)
+  const [demoRunning, setDemoRunning] = useState(false);
+  const [demoError, setDemoError] = useState<string | null>(null);
+
+  const handleTryDemo = useCallback(async () => {
+    if (demoRunning) return;
+    setDemoRunning(true);
+    setDemoError(null);
+    try {
+      const result = await startDemoShort();
+      navigate(`/projects/${result.seeded_project_id}`);
+    } catch (err) {
+      const message =
+        err instanceof ApiError
+          ? err.recoverySteps?.length
+            ? `${err.detail} — ${err.recoverySteps.join("; ")}`
+            : err.detail
+          : "Could not start the demo Short.";
+      setDemoError(message);
+    } finally {
+      setDemoRunning(false);
+    }
+  }, [demoRunning, navigate]);
 
   // Stable ref for modelDefaults so IdeaForm submit handler always has latest
   const modelDefaultsRef = useRef(modelDefaults);
@@ -250,6 +275,46 @@ export default function CreatePage() {
   return (
     <div style={{ maxWidth: 720, margin: "0 auto", padding: 24 }}>
       <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 24 }}>Create New Project</h1>
+
+      {/* One-click demo: seed a sample-backed Short and jump into it */}
+      <div style={{ marginBottom: 24, padding: 16, background: "#f0f7ff", borderRadius: 8, border: "1px solid #cfe3ff" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>New here? Try a sample Short</div>
+            <div style={{ fontSize: 13, color: "#555" }}>
+              Creates a ready-made &ldquo;Demo Short&rdquo; project you can preview and edit.
+            </div>
+          </div>
+          <button
+            type="button"
+            data-testid="try-demo-button"
+            disabled={demoRunning}
+            onClick={handleTryDemo}
+            style={{
+              padding: "10px 20px",
+              background: demoRunning ? "#93b4f4" : "#4285f4",
+              color: "#fff",
+              border: "none",
+              borderRadius: 6,
+              fontSize: 14,
+              fontWeight: 600,
+              cursor: demoRunning ? "not-allowed" : "pointer",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {demoRunning ? "Starting…" : "Try the demo"}
+          </button>
+        </div>
+        {demoError && (
+          <div
+            data-testid="demo-error"
+            role="alert"
+            style={{ marginTop: 12, padding: "8px 12px", background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 4, color: "#b91c1c", fontSize: 13 }}
+          >
+            {demoError}
+          </div>
+        )}
+      </div>
 
       {/* Tab list */}
       <div role="tablist" style={{ display: "flex", gap: 4, marginBottom: 16, borderBottom: "2px solid #ddd" }}>
