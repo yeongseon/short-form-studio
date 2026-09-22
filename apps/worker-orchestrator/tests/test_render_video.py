@@ -26,6 +26,9 @@ def no_pacing_split(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "creator_service.quality_profile.get_quality_profile", _profile
     )
+    monkeypatch.setattr(
+        "creator_service.recipe_profile.get_quality_profile", _profile
+    )
 
 
 class FakeStorage:
