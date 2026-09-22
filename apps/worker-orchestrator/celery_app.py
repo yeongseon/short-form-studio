@@ -27,6 +27,7 @@ try:
     import worker_loop as _worker_loop_module  # noqa: F401 — register signal handlers
 except ImportError:
     _worker_loop_module = None  # API context — worker_loop not available
+from creator_service.actionable_errors import redact_error_message
 from creator_service.logging_config import setup_json_logging
 from kombu import Exchange, Queue
 
@@ -224,11 +225,18 @@ _SENSITIVE_KEY_PATTERNS = frozenset({"key", "secret", "token", "password", "cred
 
 
 def _sanitize_for_dlq(data: Any, depth: int = 0) -> Any:
-    """Sanitize data before writing to DLQ: truncate strings, redact secrets."""
+    """Sanitize data before writing to DLQ: redact secrets, then truncate strings.
+
+    String VALUES are scrubbed of secret-shaped substrings (URLs, tokens, paths)
+    via the SF-78 redactor — not just redacted by dict-key name — so an exception
+    repr embedding a token/URL can never reach Redis or the fallback file in the
+    clear.
+    """
     if depth > 10:
         return "<nested>"
     if isinstance(data, str):
-        return data[:_DLQ_MAX_STRING_LEN] if len(data) > _DLQ_MAX_STRING_LEN else data
+        redacted = redact_error_message(data)
+        return redacted[:_DLQ_MAX_STRING_LEN] if len(redacted) > _DLQ_MAX_STRING_LEN else redacted
     if isinstance(data, dict):
         result = {}
         for k, v in data.items():
