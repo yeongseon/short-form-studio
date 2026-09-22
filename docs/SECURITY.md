@@ -34,7 +34,7 @@ dependency, the middleware still blocks unauthenticated access.
 
 ---
 
-## Shared API Key Limitations
+## Personal API Keys and Attribution
 
 > **Warning**: The current API key model is designed for **single-user or
 > trusted-team deployments only**. It is NOT suitable for multi-user public
@@ -42,10 +42,31 @@ dependency, the middleware still blocks unauthenticated access.
 
 ### Current Model
 
-- One workspace has one or more API keys
-- All users sharing a key have **identical permissions** within that workspace
-- There is no per-user audit trail at the key level (all actions appear as
-  the same user)
+- Each user can hold multiple named personal API keys. The `api_keys` table
+  binds each key to a `user_id`; only the SHA-256 hash is stored.
+- Operators issue keys with `scripts/create_api_key.py --email <user-email>
+  --workspace <workspace-slug> --name <key-label>`. Repeating issuance for the
+  same email creates another key for the same user. The raw key is displayed
+  once for delivery to that user; keep this output out of application logs.
+- Clients continue using `X-API-Key` or `Authorization: Bearer`. Workspace
+  access comes from that user's memberships; `X-Workspace-Id` selects one of
+  those workspaces. Missing/invalid/revoked credentials return 401; unavailable
+  or unauthorized workspace selections return 404. Auth database failures
+  return 503, including the dependency fallback lookup.
+- Request audit entries from `shorts_api.app_factory` include `user_id`,
+  `key_id` (the database primary key), and `workspace_id`, alongside method,
+  path, response status, and elapsed time. These identify authenticated actions
+  reaching request logging, including route-level errors. Raw credentials,
+  key hashes, authorization headers, and query strings are not audit fields.
+- Authentication middleware rejections occur before request logging; these
+  entries are not a comprehensive authentication-attempt ledger. Admin audit
+  logging remains a separate authentication domain, described below.
+- Revocation is per key: operators set `api_keys.revoked_at` for its `id`.
+  Revoked keys cannot authenticate; other keys belonging to the user remain valid.
+- Sharing a personal key still makes all holders appear as its owner. In
+  particular, a Studio proxy configured with one `API_KEY` attributes all
+  browser actions to that key's user, not to distinct humans. Use individually
+  provisioned credentials for per-user attribution.
 - Keys cannot be scoped to specific operations (read-only, write-only, etc.)
 
 ### Implications for Multi-User Deployments
@@ -54,20 +75,21 @@ If you need to support untrusted multi-user access:
 
 | Requirement | Current Support | Recommendation |
 |-------------|-----------------|----------------|
-| Per-user identity | No (shared key) | Add OAuth2/OIDC integration |
+| Per-user identity | Yes (personal keys) | OAuth2/OIDC for human login |
 | Role-based access | No | Implement RBAC layer |
-| Audit trail per user | No | Per-user tokens with identity binding |
-| Key revocation per user | Partial (revoke entire key) | Per-user token management |
+| Audit trail per user | Request logs carry user/key/workspace IDs | Durable audit storage and auth-attempt coverage |
+| Key revocation per user | Individual key revocation via DB | Self-service key lifecycle management |
 | Rate limiting per user | No | Token-based rate limiting |
 
-### Recommended Production Architecture (Multi-User)
+### OAuth2/OIDC Roadmap (Not Implemented)
 
 For production deployments with multiple untrusted users:
 
-1. Place an **identity provider** (Keycloak, Auth0, Supabase Auth) in front
+1. Adopt an **identity provider** (e.g. Authelia or Keycloak)
 2. Map identity tokens to workspace membership
 3. Issue **per-user, short-lived tokens** instead of long-lived API keys
-4. Add audit logging that captures the authenticated user identity
+4. Preserve user attribution in a durable audit trail
+5. Retain personal/service API keys for machine-to-machine clients
 
 Until these are implemented, treat the current system as a **team-internal
 tool** where all key holders are trusted.
@@ -120,8 +142,8 @@ The `docker-compose.local-server.yml` override maintains this policy:
    against brute-force or denial-of-service attacks.
 3. **No request filtering**: Large payloads, malformed requests, and slow
    clients hit the API directly.
-4. **Single credential**: If the shared API key leaks, there's no network-level
-   barrier to full access.
+4. **Credential compromise**: A leaked personal key grants its owner's workspace
+   access; a shared Studio proxy key exposes that same identity to every holder.
 
 ### Deployment Checklist
 

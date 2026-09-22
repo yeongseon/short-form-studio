@@ -33,7 +33,11 @@ If you discover a security vulnerability in Short Form Studio, please report it 
 
 ## Security Best Practices for Deployers
 
-- **Always set `API_KEY`** in production — leaving it empty disables authentication
+- **Issue DB-backed personal API keys** for creator access; missing, invalid, or
+  revoked credentials are rejected. `API_KEY` configures the Studio proxy's
+  server-side header injection; leaving it empty does not disable API authentication.
+  A shared proxy key attributes browser requests to that key's owner, not to
+  individual visitors. See [the authentication model](docs/SECURITY.md).
 - **Never expose** the API port (8000) directly to the internet without a reverse proxy
 - **Use HTTPS** in production via a reverse proxy (nginx, Caddy, etc.)
 - **Restrict `CORS_ORIGINS`** to your frontend domain only
