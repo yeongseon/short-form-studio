@@ -97,13 +97,16 @@ def test_approve_raises_inconsistency_when_rollback_also_fails() -> None:
     call_count = 0
 
     async def _cas_that_fails_on_second_call(
-        run_id, updates, expected_stages, workspace_id=None
+        run_id, updates, expected_stages, workspace_id=None, rejected_statuses=None
     ):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
             # First call: the real stage advance
-            return await original_cas(run_id, updates, expected_stages, workspace_id=workspace_id)
+            return await original_cas(
+                run_id, updates, expected_stages, workspace_id=workspace_id,
+                rejected_statuses=rejected_statuses,
+            )
         # Second call: rollback — simulate concurrent modification
         return False, {"current_stage": "SOMETHING_ELSE"}
 

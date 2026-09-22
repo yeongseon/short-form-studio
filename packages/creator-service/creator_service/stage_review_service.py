@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any, Protocol
@@ -136,12 +137,19 @@ class StageReviewService:
             current_run = await run_service.get_run(run_id, workspace_id=workspace_id)
             if current_run is not None:
                 for key in extra_updates:
-                    original_extra_values[key] = getattr(current_run, key, None)
+                    if key == "metadata_json":
+                        original_extra_values[key] = (
+                            json.dumps(current_run.metadata)
+                            if current_run.metadata is not None else None
+                        )
+                    else:
+                        original_extra_values[key] = getattr(current_run, key, None)
         ok, row = await run_service.storage.conditional_update_run(
             run_id,
             updates,
             frozenset({stage.value}),
             workspace_id=workspace_id,
+            rejected_statuses=frozenset({"cancelled"}),
         )
 
         if not ok:
@@ -175,6 +183,7 @@ class StageReviewService:
                 rollback_updates,
                 frozenset({target.value}),
                 workspace_id=workspace_id,
+                rejected_statuses=frozenset({"cancelled"}),
             )
             if not rollback_ok:
                 logger.critical(
