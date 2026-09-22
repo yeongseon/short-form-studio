@@ -1,25 +1,10 @@
 import os
-from dataclasses import dataclass
-from enum import Enum
 from typing import Any
 
-
-class ProviderCategory(Enum):
-    LLM = "llm"
-    IMAGE = "image"
-    TTS = "tts"
-    STT = "stt"
-
-
-@dataclass
-class ModelCatalogEntry:
-    model_key: str
-    provider_type: str
-    endpoint: str
-    category: ProviderCategory
-    requires_gpu: bool = True
-    is_local: bool = True
-    default_params: dict[str, Any] | None = None
+from creator_domain.provider_catalog import (
+    ModelCatalogEntry as ModelCatalogEntry,
+    ProviderCategory as ProviderCategory,
+)
 
 
 class ProviderRegistry:
