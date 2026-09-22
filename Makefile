@@ -86,8 +86,8 @@ lock-constraints:
 lock-check:
 	uv lock --check
 
-# Bump version in pyproject.toml. Usage: make release VERSION=0.5.0
+# Bump package version; optional tag-only suffix: make release VERSION=0.5.0 TAG_SUFFIX=-e2e
 release:
-	@test -n "$(VERSION)" || { echo "Usage: make release VERSION=0.5.0"; exit 1; }
+	@test -n "$(VERSION)" || { echo "Usage: make release VERSION=0.5.0 [TAG_SUFFIX=-e2e]"; exit 1; }
 	python3 -c "import re; s=open('pyproject.toml').read(); s=re.sub(r'^version = \".*\"', 'version = \"$(VERSION)\"', s, flags=re.M); open('pyproject.toml','w').write(s)"
-	@echo "Bumped pyproject.toml to $(VERSION). Review, commit, then: git tag v$(VERSION) && git push --tags"
+	@echo "Bumped pyproject.toml to $(VERSION). Review, commit, then: git tag v$(VERSION)$(TAG_SUFFIX) && git push --tags"
