@@ -10,44 +10,60 @@ project facts only.
 from __future__ import annotations
 
 from creator_provider.api_keys import list_configured_providers
+from creator_provider.registry import get_default_registry
+from creator_service.model_health_service import ModelHealthService
 from creator_service.onboarding import build_onboarding_guidance
 from creator_service.project_service import project_service
+from creator_service.provider_readiness import resolve_setup_provider_facts
 from creator_service.setup_wizard import ModelCategory, resolve_setup_state
+from creator_service.timeline_service import timeline_service
 from fastapi import APIRouter, Depends
 
 from shorts_api.auth import CurrentUser, require_workspace_access
 
 router = APIRouter(prefix="/workspaces", tags=["onboarding"])
 
-# Provider -> capability categories it can satisfy (names only, never key values).
-_PROVIDER_CATEGORIES: dict[str, tuple[ModelCategory, ...]] = {
-    "openai": (ModelCategory.LLM, ModelCategory.IMAGE, ModelCategory.TTS),
-    "anthropic": (ModelCategory.LLM,),
-    "google": (ModelCategory.LLM, ModelCategory.IMAGE),
-    "stability": (ModelCategory.IMAGE,),
-    "elevenlabs": (ModelCategory.TTS,),
-    "groq": (ModelCategory.STT,),
-}
+_health_service = ModelHealthService()
 
 
-async def _onboarding_setup_state():
-    configured = list_configured_providers()
+async def _project_has_first_draft(project_id: int, workspace_id: int) -> bool:
+    timeline = await timeline_service.load_timeline(
+        project_id=project_id, workspace_id=workspace_id
+    )
+    return timeline is not None and bool(timeline.segments)
+
+
+async def _workspace_has_first_draft(workspace_id: int) -> bool:
+    count = await project_service.count_projects(workspace_id=workspace_id)
+    if count <= 0:
+        return False
+    projects = await project_service.list_projects(
+        limit=count, offset=0, workspace_id=workspace_id
+    )
+    for project in projects:
+        if await _project_has_first_draft(project.id, workspace_id):
+            return True
+    return False
+
+
+async def _onboarding_setup_state(workspace_id: int):
+    facts = await resolve_setup_provider_facts(
+        registry=get_default_registry(),
+        health_service=_health_service,
+        configured_remote_providers=list_configured_providers(),
+    )
 
     async def _category_status() -> dict[ModelCategory, tuple[str, ...]]:
-        status: dict[ModelCategory, list[str]] = {}
-        for provider in configured:
-            for category in _PROVIDER_CATEGORIES.get(provider, ()):
-                status.setdefault(category, []).append(provider)
-        return {category: tuple(providers) for category, providers in status.items()}
+        return facts.category_status
 
     async def _unhealthy() -> tuple[str, ...]:
-        return ()
+        return facts.unhealthy_providers
 
     return await resolve_setup_state(
-        configured_providers_source=lambda: list(configured),
+        configured_providers_source=lambda: list(facts.configured_providers),
         category_status_source=_category_status,
         unhealthy_source=_unhealthy,
-        has_first_draft=False,
+        has_first_draft=await _workspace_has_first_draft(workspace_id),
     )
 
 
@@ -56,7 +72,7 @@ async def get_onboarding_guidance(
     workspace_id: int,
     _user: CurrentUser = Depends(require_workspace_access),
 ) -> dict[str, object]:
-    setup_state = await _onboarding_setup_state()
+    setup_state = await _onboarding_setup_state(workspace_id)
     project_count = await project_service.count_projects(workspace_id=workspace_id)
     guidance = build_onboarding_guidance(
         setup_state=setup_state,

@@ -19,26 +19,58 @@ class _StubProjectService:
         self.count_calls.append(workspace_id)
         return self._count
 
+    async def list_projects(self, limit=20, offset=0, workspace_id=None):
+        return []
+
+
+class _StubHealth:
+    async def check_model(self, host):
+        from creator_service.model_health_service import ModelHealthResult, ModelStatus
+
+        return ModelHealthResult(model_name=host, endpoint=host, status=ModelStatus.UNKNOWN)
+
+
+class _StubTimeline:
+    async def load_timeline(self, *, project_id: int, workspace_id: int):
+        return None
+
 
 def _onboarding_routes() -> list[APIRoute]:
     return [r for r in app.routes if isinstance(r, APIRoute) and "onboarding" in r.path]
 
 
+def _stub_readiness_globals(monkeypatch, providers: list[str], project_stub) -> None:
+    """Stub the P0-2 registry-SSOT readiness deps so a configured remote key
+    satisfies its category without any real health probe or DB timeline."""
+    from creator_service.model_health_service import ModelHealthResult, ModelStatus
+
+    class _ConfiguredHealth:
+        def __init__(self, remote_hosts: set[str]) -> None:
+            self._remote = remote_hosts
+
+        async def check_model(self, host):
+            status = ModelStatus.CONFIGURED if host in self._remote else ModelStatus.UNKNOWN
+            return ModelHealthResult(model_name=host, endpoint=host, status=status)
+
+    # Map configured provider names to the hostnames the resolver probes.
+    _HOSTS = {"openai": "api.openai.com", "groq": "api.groq.com"}
+    remote_hosts = {_HOSTS[p] for p in providers if p in _HOSTS}
+    for route in _onboarding_routes():
+        g = route.endpoint.__globals__
+        monkeypatch.setitem(g, "list_configured_providers", lambda: list(providers))
+        monkeypatch.setitem(g, "project_service", project_stub)
+        monkeypatch.setitem(g, "_health_service", _ConfiguredHealth(remote_hosts))
+        monkeypatch.setitem(g, "timeline_service", _StubTimeline())
+
+
 @pytest.fixture
 def onboarding_env(monkeypatch: pytest.MonkeyPatch):
     state = {"providers": ["openai"], "project_count": 0}
-
-    for route in _onboarding_routes():
-        monkeypatch.setitem(
-            route.endpoint.__globals__,
-            "list_configured_providers",
-            lambda: list(state["providers"]),
-        )
-        monkeypatch.setitem(
-            route.endpoint.__globals__,
-            "project_service",
-            _StubProjectService(int(state["project_count"])),
-        )
+    _stub_readiness_globals(
+        monkeypatch,
+        list(state["providers"]),
+        _StubProjectService(int(state["project_count"])),
+    )
 
     async def _require_workspace_access(workspace_id: int) -> CurrentUser:
         return CurrentUser(user_id=1, workspace_id=workspace_id)
@@ -84,12 +116,19 @@ async def test_onboarding_first_run_discloses_path_presets_and_gates(client, onb
 
 
 @pytest.mark.asyncio
-async def test_onboarding_returning_when_workspace_has_projects(client, onboarding_env):
-    onboarding_env["project_count"] = 3
-    # Rebind the stubbed service with the new count.
-    for route in _onboarding_routes():
-        route.endpoint.__globals__["project_service"] = _StubProjectService(3)
-    response = await client.get("/api/creator/workspaces/1/onboarding")
+async def test_onboarding_returning_when_workspace_has_projects(client, monkeypatch):
+    # A workspace with existing projects is a returning user (first-run derives
+    # from count_projects > 0, independent of first-draft detection).
+    _stub_readiness_globals(monkeypatch, ["openai"], _StubProjectService(3))
+
+    async def _require_workspace_access(workspace_id: int) -> CurrentUser:
+        return CurrentUser(user_id=1, workspace_id=workspace_id)
+
+    app.dependency_overrides[require_workspace_access] = _require_workspace_access
+    try:
+        response = await client.get("/api/creator/workspaces/1/onboarding")
+    finally:
+        app.dependency_overrides.pop(require_workspace_access, None)
     assert response.status_code == 200
     body = response.json()
     assert body["is_first_run"] is False
@@ -109,13 +148,7 @@ async def test_onboarding_scopes_project_count_to_path_workspace(client, monkeyp
     # First-run/returning must be decided from the PATH workspace, not the
     # authenticated user's default workspace.
     stub = _StubProjectService(0)
-    for route in _onboarding_routes():
-        monkeypatch.setitem(
-            route.endpoint.__globals__,
-            "list_configured_providers",
-            lambda: ["openai"],
-        )
-        monkeypatch.setitem(route.endpoint.__globals__, "project_service", stub)
+    _stub_readiness_globals(monkeypatch, ["openai"], stub)
 
     async def _require_workspace_access(workspace_id: int) -> CurrentUser:
         return CurrentUser(user_id=1, workspace_id=999)
@@ -127,4 +160,5 @@ async def test_onboarding_scopes_project_count_to_path_workspace(client, monkeyp
         app.dependency_overrides.pop(require_workspace_access, None)
 
     assert response.status_code == 200
-    assert stub.count_calls == [42]
+    # Every project-count read is scoped to the PATH workspace (42), never 999.
+    assert set(stub.count_calls) == {42}
