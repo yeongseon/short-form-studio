@@ -11,14 +11,18 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from creator_provider.api_keys import list_configured_providers
+from creator_provider.registry import get_default_registry
 from creator_service.demo_short_flow import (
     build_demo_short_plan,
     create_demo_run,
     resolve_demo_short_plan,
 )
+from creator_service.model_health_service import ModelHealthService
+from creator_service.provider_readiness import resolve_setup_provider_facts
 from creator_service.run_service import ConflictError, run_service
 from creator_service.sample_project import build_sample_project_bundle
 from creator_service.setup_wizard import ModelCategory, resolve_setup_state
+from creator_service.timeline_service import timeline_service
 from fastapi import APIRouter, Depends, HTTPException
 
 from shorts_api.auth import CurrentUser, require_project_access
@@ -28,36 +32,34 @@ if TYPE_CHECKING:
 
 router = APIRouter(tags=["demo"])
 
-# Provider -> the capability categories it can satisfy for the setup gate. Only
-# provider NAMES are read (never key values), mirroring the SF-72 wizard.
-_PROVIDER_CATEGORIES: dict[str, tuple[ModelCategory, ...]] = {
-    "openai": (ModelCategory.LLM, ModelCategory.IMAGE, ModelCategory.TTS),
-    "anthropic": (ModelCategory.LLM,),
-    "google": (ModelCategory.LLM, ModelCategory.IMAGE),
-    "stability": (ModelCategory.IMAGE,),
-    "elevenlabs": (ModelCategory.TTS,),
-    "groq": (ModelCategory.STT,),
-}
+_health_service = ModelHealthService()
 
 
-async def _demo_setup_state():
-    configured = list_configured_providers()
+async def _project_has_first_draft(project_id: int, workspace_id: int) -> bool:
+    timeline = await timeline_service.load_timeline(
+        project_id=project_id, workspace_id=workspace_id
+    )
+    return timeline is not None and bool(timeline.segments)
+
+
+async def _demo_setup_state(project_id: int, workspace_id: int):
+    facts = await resolve_setup_provider_facts(
+        registry=get_default_registry(),
+        health_service=_health_service,
+        configured_remote_providers=list_configured_providers(),
+    )
 
     async def _category_status() -> dict[ModelCategory, tuple[str, ...]]:
-        status: dict[ModelCategory, list[str]] = {}
-        for provider in configured:
-            for category in _PROVIDER_CATEGORIES.get(provider, ()):
-                status.setdefault(category, []).append(provider)
-        return {category: tuple(providers) for category, providers in status.items()}
+        return facts.category_status
 
     async def _unhealthy() -> tuple[str, ...]:
-        return ()
+        return facts.unhealthy_providers
 
     return await resolve_setup_state(
-        configured_providers_source=lambda: list(configured),
+        configured_providers_source=lambda: list(facts.configured_providers),
         category_status_source=_category_status,
         unhealthy_source=_unhealthy,
-        has_first_draft=False,
+        has_first_draft=await _project_has_first_draft(project_id, workspace_id),
     )
 
 
@@ -96,7 +98,8 @@ async def get_demo_short_plan(
     project_id: int,
     access: tuple[CurrentUser, Project] = Depends(require_project_access),
 ) -> dict[str, object]:
-    setup_state = await _demo_setup_state()
+    user, _ = access
+    setup_state = await _demo_setup_state(project_id, user.workspace_id)
     plan = await resolve_demo_short_plan(
         setup_state=setup_state,
         bundle=build_sample_project_bundle(),
@@ -117,7 +120,7 @@ async def create_demo_short_run(
             detail="Project is being deleted; cannot create new runs",
         )
 
-    setup_state = await _demo_setup_state()
+    setup_state = await _demo_setup_state(project_id, user.workspace_id)
     plan = await resolve_demo_short_plan(
         setup_state=setup_state, bundle=build_sample_project_bundle()
     )

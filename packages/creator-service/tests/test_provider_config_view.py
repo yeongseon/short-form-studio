@@ -43,6 +43,7 @@ def _fact(
     is_local: bool = False,
     requires_gpu: bool = False,
     healthy: bool = True,
+    configured_unverified: bool = False,
 ) -> ProviderCatalogFact:
     return ProviderCatalogFact(
         provider=provider,
@@ -50,6 +51,7 @@ def _fact(
         is_local=is_local,
         requires_gpu=requires_gpu,
         healthy=healthy,
+        configured_unverified=configured_unverified,
     )
 
 
@@ -126,6 +128,53 @@ def test_configured_but_unhealthy_is_configured_unavailable_without_endpoint() -
     assert "unavailable" in anthropic.hint.lower() or "unreachable" in anthropic.hint.lower()
     assert "http" not in anthropic.hint
     assert "malformed" not in anthropic.hint.lower()
+
+
+# ------------------------- 4b. configured + UNVERIFIED (key present, not probed) -------------------------
+
+
+def test_configured_unverified_remote_is_distinct_from_available_and_unavailable() -> None:
+    # A remote key present but only CONFIGURED (not HTTP-probed HEALTHY) is honest
+    # as "configured; not verified" — never "ready" and never "unavailable".
+    view = _build(
+        configured={"openai"},
+        facts=[_fact("openai", ModelCategory.LLM, healthy=False, configured_unverified=True)],
+    )
+    openai = _state(view, "openai")
+    assert openai.status is ProviderConfigStatus.CONFIGURED_UNVERIFIED
+    assert openai.configured is True
+    assert "not" in openai.hint.lower() and "verif" in openai.hint.lower()
+    assert "ready" not in openai.hint.lower()
+    assert "unavailable" not in openai.hint.lower()
+    assert "http" not in openai.hint
+
+
+def test_verified_healthy_outranks_unverified_for_same_provider() -> None:
+    # If any category probed HEALTHY, the provider is AVAILABLE even if another
+    # category is only configured-unverified.
+    view = _build(
+        configured={"openai"},
+        facts=[
+            _fact("openai", ModelCategory.LLM, healthy=True),
+            _fact("openai", ModelCategory.IMAGE, healthy=False, configured_unverified=True),
+        ],
+    )
+    openai = _state(view, "openai")
+    assert openai.status is ProviderConfigStatus.CONFIGURED_AVAILABLE
+
+
+def test_unverified_outranks_unavailable_for_same_provider() -> None:
+    # configured-unverified beats a hard-unavailable category: the provider is not
+    # known-bad, so it must not read "unavailable".
+    view = _build(
+        configured={"openai"},
+        facts=[
+            _fact("openai", ModelCategory.LLM, healthy=False, configured_unverified=True),
+            _fact("openai", ModelCategory.IMAGE, healthy=False),
+        ],
+    )
+    openai = _state(view, "openai")
+    assert openai.status is ProviderConfigStatus.CONFIGURED_UNVERIFIED
 
 
 # ------------------------- 5. not configured (remote) -------------------------

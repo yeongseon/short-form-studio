@@ -47,18 +47,41 @@ def _demo_routes() -> list[APIRoute]:
     return [r for r in app.routes if isinstance(r, APIRoute) and "demo-short" in r.path]
 
 
+class _ConfiguredHealth:
+    """Health stub where the given remote hosts read CONFIGURED (key present,
+    not probed) so a configured remote provider satisfies its category."""
+
+    def __init__(self, providers: list[str]) -> None:
+        hosts = {"openai": "api.openai.com", "groq": "api.groq.com"}
+        self._remote = {hosts[p] for p in providers if p in hosts}
+
+    async def check_model(self, host):
+        from creator_service.model_health_service import ModelHealthResult, ModelStatus
+
+        status = ModelStatus.CONFIGURED if host in self._remote else ModelStatus.UNKNOWN
+        return ModelHealthResult(model_name=host, endpoint=host, status=status)
+
+
+class _StubTimeline:
+    async def load_timeline(self, *, project_id: int, workspace_id: int):
+        return None
+
+
 @pytest.fixture
 def demo_env(monkeypatch: pytest.MonkeyPatch):
     stub_service = _StubRunService()
     configured = {"providers": ["openai", "groq"]}
 
-    for route in _demo_routes():
-        monkeypatch.setitem(
-            route.endpoint.__globals__,
-            "list_configured_providers",
-            lambda: list(configured["providers"]),
-        )
-        monkeypatch.setitem(route.endpoint.__globals__, "run_service", stub_service)
+    def _apply(providers: list[str]) -> None:
+        for route in _demo_routes():
+            g = route.endpoint.__globals__
+            monkeypatch.setitem(g, "list_configured_providers", lambda: list(providers))
+            monkeypatch.setitem(g, "run_service", stub_service)
+            monkeypatch.setitem(g, "_health_service", _ConfiguredHealth(providers))
+            monkeypatch.setitem(g, "timeline_service", _StubTimeline())
+
+    _apply(list(configured["providers"]))
+    configured["_apply"] = _apply  # type: ignore[assignment]
 
     async def _require_project_access(project_id: int) -> tuple[CurrentUser, _StubProject]:
         return CurrentUser(user_id=1, workspace_id=1), _StubProject(project_id)
@@ -112,7 +135,8 @@ async def test_demo_seed_creates_idea_ready_run(client, demo_env):
 @pytest.mark.asyncio
 async def test_demo_seed_refuses_when_prerequisites_not_configured(client, demo_env):
     stub_service, configured = demo_env
-    configured["providers"] = []  # no LLM provider -> not ready
+    # No configured providers -> no LLM satisfied -> not ready -> refuse to seed.
+    configured["_apply"]([])
     response = await client.post("/api/creator/projects/5/demo-short/runs")
     assert response.status_code == 409
     assert len(stub_service.create_calls) == 0

@@ -22,10 +22,6 @@ from urllib.parse import urlparse
 from creator_service.model_health_service import ModelStatus
 from creator_service.setup_wizard import ModelCategory
 
-_HEALTHY_STATUSES: frozenset[ModelStatus] = frozenset(
-    {ModelStatus.HEALTHY, ModelStatus.CONFIGURED}
-)
-
 # Registry provider_type -> canonical config provider name. Multiple typed
 # providers (openai_llm/openai_image/openai_tts) collapse to one config provider.
 _PROVIDER_TYPE_TO_CANONICAL: dict[str, str] = {
@@ -70,6 +66,7 @@ _CATEGORY_ORDER = (
 class ProviderConfigStatus(enum.Enum):
     NOT_CONFIGURED = "not_configured"
     CONFIGURED_AVAILABLE = "configured_available"
+    CONFIGURED_UNVERIFIED = "configured_unverified"
     CONFIGURED_UNAVAILABLE = "configured_unavailable"
 
 
@@ -94,13 +91,21 @@ APPROVED_CREDENTIALS: dict[str, ApprovedCredential] = {
 
 @dataclass(frozen=True)
 class ProviderCatalogFact:
-    """A sanitized provider capability fact — NO endpoint, NO secret ever crosses here."""
+    """A sanitized provider capability fact — NO endpoint, NO secret ever crosses here.
+
+    ``healthy`` means the capability was actually verified reachable (a local
+    service probe or a live remote check succeeded). ``configured_unverified`` means
+    a remote key is present but was NOT probed for validity — configured, but not
+    known-good. The two are distinct so the view never claims an unverified key is
+    "ready", nor calls it "unavailable".
+    """
 
     provider: str
     category: ModelCategory
     is_local: bool
     requires_gpu: bool
     healthy: bool
+    configured_unverified: bool = False
 
 
 @dataclass(frozen=True)
@@ -190,8 +195,9 @@ def _state_for(
     is_local = all(f.is_local for f in facts)
     requires_gpu = any(f.requires_gpu for f in facts)
     categories = {f.category for f in facts}
-    unavailable = {f.category for f in facts if not f.healthy}
+    unavailable = {f.category for f in facts if not f.healthy and not f.configured_unverified}
     any_healthy = any(f.healthy for f in facts)
+    any_unverified = any(f.configured_unverified for f in facts)
 
     # A remote provider is "present" only when its key is configured; a local
     # provider needs no key, so it is always present but gated by service health.
@@ -207,8 +213,13 @@ def _state_for(
             else f"configure {label} to enable it"
         )
     elif any_healthy:
+        # Verified-healthy outranks unverified/unavailable.
         status = ProviderConfigStatus.CONFIGURED_AVAILABLE
         hint = f"{label} is ready"
+    elif any_unverified:
+        # Key present but not probed: honest middle state, neither ready nor bad.
+        status = ProviderConfigStatus.CONFIGURED_UNVERIFIED
+        hint = f"{label} is configured but not yet verified"
     else:
         status = ProviderConfigStatus.CONFIGURED_UNAVAILABLE
         hint = (
@@ -244,7 +255,6 @@ async def resolve_provider_config_view(
     lookup key and is NEVER carried onto the fact, so no endpoint can leak. The
     provider_type is collapsed to its canonical config provider name.
     """
-    healthy_statuses = _HEALTHY_STATUSES
     facts: list[ProviderCatalogFact] = []
     for entry in registry.list_models():
         category = _CATEGORY_FROM_REGISTRY_VALUE.get(
@@ -255,13 +265,16 @@ async def resolve_provider_config_view(
         provider = _PROVIDER_TYPE_TO_CANONICAL.get(entry.provider_type, entry.provider_type)
         health_key = _health_lookup_key(entry)
         result = await health_service.check_model(health_key)
+        # HEALTHY = actually verified reachable; CONFIGURED = remote key present but
+        # not probed (honest "unverified", never counted as verified-healthy).
         facts.append(
             ProviderCatalogFact(
                 provider=provider,
                 category=category,
                 is_local=entry.is_local,
                 requires_gpu=entry.requires_gpu,
-                healthy=result.status in healthy_statuses,
+                healthy=result.status is ModelStatus.HEALTHY,
+                configured_unverified=result.status is ModelStatus.CONFIGURED,
             )
         )
     return build_provider_config_view(
