@@ -207,6 +207,11 @@ def test_authenticated_demo_survives_restart_and_renders_downloadable_mp4(tmp_pa
                 )
                 assert approve.status_code in {200, 202}, approve.text
                 wait_for_render(client, run_id)
+                startup_log = (tmp_path / "worker.log").read_text()
+                assert "raised:" not in startup_log, startup_log
+                assert "Traceback (most recent call last)" not in startup_log, startup_log
+                records = [json.loads(line) for line in startup_log.splitlines() if line.startswith("{")]
+                assert any(record.get("service") == "worker" for record in records), startup_log
                 assert anyio.run(count_approvals, database_url, schema, run_id) == 1
                 rendered = client.get(f"/api/creator/runs/{run_id}/preview")
                 assert rendered.status_code == 200, rendered.text
