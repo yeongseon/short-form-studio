@@ -15,10 +15,9 @@
  * - onClose:       Called when the user manually dismisses the dialog.
  */
 
-import { useState, useEffect, useRef, useCallback, useId } from "react";
-import { apiFetch } from "../../api/client";
-import { categoryLabel } from "../../api/errorLabels";
-import { STAGE_ORDER } from "../../types/api";
+import { useEffect, useRef, useId } from "react";
+import { useRunProgress } from "./useRunProgress";
+import { TaskFailureDetails, TASK_ERROR_LABELS } from "./TaskFailureDetails";
 
 const DEFAULT_API = "/api/creator";
 const DEFAULT_POLL_MS = 3000;
@@ -36,13 +35,6 @@ export interface ProgressDialogProps {
   onClose?: () => void;
 }
 
-interface RunSnapshot {
-  current_stage: string;
-  status: string;
-}
-
-type Outcome = "running" | "completed" | "failed" | "error";
-
 // Friendly labels for stages
 const STAGE_LABELS: Record<string, string> = {
   SCRIPT_GENERATING: "Generating script…",
@@ -52,33 +44,6 @@ const STAGE_LABELS: Record<string, string> = {
   SUBTITLE_GENERATING: "Generating subtitles…",
   RENDER_GENERATING: "Rendering video…",
 };
-
-// Error code to human-readable label mapping
-const ERROR_LABELS: Record<string, string> = {
-  provider_timeout: "Timed out",
-  rate_limit: "Rate limited",
-  provider_error: "Provider error",
-  validation_error: "Invalid input",
-  revoked: "Cancelled",
-  soft_time_limit: "Timed out",
-};
-
-interface TaskFailureSummary {
-  code: string;
-  category: string;
-  retryable: boolean;
-  recovery_steps: string[];
-  message: string;
-}
-
-interface RunTaskInfo {
-  task_type: string;
-  status: string;
-  attempt: number;
-  error_code: string | null;
-  error_message: string | null;
-  failure?: TaskFailureSummary | null;
-}
 
 // --------------- component ---------------
 
@@ -92,116 +57,13 @@ export default function ProgressDialog({
   onFailed,
   onClose,
 }: ProgressDialogProps) {
-  const [snapshot, setSnapshot] = useState<RunSnapshot | null>(null);
-  const [outcome, setOutcome] = useState<Outcome>("running");
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [pollCount, setPollCount] = useState(0);
-  const [taskInfo, setTaskInfo] = useState<RunTaskInfo | null>(null);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const { snapshot, outcome, errorMsg, pollCount, taskInfo } = useRunProgress({
+    open, runId, expectedStage, apiBase, pollInterval, onComplete, onFailed,
+  });
   const dialogRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const titleId = useId();
   const descId = useId();
-
-  // ---- classify run state ----
-
-  const classify = useCallback(
-    (run: RunSnapshot): Outcome => {
-      if (run.status === "failed") return "failed";
-      if (run.current_stage === expectedStage) return "running";
-      // Stage changed — only treat as completed if it moved forward in the pipeline
-      const expectedIdx = STAGE_ORDER.indexOf(expectedStage);
-      const currentIdx = STAGE_ORDER.indexOf(run.current_stage);
-      if (currentIdx > expectedIdx) return "completed";
-      // Stage rolled back (stopped/cancelled) or is unrecognised — keep running
-      return "running";
-    },
-    [expectedStage],
-  );
-
-  // ---- poll loop ----
-
-  useEffect(() => {
-    if (!open) {
-      // Reset when closed
-      setSnapshot(null);
-      setOutcome("running");
-      setErrorMsg(null);
-      setPollCount(0);
-      setTaskInfo(null);
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-      return;
-    }
-
-    let cancelled = false;
-
-    const poll = async () => {
-      try {
-        const res = await apiFetch(`${apiBase}/runs/${runId}`);
-        if (cancelled) return;
-        if (!res.ok) {
-          const body = await res.json().catch(() => null);
-          setErrorMsg(body?.detail ?? `Poll failed (${res.status})`);
-          setOutcome("error");
-          return;
-        }
-        const data: RunSnapshot = await res.json();
-        if (cancelled) return;
-        setSnapshot(data);
-        setPollCount((c) => c + 1);
-        setErrorMsg(null);
-
-        // Fetch task-level detail (retry count, error info)
-        try {
-          const taskRes = await apiFetch(`${apiBase}/runs/${runId}/tasks`);
-          if (!cancelled && taskRes.ok) {
-            const tasks: RunTaskInfo[] = await taskRes.json();
-            // Get the latest task (most recent by attempt/creation)
-            const latest = tasks.length > 0 ? tasks[tasks.length - 1] : null;
-            setTaskInfo(latest);
-          }
-        } catch {
-          // Task fetch is non-critical — don't block on failure
-        }
-
-        const result = classify(data);
-        if (result === "completed") {
-          setOutcome("completed");
-          if (timerRef.current) {
-            clearInterval(timerRef.current);
-            timerRef.current = null;
-          }
-          onComplete?.(data.current_stage, data.status);
-        } else if (result === "failed") {
-          setOutcome("failed");
-          if (timerRef.current) {
-            clearInterval(timerRef.current);
-            timerRef.current = null;
-          }
-          onFailed?.(data.current_stage, data.status);
-        }
-      } catch (err) {
-        if (cancelled) return;
-        setErrorMsg(err instanceof Error ? err.message : "Network error");
-        setOutcome("error");
-      }
-    };
-
-    // Initial poll immediately
-    poll();
-    timerRef.current = setInterval(poll, pollInterval);
-
-    return () => {
-      cancelled = true;
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-    };
-  }, [open, runId, apiBase, pollInterval, classify, onComplete, onFailed]);
 
   // ---- focus management + Escape handler ----
 
@@ -291,8 +153,11 @@ export default function ProgressDialog({
           background: "#fff",
           borderRadius: 12,
           padding: "32px 40px",
-          minWidth: 360,
-          maxWidth: 480,
+          boxSizing: "border-box",
+          width: 440,
+          minWidth: 0,
+          maxWidth: "calc(100vw - 32px)",
+          overflowWrap: "anywhere",
           boxShadow: "0 8px 30px rgba(0,0,0,0.2)",
           textAlign: "center",
         }}
@@ -337,7 +202,7 @@ export default function ProgressDialog({
             data-testid="progress-retry"
             style={{ margin: "0 0 12px", fontSize: 12, color: "#d97706", fontWeight: 500 }}
           >
-            Retry attempt {taskInfo.attempt} — {taskInfo.error_code ? (ERROR_LABELS[taskInfo.error_code] ?? taskInfo.error_code) : "retrying"}…
+            Retry attempt {taskInfo.attempt} — {taskInfo.error_code ? (TASK_ERROR_LABELS[taskInfo.error_code] ?? taskInfo.error_code) : "retrying"}…
           </p>
         )}
 
@@ -374,37 +239,7 @@ export default function ProgressDialog({
             }}
           >
             Generation failed
-            {taskInfo?.failure ? (
-              <span data-testid="task-failure" style={{ display: "block", marginTop: 4, fontSize: 12, opacity: 0.9 }}>
-                <span style={{ fontWeight: 600 }}>{categoryLabel(taskInfo.failure.category)}</span>
-                {" — "}
-                {taskInfo.failure.retryable ? "you can retry" : "not retryable"}
-                {taskInfo.failure.recovery_steps.length > 0 && (
-                  <ul data-testid="task-recovery-steps" style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 11, opacity: 0.85 }}>
-                    {taskInfo.failure.recovery_steps.map((step, i) => (
-                      <li key={i}>{step}</li>
-                    ))}
-                  </ul>
-                )}
-              </span>
-            ) : (
-              <>
-                {taskInfo?.error_code && (
-                  <span style={{ display: "block", marginTop: 4, fontSize: 12, opacity: 0.85 }}>
-                    {ERROR_LABELS[taskInfo.error_code] ?? taskInfo.error_code}
-                    {taskInfo.attempt > 1 && ` (after ${taskInfo.attempt} attempts)`}
-                  </span>
-                )}
-                {taskInfo?.error_message && (
-                  <span
-                    style={{ display: "block", marginTop: 4, fontSize: 11, opacity: 0.7, maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                    title={taskInfo.error_message}
-                  >
-                    {taskInfo.error_message}
-                  </span>
-                )}
-              </>
-            )}
+            <TaskFailureDetails task={taskInfo} />
           </div>
         )}
         {/* Network error state */}
