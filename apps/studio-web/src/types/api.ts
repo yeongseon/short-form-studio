@@ -32,6 +32,7 @@ export interface RunDetail {
   model_defaults: ModelDefaults | null;
   error_message?: string | null;
   finished_at?: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 export interface SceneData {
@@ -99,6 +100,7 @@ export const STAGE_ORDER: string[] = [
   "VISUAL_ASSET_REVIEW",
   "AUDIO_GENERATING",
   "SUBTITLE_GENERATING",
+  "TIMELINE_REVIEW",
   "RENDER_GENERATING",
   "FINAL_REVIEW",
   "PUBLISHED",
