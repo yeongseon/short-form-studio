@@ -180,7 +180,7 @@ async def test_record_task_queued_failure_revokes_task(
         _ = workspace_id
         return SimpleNamespace(id=1, status="running", current_stage="VISUAL_ASSET_REVIEW")
 
-    async def _mock_record_task_queued(_run_id: int, _task_name: str, _task_id: str) -> None:
+    async def _mock_record_task_queued(_task_id: str) -> None:
         raise RuntimeError("db failure")
 
     revoke_calls: list[tuple[str, bool]] = []
@@ -209,10 +209,10 @@ async def test_record_task_queued_failure_revokes_task(
     monkeypatch.setattr("creator_service.run_service.run_service.get_run", _mock_get_run)
     monkeypatch.setattr(
         "shorts_api.routes.creator_runs_storyboard.dispatch_paragraph_audio",
-        lambda **kwargs: "task-123",
+        lambda **kwargs: kwargs["task_id"],
     )
     monkeypatch.setattr(
-        "shorts_api.routes.storyboard_dispatch.task_tracking_service.record_task_queued",
+        "shorts_api.routes.storyboard_dispatch.task_tracking_service.promote_pending_to_queued",
         _mock_record_task_queued,
     )
     monkeypatch.setattr(
@@ -220,13 +220,11 @@ async def test_record_task_queued_failure_revokes_task(
         _mock_mark_tasks_revoked,
     )
     monkeypatch.setattr(
-        storyboard_dispatch,
-        "__import__",
-        lambda name: SimpleNamespace(celery_app=celery_app)
-        if name == "celery_app"
-        else __import__(name),
-        raising=False,
+        storyboard_dispatch.task_dispatch_service.dispatcher,
+        "cancel",
+        lambda task_id: celery_app.control.revoke(task_id, terminate=True),
     )
+    monkeypatch.setattr(storyboard_dispatch, "uuid4", lambda: "task-123")
 
     try:
         resp = await client.post(
@@ -282,7 +280,7 @@ async def test_post_dispatch_revoke_on_concurrent_cancellation(
     async def _mock_get_fresh_run_for_dispatch(_run_id: int, _workspace_id: int) -> Any:
         return states.pop(0)
 
-    async def _mock_record_task_queued(_run_id: int, _task_name: str, _task_id: str) -> None:
+    async def _mock_record_task_queued(_task_id: str) -> None:
         return None
 
     revoke_calls: list[tuple[str, bool]] = []
@@ -318,10 +316,10 @@ async def test_post_dispatch_revoke_on_concurrent_cancellation(
     )
     monkeypatch.setattr(
         "shorts_api.routes.creator_runs_storyboard.dispatch_paragraph_audio",
-        lambda **kwargs: "task-123",
+        lambda **kwargs: kwargs["task_id"],
     )
     monkeypatch.setattr(
-        "shorts_api.routes.storyboard_dispatch.task_tracking_service.record_task_queued",
+        "shorts_api.routes.storyboard_dispatch.task_tracking_service.promote_pending_to_queued",
         _mock_record_task_queued,
     )
     monkeypatch.setattr(
@@ -329,13 +327,11 @@ async def test_post_dispatch_revoke_on_concurrent_cancellation(
         _mock_mark_tasks_revoked,
     )
     monkeypatch.setattr(
-        storyboard_dispatch,
-        "__import__",
-        lambda name: SimpleNamespace(celery_app=celery_app)
-        if name == "celery_app"
-        else __import__(name),
-        raising=False,
+        storyboard_dispatch.task_dispatch_service.dispatcher,
+        "cancel",
+        lambda task_id: celery_app.control.revoke(task_id, terminate=True),
     )
+    monkeypatch.setattr(storyboard_dispatch, "uuid4", lambda: "task-123")
 
     try:
         resp = await client.post(
@@ -404,7 +400,7 @@ async def test_bulk_audio_post_dispatch_revoke_on_concurrent_cancellation(
     async def _mock_list_paragraph_audio(_run_id: int) -> list:
         return []
 
-    async def _mock_record_task_queued(_run_id: int, _task_name: str, _task_id: str) -> None:
+    async def _mock_record_task_queued(_task_id: str) -> None:
         return None
 
     revoke_calls: list[str] = []
@@ -444,10 +440,10 @@ async def test_bulk_audio_post_dispatch_revoke_on_concurrent_cancellation(
     )
     monkeypatch.setattr(
         "shorts_api.routes.creator_runs_storyboard.dispatch_paragraph_audio",
-        lambda **kwargs: "bulk-task-1",
+        lambda **kwargs: kwargs["task_id"],
     )
     monkeypatch.setattr(
-        "shorts_api.routes.storyboard_dispatch.task_tracking_service.record_task_queued",
+        "shorts_api.routes.storyboard_dispatch.task_tracking_service.promote_pending_to_queued",
         _mock_record_task_queued,
     )
     monkeypatch.setattr(
@@ -455,13 +451,11 @@ async def test_bulk_audio_post_dispatch_revoke_on_concurrent_cancellation(
         _mock_mark_tasks_revoked,
     )
     monkeypatch.setattr(
-        storyboard_dispatch,
-        "__import__",
-        lambda name: SimpleNamespace(celery_app=celery_app)
-        if name == "celery_app"
-        else __import__(name),
-        raising=False,
+        storyboard_dispatch.task_dispatch_service.dispatcher,
+        "cancel",
+        lambda task_id: celery_app.control.revoke(task_id, terminate=True),
     )
+    monkeypatch.setattr(storyboard_dispatch, "uuid4", lambda: "bulk-task-1")
 
     try:
         resp = await client.post(
@@ -529,7 +523,7 @@ async def test_bulk_subtitles_record_failure_revokes_task(
     async def _mock_list_paragraph_subtitles(_run_id: int) -> list:
         return []
 
-    async def _mock_record_task_queued(_run_id: int, _task_name: str, _task_id: str) -> None:
+    async def _mock_record_task_queued(_task_id: str) -> None:
         raise RuntimeError("db failure")
 
     revoke_calls: list[str] = []
@@ -573,10 +567,10 @@ async def test_bulk_subtitles_record_failure_revokes_task(
     )
     monkeypatch.setattr(
         "shorts_api.routes.creator_runs_storyboard.dispatch_paragraph_subtitles",
-        lambda **kwargs: "sub-task-1",
+        lambda **kwargs: kwargs["task_id"],
     )
     monkeypatch.setattr(
-        "shorts_api.routes.storyboard_dispatch.task_tracking_service.record_task_queued",
+        "shorts_api.routes.storyboard_dispatch.task_tracking_service.promote_pending_to_queued",
         _mock_record_task_queued,
     )
     monkeypatch.setattr(
@@ -584,13 +578,11 @@ async def test_bulk_subtitles_record_failure_revokes_task(
         _mock_mark_tasks_revoked,
     )
     monkeypatch.setattr(
-        storyboard_dispatch,
-        "__import__",
-        lambda name: SimpleNamespace(celery_app=celery_app)
-        if name == "celery_app"
-        else __import__(name),
-        raising=False,
+        storyboard_dispatch.task_dispatch_service.dispatcher,
+        "cancel",
+        lambda task_id: celery_app.control.revoke(task_id, terminate=True),
     )
+    monkeypatch.setattr(storyboard_dispatch, "uuid4", lambda: "sub-task-1")
 
     try:
         resp = await client.post(
@@ -738,7 +730,7 @@ async def test_post_dispatch_reread_exception_revokes_task(
         # Post-dispatch re-read fails
         raise RuntimeError("DB gone during post-dispatch check")
 
-    async def _mock_record_task_queued(_run_id: int, _task_name: str, _task_id: str) -> None:
+    async def _mock_record_task_queued(_task_id: str) -> None:
         return None
 
     revoke_calls: list[tuple[str, bool]] = []
@@ -774,10 +766,10 @@ async def test_post_dispatch_reread_exception_revokes_task(
     )
     monkeypatch.setattr(
         "shorts_api.routes.creator_runs_storyboard.dispatch_paragraph_audio",
-        lambda **kwargs: "task-123",
+        lambda **kwargs: kwargs["task_id"],
     )
     monkeypatch.setattr(
-        "shorts_api.routes.storyboard_dispatch.task_tracking_service.record_task_queued",
+        "shorts_api.routes.storyboard_dispatch.task_tracking_service.promote_pending_to_queued",
         _mock_record_task_queued,
     )
     monkeypatch.setattr(
@@ -785,13 +777,11 @@ async def test_post_dispatch_reread_exception_revokes_task(
         _mock_mark_tasks_revoked,
     )
     monkeypatch.setattr(
-        storyboard_dispatch,
-        "__import__",
-        lambda name: SimpleNamespace(celery_app=celery_app)
-        if name == "celery_app"
-        else __import__(name),
-        raising=False,
+        storyboard_dispatch.task_dispatch_service.dispatcher,
+        "cancel",
+        lambda task_id: celery_app.control.revoke(task_id, terminate=True),
     )
+    monkeypatch.setattr(storyboard_dispatch, "uuid4", lambda: "task-123")
 
     try:
         resp = await client.post(

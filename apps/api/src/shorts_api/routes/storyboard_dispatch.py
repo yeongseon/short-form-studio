@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import logging
 from typing import Callable
+from uuid import uuid4
 
+from creator_service.task_dispatch_service import task_dispatch_service
 from creator_service.task_tracking_service import task_tracking_service
 from creator_service.usage_service import cancel_workspace_quota_reservation
 from fastapi import HTTPException
@@ -30,8 +32,7 @@ def _is_cancelled(run) -> bool:
 def _revoke_task(task_id: str) -> None:
     """Best-effort revoke of a Celery task."""
     try:
-        celery_app = __import__("celery_app").celery_app
-        celery_app.control.revoke(task_id, terminate=True)
+        task_dispatch_service.dispatcher.cancel(task_id)
     except Exception:
         logger.warning("Failed to revoke task %s", task_id)
 
@@ -45,21 +46,33 @@ async def _revoke_and_mark(task_id: str) -> None:
         logger.warning("Failed to mark task %s as revoked in tracking", task_id)
 
 
+async def _publish_pending(run_id: int, task_type: str, dispatch: Callable[[str], str]) -> str:
+    task_id = str(uuid4())
+    await task_tracking_service.record_task_pending(run_id, task_type, task_id)
+    try:
+        dispatch(task_id)
+        await task_tracking_service.promote_pending_to_queued(task_id)
+    except Exception:
+        await _revoke_and_mark(task_id)
+        raise
+    return task_id
+
+
 async def dispatch_storyboard_task_with_tracking(
     *,
     run_id: int,
     workspace_id: int,
     operation_type: str,
     task_type: str,
-    dispatch: Callable[[], str],
+    dispatch: Callable[[str], str],
     error_detail: str = "Failed to enqueue task",
 ) -> str:
     """Dispatch a storyboard task with full quota/tracking/cancel safety.
 
     Performs:
     1. Pre-dispatch cancelled check
-    2. Dispatch (call the provided callable)
-    3. Record task in tracking
+    2. Record pending, then dispatch with that task ID
+    3. Promote pending to queued without overwriting concurrent worker state
     4. Post-dispatch cancelled check (TOCTOU close)
 
     On any failure: revokes task, cancels quota, raises HTTPException.
@@ -72,18 +85,9 @@ async def dispatch_storyboard_task_with_tracking(
         await cancel_workspace_quota_reservation(workspace_id, operation_type)
         raise HTTPException(status_code=409, detail="Run was cancelled before dispatch")
 
-    # Dispatch
     try:
-        task_id = dispatch()
+        task_id = await _publish_pending(run_id, task_type, dispatch)
     except Exception:
-        await cancel_workspace_quota_reservation(workspace_id, operation_type)
-        raise HTTPException(status_code=503, detail=error_detail) from None
-
-    # Track
-    try:
-        await task_tracking_service.record_task_queued(run_id, task_type, task_id)
-    except Exception:
-        await _revoke_and_mark(task_id)
         await cancel_workspace_quota_reservation(workspace_id, operation_type)
         raise HTTPException(status_code=503, detail=error_detail) from None
 
@@ -104,7 +108,7 @@ async def dispatch_storyboard_task_bulk(
     operation_type: str,
     task_type: str,
     section_id: str,
-    dispatch: Callable[[], str],
+    dispatch: Callable[[str], str],
 ) -> dict[str, str]:
     """Dispatch a single task within a bulk loop. Returns result dict.
 
@@ -124,18 +128,10 @@ async def dispatch_storyboard_task_bulk(
         return {"section_id": section_id, "task_id": "", "error": "dispatch_failed"}
 
     try:
-        task_id = dispatch()
+        task_id = await _publish_pending(run_id, task_type, dispatch)
     except Exception:
         await cancel_workspace_quota_reservation(workspace_id, operation_type)
         logger.exception("Failed to dispatch %s for section %s of run %s", task_type, section_id, run_id)
-        return {"section_id": section_id, "task_id": "", "error": "dispatch_failed"}
-
-    try:
-        await task_tracking_service.record_task_queued(run_id, task_type, task_id)
-    except Exception:
-        await _revoke_and_mark(task_id)
-        await cancel_workspace_quota_reservation(workspace_id, operation_type)
-        logger.exception("Failed to track %s for section %s of run %s", task_type, section_id, run_id)
         return {"section_id": section_id, "task_id": "", "error": "dispatch_failed"}
 
     post_run = await _get_fresh_run_for_dispatch(run_id, workspace_id)
