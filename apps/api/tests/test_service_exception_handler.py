@@ -66,6 +66,13 @@ def app_with_exception_routes():
     async def raise_base():
         raise ServiceError("Something broke")
 
+    @test_router.get("/test/leaky-detail")
+    async def raise_leaky():
+        raise ValidationError(
+            "failed at /home/user/.env with token sk-abcdef1234567890abcdef "
+            "hitting https://api.openai.com/v1"
+        )
+
     app.include_router(test_router)
     return app
 
@@ -102,6 +109,20 @@ class TestServiceExceptionHandler:
             assert resp.status_code == expected_status
             body = resp.json()
             assert body["detail"] == expected_detail
+
+    async def test_leaky_detail_is_redacted(self, app_with_exception_routes) -> None:
+        """A ServiceError.detail that embeds a path/token/URL is redacted before
+        it reaches the client (defense-in-depth; safe developer details are a
+        no-op, so the parametrized exact-detail assertions above still hold)."""
+        async with AsyncClient(
+            transport=ASGITransport(app=app_with_exception_routes),
+            base_url="http://test",
+        ) as client:
+            resp = await client.get("/test/leaky-detail")
+            blob = resp.text
+            assert "sk-abcdef1234567890abcdef" not in blob
+            assert "/home/user/.env" not in blob
+            assert "api.openai.com" not in blob
 
     async def test_non_service_errors_still_500(
         self,
