@@ -27,7 +27,8 @@ try:
     import worker_loop as _worker_loop_module  # noqa: F401 — register signal handlers
 except ImportError:
     _worker_loop_module = None  # API context — worker_loop not available
-from creator_service.actionable_errors import redact_error_message
+from creator_service.actionable_errors import build_run_failure_summary
+from creator_service.error_redaction import JsonValue, sanitize_error_json
 from creator_service.logging_config import setup_json_logging
 from kombu import Exchange, Queue
 
@@ -220,70 +221,43 @@ def setup_worker_process_telemetry(**kwargs: object) -> None:
 
 
 
-_DLQ_MAX_STRING_LEN = 1024
-_SENSITIVE_KEY_PATTERNS = frozenset({"key", "secret", "token", "password", "credential"})
+_sanitize_for_dlq = sanitize_error_json
 
 
-def _sanitize_for_dlq(data: Any, depth: int = 0) -> Any:
-    """Sanitize data before writing to DLQ: redact secrets, then truncate strings.
-
-    String VALUES are scrubbed of secret-shaped substrings (URLs, tokens, paths)
-    via the SF-78 redactor — not just redacted by dict-key name — so an exception
-    repr embedding a token/URL can never reach Redis or the fallback file in the
-    clear.
-    """
-    if depth > 10:
-        return "<nested>"
-    if isinstance(data, str):
-        redacted = redact_error_message(data)
-        return redacted[:_DLQ_MAX_STRING_LEN] if len(redacted) > _DLQ_MAX_STRING_LEN else redacted
-    if isinstance(data, dict):
-        result = {}
-        for k, v in data.items():
-            if any(p in str(k).lower() for p in _SENSITIVE_KEY_PATTERNS):
-                result[k] = "<redacted>"
-            else:
-                result[k] = _sanitize_for_dlq(v, depth + 1)
-        return result
-    if isinstance(data, (list, tuple)):
-        return [_sanitize_for_dlq(item, depth + 1) for item in data[:50]]
-    return data
 def _record_failed_task_to_dlq(
     task_id: str | None,
     task_name: str,
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
+    args: tuple[object, ...],
+    kwargs: dict[str, object],
     exception: BaseException,
 ) -> None:
+    failure = build_run_failure_summary(exception)
     payload = _sanitize_for_dlq({
         "task_id": task_id,
         "task_name": task_name,
+        "exception": failure["message"],
+        "failure": failure,
         "args": args,
         "kwargs": kwargs,
-        "exception": repr(exception),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
 
-    def _write_dlq_fallback(entry: dict[str, Any], error: BaseException | None = None) -> None:
+    def _write_dlq_fallback(entry: JsonValue, error: BaseException | None = None) -> None:
         logger = logging.getLogger(__name__)
         try:
             with open(dlq_fallback_path, "a", encoding="utf-8") as fallback_file:
-                fallback_file.write(json.dumps(entry, default=str))
+                fallback_file.write(json.dumps(entry, allow_nan=False))
                 fallback_file.write("\n")
             logger.warning(
                 "DLQ Redis write failed; wrote entry to fallback file",
-                extra={"dlq_fallback_path": dlq_fallback_path},
             )
-        except Exception as fallback_error:
+        except OSError:
             logger.error(
                 "DLQ Redis write failed and fallback file write also failed",
-                extra={"dlq_fallback_path": dlq_fallback_path},
-                exc_info=(type(fallback_error), fallback_error, fallback_error.__traceback__),
             )
         if error is not None:
             logger.error(
                 "DLQ Redis write failure",
-                exc_info=(type(error), error, error.__traceback__),
             )
 
     if redis is None:
@@ -292,7 +266,7 @@ def _record_failed_task_to_dlq(
 
     try:
         client = redis.Redis.from_url(redis_url)
-        client.lpush("dlq:creator", json.dumps(payload, default=str))
+        client.lpush("dlq:creator", json.dumps(payload, allow_nan=False))
         client.ltrim("dlq:creator", 0, dlq_max_size - 1)
     except Exception as redis_error:
         _write_dlq_fallback(payload, redis_error)

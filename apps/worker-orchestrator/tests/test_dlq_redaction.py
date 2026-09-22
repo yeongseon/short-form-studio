@@ -29,11 +29,13 @@ def test_sanitize_redacts_nested_and_list_string_values() -> None:
 
 def test_sanitize_preserves_safe_strings() -> None:
     sanitized = celery_app._sanitize_for_dlq({"task_name": "generate_script", "run_id": 42})
+    assert isinstance(sanitized, dict)
     assert sanitized["task_name"] == "generate_script"
     assert sanitized["run_id"] == 42
 
 
 def test_sanitize_still_redacts_sensitive_key_names() -> None:
     sanitized = celery_app._sanitize_for_dlq({"api_key": "whatever", "token": "xyz"})
+    assert isinstance(sanitized, dict)
     assert sanitized["api_key"] == "<redacted>"
     assert sanitized["token"] == "<redacted>"
