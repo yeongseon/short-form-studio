@@ -1,18 +1,21 @@
 from pathlib import Path
 
 import pytest
-from shorts_api.routes import creator_runs_core, creator_runs_scene_assets
 from tasks.render_video import execute_render
 from tasks.render_materializer import RenderSourceError
 from tasks.task_runner import TaskContext
-
-from .timeline_demo_support import environment
 
 
 @pytest.mark.asyncio
 async def test_unapproved_timeline_cannot_render_after_public_restart(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Cross-runtime setup: API routes restart; this worker suite owns rejection.
+    root = Path(__file__).resolve().parents[3]
+    monkeypatch.syspath_prepend(str(root))
+    from apps.api.tests.timeline_demo_support import environment
+    from shorts_api.routes import creator_runs_core, creator_runs_scene_assets
+
     # Given a real seeded canonical run and the public lifecycle/render routers.
     env = await environment(tmp_path, monkeypatch)
     for module in (creator_runs_core, creator_runs_scene_assets):

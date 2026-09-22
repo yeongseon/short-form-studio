@@ -8,13 +8,16 @@ from creator_service.render_profile import RenderProfile
 from tasks.task_runner import TaskContext
 from tasks.timeline_render import render_saved_timeline
 
-from .timeline_demo_support import environment
-
 
 @pytest.mark.asyncio
 async def test_approved_seed_renders_both_distinct_synthetic_scenes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # Cross-runtime setup: API routes seed/approve; this worker suite owns rendering.
+    root = Path(__file__).resolve().parents[3]
+    monkeypatch.syspath_prepend(str(root))
+    from apps.api.tests.timeline_demo_support import environment
+
     # Given a user-loaded sample and explicit approval through the real API.
     env = await environment(tmp_path, monkeypatch)
     monkeypatch.setenv("STORAGE_BACKEND", "local")
