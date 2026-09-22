@@ -1,5 +1,5 @@
 import asyncio
-from types import ModuleType, SimpleNamespace
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,6 +13,8 @@ from creator_service.task_dispatch_service import (
     SynchronousTaskExecutionError,
     TaskDispatchService,
 )
+from creator_domain.task_dispatch import TaskSubmission
+from .test_dispatch_port import RecordingDispatcher
 
 
 class _FakeRunStorage:
@@ -42,25 +44,14 @@ class _FakeRunService:
         return SimpleNamespace(status="running", project_id=1)
 
 
-def test_dispatch_generate_script_uses_sync_runner_when_redis_missing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service = TaskDispatchService()
-    monkeypatch.delenv("REDIS_URL", raising=False)
+def test_dispatch_generate_script_uses_injected_sync_runner() -> None:
+    class SyncDispatcher(RecordingDispatcher):
+        def dispatch(self, submission: TaskSubmission) -> str:
+            self.submissions.append(submission)
+            return "sync-generate_script-123-fake"
 
-    run_calls: list[tuple[object, tuple[object, ...], dict[str, object]]] = []
-
-    class _FakeTask:
-        def run(self, *args: object, **kwargs: object) -> dict[str, object]:
-            run_calls.append((self, args, kwargs))
-            return {"ok": True}
-
-    def fake_import_module(name: str) -> object:
-        if name == "tasks.generate_script":
-            return SimpleNamespace(generate_script=_FakeTask())
-        raise AssertionError(f"unexpected import: {name}")
-
-    monkeypatch.setattr("creator_service.task_dispatch_service.import_module", fake_import_module)
+    port = SyncDispatcher()
+    service = TaskDispatchService(port)
 
     task_id = service.dispatch_generate_script(
         run_id=123,
@@ -70,51 +61,27 @@ def test_dispatch_generate_script_uses_sync_runner_when_redis_missing(
     )
 
     assert task_id.startswith("sync-generate_script-123-")
-    assert len(run_calls) == 1
-    _, args, kwargs = run_calls[0]
-    assert len(args) == 1  # sync_self
-    sync_self = args[0]
-    assert getattr(getattr(sync_self, "request"), "id") == task_id
+    assert len(port.submissions) == 1
+    submission = port.submissions[0]
+    assert submission.args == ()
+    kwargs = submission.kwargs
     assert kwargs == {"run_id": 123, "idea_brief": "idea", "model_key": "qwen3-4b", "instructions": "extra", "niche": None, "language": "ko"}
 
 
-def test_dispatch_generate_script_uses_celery_when_redis_set(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    service = TaskDispatchService()
-    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
-
-    apply_async_calls: list[tuple[list[object], dict[str, object], dict[str, str]]] = []
-
-    class _FakeTask:
-        def apply_async(
-            self,
-            *,
-            args: list[object],
-            kwargs: dict[str, object],
-            headers: dict[str, str],
-        ) -> object:
-            apply_async_calls.append((args, kwargs, headers))
-            return SimpleNamespace(id="celery-789")
-
-    def fake_import_module(name: str) -> object:
-        if name == "tasks.generate_script":
-            return SimpleNamespace(generate_script=_FakeTask())
-        if name == "creator_service.telemetry":
-            return SimpleNamespace(get_trace_headers=lambda: {"traceparent": "abc"})
-        raise AssertionError(f"unexpected import: {name}")
-
-    monkeypatch.setattr("creator_service.task_dispatch_service.import_module", fake_import_module)
+def test_dispatch_generate_script_uses_injected_queued_runner() -> None:
+    port = RecordingDispatcher(queued=True)
+    service = TaskDispatchService(port)
 
     task_id = service.dispatch_generate_script(
         run_id=11,
         idea_brief="idea",
         model_key="qwen3-4b",
         instructions=None,
+        task_id="celery-789",
     )
 
     assert task_id == "celery-789"
-    assert apply_async_calls == [([], {"run_id": 11, "idea_brief": "idea", "model_key": "qwen3-4b", "instructions": None, "niche": None, "language": "ko"}, {"traceparent": "abc"})]
+    assert port.submissions == [TaskSubmission("generate_script", 11, kwargs={"run_id": 11, "idea_brief": "idea", "model_key": "qwen3-4b", "instructions": None, "niche": None, "language": "ko"}, task_id="celery-789")]
 
 
 def test_cas_dispatch_with_rollback_enqueue_failure_rolls_back_stage() -> None:
@@ -178,9 +145,9 @@ def test_cas_dispatch_with_rollback_sync_execution_failure_does_not_rollback() -
 def test_cas_dispatch_with_rollback_record_failure_revokes_and_rolls_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service = TaskDispatchService()
+    port = RecordingDispatcher()
+    service = TaskDispatchService(port)
     run_service = _FakeRunService()
-    revoked: list[tuple[str, bool]] = []
     marked_revoked: list[str] = []
 
     def dispatch_generate_subtitles(**_: object) -> str:
@@ -193,24 +160,12 @@ def test_cas_dispatch_with_rollback_record_failure_revokes_and_rolls_back(
         async def mark_revoked(self, task_id: str) -> None:
             marked_revoked.append(task_id)
 
-    celery_app_module = ModuleType("celery_app")
-    setattr(
-        celery_app_module,
-        "celery_app",
-        SimpleNamespace(
-            control=SimpleNamespace(
-                revoke=lambda task_id, terminate: revoked.append((task_id, terminate))
-            )
-        ),
-    )
-    monkeypatch.setitem(__import__("sys").modules, "celery_app", celery_app_module)
-
     def fake_import_module(name: str) -> object:
         if name == "creator_service.task_tracking_service":
             return SimpleNamespace(task_tracking_service=_TrackingService())
         raise AssertionError(f"unexpected import: {name}")
 
-    monkeypatch.setattr("creator_service.task_dispatch_service.import_module", fake_import_module)
+    monkeypatch.setattr("creator_service.dispatch_cas.import_module", fake_import_module)
 
     with pytest.raises(ServiceUnavailableError) as exc:
         asyncio.run(
@@ -228,7 +183,7 @@ def test_cas_dispatch_with_rollback_record_failure_revokes_and_rolls_back(
         )
 
     assert exc.value.http_status_code == 503
-    assert revoked == [("celery-123", True)]
+    assert port.cancelled == ["celery-123"]
     assert marked_revoked == ["celery-123"]
     assert run_service.storage.calls[1][1] == {
         "current_stage": "AUDIO_GENERATING",
@@ -255,7 +210,7 @@ def test_cas_dispatch_with_rollback_sync_dispatch_skips_record_task_queued(
             return SimpleNamespace(task_tracking_service=_TrackingService())
         raise AssertionError(f"unexpected import: {name}")
 
-    monkeypatch.setattr("creator_service.task_dispatch_service.import_module", fake_import_module)
+    monkeypatch.setattr("creator_service.dispatch_cas.import_module", fake_import_module)
 
     result = asyncio.run(
         service.cas_dispatch_with_rollback(
@@ -294,7 +249,7 @@ def test_cas_dispatch_with_rollback_celery_dispatch_records_task_queued(
             return SimpleNamespace(task_tracking_service=_TrackingService())
         raise AssertionError(f"unexpected import: {name}")
 
-    monkeypatch.setattr("creator_service.task_dispatch_service.import_module", fake_import_module)
+    monkeypatch.setattr("creator_service.dispatch_cas.import_module", fake_import_module)
 
     result = asyncio.run(
         service.cas_dispatch_with_rollback(
@@ -496,7 +451,7 @@ def test_cas_dispatch_with_rollback_allows_non_cancelled_run() -> None:
     async def _get_run(_run_id: int, **_kw: object) -> object:
         return SimpleNamespace(status="running", project_id=1)
 
-    run_service.get_run = _get_run  # type: ignore[attr-defined]
+    run_service.get_run = _get_run
 
     def _dispatcher(**_: object) -> str:
         return "sync-test-1-abc"
@@ -521,8 +476,8 @@ def test_cas_dispatch_with_rollback_allows_non_cancelled_run() -> None:
 def test_cas_dispatch_post_dispatch_revoke_on_concurrent_cancel(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service = TaskDispatchService()
-    revoked: list[tuple[str, bool]] = []
+    port = RecordingDispatcher()
+    service = TaskDispatchService(port)
 
     class _Storage:
         def __init__(self) -> None:
@@ -566,24 +521,12 @@ def test_cas_dispatch_post_dispatch_revoke_on_concurrent_cancel(
         async def mark_tasks_revoked(self, _task_ids: list[str]) -> None:
             return None
 
-    celery_app_module = ModuleType("celery_app")
-    setattr(
-        celery_app_module,
-        "celery_app",
-        SimpleNamespace(
-            control=SimpleNamespace(
-                revoke=lambda task_id, terminate: revoked.append((task_id, terminate))
-            )
-        ),
-    )
-    monkeypatch.setitem(__import__("sys").modules, "celery_app", celery_app_module)
-
     def fake_import_module(name: str) -> object:
         if name == "creator_service.task_tracking_service":
             return SimpleNamespace(task_tracking_service=_TrackingService())
         raise AssertionError(f"unexpected import: {name}")
 
-    monkeypatch.setattr("creator_service.task_dispatch_service.import_module", fake_import_module)
+    monkeypatch.setattr("creator_service.dispatch_cas.import_module", fake_import_module)
 
     run_service = _RunService()
 
@@ -603,7 +546,7 @@ def test_cas_dispatch_post_dispatch_revoke_on_concurrent_cancel(
         )
 
     assert exc.value.http_status_code == 409
-    assert revoked == [("celery-999", True)]
+    assert port.cancelled == ["celery-999"]
     assert run_service.storage.calls[1]["updates"] == {
         "current_stage": "SCRIPT_REVIEW",
         "restart_from": None,

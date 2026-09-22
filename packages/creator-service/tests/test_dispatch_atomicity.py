@@ -17,6 +17,8 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from creator_domain.task_dispatch import TaskSubmission
+from .test_dispatch_port import RecordingDispatcher
 
 from creator_service.task_tracking_service import (
     InMemoryTaskTrackingStorage,
@@ -369,43 +371,19 @@ class TestPreGeneratedTaskId:
     def test_dispatch_task_uses_pre_generated_id(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from creator_service.task_dispatch_service import TaskDispatchService
 
-        service = TaskDispatchService()
-        monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
-
-        received_task_id: list[str | None] = []
-
-        class _FakeTask:
-            def apply_async(
-                self,
-                *,
-                args: list[Any],
-                kwargs: dict[str, Any],
-                headers: dict[str, str],
-                task_id: str | None = None,
-            ) -> Any:
-                received_task_id.append(task_id)
-                return SimpleNamespace(id=task_id or "fallback-id")
-
-        def fake_import_module(name: str) -> Any:
-            if name == "tasks.generate_script":
-                return SimpleNamespace(generate_script=_FakeTask())
-            if name == "creator_service.telemetry":
-                return SimpleNamespace(get_trace_headers=lambda: {})
-            raise AssertionError(f"unexpected import: {name}")
-
-        monkeypatch.setattr(
-            "creator_service.task_dispatch_service.import_module", fake_import_module
-        )
+        port = RecordingDispatcher(queued=True)
+        service = TaskDispatchService(port)
 
         result = service._dispatch_task(
-            module_name="tasks.generate_script",
             task_attr="generate_script",
             run_id=1,
             args=[1, "idea", "model", None],
             task_id="pre-generated-123",
         )
         assert result == "pre-generated-123"
-        assert received_task_id == ["pre-generated-123"]
+        assert port.submissions == [TaskSubmission(
+            "generate_script", 1, args=(1, "idea", "model", None), task_id="pre-generated-123",
+        )]
 
 
 # ---------------------------------------------------------------------------
@@ -447,7 +425,7 @@ class TestCasDispatchEndToEnd:
         """Pre-generated task_id should flow through dispatcher and task promoted to queued."""
         from creator_service.task_dispatch_service import TaskDispatchService
 
-        service = TaskDispatchService()
+        service = TaskDispatchService(RecordingDispatcher(queued=True))
         tracking_storage = InMemoryTaskTrackingStorage()
         tracking_svc = TaskTrackingService(tracking_storage)
 
@@ -482,7 +460,7 @@ class TestCasDispatchEndToEnd:
             return _real_import(name)
 
         monkeypatch.setattr(
-            "creator_service.task_dispatch_service.import_module", patched_import
+            "creator_service.dispatch_cas.import_module", patched_import
         )
 
         # Give dispatcher the right __name__ for _DISPATCH_TASK_TYPES lookup
@@ -523,7 +501,7 @@ class TestCasDispatchEndToEnd:
         from creator_domain.exceptions import ServiceUnavailableError
         from creator_service.task_dispatch_service import TaskDispatchService
 
-        service = TaskDispatchService()
+        service = TaskDispatchService(RecordingDispatcher(queued=True))
         rollback_calls: list[dict[str, Any]] = []
         dispatcher_called = False
 
@@ -558,7 +536,7 @@ class TestCasDispatchEndToEnd:
             return _real_import(name)
 
         monkeypatch.setattr(
-            "creator_service.task_dispatch_service.import_module", patched_import
+            "creator_service.dispatch_cas.import_module", patched_import
         )
 
         fake_dispatcher.__name__ = "dispatch_generate_script"

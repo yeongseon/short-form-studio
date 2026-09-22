@@ -92,24 +92,9 @@ class TestCasDispatchRaisesNotFound:
 
         svc = TaskDispatchService()
         with patch(
-            "creator_service.task_dispatch_service.import_module"
-        ) as mock_import:
-            project_svc = SimpleNamespace(
-                get_project=AsyncMock(return_value=None),
-            )
-            usage_mod = SimpleNamespace(
-                check_workspace_quota=AsyncMock(return_value=(True, None)),
-            )
-
-            def side_effect(name: str) -> Any:
-                if "project_service" in name:
-                    return SimpleNamespace(project_service=project_svc)
-                if "usage_service" in name:
-                    return usage_mod
-                return SimpleNamespace()
-
-            mock_import.side_effect = side_effect
-
+            "creator_service.project_service.project_service.get_project",
+            new=AsyncMock(return_value=None),
+        ):
             with pytest.raises(NotFoundError, match="Project not found"):
                 await svc.cas_dispatch_with_rollback(
                     run_id=1,
