@@ -4,12 +4,14 @@ from types import SimpleNamespace
 import pytest
 
 from creator_service.task_dispatch_service import SynchronousTaskExecutionError, TaskDispatchService
+from shorts_api.task_dispatch_adapter import ApplicationTaskDispatcher
 
 
 def test_lightweight_dispatch_runs_in_thread_without_event_loop_conflict(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service = TaskDispatchService()
+    adapter = ApplicationTaskDispatcher()
+    service = TaskDispatchService(adapter)
     monkeypatch.delenv("REDIS_URL", raising=False)
 
     run_thread_names: list[str] = []
@@ -27,7 +29,7 @@ def test_lightweight_dispatch_runs_in_thread_without_event_loop_conflict(
             return SimpleNamespace(generate_script=_FakeTask())
         raise AssertionError(f"unexpected import: {name}")
 
-    monkeypatch.setattr("creator_service.task_dispatch_service.import_module", fake_import_module)
+    monkeypatch.setattr("shorts_api.task_dispatch_adapter.import_module", fake_import_module)
 
     async def _invoke() -> str:
         return service.dispatch_generate_script(1, "idea", "model", None)
@@ -42,7 +44,8 @@ def test_lightweight_dispatch_runs_in_thread_without_event_loop_conflict(
 def test_lightweight_dispatch_wraps_execution_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    service = TaskDispatchService()
+    adapter = ApplicationTaskDispatcher()
+    service = TaskDispatchService(adapter)
     monkeypatch.delenv("REDIS_URL", raising=False)
 
     mark_failed_calls: list[int] = []
@@ -56,9 +59,9 @@ def test_lightweight_dispatch_wraps_execution_failure(
             return SimpleNamespace(generate_script=_FakeTask())
         raise AssertionError(f"unexpected import: {name}")
 
-    monkeypatch.setattr("creator_service.task_dispatch_service.import_module", fake_import_module)
+    monkeypatch.setattr("shorts_api.task_dispatch_adapter.import_module", fake_import_module)
     monkeypatch.setattr(
-        service, "_mark_run_failed", lambda run_id: mark_failed_calls.append(run_id)
+        adapter, "_mark_run_failed", lambda run_id: mark_failed_calls.append(run_id)
     )
 
     with pytest.raises(SynchronousTaskExecutionError):
@@ -68,7 +71,8 @@ def test_lightweight_dispatch_wraps_execution_failure(
 
 
 def test_dispatch_uses_celery_path_when_redis_set(monkeypatch: pytest.MonkeyPatch) -> None:
-    service = TaskDispatchService()
+    adapter = ApplicationTaskDispatcher()
+    service = TaskDispatchService(adapter)
     monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
 
     apply_async_calls: list[tuple[list[object], dict[str, object], dict[str, str]]] = []
@@ -91,7 +95,8 @@ def test_dispatch_uses_celery_path_when_redis_set(monkeypatch: pytest.MonkeyPatc
             return SimpleNamespace(get_trace_headers=lambda: {"traceparent": "trace"})
         raise AssertionError(f"unexpected import: {name}")
 
-    monkeypatch.setattr("creator_service.task_dispatch_service.import_module", fake_import_module)
+    monkeypatch.setattr("shorts_api.task_dispatch_adapter.import_module", fake_import_module)
+    monkeypatch.setattr(adapter, "_get_trace_headers", lambda: {"traceparent": "trace"})
 
     task_id = service.dispatch_generate_script(9, "idea", "model", "instructions")
 
