@@ -44,6 +44,13 @@ jobs:
           check-name: "docker"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           wait-interval: 10
+      - name: Wait for CI first-Short runtime
+        uses: lewagon/wait-on-check-action@v1.3.4
+        with:
+          ref: ${{ github.sha }}
+          check-name: "first-short-runtime"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          wait-interval: 10
 
   build-and-push:
     if: ${{ github.event_name == 'push' }}
