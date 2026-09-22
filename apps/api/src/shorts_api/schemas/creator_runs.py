@@ -5,7 +5,8 @@ from __future__ import annotations
 import os
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from pydantic_core import PydanticCustomError
 
 # --- Env-configurable model defaults ---
 _SCRIPT_DEFAULT_MODEL = os.getenv("SCRIPT_DEFAULT_MODEL", "qwen3-4b")
@@ -18,6 +19,25 @@ class CreateRunRequest(BaseModel):
     model_defaults: dict[str, str] | None = None
     style_preset: str = Field(default="default", max_length=256)
     metadata: dict[str, object] | None = None
+
+    @field_validator("metadata")
+    @classmethod
+    def reject_server_owned_metadata(
+        cls, metadata: dict[str, object] | None,
+    ) -> dict[str, object] | None:
+        if metadata is None:
+            return None
+        reserved = {
+            "render_source", "render_timeline_revision",
+            "reviewer", "review_status", "review_stage",
+        }
+        for key in metadata:
+            if key in reserved or {"approval", "approvals", "approved"}.intersection(key.split("_")):
+                raise PydanticCustomError(
+                    "server_owned_metadata",
+                    "Render routing and approval metadata are server-owned",
+                )
+        return metadata
 
 
 class RestartRunRequest(BaseModel):
