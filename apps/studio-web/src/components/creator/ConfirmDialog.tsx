@@ -111,8 +111,10 @@ export default function ConfirmDialog({
         data-testid="confirm-dialog"
         onClick={(e) => e.stopPropagation()}
         style={{
-          maxWidth: 420,
-          width: "90%",
+          boxSizing: "border-box",
+          width: 468,
+          maxWidth: "calc(100vw - 32px)",
+          overflowWrap: "anywhere",
           background: "#fff",
           borderRadius: 8,
           boxShadow: "0 8px 30px rgba(0,0,0,0.18)",

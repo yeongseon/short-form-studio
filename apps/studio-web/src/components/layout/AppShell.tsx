@@ -33,12 +33,15 @@ export default function AppShell() {
         data-testid="app-nav"
         style={{
           display: "flex",
+          flexWrap: "wrap",
+          boxSizing: "border-box",
           alignItems: "center",
-          padding: "0 24px",
-          height: 48,
+          padding: "8px 24px",
+          minHeight: 48,
           borderBottom: "1px solid #e5e7eb",
           background: "#fff",
           gap: 24,
+          rowGap: 8,
         }}
       >
         <Link
