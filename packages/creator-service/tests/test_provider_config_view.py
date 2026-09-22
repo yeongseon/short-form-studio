@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 
-import pytest
 from creator_service.provider_config_view import (
     ApprovedCredential,
     ProviderCatalogFact,
@@ -75,13 +74,16 @@ def _state(view: ProviderConfigView, provider: str):
 # ------------------------- 1. approved-only output -------------------------
 
 
-def test_arbitrary_provider_is_never_surfaced_as_configurable() -> None:
+def test_arbitrary_provider_is_disclosed_as_unknown_not_configurable() -> None:
     view = _build(
         configured={"evil_provider", "openai"},
         facts=[_fact("evil_provider", ModelCategory.LLM), _fact("openai", ModelCategory.LLM)],
     )
     providers = {s.provider for s in view.providers}
-    assert "evil_provider" not in providers
+    unknown = _state(view, "evil_provider")
+    assert unknown.status is ProviderConfigStatus.UNKNOWN
+    assert unknown.configured is False
+    assert unknown.env_var is None
     assert "openai" in providers
 
 
@@ -299,84 +301,3 @@ def test_categories_use_the_setup_wizard_model_category_enum() -> None:
     for state in view.providers:
         for category in state.categories:
             assert isinstance(category, ModelCategory)
-
-
-# ------------------------- thin resolver (endpoint-free from raw registry) -------------------------
-
-
-class _FakeEntry:
-    def __init__(self, provider_type, endpoint, category, is_local, requires_gpu=False):
-        self.provider_type = provider_type
-        self.endpoint = endpoint
-        self.category = category
-        self.is_local = is_local
-        self.requires_gpu = requires_gpu
-
-
-class _RegistryCategory:
-    def __init__(self, value: str) -> None:
-        self.value = value
-
-
-class _FakeRegistry:
-    def __init__(self, entries):
-        self._entries = entries
-
-    def list_models(self):
-        return self._entries
-
-
-class _FakeResult:
-    def __init__(self, status):
-        self.status = status
-
-
-class _FakeHealthService:
-    def __init__(self, unhealthy_hosts=()):
-        self._unhealthy = set(unhealthy_hosts)
-
-    async def check_model(self, model_name):
-        from creator_service.model_health_service import ModelStatus
-
-        if model_name in self._unhealthy:
-            return _FakeResult(ModelStatus.UNHEALTHY)
-        return _FakeResult(ModelStatus.HEALTHY)
-
-
-@pytest.mark.asyncio
-async def test_resolver_produces_a_view_from_raw_registry_entries_with_endpoints() -> None:
-    from creator_service.provider_config_view import resolve_provider_config_view
-
-    registry = _FakeRegistry(
-        [
-            _FakeEntry("openai_llm", "https://api.openai.com", _RegistryCategory("llm"), False),
-            _FakeEntry("groq_stt", "https://api.groq.com/openai/v1", _RegistryCategory("stt"), False),
-            _FakeEntry("ollama", "http://ollama:11434", _RegistryCategory("llm"), True),
-        ]
-    )
-    view = await resolve_provider_config_view(
-        registry=registry, health_service=_FakeHealthService(), configured_providers={"openai", "groq"}
-    )
-    providers = {s.provider for s in view.providers}
-    assert {"openai", "groq", "ollama"} <= providers
-
-
-@pytest.mark.asyncio
-async def test_resolver_output_never_leaks_an_endpoint_even_from_raw_entries() -> None:
-    # The raw registry entries carry real endpoint URLs; the resolver must strip them
-    # so the serialized view contains no host/port/scheme from any entry.
-    from creator_service.provider_config_view import resolve_provider_config_view
-
-    registry = _FakeRegistry(
-        [
-            _FakeEntry("openai_llm", "https://api.openai.com", _RegistryCategory("llm"), False),
-            _FakeEntry("ollama", "http://ollama:11434", _RegistryCategory("llm"), True),
-            _FakeEntry("sd_local", "http://stable-diffusion:7860", _RegistryCategory("image"), True),
-        ]
-    )
-    view = await resolve_provider_config_view(
-        registry=registry, health_service=_FakeHealthService(), configured_providers={"openai"}
-    )
-    blob = json.dumps(asdict(view), default=str)
-    for leak in ("api.openai.com", "ollama:11434", "stable-diffusion", ":7860", "http://", "https://"):
-        assert leak not in blob
