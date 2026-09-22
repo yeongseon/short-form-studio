@@ -65,7 +65,7 @@ def test_documented_routes_exist_in_source() -> None:
     source = _routes_source()
     fragments = [
         "/projects/{project_id}/demo-short/plan",
-        "/projects/{project_id}/demo-short/runs",
+        "/workspaces/{workspace_id}/demo-short/runs",
         "/{workspace_id}/onboarding",
         "/{project_id}/timeline",
         "/{project_id}/timeline/preview",
