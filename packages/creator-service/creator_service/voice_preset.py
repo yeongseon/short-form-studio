@@ -2,7 +2,7 @@
 
 A VoicePreset is a reusable, CREDENTIAL-FREE selection of a TTS model_key + voice_id
 + provider-agnostic settings, independent of recipes. It carries NO api key, secret,
-or endpoint — credentials stay in the environment (resolve_api_key) and are never
+or endpoint — credentials stay in the environment and are never
 embedded in a preset, a resolved selection, or an error. resolve_voice_selection
 derives the provider from ProviderRegistry.resolve(model_key) (requiring a TTS
 model), and reports availability by checking configured-ness of a remote provider's
@@ -14,13 +14,13 @@ and missing-provider (remote key not configured) produce distinct typed errors.
 from __future__ import annotations
 
 import math
+import os
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 
 from creator_domain.exceptions import ValidationError
-from creator_provider.api_keys import resolve_api_key
-from creator_provider.registry import ProviderCategory, ProviderRegistry
+from creator_domain.provider_catalog import ModelResolver, ProviderCategory
 
 _SettingValue = str | int | float | bool
 
@@ -111,7 +111,7 @@ def resolve_voice_preset(preset_id: str) -> VoicePreset:
 def resolve_voice_selection(
     preset: VoicePreset,
     *,
-    registry: ProviderRegistry,
+    registry: ModelResolver,
     key_configured: Callable[[str], bool] | None = None,
 ) -> ResolvedVoiceSelection:
     """Resolve a preset to a credential-free provider/voice/settings selection.
@@ -158,4 +158,4 @@ def resolve_voice_selection(
 
 
 def _default_key_configured(provider_name: str) -> bool:
-    return resolve_api_key(provider_name, required=False) is not None
+    return bool(os.environ.get(_ENV_VAR_FOR_PROVIDER[provider_name], "").strip())

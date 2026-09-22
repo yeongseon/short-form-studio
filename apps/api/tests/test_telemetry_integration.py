@@ -126,6 +126,10 @@ def test_fastapi_instrumentation_sets_trace_id_header(instrumented_client):
 
 
 def test_api_to_celery_trace_context_propagates_via_task_headers(monkeypatch):
+    from creator_service.task_dispatch_service import task_dispatch_service
+    from shorts_api.task_dispatch_adapter import ApplicationTaskDispatcher
+
+    monkeypatch.setattr(task_dispatch_service, "dispatcher", ApplicationTaskDispatcher())
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(SimpleSpanProcessor(exporter))
@@ -144,7 +148,7 @@ def test_api_to_celery_trace_context_propagates_via_task_headers(monkeypatch):
 
     fake_tasks_module = types.SimpleNamespace(generate_script=_FakeTask())
     monkeypatch.setattr(
-        "creator_service.task_dispatch_service.import_module",
+        "shorts_api.task_dispatch_adapter.import_module",
         lambda name: creator_service_telemetry
         if name == "creator_service.telemetry"
         else fake_tasks_module

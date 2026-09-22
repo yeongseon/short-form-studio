@@ -242,11 +242,12 @@ async def generate_paragraph_audio_endpoint(
         workspace_id=user.workspace_id,
         operation_type="tts",
         task_type="generate_paragraph_audio",
-        dispatch=lambda: dispatch_paragraph_audio(
+        dispatch=lambda task_id: dispatch_paragraph_audio(
             run_id=run_id,
             section_id=section_id,
             tts_model=effective.tts_model,
             voice=effective.voice,
+            task_id=task_id,
         ),
         error_detail="Failed to enqueue paragraph audio task",
     )
@@ -303,11 +304,12 @@ async def generate_paragraph_subtitles_endpoint(
         workspace_id=user.workspace_id,
         operation_type="stt",
         task_type="generate_paragraph_subtitles",
-        dispatch=lambda: dispatch_paragraph_subtitles(
+        dispatch=lambda task_id: dispatch_paragraph_subtitles(
             run_id=run_id,
             section_id=section_id,
             subtitle_model=effective.subtitle_model,
             subtitle_format=effective.subtitle_format,
+            task_id=task_id,
         ),
         error_detail="Failed to enqueue paragraph subtitle task",
     )
@@ -366,11 +368,12 @@ async def generate_all_paragraph_audio(
                 operation_type="tts",
                 task_type="generate_paragraph_audio",
                 section_id=section.section_id,
-                dispatch=lambda: dispatch_paragraph_audio(
+                dispatch=lambda task_id: dispatch_paragraph_audio(
                     run_id=run_id,
                     section_id=section.section_id,
                     tts_model=effective.tts_model,
                     voice=effective.voice,
+                    task_id=task_id,
                 ),
             )
         )
@@ -439,11 +442,12 @@ async def generate_all_paragraph_subtitles(
                 operation_type="stt",
                 task_type="generate_paragraph_subtitles",
                 section_id=section_id,
-                dispatch=lambda section_id=section_id: dispatch_paragraph_subtitles(
+                dispatch=lambda task_id, section_id=section_id: dispatch_paragraph_subtitles(
                     run_id=run_id,
                     section_id=section_id,
                     subtitle_model=effective.subtitle_model,
                     subtitle_format=effective.subtitle_format,
+                    task_id=task_id,
                 ),
             )
         )

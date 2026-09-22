@@ -13,6 +13,7 @@ from starlette import status
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from shorts_api.auth import ApiKeyMiddleware, CurrentUser
+from shorts_api.task_dispatch_adapter import initialize_task_dispatch
 from shorts_api.health import register_health_routes
 from shorts_api.lifecycle import lifespan, shutdown_state
 from shorts_api.routes.admin import router as admin_router
@@ -51,6 +52,7 @@ runs_router.include_router(runs_lifecycle_router)
 
 
 def create_app() -> FastAPI:
+    initialize_task_dispatch()
     environment = os.getenv("ENVIRONMENT", "development").strip().lower()
     production_hardened = environment == "production"
 
