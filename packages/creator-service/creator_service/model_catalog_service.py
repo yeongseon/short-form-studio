@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any
-from urllib.parse import urlparse
-
-try:
-    from .model_health_service import ModelHealthService, ModelStatus
-except ImportError:
-    from model_health_service import ModelHealthService, ModelStatus
+from creator_service.model_health_service import ModelStatus
+from creator_service.provider_facts import (
+    HealthReader, ModelRegistry, ProviderFact, resolve_provider_facts,
+)
 
 
 class ModelCatalogService:
@@ -30,7 +27,7 @@ class ModelCatalogService:
 
     _HEALTH_TO_CATALOG_STATUS = {
         ModelStatus.HEALTHY: "available",
-        ModelStatus.CONFIGURED: "available",
+        ModelStatus.CONFIGURED: "configured_unverified",
         ModelStatus.UNHEALTHY: "unavailable",
         ModelStatus.UNKNOWN: "unknown",
     }
@@ -55,7 +52,7 @@ class ModelCatalogService:
         "llama-3.1-8b": "Llama 3.1 8B",
     }
 
-    def __init__(self, registry: Any, health_service: ModelHealthService):
+    def __init__(self, registry: ModelRegistry, health_service: HealthReader):
         self.registry = registry
         self.health_service = health_service
 
@@ -74,14 +71,11 @@ class ModelCatalogService:
             if category_value is None:
                 raise ValueError(f"Unsupported category '{category}'")
 
-        entries = self.registry.list_models()
-        for entry in entries:
-            entry_category = entry.category.value
-            if category_value is not None and entry_category != category_value:
-                continue
-
-            response_key = self._CATEGORY_TO_RESPONSE_KEY[entry_category]
-            response[response_key].append(await self._catalog_entry(entry))
+        entries = [entry for entry in self.registry.list_models()
+                   if category_value is None or entry.category.value == category_value]
+        for fact in await resolve_provider_facts(entries, self.health_service):
+            response_key = self._CATEGORY_TO_RESPONSE_KEY[fact.entry.category.value]
+            response[response_key].append(self._catalog_entry(fact))
 
         return response
 
@@ -90,41 +84,34 @@ class ModelCatalogService:
         providers: list[dict[str, object]] = []
         seen: set[tuple[str, str]] = set()
 
-        for entry in self.registry.list_models():
-            provider_id = (entry.provider_type, entry.endpoint)
+        for fact in await resolve_provider_facts(self.registry.list_models(), self.health_service):
+            provider_id = (fact.health_key, fact.entry.endpoint if fact.is_local else "")
             if provider_id in seen:
                 continue
             seen.add(provider_id)
 
-            health_key = self._health_key(entry)
-            health_result = await self.health_service.check_model(health_key)
             providers.append(
                 {
-                    "name": self._health_key(entry),
-                    "provider_type": entry.provider_type,
-                    "healthy": health_result.status in {ModelStatus.HEALTHY, ModelStatus.CONFIGURED},
-                    "loaded_model": None,
-                    "gpu_locked": False,
+                    "name": fact.health_key,
+                    "healthy": fact.status is ModelStatus.HEALTHY,
+                    "status": self._HEALTH_TO_CATALOG_STATUS[fact.status],
                 }
             )
 
         return {
-            "providers": [
-                {"name": p["name"], "healthy": p["healthy"]}
-                for p in providers
-            ],
+            "providers": providers,
             "gpu_lock": {"active": False},
         }
 
-    async def _catalog_entry(self, entry: Any) -> dict[str, object]:
-        health_result = await self.health_service.check_model(self._health_key(entry))
+    def _catalog_entry(self, fact: ProviderFact) -> dict[str, object]:
+        entry = fact.entry
         return {
             "key": entry.model_key,
-            "label": self._format_label(entry.model_key, entry.is_local),
+            "label": self._format_label(entry.model_key, fact.is_local),
             "provider_type": entry.provider_type,
-            "is_local": entry.is_local,
+            "is_local": fact.is_local,
             "requires_gpu": entry.requires_gpu,
-            "status": self._HEALTH_TO_CATALOG_STATUS[health_result.status],
+            "status": self._HEALTH_TO_CATALOG_STATUS[fact.status],
             "default_params": entry.default_params or {},
         }
 
@@ -138,16 +125,3 @@ class ModelCatalogService:
     def _format_label_fallback(model_key: str) -> str:
         """Best-effort title-case for unknown model keys."""
         return model_key.replace("-", " ").replace("_", " ").title()
-
-    @staticmethod
-    def _health_key(entry: Any) -> str:
-        """Derive the ModelHealthService lookup key from a registry entry.
-
-        ModelHealthService is keyed by Docker service hostname (e.g.
-        "ollama", "stable-diffusion"), which matches the hostname portion
-        of the endpoint URL in the registry.
-        """
-        parsed = urlparse(entry.endpoint)
-        if parsed.hostname:
-            return parsed.hostname
-        return entry.provider_type

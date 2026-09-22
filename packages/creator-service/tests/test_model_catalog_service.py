@@ -30,11 +30,11 @@ def health_service() -> AsyncMock:
         "api.elevenlabs.io": ModelStatus.UNKNOWN,
     }
 
-    async def check_model(name: str) -> ModelHealthResult:
+    async def check_model(name: str, *, endpoint: str | None = None) -> ModelHealthResult:
         status = status_by_provider.get(name, ModelStatus.UNKNOWN)
         return ModelHealthResult(
             model_name=name,
-            endpoint=f"http://{name}:1234",
+            endpoint=endpoint or f"http://{name}:1234",
             status=status,
         )
 
@@ -123,14 +123,10 @@ class TestModelCatalogService:
         assert set(result.keys()) == {"providers", "gpu_lock"}
         assert isinstance(result["providers"], list)
 
-        # Providers are deduplicated by (provider_type, endpoint).
-        # Count the actual unique (provider_type, endpoint) pairs from the registry.
-        entries = registry.list_models()
-        unique_providers = {(e.provider_type, e.endpoint) for e in entries}
-        assert len(result["providers"]) == len(unique_providers)
+        assert len(result["providers"]) == 16
 
         provider = result["providers"][0]
-        assert set(provider.keys()) == {"name", "healthy"}
+        assert set(provider.keys()) == {"name", "healthy", "status"}
         assert "endpoint" not in provider, "endpoint must not be exposed in status response"
 
         # Verify local providers are present
@@ -171,7 +167,6 @@ class TestModelCatalogService:
     async def test_health_key_matches_health_service_keys(
         self, registry, health_service: AsyncMock
     ):
-        """Verify _health_key() produces keys that ModelHealthService recognises."""
         service = ModelCatalogService(registry, health_service)
 
         await service.list_models()
@@ -183,50 +178,46 @@ class TestModelCatalogService:
             "api.openai.com", "api.anthropic.com",
             "generativelanguage.googleapis.com",
             "api.stability.ai", "api.elevenlabs.io",
-            "api.groq.com", "edge_tts", "placeholder_image",
-            "image.pollinations.ai", "router.huggingface.co",
-            "tts-cosyvoice", "chatgpt.com",
+            "api.groq.com", "router.huggingface.co",
+            "tts-cosyvoice",
         }
         assert called_keys == expected_keys
 
     @pytest.mark.asyncio
-    async def test_configured_remote_providers_are_available(self, registry, health_service: AsyncMock):
-        """Remote providers returning CONFIGURED should map to 'available', not crash."""
+    async def test_configured_remote_providers_are_unverified(self, registry, health_service: AsyncMock):
         # Override health_service to return CONFIGURED for a remote provider
         original_side_effect = health_service.check_model.side_effect
 
-        async def check_with_configured(name: str) -> ModelHealthResult:
+        async def check_with_configured(name: str, *, endpoint: str | None = None) -> ModelHealthResult:
             if name == "api.openai.com":
                 return ModelHealthResult(
                     model_name=name,
                     endpoint=f"http://{name}:1234",
                     status=ModelStatus.CONFIGURED,
                 )
-            return await original_side_effect(name)
+            return await original_side_effect(name, endpoint=endpoint)
 
         health_service.check_model.side_effect = check_with_configured
         service = ModelCatalogService(registry, health_service)
 
         result = await service.list_models()
 
-        # OpenAI models should be available, not crash with KeyError
         openai_models = [m for m in result["script_models"] if m["provider_type"] == "openai_llm"]
         assert len(openai_models) > 0
-        assert openai_models[0]["status"] == "available"
+        assert openai_models[0]["status"] == "configured_unverified"
 
     @pytest.mark.asyncio
-    async def test_get_status_configured_provider_is_healthy(self, registry, health_service: AsyncMock):
-        """get_status() should treat CONFIGURED as healthy, not unhealthy."""
+    async def test_get_status_configured_provider_is_unverified(self, registry, health_service: AsyncMock):
         original_side_effect = health_service.check_model.side_effect
 
-        async def check_with_configured(name: str) -> ModelHealthResult:
+        async def check_with_configured(name: str, *, endpoint: str | None = None) -> ModelHealthResult:
             if name == "api.openai.com":
                 return ModelHealthResult(
                     model_name=name,
                     endpoint=f"http://{name}:1234",
                     status=ModelStatus.CONFIGURED,
                 )
-            return await original_side_effect(name)
+            return await original_side_effect(name, endpoint=endpoint)
 
         health_service.check_model.side_effect = check_with_configured
         service = ModelCatalogService(registry, health_service)
@@ -239,4 +230,5 @@ class TestModelCatalogService:
             None,
         )
         assert openai_provider is not None
-        assert openai_provider["healthy"] is True
+        assert openai_provider["healthy"] is False
+        assert openai_provider["status"] == "configured_unverified"
