@@ -1,9 +1,9 @@
 # First Short Walkthrough
 
-This is the end-to-end walkthrough for creating your **first Short** with the
+This is the walkthrough for creating your **first Short** with the
 bundled sample, from a fresh clone through preview, download, and editing. It
 links to [QUICKSTART.md](QUICKSTART.md) for setup rather than duplicating it, and
-records an honest time-to-first-Short measurement against the product target.
+separates automated checks from a first-user time-to-first-Short measurement.
 
 > **The under-10-minute figure is a _target, not a measured result_.** See
 > [Time to First Short measurement](#time-to-first-short-measurement) below for
@@ -54,22 +54,25 @@ the env var and restart, mirroring the first-run Setup Wizard.
 
 ## 3. Create a sample-backed first Short (optional demo flow)
 
-The one-click demo seeds a Short from the reproducible sample project. First
+The demo seeds offline synthetic media into a new workspace-owned project. First
 review what it will do — estimated costs, required provider configuration, and the
 approvals it will _not_ bypass:
 
-- `GET /api/creator/projects/{project_id}/demo-short/plan`
+- `GET /api/creator/workspaces/{workspace_id}/demo-short/plan`
 
 Then seed the run. This creates a **new, workspace-owned "Demo Short" project**
-with a real sample-backed timeline, plus a normal run at the `IDEA_READY` stage;
+with a real sample-backed timeline, plus a run at the `TIMELINE_REVIEW` stage;
 it does **not** mutate your existing project and does **not** auto-advance or
 auto-approve anything:
 
 - `POST /api/creator/workspaces/{workspace_id}/demo-short/runs`
 
-The Short then moves through the normal pipeline, which has **four human review
-gates that are surfaced, never bypassed**: `SCRIPT` review, `VISUAL_PLAN` review,
-`VISUAL_ASSET` review, and `FINAL` review. You approve each one explicitly.
+Inspect the saved Timeline preview before rendering. Approve that exact revision
+with `POST /api/creator/runs/{run_id}/approve-timeline-render`, supplying
+`{"expected_revision": <saved revision>}`. A changed revision requires a new review.
+The result still requires `FINAL` review before publishing. Generated workflows
+retain their `SCRIPT`, `VISUAL_PLAN`, `VISUAL_ASSET`, and `FINAL` review gates;
+the pre-authored demo does not bypass approvals on those workflows.
 
 ## 4. (Optional) Upload your own media
 
@@ -131,10 +134,11 @@ latency). Timing is environment-dependent and is not asserted in CI.
 
 | Date | Environment | Start | End | Elapsed | Result | Notes |
 |---|---|---|---:|---:|---|---|
-| 2026-09-21 | Local, CPU remote-provider path, **no provider keys configured** | Fresh clone / setup start | Setup readiness reached; generation blocked | ~0m to block | **Not a completed first Short** | No `OPENAI_API_KEY` / `GROQ_API_KEY` configured and local GPU model images not shipped, so the first generate step could not run. **KPI not measured / not achieved.** The install→start→open→readiness path completed; the generate→preview→download path is blocked pending provider prerequisites. |
+| 2026-09-21 | Existing development checkout | File and environment-variable presence check | Check finished | Not measured | **Not a completed first Short** | This was not a fresh installation, browser session, or render. The earlier claim that install/start/open/readiness completed was unsupported and is withdrawn. **KPI not measured.** |
 
-The recorded run above is a **prerequisite-blocked attempt**: it honestly reflects
-that no successful end-to-end time-to-first-Short has been measured in this
-environment, and it does **not** claim the KPI is achieved. A completed timed run
-requires configured provider keys (CPU path) or a GPU/local-model setup; record
-it in the table above when you run it.
+The record above is an environment preflight, not a user-journey timing attempt.
+No successful fresh-user time-to-first-Short measurement is recorded here.
+Automated PostgreSQL, FFmpeg, API, and browser regression checks are useful
+engineering evidence, but they must not be reported as a timed first-user result.
+The offline demo does not call paid providers; AI generation still requires
+configured remote providers or a working local model setup.
