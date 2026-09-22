@@ -7,6 +7,8 @@ import { useProjectData } from "./project/useProjectData";
 import { useRunActions } from "./project/useRunActions";
 import WorkspaceSection from "./project/WorkspaceSection";
 import Card from "../components/ui/Card";
+import { TimelineReviewSection } from "./project/TimelineReviewSection";
+import { runArtifactUrl } from "../api/runPreview";
 
 type SourceType = "idea" | "markdown" | "json" | "pasted_json" | "url";
 
@@ -67,14 +69,10 @@ export default function ProjectPage() {
   });
 
   const currentStage = run?.current_stage ?? "IDEA_READY";
-  const isFailed = run?.status === "failed";
-  const showScriptComposer = true;
+  const timelineBacked = run?.metadata?.render_source === "timeline" || currentStage === "TIMELINE_REVIEW";
+  const showScriptComposer = !timelineBacked;
   const isFinalReview = FINAL_REVIEW_STAGES.has(currentStage);
-  const previewVideo = (preview as Record<string, unknown> | null)?.video;
-  const previewVideoPath =
-    previewVideo && typeof previewVideo === "object"
-      ? (previewVideo as Record<string, unknown>).path
-      : null;
+  const previewVideoUrl = run && preview?.video ? runArtifactUrl(run.id, preview.video.id) : null;
   const maxWidth = run ? 1200 : 960;
   const showGoBack =
     Boolean(run) &&
@@ -145,8 +143,6 @@ export default function ProjectPage() {
     );
   }
 
-  void isFailed;
-
   return (
     <div style={{ maxWidth, margin: "0 auto", padding: 24 }}>
       <ProjectHeader
@@ -168,7 +164,7 @@ export default function ProjectPage() {
         currentStage={currentStage}
       />
 
-        <Card
+      {!run && <Card
           variant="dashed"
           padding="lg"
           data-testid="no-run"
@@ -178,7 +174,9 @@ export default function ProjectPage() {
           <p style={{ margin: 0, fontSize: 13 }}>
             This project has no pipeline runs. Go back to create a new one.
           </p>
-        </Card>
+        </Card>}
+
+      {run && timelineBacked && <TimelineReviewSection key={run.id} run={run} refreshRun={refreshRun} />}
 
       {run && showScriptComposer && (
         <ScriptSection
@@ -196,7 +194,7 @@ export default function ProjectPage() {
         />
       )}
 
-      {run && (
+      {run && !timelineBacked && (
         <WorkspaceSection
           run={run}
           currentStage={currentStage}
@@ -210,7 +208,7 @@ export default function ProjectPage() {
           onApproveVisualPlan={handleApproveVisualPlan}
           onRegenerateVisualPlan={handleRestartVisualPlan}
           isFinalReview={isFinalReview}
-          previewVideoPath={typeof previewVideoPath === "string" ? previewVideoPath : null}
+          previewVideoUrl={previewVideoUrl}
           showGoBack={showGoBack}
           onGoBack={handleGoBack}
           goingBack={goingBack}
