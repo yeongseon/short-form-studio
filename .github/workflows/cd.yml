@@ -20,27 +20,27 @@ concurrency:
 
 jobs:
   wait-for-ci:
-    if: ${{ github.event_name == 'push' }}
+    if: ${{ vars.DEPLOYMENT_ENABLED == 'true' && github.event_name == 'push' }}
     runs-on: ubuntu-latest
     steps:
       - name: Wait for CI lint
         uses: lewagon/wait-on-check-action@v1.3.4
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ github.sha }}
           check-name: "lint"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           wait-interval: 10
       - name: Wait for CI test
         uses: lewagon/wait-on-check-action@v1.3.4
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ github.sha }}
           check-name: "test"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           wait-interval: 10
       - name: Wait for CI docker
         uses: lewagon/wait-on-check-action@v1.3.4
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ github.sha }}
           check-name: "docker"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           wait-interval: 10
@@ -182,7 +182,7 @@ jobs:
   select-deploy-tag:
     runs-on: ubuntu-latest
     needs: [build-and-push, trivy-scan]
-    if: ${{ always() && (github.event_name == 'workflow_dispatch' || (needs.build-and-push.result == 'success' && needs.trivy-scan.result == 'success')) }}
+    if: ${{ always() && vars.DEPLOYMENT_ENABLED == 'true' && (github.event_name == 'workflow_dispatch' || (needs.build-and-push.result == 'success' && needs.trivy-scan.result == 'success')) }}
     outputs:
       image_tag: ${{ steps.select.outputs.image_tag }}
       is_rollback: ${{ steps.select.outputs.is_rollback }}
