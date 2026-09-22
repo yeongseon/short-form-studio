@@ -1,3 +1,6 @@
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
+import sys
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -21,9 +24,20 @@ def test_celery_submission_preserves_id_arguments_and_trace(monkeypatch: pytest.
     assert result == "fixed-id"
 
 
-def test_cancel_terminates_the_exact_task() -> None:
+def test_cancel_terminates_the_exact_task(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given the real module copied into API Docker, without worker_loop or a worker path.
+    source = Path(__file__).resolve().parents[2] / "worker-orchestrator" / "celery_app.py"
+    spec = spec_from_file_location("celery_app", source)
+    assert spec is not None and spec.loader is not None
+    module = module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, "celery_app", module)
+    monkeypatch.setitem(sys.modules, "worker_loop", None)
+    spec.loader.exec_module(module)
+
+    # When cancellation reaches Celery's control boundary.
     with patch("celery_app.celery_app.control.revoke") as revoke:
         ApplicationTaskDispatcher().cancel("queued-id")
+    # Then only the requested task is terminated.
     revoke.assert_called_once_with("queued-id", terminate=True)
 
 
