@@ -94,6 +94,12 @@ because the browser sends no key until the proxy is configured with `API_KEY`.
 
 Navigate to <http://127.0.0.1:5174>. From there:
 
+For a no-provider smoke path, choose **Try the demo**. This creates synthetic
+image media and a saved Timeline locally, not an AI-generated video. Review the
+Timeline, explicitly approve its current revision for rendering, then inspect
+and download the resulting MP4. The final publication review remains required.
+See [First Short Walkthrough](FIRST_SHORT_WALKTHROUGH.md).
+
 1. Start a new project from an idea or script.
 2. Approve each stage (script → visual plan → images → audio → subtitles → render).
    With the remote keys set, every stage runs without a GPU.
@@ -123,6 +129,18 @@ bootstrap/migration entrypoints exist:
 
 ```bash
 bash scripts/quickstart_smoke.sh
+```
+
+This uses an isolated copy of `.env.example`; it neither requires nor reads your
+local `.env`. It validates Compose configuration, not video generation. Runtime
+acceptance is a separate test with disposable PostgreSQL and Redis, a real API
+process, a Celery worker and FFmpeg:
+
+```bash
+# These variables must point at disposable test services, never production.
+FIRST_SHORT_TEST_DATABASE_URL=postgresql://review:review-local-only@127.0.0.1:55439/first_short \
+FIRST_SHORT_TEST_REDIS_URL=redis://127.0.0.1:56389/0 \
+python3 -m pytest tests/integration/test_first_short_runtime.py -v
 ```
 
 ## Failure recovery / troubleshooting
