@@ -82,3 +82,21 @@ def test_internal_doc_links_resolve() -> None:
 def test_references_the_smoke_check_script_which_exists() -> None:
     assert (_REPO_ROOT / "scripts" / "quickstart_smoke.sh").is_file()
     assert "scripts/quickstart_smoke.sh" in _text()
+
+
+def test_wires_the_generated_key_into_studio_web_for_browser_auth() -> None:
+    """The browser sends no key unless API_KEY is set for studio-web and it is
+    restarted. The Quick Start must tell the user to do exactly that, otherwise
+    every /api/creator/* call from the UI 401s (the key is only printed, never
+    wired). This pins the wiring step against silent drift."""
+    text = _text()
+    # The generated key must be placed into the API_KEY env consumed by studio-web.
+    assert re.search(r"API_KEY=", text)
+    # studio-web must be (re)started so nginx envsubst picks up the key.
+    assert re.search(r"(?:--force-recreate|restart|up -d)[^\n]*studio-web", text)
+    # The env plumbing the doc relies on must actually exist in the repo.
+    assert re.search(r"^API_KEY=", (_REPO_ROOT / ".env.example").read_text(encoding="utf-8"), re.MULTILINE)
+    compose = (_REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert re.search(r"API_KEY:\s*\$\{API_KEY", compose), "studio-web must receive API_KEY from env"
+    nginx = (_REPO_ROOT / "apps" / "studio-web" / "nginx.conf.template").read_text(encoding="utf-8")
+    assert 'proxy_set_header X-API-Key "${API_KEY}"' in nginx

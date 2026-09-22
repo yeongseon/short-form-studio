@@ -74,6 +74,22 @@ docker compose run --rm api python scripts/create_api_key.py \
 This creates a user, a workspace, and an API key for local development; the key is
 printed to stdout. Keep it — the studio UI and API use it to authenticate.
 
+**Wire the key into the studio UI so the browser can authenticate.** The studio
+UI never holds the key in the browser; instead its server-side proxy injects it
+as the `X-API-Key` header. That injection reads the `API_KEY` env var, so you must
+put the generated key into `.env` and restart the studio container:
+
+```bash
+# 1. Put the generated key into .env
+API_KEY=<paste-the-generated-key>   # set this line in .env (replaces the placeholder)
+
+# 2. Recreate studio-web so its proxy picks up the key
+docker compose up -d --force-recreate --no-deps studio-web
+```
+
+Without this step the UI's calls to `/api/creator/*` return **401 Unauthorized**,
+because the browser sends no key until the proxy is configured with `API_KEY`.
+
 ## 6. Open the studio and make your first Short
 
 Navigate to <http://127.0.0.1:5174>. From there:
@@ -114,6 +130,7 @@ bash scripts/quickstart_smoke.sh
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | A stage errors with "provider not configured" / auth error | The relevant provider key is blank in `.env` | Set `OPENAI_API_KEY` (script/image/TTS) and `GROQ_API_KEY` (subtitles), then `docker compose up -d` to reload |
+| The studio UI loads but every action fails with 401 Unauthorized | `API_KEY` not wired into studio-web (step 5) | Put the generated key into `.env` as `API_KEY=...`, then `docker compose up -d --force-recreate --no-deps studio-web` |
 | API errors about missing tables / relations | Migrations not run | `docker compose run --rm api alembic upgrade head` |
 | API/UI won't start; "default password" or CORS error at boot | `ENVIRONMENT=production` with the placeholder password or missing `CORS_ORIGINS` | Keep `ENVIRONMENT=development` locally, or set a real `POSTGRES_PASSWORD`, `ADMIN_API_KEY`, and `CORS_ORIGINS` |
 | Port already in use on `127.0.0.1:5174` / `:8000` | Another process holds the port | Stop it, or remap the host port in `docker-compose.yml` (keep the `127.0.0.1:` prefix) |
