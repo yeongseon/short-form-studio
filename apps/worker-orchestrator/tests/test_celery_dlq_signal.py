@@ -37,7 +37,8 @@ def test_task_failure_signal_writes_structured_dlq_entry(monkeypatch):
     assert payload["task_name"] == "tasks.generate_script"
     assert payload["args"] == ["topic", 2]
     assert payload["kwargs"] == {"language": "en"}
-    assert payload["exception"] == "RuntimeError('boom')"
+    assert payload["exception"] == "The operation failed unexpectedly"
+    assert payload["failure"]["code"] == "INTERNAL"
     assert isinstance(payload["timestamp"], str)
     assert payload["timestamp"]
 
@@ -64,7 +65,8 @@ def test_task_failure_signal_handles_redis_connection_error_gracefully(monkeypat
     assert payload["task_id"] == "task-connection-error"
     assert payload["task_name"] == "tasks.generate_script"
     assert payload["kwargs"] == {"language": "en"}
-    assert "boom" in payload["exception"]
+    assert payload["exception"] == "The operation failed unexpectedly"
+    assert payload["failure"]["code"] == "INTERNAL"
 
     logger = get_logger.return_value
     logger.error.assert_called()

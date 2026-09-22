@@ -3,7 +3,7 @@
 map_service_error derives a stable, type-based category (never status-based) with
 correct retryability and STATIC recovery copy — raw exception detail is never
 interpolated into user-facing steps, so paths/secrets cannot leak that way.
-map_provider_error wraps a creator_provider ProviderError into the right
+map_provider_error wraps a domain ProviderError into the right
 creator_domain ServiceError with a safe static detail. redact_error_message strips
 filesystem paths, URLs, and secret-shaped tokens. build_run_failure_summary is the
 async (worker) surface: a safe, categorized, redacted failure summary for a run
@@ -13,8 +13,9 @@ that transitioned to FAILED.
 from __future__ import annotations
 
 import enum
-import re
 from dataclasses import dataclass
+
+from .error_redaction import redact_error_message as redact_error_message
 
 from creator_domain.exceptions import (
     ConflictError,
@@ -27,7 +28,7 @@ from creator_domain.exceptions import (
     ValidationError,
     VersionConflictError,
 )
-from creator_provider.exceptions import (
+from creator_domain.provider_errors import (
     ProviderAuthError,
     ProviderError,
     ProviderTimeoutError,
@@ -129,7 +130,10 @@ def map_service_error(exc: ServiceError) -> ActionableError:
     version_conflict: dict[str, int | str] | None = None
     if isinstance(exc, VersionConflictError):
         version_conflict = {
-            "resource_id": exc.resource_id,
+            "resource_id": (
+                redact_error_message(exc.resource_id)
+                if isinstance(exc.resource_id, str) else exc.resource_id
+            ),
             "expected_version": exc.expected_version,
             "actual_version": exc.actual_version,
         }
@@ -158,27 +162,6 @@ def map_provider_error(exc: ProviderError) -> ServiceError:
     return ServiceUnavailableError("The provider is temporarily unavailable")
 
 
-_ABS_POSIX_PATH = re.compile(r"(?:/[\w.\-]+){2,}/?")
-_WORKSPACE_PATH = re.compile(r"\bworkspaces/[\w./\-]+")
-_WINDOWS_PATH = re.compile(r"[A-Za-z]:\\[\\\w.\- ]+")
-_URL = re.compile(r"\bhttps?://[^\s'\"]+")
-_TOKEN_PREFIX = re.compile(r"\b(?:(?:sk|ghp|xoxb)[-_]|AKIA)[A-Za-z0-9\-]{6,}")
-_LONG_HEX = re.compile(r"\b[0-9a-fA-F]{20,}\b")
-_REDACTED = "<redacted>"
-
-
-def redact_error_message(text: str) -> str:
-    if not text:
-        return text
-    redacted = _URL.sub(_REDACTED, text)
-    redacted = _TOKEN_PREFIX.sub(_REDACTED, redacted)
-    redacted = _WINDOWS_PATH.sub(_REDACTED, redacted)
-    redacted = _WORKSPACE_PATH.sub(_REDACTED, redacted)
-    redacted = _ABS_POSIX_PATH.sub(_REDACTED, redacted)
-    redacted = _LONG_HEX.sub(_REDACTED, redacted)
-    return redacted
-
-
 _PROVIDER_MESSAGE: dict[ErrorCategory, str] = {
     ErrorCategory.UNAVAILABLE: "The provider was temporarily unavailable",
     ErrorCategory.QUOTA: "The provider rate limit was exceeded",
@@ -188,7 +171,7 @@ _PROVIDER_MESSAGE: dict[ErrorCategory, str] = {
 }
 
 
-def build_run_failure_summary(exc: Exception) -> dict[str, object]:
+def build_run_failure_summary(exc: BaseException) -> dict[str, object]:
     """Build a safe, categorized failure summary for a run that hit FAILED.
 
     Provider errors are mapped to the actionable ServiceError taxonomy; any other
