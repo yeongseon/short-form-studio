@@ -240,7 +240,7 @@ describe("ReviewPage", () => {
     expect(screen.getByTestId("review-video-section")).toBeTruthy();
     const videoEl = screen.getByTestId("review-video-section").querySelector("video");
     expect(videoEl).toBeTruthy();
-    expect(videoEl?.getAttribute("src")).toContain("output.mp4");
+    expect(videoEl?.getAttribute("src")).toBe("/api/creator/runs/10/artifacts/1/download");
     expect(screen.getByText("shorts_default")).toBeTruthy();
   });
 
