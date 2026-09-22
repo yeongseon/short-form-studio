@@ -24,10 +24,10 @@ class _StubProjectService:
 
 
 class _StubHealth:
-    async def check_model(self, host):
+    async def check_model(self, host: str, *, endpoint: str | None = None):
         from creator_service.model_health_service import ModelHealthResult, ModelStatus
 
-        return ModelHealthResult(model_name=host, endpoint=host, status=ModelStatus.UNKNOWN)
+        return ModelHealthResult(model_name=host, endpoint=endpoint or host, status=ModelStatus.UNKNOWN)
 
 
 class _StubTimeline:
@@ -48,9 +48,9 @@ def _stub_readiness_globals(monkeypatch, providers: list[str], project_stub) -> 
         def __init__(self, remote_hosts: set[str]) -> None:
             self._remote = remote_hosts
 
-        async def check_model(self, host):
+        async def check_model(self, host: str, *, endpoint: str | None = None):
             status = ModelStatus.CONFIGURED if host in self._remote else ModelStatus.UNKNOWN
-            return ModelHealthResult(model_name=host, endpoint=host, status=status)
+            return ModelHealthResult(model_name=host, endpoint=endpoint or host, status=status)
 
     # Map configured provider names to the hostnames the resolver probes.
     _HOSTS = {"openai": "api.openai.com", "groq": "api.groq.com"}
@@ -110,6 +110,7 @@ async def test_onboarding_first_run_discloses_path_presets_and_gates(client, onb
         "SCRIPT_REVIEW",
         "VISUAL_PLAN_REVIEW",
         "VISUAL_ASSET_REVIEW",
+        "TIMELINE_REVIEW",
         "FINAL_REVIEW",
     ]
     assert body["custom_duration_hint_seconds"] == 180

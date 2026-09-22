@@ -15,7 +15,7 @@ from creator_service.model_health_service import ModelHealthService
 from creator_service.onboarding import build_onboarding_guidance
 from creator_service.project_service import project_service
 from creator_service.provider_readiness import resolve_setup_provider_facts
-from creator_service.setup_wizard import ModelCategory, resolve_setup_state
+from creator_service.setup_wizard import ModelCategory, SetupState, resolve_setup_state
 from creator_service.timeline_service import timeline_service
 from fastapi import APIRouter, Depends
 
@@ -46,7 +46,7 @@ async def _workspace_has_first_draft(workspace_id: int) -> bool:
     return False
 
 
-async def _onboarding_setup_state(workspace_id: int):
+async def _onboarding_setup_state(workspace_id: int) -> SetupState:
     facts = await resolve_setup_provider_facts(
         registry=get_default_registry(),
         health_service=_health_service,
@@ -87,4 +87,7 @@ async def get_onboarding_guidance(
         "review_gates": [gate.value for gate in guidance.review_gates],
         "custom_duration_hint_seconds": guidance.custom_duration_hint_seconds,
         "next_action": guidance.next_action,
+        "setup_step": guidance.setup_step.value,
+        "setup_status": guidance.setup_status.value,
+        "has_first_draft": guidance.has_first_draft,
     }
