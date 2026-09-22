@@ -37,32 +37,41 @@ grep -qF 'proxy_set_header X-API-Key "${API_KEY}"' apps/studio-web/nginx.conf.te
   || fail "nginx must inject X-API-Key from API_KEY"
 pass "studio-web browser-auth wiring present"
 
-# --- compose config validates against a clean env (placeholder .env) ---
-# Use .env.example so a developer's shell env cannot mask a real config defect.
-docker compose --env-file .env.example config --quiet || fail "docker compose config invalid"
+# Service env_file paths are resolved independently of --env-file interpolation.
+# Validate an isolated copy so neither a missing nor a private .env is consulted.
+SMOKE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/quickstart-smoke.XXXXXX")"
+trap 'rm -rf "$SMOKE_DIR"' EXIT
+cp docker-compose.yml "$SMOKE_DIR/compose.yml"
+cp .env.example "$SMOKE_DIR/.env"
+compose() {
+  env -i PATH="$PATH" HOME="${HOME:-/tmp}" docker compose \
+    --project-name quickstart-smoke --project-directory "$SMOKE_DIR" \
+    --env-file "$SMOKE_DIR/.env" -f "$SMOKE_DIR/compose.yml" "$@"
+}
+compose config --quiet || fail "docker compose config invalid"
 pass "docker compose config valid"
 
 # --- CPU core services are defined and NOT gpu-profile-gated ---
-CORE_SERVICES="$(docker compose --env-file .env.example config --services)"
+CORE_SERVICES="$(compose config --services)"
 for svc in postgres redis api worker studio-web; do
   echo "$CORE_SERVICES" | grep -qx "$svc" || fail "CPU core service '${svc}' not defined"
 done
 pass "CPU core services defined"
 
 # ollama (local LLM) must be gpu-gated so the default `up` is CPU-only.
-GPU_SERVICES="$(docker compose --env-file .env.example --profile gpu config --services)"
+GPU_SERVICES="$(compose --profile gpu config --services)"
 echo "$GPU_SERVICES" | grep -qx "ollama" || fail "ollama should exist under the gpu profile"
 echo "$CORE_SERVICES" | grep -qx "ollama" && fail "ollama must NOT start without --profile gpu"
 pass "gpu services gated behind the gpu profile"
 
 # --- every published port binds to 127.0.0.1 only (loopback) ---
-docker compose --env-file .env.example config -o /tmp/quickstart.compose.yml
-python3 - <<'PY'
+compose config --format json > "$SMOKE_DIR/compose.json"
+python3 - "$SMOKE_DIR/compose.json" <<'PY'
+import json
 import sys
-import yaml
 
-with open("/tmp/quickstart.compose.yml") as handle:
-    compose = yaml.safe_load(handle)
+with open(sys.argv[1]) as handle:
+    compose = json.load(handle)
 
 bad = []
 for name, service in (compose.get("services") or {}).items():
