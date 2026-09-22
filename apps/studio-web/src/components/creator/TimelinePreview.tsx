@@ -22,6 +22,8 @@ export interface TimelinePreviewProps {
   projectId: number;
   output?: string;
   encoding?: string;
+  onReady?: (revision: number | undefined) => void;
+  onUnavailable?: () => void;
 }
 
 /** Total timeline duration = furthest segment end. */
@@ -58,6 +60,8 @@ export default function TimelinePreview({
   projectId,
   output,
   encoding,
+  onReady,
+  onUnavailable,
 }: TimelinePreviewProps) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
   const [currentTime, setCurrentTime] = useState(0);
@@ -68,6 +72,8 @@ export default function TimelinePreview({
   useEffect(() => {
     let cancelled = false;
     setState({ status: "loading" });
+    setPlaying(false);
+    onUnavailable?.();
     fetchTimelinePreview(projectId, { output, encoding })
       .then((plan) => {
         if (!cancelled) {
@@ -84,7 +90,7 @@ export default function TimelinePreview({
     return () => {
       cancelled = true;
     };
-  }, [projectId, output, encoding]);
+  }, [projectId, output, encoding, onUnavailable]);
 
   const total = state.status === "ready" ? totalDuration(state.plan) : 0;
 
@@ -126,7 +132,7 @@ export default function TimelinePreview({
 
   if (state.status === "error") {
     return (
-      <div data-testid="timeline-preview" data-status="error">
+      <div data-testid="timeline-preview" data-status="error" role="alert">
         {state.message}
       </div>
     );
@@ -135,6 +141,14 @@ export default function TimelinePreview({
   const { plan } = state;
   const active = segmentAtTime(plan, currentTime);
   const { width, height } = plan.output_spec;
+  const mediaLoaded = () => {
+    if (active === plan.segments[0]) onReady?.(plan.timeline_revision);
+  };
+  const mediaFailed = () => {
+    onUnavailable?.();
+    setPlaying(false);
+    setState({ status: "error", message: "Preview media could not load. Reload the project to retry; if it still fails, check asset access before approving." });
+  };
 
   return (
     <div data-testid="timeline-preview" data-status="ready">
@@ -143,6 +157,8 @@ export default function TimelinePreview({
         data-aspect={`${width}x${height}`}
         style={{
           aspectRatio: `${width} / ${height}`,
+          width: `min(100%, ${60 * width / height}vh)`,
+          maxHeight: "60vh",
           maxWidth: "100%",
           background: "#000",
           display: "flex",
@@ -155,8 +171,11 @@ export default function TimelinePreview({
           <div data-testid="preview-empty">No content at this time</div>
         ) : active.kind === "image" ? (
           <img
+            key={active.media_url ?? active.source}
             data-testid="preview-media"
-            src={active.source}
+            src={active.media_url ?? active.source}
+            onLoad={mediaLoaded}
+            onError={mediaFailed}
             alt=""
             style={{
               width: "100%",
@@ -166,8 +185,12 @@ export default function TimelinePreview({
           />
         ) : (
           <video
+            key={active.media_url ?? active.source}
             data-testid="preview-media"
-            src={active.source}
+            src={active.media_url ?? active.source}
+            onLoadedData={mediaLoaded}
+            onError={mediaFailed}
+            playsInline
             muted
             style={{
               width: "100%",
