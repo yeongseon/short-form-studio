@@ -17,6 +17,7 @@
 
 import { useState, useEffect, useRef, useCallback, useId } from "react";
 import { apiFetch } from "../../api/client";
+import { categoryLabel } from "../../api/errorLabels";
 import { STAGE_ORDER } from "../../types/api";
 
 const DEFAULT_API = "/api/creator";
@@ -62,12 +63,21 @@ const ERROR_LABELS: Record<string, string> = {
   soft_time_limit: "Timed out",
 };
 
+interface TaskFailureSummary {
+  code: string;
+  category: string;
+  retryable: boolean;
+  recovery_steps: string[];
+  message: string;
+}
+
 interface RunTaskInfo {
   task_type: string;
   status: string;
   attempt: number;
   error_code: string | null;
   error_message: string | null;
+  failure?: TaskFailureSummary | null;
 }
 
 // --------------- component ---------------
@@ -364,19 +374,36 @@ export default function ProgressDialog({
             }}
           >
             Generation failed
-            {taskInfo?.error_code && (
-              <span style={{ display: "block", marginTop: 4, fontSize: 12, opacity: 0.85 }}>
-                {ERROR_LABELS[taskInfo.error_code] ?? taskInfo.error_code}
-                {taskInfo.attempt > 1 && ` (after ${taskInfo.attempt} attempts)`}
+            {taskInfo?.failure ? (
+              <span data-testid="task-failure" style={{ display: "block", marginTop: 4, fontSize: 12, opacity: 0.9 }}>
+                <span style={{ fontWeight: 600 }}>{categoryLabel(taskInfo.failure.category)}</span>
+                {" — "}
+                {taskInfo.failure.retryable ? "you can retry" : "not retryable"}
+                {taskInfo.failure.recovery_steps.length > 0 && (
+                  <ul data-testid="task-recovery-steps" style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 11, opacity: 0.85 }}>
+                    {taskInfo.failure.recovery_steps.map((step, i) => (
+                      <li key={i}>{step}</li>
+                    ))}
+                  </ul>
+                )}
               </span>
-            )}
-            {taskInfo?.error_message && (
-              <span
-                style={{ display: "block", marginTop: 4, fontSize: 11, opacity: 0.7, maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-                title={taskInfo.error_message}
-              >
-                {taskInfo.error_message}
-              </span>
+            ) : (
+              <>
+                {taskInfo?.error_code && (
+                  <span style={{ display: "block", marginTop: 4, fontSize: 12, opacity: 0.85 }}>
+                    {ERROR_LABELS[taskInfo.error_code] ?? taskInfo.error_code}
+                    {taskInfo.attempt > 1 && ` (after ${taskInfo.attempt} attempts)`}
+                  </span>
+                )}
+                {taskInfo?.error_message && (
+                  <span
+                    style={{ display: "block", marginTop: 4, fontSize: 11, opacity: 0.7, maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                    title={taskInfo.error_message}
+                  >
+                    {taskInfo.error_message}
+                  </span>
+                )}
+              </>
             )}
           </div>
         )}
