@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse
 from starlette import status
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from shorts_api.auth import ApiKeyMiddleware
+from shorts_api.auth import ApiKeyMiddleware, CurrentUser
 from shorts_api.health import register_health_routes
 from shorts_api.lifecycle import lifespan, shutdown_state
 from shorts_api.routes.admin import router as admin_router
@@ -80,12 +80,18 @@ def create_app() -> FastAPI:
         finally:
             shutdown_state.inflight_requests = max(0, shutdown_state.inflight_requests - 1)
             elapsed_ms = (time.perf_counter() - start) * 1000
+            user = getattr(request.state, "user", None)
             logger.info(
                 "%s %s %d %.1fms",
                 request.method,
                 request.url.path,
                 status_code,
                 elapsed_ms,
+                extra={
+                    "user_id": user.user_id if isinstance(user, CurrentUser) else None,
+                    "key_id": user.key_id if isinstance(user, CurrentUser) else None,
+                    "workspace_id": user.workspace_id if isinstance(user, CurrentUser) else None,
+                },
             )
 
     async def security_headers_middleware(request: Request, call_next):
