@@ -73,6 +73,7 @@ def test_stage_group_sets() -> None:
         RunStage.VISUAL_PLAN_REVIEW,
         RunStage.VISUAL_ASSET_REVIEW,
         RunStage.FINAL_REVIEW,
+        RunStage.TIMELINE_REVIEW,
     } == REVIEW_STAGES
     assert {
         RunStage.SCRIPT_GENERATING,
