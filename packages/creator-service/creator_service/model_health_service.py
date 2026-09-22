@@ -45,12 +45,14 @@ class ModelHealthService:
             "ollama": os.getenv("OLLAMA_BASE_URL", "http://ollama:11434"),
             "stable-diffusion": os.getenv("STABLE_DIFFUSION_BASE_URL", "http://stable-diffusion:7860"),
             "tts-qwen3": os.getenv("TTS_QWEN3_BASE_URL", "http://tts-qwen3:8100"),
+            "tts-cosyvoice": os.getenv("TTS_COSYVOICE_BASE_URL", "http://tts-cosyvoice:50000"),
             "stt-whisper": os.getenv("STT_WHISPER_BASE_URL", "http://stt-whisper:8200"),
         }
         self.health_paths = {
             "ollama": "/api/tags",
             "stable-diffusion": "/sdapi/v1/options",
             "tts-qwen3": "/health",
+            "tts-cosyvoice": "/health",
             "stt-whisper": "/health",
         }
 
