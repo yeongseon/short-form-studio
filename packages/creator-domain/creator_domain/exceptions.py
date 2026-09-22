@@ -51,6 +51,18 @@ class ValidationError(ServiceError):
         super().__init__(detail)
 
 
+class ProviderConfigError(ValidationError):
+    """A provider credential is missing, invalid, or not configured.
+
+    A ValidationError subclass so it stays a user-fixable 400 (fix the provider
+    configuration), but a distinct type so the actionable-error taxonomy can keep
+    the auth/config root cause instead of collapsing it into generic VALIDATION.
+    """
+
+    def __init__(self, detail: str = "Provider is not configured or its credential is invalid") -> None:
+        super().__init__(detail)
+
+
 class ConflictError(ServiceError):
     """State conflict (e.g. concurrent modification, stage mismatch)."""
 

@@ -9,6 +9,7 @@
 export const ERROR_CATEGORY_LABELS: Record<string, string> = {
   NOT_FOUND: "Not found",
   VALIDATION: "Invalid request",
+  PROVIDER_AUTH: "Provider not configured",
   CONFLICT: "Conflict",
   VERSION_CONFLICT: "Out of date",
   QUOTA: "Rate limited",

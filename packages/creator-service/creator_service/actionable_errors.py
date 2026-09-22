@@ -20,6 +20,7 @@ from creator_domain.exceptions import (
     ConflictError,
     DataIntegrityError,
     NotFoundError,
+    ProviderConfigError,
     QuotaExceededError,
     ServiceError,
     ServiceUnavailableError,
@@ -38,6 +39,7 @@ from creator_provider.exceptions import (
 class ErrorCategory(enum.Enum):
     NOT_FOUND = "NOT_FOUND"
     VALIDATION = "VALIDATION"
+    PROVIDER_AUTH = "PROVIDER_AUTH"
     CONFLICT = "CONFLICT"
     VERSION_CONFLICT = "VERSION_CONFLICT"
     QUOTA = "QUOTA"
@@ -63,6 +65,10 @@ _RECOVERY: dict[ErrorCategory, tuple[str, ...]] = {
     ErrorCategory.VALIDATION: (
         "Fix the highlighted input",
         "Check the required fields and try again",
+    ),
+    ErrorCategory.PROVIDER_AUTH: (
+        "Check the provider is configured and its credential is valid",
+        "Set or update the provider's API key, then retry",
     ),
     ErrorCategory.CONFLICT: (
         "Reload the current state",
@@ -97,11 +103,14 @@ _RETRYABLE: frozenset[ErrorCategory] = frozenset(
 
 
 def _category_for(exc: ServiceError) -> ErrorCategory:
-    # Order matters: VersionConflictError is a ConflictError subclass.
+    # Order matters: VersionConflictError is a ConflictError subclass, and
+    # ProviderConfigError is a ValidationError subclass — check the narrow types first.
     if isinstance(exc, VersionConflictError):
         return ErrorCategory.VERSION_CONFLICT
     if isinstance(exc, NotFoundError):
         return ErrorCategory.NOT_FOUND
+    if isinstance(exc, ProviderConfigError):
+        return ErrorCategory.PROVIDER_AUTH
     if isinstance(exc, ValidationError):
         return ErrorCategory.VALIDATION
     if isinstance(exc, QuotaExceededError):
@@ -143,7 +152,9 @@ def map_provider_error(exc: ProviderError) -> ServiceError:
     if isinstance(exc, ProviderValidationError):
         return ValidationError("The provider rejected the request; check the input")
     if isinstance(exc, ProviderAuthError):
-        return ValidationError("The provider is not configured or its credential is invalid")
+        return ProviderConfigError(
+            "The provider is not configured or its credential is invalid"
+        )
     return ServiceUnavailableError("The provider is temporarily unavailable")
 
 
@@ -171,6 +182,7 @@ def redact_error_message(text: str) -> str:
 _PROVIDER_MESSAGE: dict[ErrorCategory, str] = {
     ErrorCategory.UNAVAILABLE: "The provider was temporarily unavailable",
     ErrorCategory.QUOTA: "The provider rate limit was exceeded",
+    ErrorCategory.PROVIDER_AUTH: "The provider is not configured or its credential is invalid",
     ErrorCategory.VALIDATION: "The request could not be processed as given",
     ErrorCategory.INTERNAL: "The operation failed unexpectedly",
 }
