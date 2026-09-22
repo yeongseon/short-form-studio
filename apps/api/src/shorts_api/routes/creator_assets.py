@@ -38,7 +38,7 @@ async def upload_image_asset(
 
     try:
         asset = await media_asset_service.create_image_asset(
-            workspace_id=user.workspace_id,
+            workspace_id=workspace_id,
             filename=file.filename or "upload",
             data=data,
             content_type=file.content_type or "application/octet-stream",
@@ -68,7 +68,7 @@ async def upload_audio_asset(
 
     try:
         asset = await media_asset_service.create_audio_asset(
-            workspace_id=user.workspace_id,
+            workspace_id=workspace_id,
             filename=file.filename or "upload",
             data=data,
             content_type=file.content_type or "application/octet-stream",
@@ -98,7 +98,7 @@ async def upload_video_asset(
 
     try:
         asset = await media_asset_service.create_video_asset(
-            workspace_id=user.workspace_id,
+            workspace_id=workspace_id,
             filename=file.filename or "upload",
             data=data,
             content_type=file.content_type or "application/octet-stream",
@@ -125,7 +125,7 @@ async def list_workspace_assets(
     workspaces). Only assets in the caller's workspace are ever returned.
     """
     page = await media_asset_service.list_assets(
-        workspace_id=user.workspace_id,
+        workspace_id=workspace_id,
         media_type=media_type,
         project_id=project_id,
         limit=limit,
@@ -146,7 +146,7 @@ async def get_workspace_asset(
     user: CurrentUser = Depends(require_workspace_access),
 ) -> dict[str, object]:
     """Fetch a single workspace-scoped asset; unknown/unauthorized ids 404."""
-    asset = await media_asset_service.get_asset(asset_id, user.workspace_id)
+    asset = await media_asset_service.get_asset(asset_id, workspace_id)
     if asset is None:
         raise HTTPException(status_code=404, detail="Not found")
     return asset.model_dump(mode="json")
