@@ -25,10 +25,17 @@ pass "referenced files present"
 
 # --- required env vars are documented in .env.example ---
 for var in POSTGRES_PASSWORD DATABASE_URL REDIS_URL CORS_ORIGINS ADMIN_API_KEY \
-           OPENAI_API_KEY GROQ_API_KEY; do
+           API_KEY OPENAI_API_KEY GROQ_API_KEY; do
   grep -qE "^${var}=" .env.example || fail "${var} not declared in .env.example"
 done
 pass "required env vars declared"
+
+# --- studio-web receives API_KEY so its proxy can authenticate the browser ---
+grep -qE 'API_KEY:\s*\$\{API_KEY' docker-compose.yml \
+  || fail "studio-web must receive API_KEY from env (browser auth wiring)"
+grep -qF 'proxy_set_header X-API-Key "${API_KEY}"' apps/studio-web/nginx.conf.template \
+  || fail "nginx must inject X-API-Key from API_KEY"
+pass "studio-web browser-auth wiring present"
 
 # --- compose config validates against a clean env (placeholder .env) ---
 # Use .env.example so a developer's shell env cannot mask a real config defect.
