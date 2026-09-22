@@ -1,21 +1,18 @@
 """Model health check service for monitoring model serving containers."""
 
-import asyncio
 import os
 import time
 from dataclasses import dataclass
 from enum import Enum
 
 import httpx
+import anyio
 
-_REMOTE_PROVIDERS: dict[str, str] = {
-    "api.openai.com": "OPENAI_API_KEY",
-    "api.anthropic.com": "ANTHROPIC_API_KEY",
-    "generativelanguage.googleapis.com": "GOOGLE_API_KEY",
-    "api.stability.ai": "STABILITY_API_KEY",
-    "api.elevenlabs.io": "ELEVENLABS_API_KEY",
-    "api.groq.com": "GROQ_API_KEY",
-}
+from creator_service.provider_metadata import (
+    KEYLESS_REMOTE_PROVIDERS, LOCAL_SERVICES, OFFLINE_PROVIDERS, REMOTE_CREDENTIALS,
+)
+
+_REMOTE_PROVIDERS = {value.health_key: value for value in REMOTE_CREDENTIALS.values()}
 
 
 class ModelStatus(Enum):
@@ -26,7 +23,7 @@ class ModelStatus(Enum):
     UNKNOWN = "unknown"
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class ModelHealthResult:
     """Result of a model health check."""
     model_name: str
@@ -42,21 +39,16 @@ class ModelHealthService:
     def __init__(self):
         """Initialize health service with model endpoints from environment variables."""
         self.endpoints = {
-            "ollama": os.getenv("OLLAMA_BASE_URL", "http://ollama:11434"),
-            "stable-diffusion": os.getenv("STABLE_DIFFUSION_BASE_URL", "http://stable-diffusion:7860"),
-            "tts-qwen3": os.getenv("TTS_QWEN3_BASE_URL", "http://tts-qwen3:8100"),
-            "tts-cosyvoice": os.getenv("TTS_COSYVOICE_BASE_URL", "http://tts-cosyvoice:50000"),
-            "stt-whisper": os.getenv("STT_WHISPER_BASE_URL", "http://stt-whisper:8200"),
+            service.health_key: os.getenv(service.env_var, service.default_endpoint)
+            for service in LOCAL_SERVICES.values()
         }
         self.health_paths = {
-            "ollama": "/api/tags",
-            "stable-diffusion": "/sdapi/v1/options",
-            "tts-qwen3": "/health",
-            "tts-cosyvoice": "/health",
-            "stt-whisper": "/health",
+            service.health_key: service.health_path for service in LOCAL_SERVICES.values()
         }
 
-    async def check_model(self, model_name: str) -> ModelHealthResult:
+    async def check_model(
+        self, model_name: str, *, endpoint: str | None = None,
+    ) -> ModelHealthResult:
         """Check health of a single model provider.
         
         Args:
@@ -65,10 +57,15 @@ class ModelHealthService:
         Returns:
             ModelHealthResult with health status and metadata
         """
-        endpoint = self.endpoints.get(model_name)
-        if endpoint is None:
-            api_key_env = _REMOTE_PROVIDERS.get(model_name)
-            if api_key_env is None:
+        if model_name in OFFLINE_PROVIDERS | KEYLESS_REMOTE_PROVIDERS:
+            return ModelHealthResult(
+                model_name, model_name,
+                ModelStatus.HEALTHY if model_name in OFFLINE_PROVIDERS else ModelStatus.UNKNOWN,
+            )
+        resolved_endpoint = endpoint if endpoint is not None else self.endpoints.get(model_name)
+        if resolved_endpoint is None:
+            credential = _REMOTE_PROVIDERS.get(model_name)
+            if credential is None:
                 return ModelHealthResult(
                     model_name=model_name,
                     endpoint="unknown",
@@ -76,7 +73,10 @@ class ModelHealthService:
                     error="Unknown model",
                 )
 
-            if os.getenv(api_key_env, "").strip():
+            token = os.getenv(credential.env_var) or (
+                os.getenv(credential.fallback_env_var) if credential.fallback_env_var else None
+            )
+            if token and token.strip():
                 return ModelHealthResult(
                     model_name=model_name,
                     endpoint=model_name,
@@ -92,7 +92,7 @@ class ModelHealthService:
             )
         
         health_path = self.health_paths.get(model_name, "/")
-        url = f"{endpoint}{health_path}"
+        url = f"{resolved_endpoint.rstrip('/')}{health_path}"
 
         start = time.perf_counter()
         try:
@@ -103,7 +103,7 @@ class ModelHealthService:
             elapsed_ms = (time.perf_counter() - start) * 1000
             return ModelHealthResult(
                 model_name=model_name,
-                endpoint=endpoint,
+                endpoint=resolved_endpoint,
                 status=ModelStatus.HEALTHY,
                 response_time_ms=elapsed_ms,
             )
@@ -111,7 +111,7 @@ class ModelHealthService:
             elapsed_ms = (time.perf_counter() - start) * 1000
             return ModelHealthResult(
                 model_name=model_name,
-                endpoint=endpoint,
+                endpoint=resolved_endpoint,
                 status=ModelStatus.UNHEALTHY,
                 response_time_ms=elapsed_ms,
                 error=str(exc),
@@ -124,4 +124,12 @@ class ModelHealthService:
             List of ModelHealthResult for each model container
         """
         provider_names = [*self.endpoints, *_REMOTE_PROVIDERS]
-        return await asyncio.gather(*(self.check_model(name) for name in provider_names))
+        results: dict[str, ModelHealthResult] = {}
+
+        async def check(name: str) -> None:
+            results[name] = await self.check_model(name)
+
+        async with anyio.create_task_group() as tasks:
+            for name in provider_names:
+                tasks.start_soon(check, name)
+        return [results[name] for name in provider_names]
