@@ -14,6 +14,19 @@ async function mount() {
 }
 
 describe("visual drafts during refresh and save", () => {
+  it("keeps run B when run A resolves last", async () => {
+    // Given an old pending run A plan and a newer run B plan.
+    const old = deferred<Response>();
+    fetchMock.mockReturnValueOnce(old.promise).mockResolvedValueOnce(json(plan(2, [scene("scene-b", "run B")])));
+    const hook = renderHook(({ id }) => useVisualPlanManager(id, "VISUAL_PLAN_REVIEW"), { initialProps: { id: 1 } });
+    hook.rerender({ id: 2 });
+    await waitFor(() => expect(hook.result.current.visualFieldBySceneId["scene-b"]?.prompt).toBe("run B"));
+    // When run A resolves after run B.
+    await act(async () => { old.resolve(json(plan(1, [scene("scene-a", "run A")]))); });
+    // Then only run B is displayed.
+    expect(hook.result.current.visualFieldBySceneId["scene-b"]?.prompt).toBe("run B");
+    expect(hook.result.current.visualFieldBySceneId["scene-a"]).toBeUndefined();
+  });
   it("retains a submitted field when a successful response did not acknowledge it", async () => {
     // Given a dirty scene and a response containing a different server value.
     const { result } = await mount();
