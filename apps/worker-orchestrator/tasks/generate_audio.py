@@ -220,6 +220,8 @@ def generate_audio(
                             "Per-section TTS generated for run %d (%d sections)",
                             run_id, len(section_audio_paths)
                         )
+                except SoftTimeLimitExceeded:
+                    raise
                 except Exception as sec_exc:
                     logger.warning(
                         "Per-section TTS failed for run %d, falling back to single-pass: %s",
