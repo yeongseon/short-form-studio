@@ -1,9 +1,12 @@
 """Validate the merged Compose healthcheck and execute its Node probe locally."""
 
+import os
+import shutil
 import socket
 import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from threading import Thread
 from typing import Final
 
@@ -36,28 +39,34 @@ class Compose(BaseModel):
 
 @pytest.fixture(scope="module")
 def healthcheck() -> Healthcheck:
-    result = subprocess.run(
-        [
-            "docker",
-            "compose",
-            "--env-file",
-            "/dev/null",
-            "-f",
-            "docker-compose.yml",
-            "-f",
-            "docker-compose.dev.yml",
-            "config",
-            "--no-env-resolution",
-            "--format",
-            "json",
-            "studio-web",
-        ],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        timeout=20,
-        check=True,
-    )
+    # Service env_file resolution is independent of --env-file interpolation.
+    with TemporaryDirectory(prefix="dev-healthcheck-") as directory:
+        compose_root = Path(directory)
+        for name in ("docker-compose.yml", "docker-compose.dev.yml"):
+            shutil.copyfile(ROOT / name, compose_root / name)
+        shutil.copyfile(ROOT / ".env.example", compose_root / ".env")
+        result = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "--env-file",
+                str(compose_root / ".env"),
+                "-f",
+                "docker-compose.yml",
+                "-f",
+                "docker-compose.dev.yml",
+                "config",
+                "--format",
+                "json",
+                "studio-web",
+            ],
+            cwd=compose_root,
+            env={"PATH": os.environ["PATH"], "HOME": directory},
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=True,
+        )
     return Compose.model_validate_json(result.stdout).services.studio_web.healthcheck
 
 
