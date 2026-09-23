@@ -60,6 +60,6 @@ async def cancel_quota(workspace_id: int | None, operation_type: str | None, con
         await cancel_workspace_quota_reservation(workspace_id, operation_type)
     except Exception:
         logger.warning(
-            "Failed to cancel quota reservation", exc_info=True,
+            "Failed to cancel quota reservation",
             extra={"workspace_id": workspace_id, "context": context},
         )
