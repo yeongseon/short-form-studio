@@ -29,7 +29,8 @@ class TestMapHttpxError:
         exc = httpx.TimeoutException("read timed out")
         result = map_httpx_error(exc, "test")
         assert isinstance(result, ProviderTimeoutError)
-        assert "read timed out" in str(result)
+        assert "TimeoutException" in str(result)
+        assert "read timed out" not in str(result)
 
     def test_connect_error(self):
         exc = httpx.ConnectError("Connection refused")

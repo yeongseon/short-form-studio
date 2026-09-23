@@ -12,6 +12,8 @@ class ProviderTimeoutError(ProviderError):
 class RateLimitError(ProviderError):
     """Provider rate limit exceeded - retryable with longer backoff."""
 
+    retry_after: str | int | None = None
+
 
 class ProviderValidationError(ProviderError):
     """Invalid input to provider - non-retryable."""
