@@ -23,8 +23,8 @@ class RecordingFile(io.BufferedReader):
         super().__init__(io.FileIO(path, "rb"))
         self.maximum = 0
 
-    def read(self, size: int = -1) -> bytes:
-        assert 0 < size <= 65536, f"unbounded read: {size}"
+    def read(self, size: int | None = -1) -> bytes:
+        assert size is not None and 0 < size <= 65536, f"unbounded read: {size}"
         self.maximum = max(size, self.maximum)
         return super().read(size)
 

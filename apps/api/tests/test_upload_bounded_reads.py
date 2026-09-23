@@ -20,9 +20,9 @@ class BoundedReader(io.BytesIO):
         super().__init__(data)
         self.requests: list[int] = []
 
-    def read(self, size: int = -1) -> bytes:
+    def read(self, size: int | None = -1) -> bytes:
+        assert size is not None and 0 < size <= 64 * 1024, f"unbounded read: {size}"
         self.requests.append(size)
-        assert 0 < size <= 64 * 1024, f"unbounded read: {size}"
         return super().read(size)
 
 
