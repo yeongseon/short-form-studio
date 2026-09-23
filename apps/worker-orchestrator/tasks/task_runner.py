@@ -42,9 +42,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from celery.exceptions import Ignore, SoftTimeLimitExceeded
+from celery.exceptions import Ignore
 from creator_domain.models.stage import REVIEW_STAGES, RunStage
-from creator_provider.exceptions import ProviderTimeoutError, RateLimitError
 from creator_provider.gpu_lock import (
     GPU_LOCK_TIMEOUT_SECONDS,
     acquire_gpu_lock,
@@ -56,6 +55,7 @@ from creator_service.actionable_errors import build_run_failure_summary
 from creator_service.run_service import run_service as _run_service
 from creator_service.task_tracking_service import task_tracking_service as _task_tracking_service
 from creator_service.usage_service import resolve_workspace_id_from_run
+from tasks.task_execution import TaskInputError, run_task as run_task
 
 
 redis: Any
@@ -88,7 +88,7 @@ class TaskRunnerConfig:
     safe_failure_stages: frozenset[str] | None = None  # defaults to safe_stages
     skip_stage_guard: bool = False
     raise_on_stage_guard: bool = True
-    no_fail_transition_exceptions: tuple[type[Exception], ...] = (ValueError,)
+    no_fail_transition_exceptions: tuple[type[Exception], ...] = (TaskInputError,)
 
 
 @dataclass
@@ -355,112 +355,6 @@ async def _handle_general_failure(
             )
     except Exception:
         logger.exception("Failed to mark run %d as FAILED after task error", run_id)
-
-
-def run_task(
-    celery_self: Any,
-    run_id: int,
-    config: TaskRunnerConfig,
-    execute: Callable[[TaskContext], Awaitable[TaskResult]],
-) -> dict[str, object]:
-    """Synchronous entry point for Celery tasks. Handles all error cases.
-
-    This wraps run_in_worker_loop() and provides consistent error handling:
-    - StageGuardError → mark_rejected, re-raise (no FAILED transition)
-    - SoftTimeLimitExceeded → FAILED transition, re-raise
-    - Retryable errors → re-raise for Celery retry
-    - Other errors → mark_failed + FAILED transition, re-raise
-    """
-    request = getattr(celery_self, "request", None)
-    raw_args = getattr(request, "args", None)
-    raw_kwargs = getattr(request, "kwargs", None)
-    if raw_args is None:
-        raw_args = ()
-    if raw_kwargs is None:
-        raw_kwargs = {}
-    if not isinstance(raw_args, (list, tuple)):
-        raise ValueError(
-            f"Malformed broker message: args is {type(raw_args).__name__}, expected list/tuple"
-        )
-    if not isinstance(raw_kwargs, dict):
-        raise ValueError(
-            f"Malformed broker message: kwargs is {type(raw_kwargs).__name__}, expected dict"
-        )
-    message = {
-        "run_id": run_id,
-        "task_name": config.task_name,
-        "args": list(raw_args),
-        "kwargs": dict(raw_kwargs),
-    }
-    validated_message = validate_task_message(message)
-    validated_run_id = validated_message["run_id"]
-
-    task_id = str(getattr(request, "id", None) or f"run-{validated_run_id}")
-    safe_failure_stages = config.safe_failure_stages or config.safe_stages
-
-    try:
-        return run_in_worker_loop(_run_task_inner(validated_run_id, task_id, config, execute))
-    except StageGuardError:
-        try:
-            run_in_worker_loop(_task_tracking_service.mark_rejected(task_id, "stage_guard"))
-        except Exception:
-            logger.warning("Failed to record task rejection", exc_info=True)
-        if config.raise_on_stage_guard:
-            raise
-        raise Ignore()
-    except SoftTimeLimitExceeded:
-        logger.error("Task %s timed out for run %s", config.task_name, validated_run_id)
-        try:
-            run_in_worker_loop(
-                _run_service.storage.conditional_update_run(
-                    validated_run_id,
-                    {"current_stage": RunStage.FAILED.value, "status": "failed"},
-                    expected_stages=safe_failure_stages,
-                    rejected_statuses=_TERMINAL_STATUSES,
-                )
-            )
-        except Exception:
-            logger.exception("Failed to mark run %d as FAILED after timeout", validated_run_id)
-        raise
-    except Ignore:
-        raise
-    except Exception as exc:
-        if isinstance(exc, config.no_fail_transition_exceptions):
-            try:
-                code, message = _safe_failure_record(exc)
-                run_in_worker_loop(
-                    _task_tracking_service.mark_failed(task_id, code, message)
-                )
-            except Exception:
-                logger.warning("Failed to record task failure", exc_info=True)
-            raise
-        if (
-            isinstance(exc, (ProviderTimeoutError, RateLimitError))
-            and celery_self.request.retries < celery_self.max_retries
-        ):
-            # Mark task as failed before Celery retry so idempotent guard
-            # allows the retried delivery to re-claim the task.
-            try:
-                code, message = _safe_failure_record(exc)
-                run_in_worker_loop(
-                    _task_tracking_service.mark_failed(task_id, code, message)
-                )
-            except Exception:
-                logger.warning("Failed to mark task as failed before retry", exc_info=True)
-            raise
-        try:
-            run_in_worker_loop(
-                _handle_general_failure(
-                    task_id,
-                    validated_run_id,
-                    config.task_name,
-                    safe_failure_stages,
-                    exc,
-                )
-            )
-        except Exception:
-            logger.exception("Failed error cleanup for run %d", validated_run_id)
-        raise
 
 
 # --- GPU Lock helpers for use in execute() callbacks ---

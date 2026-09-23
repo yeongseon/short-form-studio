@@ -19,6 +19,7 @@ from creator_service.subtitle_service import subtitle_service as _subtitle_servi
 from creator_service.telemetry import trace_task
 from creator_service.usage_service import record_provider_call
 from tasks.task_runner import GpuLockContext, TaskContext, TaskResult, TaskRunnerConfig, run_task
+from tasks.task_execution import TaskInputError
 
 logger = logging.getLogger(__name__)
 _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
@@ -51,13 +52,13 @@ def generate_subtitles(
 
     async def execute(ctx: TaskContext) -> TaskResult:
         if subtitle_format not in ("srt", "vtt"):
-            raise ValueError(
+            raise TaskInputError(
                 f"Invalid subtitle_format: {subtitle_format!r}. Must be 'srt' or 'vtt'."
             )
 
         draft = await _script_service.get_active_draft(run_id)
         if draft is None:
-            raise ValueError(f"No script draft found for run {run_id}")
+            raise TaskInputError(f"No script draft found for run {run_id}")
 
         script_text = (draft.markdown_content or "").strip()
         if not script_text and draft.structured_script:
@@ -67,7 +68,7 @@ def generate_subtitles(
                 if (section.display_text or section.text).strip()
             )
         if not script_text:
-            raise ValueError(f"Script draft for run {run_id} has no content")
+            raise TaskInputError(f"Script draft for run {run_id} has no content")
 
         audio_artifact = await _audio_service.get_latest(run_id)
         audio_path = audio_artifact.path if audio_artifact else None

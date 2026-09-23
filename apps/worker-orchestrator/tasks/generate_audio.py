@@ -21,6 +21,7 @@ from creator_service.script_service import script_service as _script_service
 from creator_service.telemetry import trace_task
 from creator_service.usage_service import record_provider_call
 from tasks.task_runner import GpuLockContext, TaskContext, TaskResult, TaskRunnerConfig, run_task
+from tasks.task_execution import TaskInputError
 
 logger = logging.getLogger(__name__)
 _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
@@ -125,7 +126,7 @@ def generate_audio(
     async def execute(ctx: TaskContext) -> TaskResult:
         draft = await _script_service.get_active_draft(run_id)
         if draft is None:
-            raise ValueError(f"No script draft found for run {run_id}")
+            raise TaskInputError(f"No script draft found for run {run_id}")
 
         script_text = (draft.markdown_content or "").strip()
         if not script_text and draft.structured_script:
@@ -135,12 +136,12 @@ def generate_audio(
                 if (section.display_text or section.text).strip()
             )
         if not script_text:
-            raise ValueError(f"Script draft for run {run_id} has no content")
+            raise TaskInputError(f"Script draft for run {run_id} has no content")
 
         # Strip markdown formatting that should not be read aloud
         script_text = _strip_markdown_for_tts(script_text)
         if not script_text:
-            raise ValueError(f"Script for run {run_id} has no speakable content after stripping markdown")
+            raise TaskInputError(f"Script for run {run_id} has no speakable content after stripping markdown")
 
         registry = get_default_registry()
         entry = registry.resolve(tts_model)

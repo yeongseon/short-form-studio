@@ -44,9 +44,11 @@ All tasks use Celery's built-in retry mechanism with:
 
 | Exception | Behavior |
 |-----------|----------|
-| `ProviderError` (base) | Task fails, run marked as failed |
-| `ValidationError` | Task fails (bad input, no point retrying) |
-| `SoftTimeLimitExceeded` | Re-raised as `ProviderTimeoutError` for retry |
+| `ProviderError` (base) | Task fails; eligible run transitions to `FAILED` |
+| Execution `ValueError` / Pydantic or domain `ValidationError` | Task fails; eligible run transitions to `FAILED`, no automatic retry |
+| `StageGuardError` | Task rejected; run unchanged |
+| `TaskInputError` | Explicit missing prerequisite/invalid argument; task failed, run unchanged |
+| `SoftTimeLimitExceeded` | Common runner attempts guarded `FAILED` transition and re-raises; it does not convert to a provider timeout |
 | Other unhandled | Task fails, stored in DLQ |
 
 ### Backoff Calculation
@@ -100,10 +102,39 @@ If Redis is unavailable, failures are written to `DLQ_FALLBACK_PATH` (JSONL file
 
 ### Run Status on Failure
 
-When a task permanently fails:
-1. Task tracking record updated: `status = "failed"`
-2. Pipeline run: `status = "failed"`, `error_message` set
-3. No stage transition occurs — run stays at the generating stage
+When execution permanently fails in the common runner:
+1. Task tracking records `status = "failed"` and a safe categorized error code/message.
+   The read surface reconstructs actionable recovery guidance from that code;
+   raw exception text and provider output are not persisted in this record.
+2. The run transitions to `current_stage = "FAILED"`, `status = "failed"` only
+   while still in the task's configured safe failure stages and not cancelled.
+   Concurrently advanced review/completed/published stages remain unchanged.
+3. Malformed broker input is rejected before claim without modifying a run.
+   Claim/context errors before execution and stage rejection do not fail a run.
+   Claim/context errors retain the existing best-effort task-failure recording:
+   `mark_failed` updates an existing tracking row only; it never creates a row
+   when the claim failed before insertion. Malformed broker input bypasses even
+   that recording, while stage rejection uses `mark_rejected`.
+4. Provider timeout/rate-limit failures with retry budget remaining mark the task
+   failed so it can be reclaimed, but keep the run generating. Exhausted retries
+   use the same guarded terminal-failure transition as other execution errors.
+
+Explicit `no_fail_transition_exceptions` overrides remain available for task-specific
+nonfatal contracts; the default exempts only `TaskInputError`. Do not exempt all
+`ValueError`s: Pydantic validation errors also inherit from `ValueError`.
+
+### Recovery of legacy failed-task/generating-run records
+
+The reconciler does not scan failed task records. After checking that the run is
+still eligible and that no active/retried delivery is executing, an operator can
+redeliver the original task ID and validated payload through the normal worker.
+The existing exclusive claim guards skip running/successful duplicates. A failed
+record can be reclaimed: fresh success advances normally, while fresh terminal
+validation failure now transitions the eligible run to `FAILED`. Never bulk-fail
+runs solely because an old task record is failed; that state is also used between
+provider retries. This is explicit recovery, not an automatic historical backfill.
+
+See [TIMEOUT_RETRY_POLICY.md](TIMEOUT_RETRY_POLICY.md) for timeout boundaries.
 
 ### Stale Task Reconciliation
 
