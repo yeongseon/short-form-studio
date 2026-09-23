@@ -51,7 +51,7 @@ class _Health:
     def __init__(self, by_host):
         self._by_host = by_host
 
-    async def check_model(self, host):
+    async def check_model(self, host: str, *, endpoint: str | None = None):
         return _Result(self._by_host.get(host, ModelStatus.UNKNOWN))
 
 

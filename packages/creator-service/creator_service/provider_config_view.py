@@ -7,8 +7,8 @@ of already-sanitized facts (canonical provider name, category, is_local,
 requires_gpu, healthy), so the raw registry endpoints are stripped BEFORE the pure
 boundary and can never leak. The view carries only provider names, labels,
 env-var-NAME guidance, categories, local/remote flags, a coarse configured status,
-and actionable hints — never a secret value and never an internal endpoint URL. An
-unapproved provider is never surfaced as configurable.
+and actionable hints — never a secret value and never an internal endpoint URL.
+Unrecognized remote providers are disclosed as unknown, never as configurable.
 """
 
 from __future__ import annotations
@@ -16,44 +16,12 @@ from __future__ import annotations
 import enum
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
-from typing import Any
-from urllib.parse import urlparse
-
 from creator_service.model_health_service import ModelStatus
+from creator_service.provider_facts import HealthReader, ModelRegistry, resolve_provider_facts
+from creator_service.provider_metadata import (
+    KEYLESS_REMOTE_PROVIDERS, REMOTE_CREDENTIALS, UNSUPPORTED_REMOTE_PROVIDERS,
+)
 from creator_service.setup_wizard import ModelCategory
-
-# Registry provider_type -> canonical config provider name. Multiple typed
-# providers (openai_llm/openai_image/openai_tts) collapse to one config provider.
-_PROVIDER_TYPE_TO_CANONICAL: dict[str, str] = {
-    "openai_llm": "openai",
-    "openai_image": "openai",
-    "openai_tts": "openai",
-    "anthropic_llm": "anthropic",
-    "gemini_llm": "google",
-    "google_image": "google",
-    "stability_image": "stability",
-    "elevenlabs_tts": "elevenlabs",
-    "groq_llm": "groq",
-    "groq_stt": "groq",
-    "groq_svg_image": "groq",
-    "ollama": "ollama",
-    "sd_local": "sd_local",
-    "qwen_tts": "qwen_tts",
-    "cosyvoice_tts": "cosyvoice_tts",
-    "edge_tts": "edge_tts",
-    "whisper": "whisper",
-    "placeholder_image": "placeholder_image",
-    "codex_image": "codex_image",
-    "huggingface_image": "huggingface_image",
-    "pollinations_image": "pollinations_image",
-}
-
-_CATEGORY_FROM_REGISTRY_VALUE: dict[str, ModelCategory] = {
-    "llm": ModelCategory.LLM,
-    "image": ModelCategory.IMAGE,
-    "tts": ModelCategory.TTS,
-    "stt": ModelCategory.STT,
-}
 
 _CATEGORY_ORDER = (
     ModelCategory.LLM,
@@ -64,6 +32,7 @@ _CATEGORY_ORDER = (
 
 
 class ProviderConfigStatus(enum.Enum):
+    UNKNOWN = "unknown"
     NOT_CONFIGURED = "not_configured"
     CONFIGURED_AVAILABLE = "configured_available"
     CONFIGURED_UNVERIFIED = "configured_unverified"
@@ -77,15 +46,9 @@ class ApprovedCredential:
     env_var: str
 
 
-# The approved credential providers (mirrors creator_provider.api_keys._KEY_MAP),
-# with the display label and env var NAME only — never a value.
 APPROVED_CREDENTIALS: dict[str, ApprovedCredential] = {
-    "openai": ApprovedCredential("openai", "OpenAI", "OPENAI_API_KEY"),
-    "anthropic": ApprovedCredential("anthropic", "Anthropic", "ANTHROPIC_API_KEY"),
-    "google": ApprovedCredential("google", "Google (Gemini / Imagen)", "GOOGLE_API_KEY"),
-    "stability": ApprovedCredential("stability", "Stability AI", "STABILITY_API_KEY"),
-    "elevenlabs": ApprovedCredential("elevenlabs", "ElevenLabs", "ELEVENLABS_API_KEY"),
-    "groq": ApprovedCredential("groq", "Groq", "GROQ_API_KEY"),
+    provider: ApprovedCredential(provider, credential.label, credential.env_var)
+    for provider, credential in REMOTE_CREDENTIALS.items()
 }
 
 
@@ -106,6 +69,7 @@ class ProviderCatalogFact:
     requires_gpu: bool
     healthy: bool
     configured_unverified: bool = False
+    unknown: bool = False
 
 
 @dataclass(frozen=True)
@@ -164,12 +128,8 @@ def build_provider_config_view(
     # Stable order: approved credential providers first (allowlist order), then any
     # local/keyless providers from the facts, sorted for determinism.
     approved_order = list(approved_credentials)
-    local_only = sorted(
-        p
-        for p in facts_by_provider
-        if p not in approved_credentials and all(f.is_local for f in facts_by_provider[p])
-    )
-    for provider in [*approved_order, *local_only]:
+    other_providers = sorted(p for p in facts_by_provider if p not in approved_credentials)
+    for provider in [*approved_order, *other_providers]:
         facts = facts_by_provider.get(provider)
         if not facts:
             continue
@@ -195,17 +155,24 @@ def _state_for(
     is_local = all(f.is_local for f in facts)
     requires_gpu = any(f.requires_gpu for f in facts)
     categories = {f.category for f in facts}
-    unavailable = {f.category for f in facts if not f.healthy and not f.configured_unverified}
+    available_categories = {f.category for f in facts if f.healthy or f.configured_unverified or f.unknown}
+    unavailable = categories - available_categories
     any_healthy = any(f.healthy for f in facts)
     any_unverified = any(f.configured_unverified for f in facts)
 
-    # A remote provider is "present" only when its key is configured; a local
-    # provider needs no key, so it is always present but gated by service health.
-    present = is_local or is_key_configured
+    present = is_local or provider in KEYLESS_REMOTE_PROVIDERS or is_key_configured
     label = credential.label if credential is not None else provider
     env_var = None if is_local else (credential.env_var if credential is not None else None)
 
-    if not present:
+    unsupported = not is_local and credential is None and provider not in KEYLESS_REMOTE_PROVIDERS
+    if unsupported:
+        present = False
+        unavailable = set()
+        status = ProviderConfigStatus.UNKNOWN
+        hint = UNSUPPORTED_REMOTE_PROVIDERS.get(
+            provider, "Provider readiness is unsupported; authentication and availability are unknown",
+        )
+    elif not present:
         status = ProviderConfigStatus.NOT_CONFIGURED
         hint = (
             f"set {env_var} to enable {label}"
@@ -220,6 +187,9 @@ def _state_for(
         # Key present but not probed: honest middle state, neither ready nor bad.
         status = ProviderConfigStatus.CONFIGURED_UNVERIFIED
         hint = f"{label} is configured but not yet verified"
+    elif any(f.unknown for f in facts):
+        status = ProviderConfigStatus.UNKNOWN
+        hint = f"{label} has not been checked; availability is unknown"
     else:
         status = ProviderConfigStatus.CONFIGURED_UNAVAILABLE
         hint = (
@@ -244,37 +214,22 @@ def _state_for(
 
 async def resolve_provider_config_view(
     *,
-    registry: Any,
-    health_service: Any,
+    registry: ModelRegistry,
+    health_service: HealthReader,
     configured_providers: Collection[str],
 ) -> ProviderConfigView:
-    """Wire the registry + health service into the pure builder (endpoint-free).
-
-    Each registry entry is health-checked and reduced to a sanitized
-    ProviderCatalogFact: the endpoint URL is used only to derive the internal health
-    lookup key and is NEVER carried onto the fact, so no endpoint can leak. The
-    provider_type is collapsed to its canonical config provider name.
-    """
+    """Reduce shared health facts to the endpoint-free provider configuration view."""
     facts: list[ProviderCatalogFact] = []
-    for entry in registry.list_models():
-        category = _CATEGORY_FROM_REGISTRY_VALUE.get(
-            getattr(entry.category, "value", str(entry.category))
-        )
-        if category is None:
-            continue
-        provider = _PROVIDER_TYPE_TO_CANONICAL.get(entry.provider_type, entry.provider_type)
-        health_key = _health_lookup_key(entry)
-        result = await health_service.check_model(health_key)
-        # HEALTHY = actually verified reachable; CONFIGURED = remote key present but
-        # not probed (honest "unverified", never counted as verified-healthy).
+    for fact in await resolve_provider_facts(registry.list_models(), health_service):
         facts.append(
             ProviderCatalogFact(
-                provider=provider,
-                category=category,
-                is_local=entry.is_local,
-                requires_gpu=entry.requires_gpu,
-                healthy=result.status is ModelStatus.HEALTHY,
-                configured_unverified=result.status is ModelStatus.CONFIGURED,
+                provider=fact.provider,
+                category=ModelCategory(fact.entry.category.value),
+                is_local=fact.is_local,
+                requires_gpu=fact.entry.requires_gpu,
+                healthy=fact.status is ModelStatus.HEALTHY,
+                configured_unverified=fact.status is ModelStatus.CONFIGURED,
+                unknown=fact.status is ModelStatus.UNKNOWN,
             )
         )
     return build_provider_config_view(
@@ -282,8 +237,3 @@ async def resolve_provider_config_view(
         configured_providers=configured_providers,
         provider_facts=facts,
     )
-
-
-def _health_lookup_key(entry: Any) -> str:
-    parsed = urlparse(entry.endpoint)
-    return parsed.hostname or entry.provider_type

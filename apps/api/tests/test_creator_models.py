@@ -182,7 +182,7 @@ class _StubResult:
 
 
 class _StubHealthService:
-    async def check_model(self, model_name):
+    async def check_model(self, model_name: str, *, endpoint: str | None = None):
         from creator_service.model_health_service import ModelStatus
 
         return _StubResult(ModelStatus.HEALTHY)

@@ -118,7 +118,7 @@ class TestModelHealthService:
             results = await health_service.check_all()
         
         assert isinstance(results, list)
-        assert len(results) == 11
+        assert len(results) == 12
         
         model_names = {result.model_name for result in results}
         expected_models = {
@@ -133,6 +133,7 @@ class TestModelHealthService:
             "api.stability.ai",
             "api.elevenlabs.io",
             "api.groq.com",
+            "router.huggingface.co",
         }
         assert model_names == expected_models
 
