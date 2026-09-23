@@ -46,14 +46,14 @@ describe("AssetSlot", () => {
         <AssetSlot
           type="image"
           status="ready"
-          url="/data/artifacts/img/scene-0.png"
+          url="/api/creator/runs/1/visual-assets/2/content"
         />,
       );
       const slot = screen.getByTestId("asset-slot-image");
       expect(slot).toHaveAttribute("data-status", "ready");
       const img = slot.querySelector("img");
       expect(img).toBeInTheDocument();
-      expect(img!.src).toContain("/artifacts/img/scene-0.png");
+      expect(img).toHaveAttribute("src", "/api/creator/runs/1/visual-assets/2/content");
     });
 
     it("shows Ready label", () => {

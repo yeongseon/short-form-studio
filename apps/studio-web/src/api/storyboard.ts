@@ -5,6 +5,7 @@
  * Mirrors backend models in creator_domain.models.storyboard.
  */
 import { apiFetch, API_BASE } from "./client";
+import { storyboardMediaUrls } from "./mediaUrls";
 
 // --------------- types ---------------
 
@@ -92,7 +93,8 @@ export async function fetchStoryboard(runId: number): Promise<StoryboardResponse
     const body = await res.json().catch(() => null);
     throw new Error(body?.detail ?? `Failed to fetch storyboard (${res.status})`);
   }
-  return res.json();
+  const result: StoryboardResponse = await res.json();
+  return { ...result, paragraphs: result.paragraphs.map((paragraph) => storyboardMediaUrls(runId, paragraph)) };
 }
 
 /**

@@ -14,12 +14,6 @@ import { STAGE_ORDER } from "../../types/api";
 
 // --------------- helpers ---------------
 
-/** Convert API artifact path → browser URL via Vite proxy. */
-function artifactUrl(path: string): string {
-  const match = path.match(/data\/artifacts\/(.*)/);
-  return match ? `/artifacts/${match[1]}` : `/artifacts/${path}`;
-}
-
 type SceneStatus = "idle" | "partial" | "generating" | "ready";
 
 function deriveSceneStatus(p: StoryboardParagraph): SceneStatus {
@@ -285,7 +279,7 @@ export default function SceneCard({
         <div style={imageColumnStyle}>
           {showImagePreview ? (
             <img
-              src={artifactUrl(p.image_url!)}
+              src={p.image_url ?? undefined}
               alt={`Scene ${p.order + 1}`}
               style={imagePreviewStyle}
               data-testid={`scene-image-${p.section_id}`}
