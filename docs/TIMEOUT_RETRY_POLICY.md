@@ -52,14 +52,30 @@ With jitter applied to prevent thundering herd.
 Tasks retry on:
 - `ProviderTimeoutError` — upstream API timed out
 - `RateLimitError` — upstream rate limit hit
-- `ConnectionError` — network failure
-- `SoftTimeLimitExceeded` — task took too long (caught and retried)
+- Network failures retry when the task translates them to `ProviderTimeoutError`.
+  Bare `ConnectionError` is not part of the common runner's retry whitelist.
+
+The common runner re-raises `SoftTimeLimitExceeded` after attempting a guarded
+`FAILED` transition. It does not convert that signal to `ProviderTimeoutError`.
+Task-specific catches may differ; per-section audio timeout propagation is tracked
+separately in #819.
 
 ### Non-Retryable Exceptions
 Tasks fail immediately on:
-- `ValidationError` — invalid input data
+- Execution-time Pydantic/domain `ValidationError` — invalid generated or stored data
 - `ProviderAuthError` — bad API credentials
-- `ValueError` — programming error in task logic
+- Execution-time `ValueError` — invalid task data or task logic
+
+These terminal execution errors mark the task failed and transition the run to
+`FAILED` only through the existing safe-stage/cancellation guard. They are distinct
+from malformed broker messages (rejected before claim, no run mutation) and
+`StageGuardError` (rejected stale/illegal-stage delivery, no run failure).
+Errors before execution begins do not fail the run. Explicitly rejected
+prerequisites/arguments (`TaskInputError`) retain the existing nonfatal behavior.
+Running/successful duplicate deliveries skip execution; timeout/rate-limit retries
+retain generating state until
+their retry budget is exhausted. Safe error records and explicit recovery of legacy
+failed-task/generating-run records are described in [TASK_POLICY.md](TASK_POLICY.md).
 
 ---
 
