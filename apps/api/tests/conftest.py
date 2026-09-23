@@ -7,6 +7,16 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from shorts_api.auth import CurrentUser, get_current_user
 from shorts_api.main import app
+from shorts_api.lifecycle import shutdown_state
+
+
+@pytest.fixture(autouse=True)
+def reset_shutdown_state_between_tests():
+    shutdown_state.is_shutting_down = False
+    shutdown_state.inflight_requests = 0
+    yield
+    shutdown_state.is_shutting_down = False
+    shutdown_state.inflight_requests = 0
 
 
 @pytest.fixture

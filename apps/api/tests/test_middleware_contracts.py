@@ -71,15 +71,17 @@ async def test_shutdown_keeps_auth_rejection_precedence(
     assert response.json() == {"detail": "API key required"}
 
 
-async def test_pytest_shutdown_bypass_is_unchanged(
+async def test_pytest_marker_does_not_bypass_shutdown_guard(
     middleware_client: AsyncClient, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Given: #816 owns removing this policy; #815 must not change it.
+    # Given: the test marker is set and the server is draining.
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "synthetic marker")
     monkeypatch.setattr(shutdown_state, "is_shutting_down", True)
     # When
     response = await middleware_client.get("/api/creator/projects")
     # Then
-    assert response.status_code == 200
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Server shutting down"}
 
 
 @pytest.mark.parametrize("environment", ["development", "staging", "production"])
