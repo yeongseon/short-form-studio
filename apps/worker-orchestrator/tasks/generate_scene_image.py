@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from celery.exceptions import SoftTimeLimitExceeded
+from celery.exceptions import Ignore, SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
 from creator_domain.sanitize import sanitize_path_component
@@ -23,22 +23,12 @@ from creator_service.visual_asset_service import visual_asset_service as _visual
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
 from tasks.task_runner import GpuLockContext, TaskContext, TaskResult, TaskRunnerConfig, run_task
 from tasks.task_execution import TaskInputError
+from tasks.scene_batch_lifecycle import SAFE_FAILURE_STAGES, SAFE_SUCCESS_STAGES, SceneBatch
 
 logger = logging.getLogger(__name__)
 _ARTIFACTS_BASE = os.getenv("ARTIFACT_ROOT", "data/artifacts")
-_SAFE_SUCCESS_STAGES = frozenset(
-    {
-        RunStage.VISUAL_PLAN_REVIEW.value,
-        RunStage.VISUAL_ASSET_GENERATING.value,
-        RunStage.VISUAL_ASSET_REVIEW.value,
-    }
-)
-_SAFE_FAILURE_STAGES = frozenset(
-    {
-        RunStage.VISUAL_PLAN_REVIEW.value,
-        RunStage.VISUAL_ASSET_GENERATING.value,
-    }
-)
+_SAFE_SUCCESS_STAGES = SAFE_SUCCESS_STAGES
+_SAFE_FAILURE_STAGES = SAFE_FAILURE_STAGES
 
 def _asset_dir(run_id: int) -> Path:
     return Path(_ARTIFACTS_BASE) / str(run_id) / "scenes"
@@ -97,15 +87,16 @@ def generate_scene_image(
         asset_dir = _asset_dir(run_id)
         asset_dir.mkdir(parents=True, exist_ok=True)
 
-        results: list[dict[str, object]] = []
-        failed_scenes: list[dict[str, object]] = []
+        batch = SceneBatch(ctx, _run_service)
 
         for idx, target_scene in enumerate(target_scenes):
-            # Rate limit protection: add delay between scenes for API-based providers
-            if idx > 0 and model_key in ("groq-svg", "pollinations", "hf-flux-schnell"):
-                import asyncio
-                logger.info("Inter-scene delay (16s) for rate limit protection")
-                await asyncio.sleep(16)
+            try:
+                await batch.checkpoint()
+                if idx > 0 and model_key in ("groq-svg", "pollinations", "hf-flux-schnell"):
+                    await batch.backoff(16)
+            except Ignore:
+                batch.cancelled = True
+                break
             scene_result: dict[str, object] = {
                 "scene_id": target_scene.scene_id,
                 "status": "pending",
@@ -135,13 +126,20 @@ def generate_scene_image(
                         params.update(image_params)
                     safe_scene_id = sanitize_path_component(target_scene.scene_id, label="scene_id")
                     target_path = str(asset_dir / f"{safe_scene_id}-{uuid4().hex}.png")
+                    batch.local_outputs.add(Path(target_path))
                     params["output_path"] = target_path
                     # Per-scene retry for SVG/XML parse errors (up to 3 attempts for groq-svg)
                     _scene_max_attempts = 3 if model_key == "groq-svg" else 1
                     for _scene_attempt in range(_scene_max_attempts):
+                        await batch.checkpoint()
                         try:
-                            await provider.generate(effective_prompt, params)
+                            try:
+                                await provider.generate(effective_prompt, params)
+                            finally:
+                                await batch.checkpoint()
                             break  # Success — exit retry loop
+                        except Ignore:
+                            raise
                         except (TimeoutError, ConnectionError) as exc:
                             raise ProviderTimeoutError(
                                 "Provider timed out during scene image generation "
@@ -172,17 +170,17 @@ def generate_scene_image(
                                 kw in message for kw in ("parse", "xml", "svg", "valid")
                             )
                             if _scene_attempt < _scene_max_attempts - 1 and is_parse_error:
-                                import asyncio
                                 logger.warning(
                                     "Scene %s SVG error on attempt %d, retrying in 5s...",
                                     target_scene.scene_id, _scene_attempt + 1,
                                 )
-                                await asyncio.sleep(5)
+                                await batch.backoff(5)
                                 # Regenerate output path for retry
                                 target_path = str(
                                     asset_dir / f"{safe_scene_id}-{uuid4().hex}.png"
                                 )
                                 params["output_path"] = target_path
+                                batch.local_outputs.add(Path(target_path))
                                 continue
                             raise ProviderError(
                                 "Provider failed scene image generation "
@@ -208,7 +206,10 @@ def generate_scene_image(
 
                 from creator_service.artifact_storage_integration import store_artifact_file
 
+                await batch.checkpoint()
                 uploaded = store_artifact_file(run_id, target_path, "image/png")
+                batch.local_outputs.discard(Path(target_path))
+                await batch.checkpoint()
                 asset = await _visual_asset_service.create_asset(
                     run_id=run_id,
                     scene_id=target_scene.scene_id,
@@ -232,7 +233,11 @@ def generate_scene_image(
                         "gpu_lock_released_at": gpu_lock.released_at,
                     }
                 )
-                results.append(scene_result)
+                batch.results.append(scene_result)
+                await batch.checkpoint()
+            except Ignore:
+                batch.cancelled = True
+                break
             except SoftTimeLimitExceeded:
                 raise
             except ProviderTimeoutError:
@@ -241,7 +246,7 @@ def generate_scene_image(
                 raise
             except Exception as exc:
                 scene_result.update({"status": "failed", "error": str(exc)})
-                failed_scenes.append(scene_result)
+                batch.failures.append(scene_result)
                 logger.error(
                     "Failed to generate image for scene %s in run %d: %s",
                     target_scene.scene_id,
@@ -249,45 +254,13 @@ def generate_scene_image(
                     exc,
                 )
 
-        total = len(target_scenes)
-        succeeded = len(results)
-        failed = len(failed_scenes)
-        if failed == total:
-            status = "failed"
-            applied, _ = await _run_service.storage.conditional_update_run(
-                run_id,
-                {"current_stage": RunStage.FAILED, "status": "failed"},
-                expected_stages=_SAFE_FAILURE_STAGES,
-            )
-            if not applied:
-                logger.info(
-                    "Run %d stage changed during image generation -- skipping FAILED transition",
-                    run_id,
-                )
-        else:
-            status = "success" if failed == 0 else "partial"
-            applied, _ = await _run_service.storage.conditional_update_run(
-                run_id,
-                {"current_stage": RunStage.VISUAL_ASSET_REVIEW, "status": "running"},
-                expected_stages=_SAFE_SUCCESS_STAGES,
-            )
-            if not applied:
-                logger.info(
-                    "Run %d stage changed during image generation -- skipping transition",
-                    run_id,
-                )
-
-        return TaskResult(
-            status=status,
-            extra={
+        return await batch.finish(
+            len(target_scenes),
+            {
                 "model_key": model_key,
                 "provider_type": entry.provider_type,
                 "endpoint": entry.endpoint,
                 "scene_id": scene_id,
-                "total_scenes": total,
-                "succeeded": succeeded,
-                "failed": failed,
-                "scene_results": results + failed_scenes,
             },
         )
 
