@@ -22,6 +22,7 @@ from creator_service.usage_service import record_provider_call
 from creator_service.visual_asset_service import visual_asset_service as _visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
 from tasks.task_runner import GpuLockContext, TaskContext, TaskResult, TaskRunnerConfig, run_task
+from tasks.task_execution import TaskInputError
 
 logger = logging.getLogger(__name__)
 _ARTIFACTS_BASE = os.getenv("ARTIFACT_ROOT", "data/artifacts")
@@ -79,16 +80,16 @@ def generate_scene_image(
     async def execute(ctx: TaskContext) -> TaskResult:
         plan = await _visual_plan_service.get_active_plan(run_id)
         if plan is None:
-            raise ValueError(f"No active visual plan for run {run_id}")
+            raise TaskInputError(f"No active visual plan for run {run_id}")
 
         if scene_id is not None:
             target_scenes = [s for s in plan.scenes if s.scene_id == scene_id]
             if not target_scenes:
-                raise ValueError(f"Scene '{scene_id}' not found in visual plan for run {run_id}")
+                raise TaskInputError(f"Scene '{scene_id}' not found in visual plan for run {run_id}")
         else:
             target_scenes = list(plan.scenes)
         if not target_scenes:
-            raise ValueError(f"Visual plan for run {run_id} has no scenes")
+            raise TaskInputError(f"Visual plan for run {run_id} has no scenes")
 
         registry = get_default_registry()
         entry = registry.resolve(model_key)

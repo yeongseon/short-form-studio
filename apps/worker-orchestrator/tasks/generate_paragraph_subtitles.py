@@ -26,6 +26,7 @@ from tasks.task_runner import (
     run_task,
     validate_artifact_path,
 )
+from tasks.task_execution import TaskInputError
 
 logger = logging.getLogger(__name__)
 _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
@@ -59,7 +60,7 @@ def generate_paragraph_subtitles(
 
     async def execute(ctx: TaskContext) -> TaskResult:
         if subtitle_format not in ("srt", "vtt"):
-            raise ValueError(
+            raise TaskInputError(
                 f"Invalid subtitle_format: {subtitle_format!r}. Must be 'srt' or 'vtt'."
             )
         audio_artifact = await _audio_service.get_paragraph_audio(run_id, section_id)
