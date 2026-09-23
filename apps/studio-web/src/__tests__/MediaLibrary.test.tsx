@@ -52,6 +52,19 @@ describe("partitionByView", () => {
 });
 
 describe("MediaLibrary", () => {
+  it("previews workspace images by identity and videos with a video element", async () => {
+    mockedList.mockResolvedValue(page([asset(1), asset(2, { media_type: "VIDEO", storage_key: "workspaces/1/movie.webm" })]));
+    render(<MediaLibrary workspaceId={1} />);
+    expect(await screen.findByTestId("asset-preview-1")).toHaveAttribute("src", "/api/creator/workspaces/1/assets/1/content");
+    const video = screen.getByTestId("asset-preview-2");
+    expect(video.tagName).toBe("VIDEO");
+    expect(video).toHaveAttribute("src", "/api/creator/workspaces/1/assets/2/content");
+  });
+  it("uses the existing project content route for project-owned media", async () => {
+    mockedList.mockResolvedValue(page([asset(1, { project_id: 42 })]));
+    render(<MediaLibrary workspaceId={1} />);
+    expect(await screen.findByTestId("asset-preview-1")).toHaveAttribute("src", "/api/creator/projects/42/assets/1/content");
+  });
   const onUnhandled = (e: PromiseRejectionEvent) => e.preventDefault();
   beforeEach(() => {
     mockedList.mockReset();
@@ -109,7 +122,7 @@ describe("MediaLibrary", () => {
     expect(screen.getByTestId("asset-card-1")).toHaveTextContent("1080×1920");
     const preview = screen.getByTestId("asset-preview-1");
     expect(preview.tagName).toBe("IMG");
-    expect(preview).toHaveAttribute("src", "/artifacts/workspaces/1/assets/1.png");
+    expect(preview).toHaveAttribute("src", "/api/creator/workspaces/1/assets/1/content");
   });
 
   it("filters to the uploaded view", async () => {
