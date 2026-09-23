@@ -2,6 +2,7 @@
 
 import logging
 import os
+from pathlib import Path
 from datetime import datetime, timezone
 
 from creator_domain.sanitize import UnsafePathComponent, sanitize_path_component
@@ -99,6 +100,8 @@ async def download_artifact(
         raise HTTPException(status_code=404, detail="Artifact not found")
 
     raw_content_type = artifact.get("content_type") or artifact.get("mime_type")
+    if not raw_content_type:
+        raw_content_type = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".srt": "application/x-subrip", ".vtt": "text/vtt"}.get(Path(resolved_path).suffix.lower())
     # Defense in depth: only allow known artifact MIME types and force download.
     # Prevents the API origin from ever rendering HTML/SVG as a document.
     _ALLOWED_CONTENT_TYPES = frozenset({
