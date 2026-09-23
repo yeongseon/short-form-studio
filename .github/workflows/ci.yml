@@ -30,6 +30,8 @@ jobs:
         run: |
           ruff check apps packages
           python3 -m compileall apps packages
+      - name: Enforce package dependency boundaries
+        run: python3 scripts/check_package_dependencies.py
       - name: Lint TypeScript
         run: npm --prefix apps/studio-web run lint
 
@@ -70,6 +72,8 @@ jobs:
           echo "Migration validation complete (1 head)"
       - name: Install Node dependencies
         run: npm --prefix apps/studio-web ci
+      - name: Test architecture dependency checker
+        run: python3 -m pytest tests/test_package_dependency_cli.py tests/test_package_dependency_parser.py tests/test_package_dependency_compliance.py -q
       - name: Test Packages (with coverage)
         run: |
           python3 -m pytest packages/creator-domain/tests/ -v --cov=creator_domain --cov-report=term-missing --cov-fail-under=60
@@ -90,10 +94,47 @@ jobs:
           pip install basedpyright==1.29.2
           basedpyright apps packages
 
+  first-short-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install runtime and test dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg nginx
+          python3 -m pip install -c constraints.txt -r apps/api/requirements.txt -r apps/api/requirements-dev.txt -r apps/worker-orchestrator/requirements.txt -r apps/worker-orchestrator/requirements-dev.txt
+          python3 -m pip install -c constraints.txt -e packages/creator-domain -e packages/creator-provider -e packages/creator-service
+      - name: Start disposable loopback databases
+        run: |
+          docker run -d --name first-short-postgres -e POSTGRES_USER=review -e POSTGRES_PASSWORD=review-local-only -e POSTGRES_DB=first_short -p 127.0.0.1:55439:5432 postgres:16-alpine
+          docker run -d --name first-short-redis -p 127.0.0.1:56389:6379 redis:7.4-alpine
+          timeout 60 bash -c 'until docker exec first-short-postgres pg_isready -U review; do sleep 1; done'
+      - name: Verify durable assets and real first-video workflow
+        env:
+          MEDIA_ASSET_TEST_DATABASE_URL: postgresql://review:review-local-only@127.0.0.1:55439/first_short
+          FIRST_SHORT_TEST_DATABASE_URL: postgresql://review:review-local-only@127.0.0.1:55439/first_short
+          FIRST_SHORT_TEST_REDIS_URL: redis://127.0.0.1:56389/0
+        run: |
+          python3 -m pytest packages/creator-service/tests/test_postgres_media_asset_storage.py tests/integration/test_first_short_runtime.py tests/integration/test_studio_proxy_runtime.py -v --basetemp=/tmp/first-short-runtime
+      - name: Upload runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: first-short-runtime-evidence
+          path: /tmp/first-short-runtime
+      - name: Stop disposable databases
+        if: always()
+        run: docker rm -f first-short-postgres first-short-redis
+
   docker:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Quick Start smoke check without a local env file
+        run: bash scripts/quickstart_smoke.sh
       - name: Create .env from example
         run: cp .env.example .env
       - name: Validate docker-compose config

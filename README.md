@@ -126,6 +126,10 @@ IDEA_READY -> SCRIPT_GENERATING -> SCRIPT_REVIEW
 
 Each `*_REVIEW` stage requires explicit approval before advancing.
 
+Pre-authored Timeline projects use `TIMELINE_REVIEW -> RENDER_GENERATING ->
+FINAL_REVIEW -> PUBLISHED`. Timeline rendering requires approval of the saved
+revision; it does not bypass the generated pipeline's script or visual reviews.
+
 ## Quick Start
 
 ### Prerequisites
@@ -192,6 +196,16 @@ docker compose run --rm api python scripts/create_api_key.py \
 
 This creates a user, workspace, and API key for local development.
 The generated key is printed to stdout.
+
+Set that generated value as `API_KEY` in your local `.env`, replacing the
+placeholder, then reload the server-side studio proxy:
+
+```bash
+docker compose up -d --force-recreate --no-deps studio-web
+```
+
+Do not put the key in browser storage or a client bundle. The proxy supplies the
+`X-API-Key` header; without this configuration creator requests return 401.
 
 ### 4. (Optional) Pull the default LLM model
 
@@ -353,6 +367,8 @@ See [`docs/LIGHTWEIGHT.md`](docs/LIGHTWEIGHT.md) for setup and tradeoffs.
 
 ## Documentation
 
+- [First Short Walkthrough](docs/FIRST_SHORT_WALKTHROUGH.md) -- Offline demo, explicit Timeline approval, render and download
+- [Quick Start](docs/QUICKSTART.md) -- Local bootstrap and server-side authentication wiring
 - [Usage Guide](docs/USAGE.md) -- Detailed feature walkthrough
 - [Security Model](docs/SECURITY.md) -- Authentication, trust boundaries, network policy
 - [Deployment Guide](docs/CUTOVER.md) -- Production deployment checklist

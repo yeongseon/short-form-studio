@@ -55,6 +55,12 @@ services:
       VITE_DEV_HOST: "0.0.0.0"
       # WARNING: Do NOT set VITE_API_KEY here. Any VITE_* var is baked into
       # the client bundle and becomes visible to all browser users.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5173/', {signal: AbortSignal.timeout(4000)}).then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     volumes:
       # Live source mounting enables hot-module replacement (HMR).
       - ./apps/studio-web:/app
