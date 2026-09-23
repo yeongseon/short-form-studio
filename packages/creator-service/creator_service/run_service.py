@@ -200,6 +200,7 @@ class InMemoryRunStorage:
         updates = json.loads(updates_json)
         merged = {**current, **updates}
         row["model_defaults_json"] = json.dumps(merged)
+        row["version"] = int(row.get("version") or 0) + 1
         row["updated_at"] = datetime.now(timezone.utc)
         self._rows[run_id] = row
         return dict(row)
