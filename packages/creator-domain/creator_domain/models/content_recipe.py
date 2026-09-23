@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class DurationRange(BaseModel):
     """An inclusive [min, max] duration window in seconds."""
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid")
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True, allow_inf_nan=False)
 
     min_seconds: float = Field(gt=0)
     max_seconds: float = Field(gt=0)

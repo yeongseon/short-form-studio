@@ -64,7 +64,7 @@ def test_prerequisites_are_honest() -> None:
 def test_documented_routes_exist_in_source() -> None:
     source = _routes_source()
     fragments = [
-        "/projects/{project_id}/demo-short/plan",
+        "/workspaces/{workspace_id}/demo-short/plan",
         "/workspaces/{workspace_id}/demo-short/runs",
         "/{workspace_id}/onboarding",
         "/{project_id}/timeline",
@@ -72,6 +72,7 @@ def test_documented_routes_exist_in_source() -> None:
         "/runs/{run_id}/generate-audio",
         "/runs/{run_id}/generate-subtitles",
         "/runs/{run_id}/render",
+        "/runs/{run_id}/approve-timeline-render",
         "/runs/{run_id}/preview",
         "/runs/{run_id}/artifacts/{artifact_id}/download",
         "/runs/{run_id}/visual-plan/scenes/{scene_id}/generate-image",
