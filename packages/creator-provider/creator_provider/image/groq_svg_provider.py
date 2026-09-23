@@ -24,7 +24,7 @@ from typing import Any
 import httpx
 
 from creator_provider.base import ImageProvider, ImageResult
-from creator_provider.exceptions import ProviderError
+from creator_provider.exceptions import ProviderError, map_httpx_error
 from creator_provider.image.svg_repair import deduplicate_attrs, repair_svg_xml
 from creator_provider.image.svg_safety import finalize_svg, parse_svg, strip_svg_markup
 from creator_provider.validation import MAX_IMAGE_PROMPT_CHARS, validate_prompt_length
@@ -175,14 +175,9 @@ class GroqSvgImageProvider(ImageProvider):
         return finalize_svg(final_svg)
 
     async def _call_groq_llm(self, prompt: str, width: int, height: int) -> str:
-        """Call Groq LLM to generate SVG content with exponential backoff."""
-        import asyncio
-
         system_prompt = _SVG_SYSTEM_PROMPT.format(width=width, height=height)
-        max_retries = 5
-
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
                 resp = await client.post(
                     _GROQ_API_URL,
                     headers={
@@ -200,29 +195,15 @@ class GroqSvgImageProvider(ImageProvider):
                     },
                 )
 
-                if resp.status_code == 429:
-                    # Exponential backoff: 10s, 20s, 40s, 60s, 60s
-                    wait_time = min(10 * (2**attempt), 60)
-                    logger.warning(
-                        "Groq rate limited, waiting %ds (attempt %d/%d)",
-                        wait_time,
-                        attempt + 1,
-                        max_retries,
-                    )
-                    await asyncio.sleep(wait_time)
-                    continue
+                resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise map_httpx_error(exc, "Groq SVG request failed") from None
 
-                if resp.status_code != 200:
-                    raise ProviderError(f"Groq API error: {resp.status_code} {resp.text[:200]}")
+        data = resp.json()
+        if "error" in data:
+            raise ProviderError("Groq returned an error response")
 
-                data = resp.json()
-                if "error" in data:
-                    raise ProviderError(f"Groq error: {data['error']}")
-
-                svg = data["choices"][0]["message"]["content"]
-                return svg
-
-        raise ProviderError(f"Groq rate limited after {max_retries} retries")
+        return data["choices"][0]["message"]["content"]
 
     @staticmethod
     def _clean_svg(raw: str) -> str:
