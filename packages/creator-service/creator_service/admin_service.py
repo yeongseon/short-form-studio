@@ -8,10 +8,11 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Protocol, cast
+from typing import Any
 
 import redis.asyncio as redis
-from celery import current_app as celery_app
+from celery import current_app as celery_app  # noqa: F401
+from creator_service.admin_task_broker import CeleryTaskBroker as CeleryTaskBroker, TaskBroker as TaskBroker
 
 from creator_service.db import get_pool
 
@@ -41,15 +42,6 @@ _STAGE_REQUIRED_ARTIFACTS: dict[str, list[str]] = {
     "PUBLISHED": ["script", "audio", "subtitle", "render"],
 }
 logger = logging.getLogger(__name__)
-
-
-class TaskBroker(Protocol):
-    async def revoke_task(self, task_id: str) -> None: ...
-
-
-class CeleryTaskBroker:
-    async def revoke_task(self, task_id: str) -> None:
-        cast(Any, celery_app).control.revoke(task_id, terminate=True)
 
 
 class AdminService:
