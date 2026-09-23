@@ -153,14 +153,12 @@ def generate_visual_plan(
             params = dict(entry.default_params or {})
             try:
                 raw_response = await provider.generate(full_prompt, params)
+            except ProviderError:
+                raise
             except (TimeoutError, ConnectionError) as exc:
                 raise ProviderTimeoutError(
                     f"Provider timed out during visual plan generation for run {run_id}"
                 ) from exc
-            except ProviderTimeoutError:
-                raise
-            except RateLimitError:
-                raise
             except SoftTimeLimitExceeded:
                 raise
             except Exception as exc:

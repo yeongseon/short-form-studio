@@ -92,15 +92,13 @@ def generate_paragraph_audio(
             params["output_path"] = audio_path
             try:
                 await provider.generate(section_text, voice=voice, params=params)
+            except ProviderError:
+                raise
             except (TimeoutError, ConnectionError) as exc:
                 raise ProviderTimeoutError(
                     "Provider timed out during paragraph audio generation "
                     f"for run {run_id} section {section_id}"
                 ) from exc
-            except ProviderTimeoutError:
-                raise
-            except RateLimitError:
-                raise
             except SoftTimeLimitExceeded:
                 raise
             except Exception as exc:

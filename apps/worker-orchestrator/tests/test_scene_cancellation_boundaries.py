@@ -17,7 +17,7 @@ def test_cancellation_during_backoff_stops_retry_or_next_scene(
     # Given a parse retry or an inter-scene delay in the real batch loop.
     case = scene_case
     case.provider.released.set()
-    case.provider.error = ProviderError("invalid svg") if retry else None
+    case.provider.error = ValueError("invalid svg") if retry else None
     entered = anyio.Event()
     released = anyio.Event()
     waits: list[float] = []
@@ -71,7 +71,7 @@ def test_final_transition_sql_predicate_preserves_cancellation(
     # Given all scene work finished, but the real guarded storage write has not run.
     case = scene_case
     case.provider.released.set()
-    case.provider.error = ProviderError("unavailable") if provider_fails else None
+    case.provider.error = RuntimeError("unavailable") if provider_fails else None
     original = case.runner.runs.storage.conditional_update_run
 
     async def cancel_before_cas(*args, **kwargs):
@@ -145,7 +145,7 @@ def test_final_transition_preserves_advanced_stage(
 ) -> None:
     case = scene_case
     case.provider.released.set()
-    case.provider.error = ProviderError("unavailable") if provider_fails else None
+    case.provider.error = RuntimeError("unavailable") if provider_fails else None
     original = case.runner.runs.storage.conditional_update_run
 
     async def advance_before_cas(*args, **kwargs):
@@ -160,3 +160,36 @@ def test_final_transition_preserves_advanced_stage(
     assert (saved["status"], saved["current_stage"], saved["version"]) == (
         "running", "AUDIO_GENERATING", 2,
     )
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_typed_failure_preserves_concurrent_transition(
+    scene_case: SceneCase, monkeypatch: pytest.MonkeyPatch, cancelled: bool,
+) -> None:
+    case = scene_case
+    case.provider.released.set()
+    error = ProviderError("unavailable")
+    case.provider.error = error
+    original = case.runner.runs.storage.conditional_update_run
+
+    async def advance_before_cas(*args, **kwargs):
+        if cancelled:
+            await case.cancel()
+        else:
+            await case.runner.runs.storage.update_run(case.runner.run_id, {
+                "current_stage": "AUDIO_GENERATING",
+            })
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(case.runner.runs.storage, "conditional_update_run", advance_before_cas)
+    with pytest.raises(ProviderError) as raised:
+        case.invoke()
+    assert raised.value is error
+    assert case.provider.calls == ["shot-0"]
+    saved = run_in_worker_loop(case.runner.runs.storage.get_run(case.runner.run_id))
+    assert (saved["status"], saved["current_stage"], saved["version"]) == (
+        "cancelled" if cancelled else "running",
+        "VISUAL_ASSET_GENERATING" if cancelled else "AUDIO_GENERATING", 2,
+    )
+    task = run_in_worker_loop(case.runner.tracking.storage.get_by_celery_id(case.task_id))
+    assert task["status"] == ("revoked" if cancelled else "failed")
