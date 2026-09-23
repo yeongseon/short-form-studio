@@ -120,6 +120,11 @@ class InMemoryRunStorage:
         workspace_id: int | None = None,
         expected_version: int | None = None,
     ) -> dict[str, Any] | None:
+        from .run_update_columns import UPDATABLE_RUN_COLUMNS
+
+        invalid_columns = set(updates) - UPDATABLE_RUN_COLUMNS
+        if invalid_columns:
+            raise ValueError(f"Invalid update columns: {', '.join(sorted(invalid_columns))}")
         row = self._rows.get(run_id)
         if row is None:
             raise ValueError(f"Run {run_id} not found")
@@ -128,6 +133,8 @@ class InMemoryRunStorage:
         current_version = int(row.get("version") or 0)
         if expected_version is not None and current_version != expected_version:
             return None
+        if not updates:
+            return dict(row)
 
         row.update(updates)
         row["version"] = current_version + 1
@@ -143,6 +150,11 @@ class InMemoryRunStorage:
         workspace_id: int | None = None,
         rejected_statuses: frozenset[str] | None = None,
     ) -> tuple[bool, dict[str, Any] | None]:
+        from .run_update_columns import UPDATABLE_RUN_COLUMNS
+
+        invalid_columns = set(updates) - UPDATABLE_RUN_COLUMNS
+        if invalid_columns:
+            raise ValueError(f"Invalid update columns: {', '.join(sorted(invalid_columns))}")
         row = self._rows.get(run_id)
         if row is None:
             return False, None
@@ -152,6 +164,8 @@ class InMemoryRunStorage:
             return False, dict(row)
         if rejected_statuses and row.get("status") in rejected_statuses:
             return False, dict(row)
+        if not updates:
+            return True, dict(row)
         row.update(updates)
         row["version"] = int(row.get("version") or 0) + 1
         row["updated_at"] = datetime.now(timezone.utc)
