@@ -52,3 +52,27 @@ This means:
 - Requests may take significantly longer (seconds to minutes) depending on the AI provider.
 - The client receives the final result immediately rather than needing to poll.
 - Timeouts at the HTTP/proxy layer may need adjustment for long-running tasks.
+# Async request boundaries
+
+Generation requests still await lightweight task completion and return the same
+task identity or error. Blocking execution runs in a bounded AnyIO worker thread;
+health and cancellation requests can continue on the API event loop. Each
+lightweight invocation owns a temporary worker loop and DB pool, closed before
+the invocation returns. Celery workers retain their persistent process loop.
+
+API offload limits per event loop are eight dispatch operations, four control
+operations (independent so saturated generation cannot starve revocation), and
+one serialized admin rate-limit operation. Media services allow four simultaneous
+validation/probe/storage operations per service instance.
+
+Thread cancellation does not stop Python threads. These boundaries use AnyIO's
+non-abandoning wait. Dispatch ownership is shielded through reservation,
+publication, tracking, and post-dispatch cancellation compensation. An accepted
+media upload is shielded through its asset-row save. A disconnected client does
+not make an in-progress publish safe to retry; use the existing run/task state.
+Shutdown must allow these owned operations to finish; downstream timeouts still
+govern their duration. Cancellation before entering an owned operation can stop it.
+
+This does not change upload buffering: video/audio/image routes still accept
+whole byte payloads up to their existing limits (#814). Cloud-storage outage
+latency and production throughput are not measured by the local boundary tests.

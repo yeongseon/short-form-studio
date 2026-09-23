@@ -124,6 +124,14 @@ jobs:
           python3 -m pytest packages/creator-service/tests/test_quota_stage_compensation.py packages/creator-service/tests/test_postgres_quota_compensation.py -v --basetemp=/tmp/quota-compensation-runtime
           PYTHONPATH=apps/worker-orchestrator python3 -m pytest packages/creator-service/tests/test_run_version_mutations.py packages/creator-service/tests/test_run_version_cas.py packages/creator-service/tests/test_run_version_boundaries.py apps/worker-orchestrator/tests/test_run_version_outcomes.py -v --basetemp=/tmp/run-version-runtime
           PYTHONPATH=apps/worker-orchestrator python3 -m pytest apps/worker-orchestrator/tests/test_scene_cancellation.py apps/worker-orchestrator/tests/test_scene_cancellation_boundaries.py -v --basetemp=/tmp/scene-cancellation-runtime
+      - name: Verify API image lightweight execution and concurrent health
+        env:
+          LIGHTWEIGHT_TEST_IMAGE: first-short-api-lightweight
+          FIRST_SHORT_TEST_DATABASE_URL: postgresql://review:review-local-only@127.0.0.1:55439/first_short
+          FIRST_SHORT_TEST_REDIS_URL: redis://127.0.0.1:56389/0
+        run: |
+          docker build --target runtime -f apps/api/Dockerfile -t first-short-api-lightweight .
+          python3 -m pytest tests/integration/test_api_lightweight_image.py -v
       - name: Upload runtime evidence
         if: always()
         uses: actions/upload-artifact@v4
