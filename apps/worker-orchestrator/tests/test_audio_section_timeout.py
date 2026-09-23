@@ -9,7 +9,6 @@ import pytest
 from billiard.exceptions import SoftTimeLimitExceeded
 from celery.exceptions import SoftTimeLimitExceeded as CelerySoftTimeLimitExceeded
 from creator_domain.models.script_draft import ScriptSection
-from creator_provider.exceptions import ProviderAuthError, ProviderError, ProviderTimeoutError, RateLimitError
 from creator_service.audio_service import AudioService, InMemoryAudioStorage
 from creator_service.script_service import InMemoryScriptStorage, ScriptService
 from tasks import generate_audio as audio
@@ -84,9 +83,7 @@ def test_soft_timeout_escapes_section_without_fallback(audio_case: AudioCase) ->
 
 
 @pytest.mark.parametrize("error", [
-    RuntimeError("section unavailable"), ProviderError("section rejected"),
-    ProviderTimeoutError("provider timed out"), RateLimitError("provider limited"),
-    ProviderAuthError("provider authentication failed"),
+    RuntimeError("section unavailable"),
 ])
 def test_ordinary_section_error_keeps_legacy_single_pass_fallback(
     audio_case: AudioCase, error: Exception,

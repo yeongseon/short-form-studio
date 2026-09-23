@@ -222,6 +222,8 @@ def generate_audio(
                         )
                 except SoftTimeLimitExceeded:
                     raise
+                except ProviderError:
+                    raise
                 except Exception as sec_exc:
                     logger.warning(
                         "Per-section TTS failed for run %d, falling back to single-pass: %s",
@@ -243,14 +245,12 @@ def generate_audio(
                         pass
                 try:
                     await provider.generate(script_text, voice=voice, params=params)
+                except ProviderError:
+                    raise
                 except (TimeoutError, ConnectionError) as exc:
                     raise ProviderTimeoutError(
                         f"Provider timed out during audio generation for run {run_id}"
                     ) from exc
-                except ProviderTimeoutError:
-                    raise
-                except RateLimitError:
-                    raise
                 except SoftTimeLimitExceeded:
                     raise
                 except Exception as exc:
