@@ -13,7 +13,9 @@ _ABS_POSIX_PATH = re.compile(r"(?:/[\w.\-]+){2,}/?")
 _WORKSPACE_PATH = re.compile(r"\bworkspaces/[\w./\-]+")
 _WINDOWS_PATH = re.compile(r"[A-Za-z]:\\[\\\w.\- ]+")
 _URL = re.compile(r"\bhttps?://[^\s'\"]+")
-_TOKEN_PREFIX = re.compile(r"\b(?:(?:sk|ghp|xoxb)[-_]|AKIA)[A-Za-z0-9\-]{6,}")
+_CREDENTIAL_URI = re.compile(r"\b[A-Za-z][A-Za-z0-9+.-]*://[^\s/'\"<>]*@[^\s;'\"<>]+")
+_BEARER = re.compile(r"\bBearer[ \t]+[A-Za-z0-9._~+/-]+=*", re.IGNORECASE)
+_TOKEN_PREFIX = re.compile(r"\b(?:(?:sk|gsk|ghp|xoxb)[-_]|AKIA|AIza)[A-Za-z0-9_\-]{6,}")
 _LONG_HEX = re.compile(r"\b[0-9a-fA-F]{20,}\b")
 _REDACTED: Final = "<redacted>"
 _MAX_STRING: Final = 1024
@@ -27,7 +29,9 @@ def redact_error_message(text: str) -> str:
     # Reject oversized text before regex processing; truncating first can split a secret.
     if len(text) > _MAX_INPUT:
         return _REDACTED
-    redacted = _URL.sub(_REDACTED, text)
+    redacted = _CREDENTIAL_URI.sub(_REDACTED, text)
+    redacted = _URL.sub(_REDACTED, redacted)
+    redacted = _BEARER.sub(_REDACTED, redacted)
     redacted = _TOKEN_PREFIX.sub(_REDACTED, redacted)
     redacted = _WINDOWS_PATH.sub(_REDACTED, redacted)
     redacted = _WORKSPACE_PATH.sub(_REDACTED, redacted)
