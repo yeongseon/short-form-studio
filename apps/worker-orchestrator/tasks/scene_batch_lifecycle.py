@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import anyio
-from celery.exceptions import Ignore
+from celery.exceptions import Ignore, SoftTimeLimitExceeded
 from creator_domain.models.stage import RunStage
 from creator_service import artifact_storage_integration
 from creator_service.object_storage import StorageResult, get_storage_backend
@@ -72,7 +72,10 @@ class SceneBatch:
             if path in self.local_outputs and uploaded.key == str(expected):
                 try:
                     backend.delete(uploaded.key)
-                except OSError:
+                except SoftTimeLimitExceeded:
+                    raise
+                except Exception:
+                    # SDK cleanup failures must not replace the already-known cancellation.
                     logger.warning("Scene upload cleanup failed", extra={"run_id": self.ctx.run_id})
             raise
         # Save may commit even if its acknowledgement raises; transfer before awaiting it.
