@@ -3,6 +3,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
+from contextvars import ContextVar
+from dataclasses import dataclass
+from collections.abc import Iterator
 from typing import Any
 
 import asyncpg
@@ -33,6 +36,29 @@ _pool_init_lock: asyncio.Lock | None = None
 _pool_init_lock_loop: asyncio.AbstractEventLoop | None = None
 
 
+@dataclass(slots=True)
+class _OwnedPool:
+    pool: asyncpg.Pool | None = None
+    lock: asyncio.Lock | None = None
+
+    async def close(self) -> None:
+        if self.pool is not None:
+            await self.pool.close()
+
+
+_owned_pool: ContextVar[_OwnedPool | None] = ContextVar("owned_db_pool", default=None)
+
+
+@contextlib.contextmanager
+def isolated_pool() -> Iterator[_OwnedPool]:
+    state = _OwnedPool()
+    token = _owned_pool.set(state)
+    try:
+        yield state
+    finally:
+        _owned_pool.reset(token)
+
+
 def _get_init_lock() -> asyncio.Lock:
     """Return an asyncio.Lock bound to the current event loop.
     
@@ -48,6 +74,16 @@ def _get_init_lock() -> asyncio.Lock:
 
 async def get_pool() -> asyncpg.Pool:
     global _pool, _pool_loop
+    owned = _owned_pool.get()
+    if owned is not None:
+        if owned.lock is None:
+            owned.lock = asyncio.Lock()
+        async with owned.lock:
+            if owned.pool is None:
+                owned.pool = await asyncpg.create_pool(
+                    os.environ["DATABASE_URL"], min_size=DB_POOL_MIN_SIZE, max_size=DB_POOL_MAX_SIZE,
+                )
+        return owned.pool
     current_loop = asyncio.get_running_loop()
 
     # Fast path – pool exists and belongs to the current loop.

@@ -2,6 +2,8 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
+from functools import partial
+from creator_service.blocking_io import run_blocking
 
 from creator_service.task_dispatch_service import SynchronousTaskExecutionError, TaskDispatchService
 from shorts_api.task_dispatch_adapter import ApplicationTaskDispatcher
@@ -32,13 +34,13 @@ def test_lightweight_dispatch_runs_in_thread_without_event_loop_conflict(
     monkeypatch.setattr("shorts_api.task_dispatch_adapter.import_module", fake_import_module)
 
     async def _invoke() -> str:
-        return service.dispatch_generate_script(1, "idea", "model", None)
+        return await run_blocking(partial(service.dispatch_generate_script, 1, "idea", "model", None))
 
     task_id = asyncio.run(_invoke())
 
     assert task_id.startswith("sync-generate_script-1-")
     assert len(run_thread_names) == 1
-    assert "ThreadPoolExecutor" in run_thread_names[0]
+    assert "AnyIO worker thread" in run_thread_names[0]
 
 
 def test_lightweight_dispatch_wraps_execution_failure(

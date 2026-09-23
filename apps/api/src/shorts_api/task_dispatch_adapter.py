@@ -1,4 +1,3 @@
-import concurrent.futures
 import logging
 import os
 from importlib import import_module
@@ -7,8 +6,8 @@ from types import SimpleNamespace
 from typing import Protocol
 from uuid import uuid4
 
-import anyio
 from celery import Task
+from creator_service.lightweight_runtime import lightweight_worker_context, invocation_loop
 from creator_domain.task_dispatch import SynchronousTaskExecutionError, TaskSubmission
 from creator_service.task_dispatch_service import task_dispatch_service
 from pydantic import JsonValue
@@ -51,14 +50,21 @@ class ApplicationTaskDispatcher:
     def _mark_run_failed(self, run_id: int) -> None:
         async def update_failed() -> None:
             from creator_service.run_service import run_service
+            from creator_domain.models.stage import RunStage
 
             try:
-                await run_service.storage.update_run(run_id, {"current_stage": "FAILED", "status": "failed"})
+                await run_service.storage.conditional_update_run(
+                    run_id, {"current_stage": "FAILED", "status": "failed"},
+                    expected_stages=frozenset(stage.value for stage in RunStage),
+                    rejected_statuses=frozenset({"cancelled"}),
+                )
             except Exception:
                 logger.warning("Failed to mark run FAILED", extra={"run_id": run_id}, exc_info=True)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            executor.submit(anyio.run, update_failed).result()
+        loop = invocation_loop.get()
+        if loop is None:
+            raise RuntimeError("Failure update requires a lightweight worker context")
+        loop.run_until_complete(update_failed())
 
     def dispatch(self, submission: TaskSubmission) -> str:
         task = self._load_task(submission)
@@ -79,11 +85,12 @@ class ApplicationTaskDispatcher:
             if ismethod(runner):
                 runner = runner.__func__
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                executor.submit(runner, context, *args, **kwargs).result()
+            with lightweight_worker_context():
+                runner(context, *args, **kwargs)
         except Exception as exc:
             logger.exception("Synchronous task dispatch failed", extra={"task": submission.task_name, "run_id": submission.run_id})
-            self._mark_run_failed(submission.run_id)
+            with lightweight_worker_context():
+                self._mark_run_failed(submission.run_id)
             raise SynchronousTaskExecutionError(f"Synchronous task execution failed for {submission.task_name}") from exc
         return task_id
 
