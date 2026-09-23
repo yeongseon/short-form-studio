@@ -204,12 +204,7 @@ def generate_scene_image(
                 except Exception:
                     logger.warning("Failed to record provider usage", exc_info=True)
 
-                from creator_service.artifact_storage_integration import store_artifact_file
-
-                await batch.checkpoint()
-                uploaded = store_artifact_file(run_id, target_path, "image/png")
-                batch.local_outputs.discard(Path(target_path))
-                await batch.checkpoint()
+                uploaded = await batch.upload(target_path)
                 asset = await _visual_asset_service.create_asset(
                     run_id=run_id,
                     scene_id=target_scene.scene_id,
