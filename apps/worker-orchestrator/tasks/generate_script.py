@@ -79,14 +79,12 @@ def generate_script(
             params = dict(entry.default_params or {})
             try:
                 generated = await provider.generate(prompt, params)
+            except ProviderError:
+                raise
             except (TimeoutError, ConnectionError) as exc:
                 raise ProviderTimeoutError(
                     f"Provider timed out during script generation for run {run_id}"
                 ) from exc
-            except ProviderTimeoutError:
-                raise
-            except RateLimitError:
-                raise
             except SoftTimeLimitExceeded:
                 raise
             except Exception as exc:
