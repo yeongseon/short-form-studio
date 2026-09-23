@@ -1,6 +1,7 @@
 import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from importlib import import_module
 from uuid import uuid4
 
@@ -9,6 +10,7 @@ from creator_domain.task_dispatch import SynchronousTaskExecutionError
 from pydantic import JsonValue
 
 from creator_service.dispatch_quota import cancel_quota, reserve_quota
+from creator_service.blocking_io import owned_operation, run_blocking, run_control
 from creator_service.dispatch_runtime import DispatchRun, DispatchRunService, DispatchRuntime
 
 logger = logging.getLogger(__name__)
@@ -55,12 +57,13 @@ async def read_run(service: DispatchRunService, run_id: int, workspace_id: int |
 class DispatchCAS(DispatchRuntime):
     _cancel_quota_safe = staticmethod(cancel_quota)
 
-    def _cancel_task_safe(self, task_id: str) -> None:
+    async def _cancel_task_safe(self, task_id: str) -> None:
         try:
-            self.dispatcher.cancel(task_id)
+            await run_control(partial(self.dispatcher.cancel, task_id))
         except Exception:
             logger.warning("Failed to revoke task", extra={"task_id": task_id}, exc_info=True)
 
+    @owned_operation
     async def cas_dispatch_with_rollback(
         self, *, run_id: int, expected_stages: frozenset[str], target_stage: str,
         dispatcher: Callable[..., str], dispatcher_args: Mapping[str, JsonValue],
@@ -126,7 +129,7 @@ class DispatchCAS(DispatchRuntime):
             dispatch_kwargs = dict(dispatcher_args)
             if pending_id is not None:
                 dispatch_kwargs["task_id"] = pending_id
-            task_id = dispatcher(**dispatch_kwargs)
+            task_id = await run_blocking(partial(dispatcher, **dispatch_kwargs))
         except SynchronousTaskExecutionError:
             await cancel_quota(reserved_workspace, quota_operation_type)
             raise ServiceError("Task execution failed") from None
@@ -142,7 +145,7 @@ class DispatchCAS(DispatchRuntime):
                 else:
                     await task_tracking_service.record_task_queued(run_id, task_type, task_id)
         except Exception:
-            self._cancel_task_safe(task_id)
+            await self._cancel_task_safe(task_id)
             try:
                 await task_tracking_service.mark_revoked(task_id)
             except Exception:
@@ -156,7 +159,7 @@ class DispatchCAS(DispatchRuntime):
         except Exception:
             post_run = None
         if post_run is None or getattr(post_run, "status", None) == "cancelled":
-            self._cancel_task_safe(task_id)
+            await self._cancel_task_safe(task_id)
             try:
                 await task_tracking_service.mark_tasks_revoked([task_id])
             except Exception:
