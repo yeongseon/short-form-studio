@@ -1701,9 +1701,9 @@ def stub_single_scene_services(
     run_svc = StubRunService()
     dispatcher = StubImageDispatcher()
 
-    monkeypatch.setattr("shorts_api.routes.creator_runs_scene_assets.run_service", run_svc)
+    monkeypatch.setattr("shorts_api.routes.scene_image_dispatch.run_service", run_svc)
     monkeypatch.setattr(
-        "shorts_api.routes.creator_runs_scene_assets.dispatch_generate_scene_image", dispatcher
+        "shorts_api.routes.scene_image_dispatch.dispatch_generate_scene_image", dispatcher
     )
 
     async def _get_project(_project_id: int, workspace_id: int | None = None):
@@ -1813,7 +1813,7 @@ async def test_generate_scene_image_dispatch_failure(client, stub_single_scene_s
 
     for route in _iter_api_routes(app.routes):
         if route.name == "generate_scene_image_endpoint":
-            route.endpoint.__globals__["dispatch_generate_scene_image"] = failing_dispatcher
+            route.endpoint.__wrapped__.__globals__["dispatch_generate_scene_image"] = failing_dispatcher
 
     response = await client.post(
         "/api/creator/runs/73/visual-plan/scenes/scene-sec-0/generate-image",
@@ -1922,7 +1922,7 @@ async def test_regenerate_scene_image_dispatch_failure(client, stub_single_scene
 
     for route in _iter_api_routes(app.routes):
         if route.name == "regenerate_scene_image_endpoint":
-            route.endpoint.__globals__["dispatch_generate_scene_image"] = failing_dispatcher
+            route.endpoint.__wrapped__.__globals__["dispatch_generate_scene_image"] = failing_dispatcher
 
     response = await client.post(
         "/api/creator/runs/84/visual-plan/scenes/scene-sec-0/regenerate-image",
