@@ -167,6 +167,19 @@ class TaskTrackingService:
         )
         return RunTask.from_row(row) if row is not None else None
 
+    async def mark_success_if_running(self, celery_task_id: str) -> RunTask | None:
+        task = await self.storage.get_by_celery_id(celery_task_id)
+        if task is None:
+            return None
+        row = await self.storage.update_task_status_if_running(
+            task["id"],
+            "success",
+            finished_at=datetime.now(timezone.utc),
+            error_code=None,
+            error_message=None,
+        )
+        return RunTask.from_row(row) if row is not None else None
+
     async def mark_failed(
         self, celery_task_id: str, error_code: str, error_message: str
     ) -> RunTask | None:
