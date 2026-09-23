@@ -86,20 +86,24 @@ class AdminService:
             pool = await get_pool()
             async with pool.acquire() as connection:
                 await connection.fetchval("SELECT 1")
-        except Exception as exc:
+        except Exception:
             health["status"] = "degraded"
-            health["db"] = {"ok": False, "error": str(exc)}
+            health["db"] = {"ok": False, "error": "UNAVAILABLE"}
 
         client: redis.Redis | None = None
         try:
             client = self._redis_client()
             await self._maybe_await(client.ping())
-        except Exception as exc:
+        except Exception:
             health["status"] = "degraded"
-            health["redis"] = {"ok": False, "error": str(exc)}
+            health["redis"] = {"ok": False, "error": "UNAVAILABLE"}
         finally:
             if client is not None:
-                await client.aclose()
+                try:
+                    await client.aclose()
+                except Exception:
+                    health["status"] = "degraded"
+                    health["redis"] = {"ok": False, "error": "UNAVAILABLE"}
 
         return health
 
