@@ -96,7 +96,7 @@ jobs:
 
   first-short-runtime:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -122,6 +122,7 @@ jobs:
           PYTHONPATH=apps/worker-orchestrator python3 -m pytest apps/worker-orchestrator/tests/test_terminal_validation_guards.py apps/worker-orchestrator/tests/test_terminal_validation_failure.py apps/worker-orchestrator/tests/test_visual_plan_terminal_validation.py -v --basetemp=/tmp/terminal-validation-runtime
           PYTHONPATH=apps/worker-orchestrator python3 -m pytest apps/worker-orchestrator/tests/test_late_worker_outcomes.py apps/worker-orchestrator/tests/test_worker_outcome_claims.py packages/creator-service/tests/test_revocation_dispatch_race.py -v --basetemp=/tmp/late-worker-outcomes-runtime
           python3 -m pytest packages/creator-service/tests/test_quota_stage_compensation.py packages/creator-service/tests/test_postgres_quota_compensation.py -v --basetemp=/tmp/quota-compensation-runtime
+          PYTHONPATH=apps/worker-orchestrator python3 -m pytest packages/creator-service/tests/test_run_version_mutations.py packages/creator-service/tests/test_run_version_cas.py packages/creator-service/tests/test_run_version_boundaries.py apps/worker-orchestrator/tests/test_run_version_outcomes.py -v --basetemp=/tmp/run-version-runtime
       - name: Upload runtime evidence
         if: always()
         uses: actions/upload-artifact@v4
