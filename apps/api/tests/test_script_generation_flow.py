@@ -231,7 +231,7 @@ def script_generation_flow_services(monkeypatch: pytest.MonkeyPatch) -> Iterator
         if instructions and instructions.strip():
             prompt = f"{prompt}\n\nAdditional instructions:\n{instructions.strip()}"
 
-        import asyncio
+        import anyio
 
         async def _mock_worker() -> None:
             generated = f"# Script\n\n{prompt}\n"
@@ -243,7 +243,7 @@ def script_generation_flow_services(monkeypatch: pytest.MonkeyPatch) -> Iterator
             run = run_service.runs[run_id]
             run_service.runs[run_id] = run.model_copy(update={"current_stage": "SCRIPT_REVIEW"})
 
-        asyncio.get_event_loop().create_task(_mock_worker())
+        anyio.from_thread.run(_mock_worker)
         return "mock-script-task-1"
 
     for route in _iter_api_routes(app.routes):

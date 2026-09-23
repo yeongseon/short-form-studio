@@ -390,7 +390,7 @@ async def test_generate_audio_rejects_llm_model_key(monkeypatch: pytest.MonkeyPa
 @pytest.mark.asyncio
 async def test_generate_scene_image_rejects_llm_model_key(monkeypatch: pytest.MonkeyPatch) -> None:
     from creator_provider.registry import ProviderRegistry
-    import shorts_api.routes.creator_runs_scene_assets as creator_runs_scene_assets
+    import shorts_api.routes.scene_image_dispatch as scene_image_dispatch
 
     registry = _stub_registry_with_models()
     monkeypatch.setattr("creator_provider.registry._default_registry", registry)
@@ -402,8 +402,7 @@ async def test_generate_scene_image_rejects_llm_model_key(monkeypatch: pytest.Mo
     async def _fake_dispatch(**_: object) -> dict[str, object]:
         return {"task_id": "t1"}
 
-    monkeypatch.setattr(creator_runs_scene_assets, "_enforce_run_quota", _fake_quota)
-    monkeypatch.setattr(creator_runs_scene_assets, "cas_dispatch_with_rollback", _fake_dispatch)
+    monkeypatch.setattr(scene_image_dispatch, "_enforce_run_quota", _fake_quota)
 
     user = CurrentUser(user_id=1, workspace_id=1)
     run = SimpleNamespace(

@@ -21,6 +21,7 @@ COPY --chown=appuser:appuser apps/api/migrations ./migrations
 # Worker task modules needed by API for Celery task dispatch (import_module)
 COPY --chown=appuser:appuser apps/worker-orchestrator/tasks ./tasks
 COPY --chown=appuser:appuser apps/worker-orchestrator/celery_app.py ./celery_app.py
+COPY --chown=appuser:appuser apps/worker-orchestrator/worker_loop.py ./worker_loop.py
 COPY --chown=appuser:appuser scripts ./scripts
 ENV PYTHONPATH=/app/src:/app
 USER appuser

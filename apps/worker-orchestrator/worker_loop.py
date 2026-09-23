@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from creator_service.lightweight_runtime import invocation_loop
 from typing import Any, Coroutine, TypeVar
 
 from celery.signals import worker_process_init, worker_process_shutdown
@@ -43,6 +44,9 @@ def get_worker_loop() -> asyncio.AbstractEventLoop:
     context (e.g. in tests or the reconciler beat task).
     """
     global _worker_loop
+    invocation = invocation_loop.get()
+    if invocation is not None:
+        return invocation
     if _worker_loop is not None and not _worker_loop.is_closed():
         return _worker_loop
     # Fallback: create a loop (useful for beat tasks / tests)

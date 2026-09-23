@@ -235,18 +235,21 @@ class TestProductionKeyLengthEnforcement:
     when the startup check is bypassed (e.g. key shortened after startup).
     """
 
-    def test_require_admin_rejects_short_key_in_production(self, monkeypatch) -> None:
+    async def test_require_admin_rejects_short_key_in_production(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """require_admin returns 503 for short keys in production mode."""
-        import asyncio
         from fastapi import HTTPException
 
+        # Given a short admin key in production.
         monkeypatch.setenv("ADMIN_API_KEY", "short")
         monkeypatch.setenv("ENVIRONMENT", "production")
         monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
 
+        # When the dependency runs on the pytest-managed event loop.
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.get_event_loop().run_until_complete(
-                admin.require_admin(x_admin_key="short")
-            )
+            await admin.require_admin(x_admin_key="short")
+
+        # Then the production guard rejects the key.
         assert exc_info.value.status_code == 503
         assert "not configured" in exc_info.value.detail

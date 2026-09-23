@@ -9,6 +9,8 @@ from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
 
+from functools import partial
+from creator_service.blocking_io import owned_operation, run_control
 from creator_service.task_dispatch_service import (
     cas_dispatch_with_rollback,
     dispatch_generate_audio,
@@ -152,6 +154,7 @@ async def _collect_active_celery_ids(run_id: int) -> tuple[list[str], bool]:
         return [], False
 
 
+@owned_operation
 async def _revoke_celery_ids(celery_ids: list[str], run_id: int) -> bool:
     """Revoke pre-captured Celery task IDs and mark them revoked."""
     if not celery_ids:
@@ -165,7 +168,7 @@ async def _revoke_celery_ids(celery_ids: list[str], run_id: int) -> bool:
         all_ok = True
         for tid in celery_ids:
             try:
-                celery_app.control.revoke(tid, terminate=True)
+                await run_control(partial(celery_app.control.revoke, tid, terminate=True))
                 revoked.append(tid)
             except Exception:
                 all_ok = False

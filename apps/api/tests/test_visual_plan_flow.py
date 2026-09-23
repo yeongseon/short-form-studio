@@ -229,7 +229,7 @@ def visual_plan_flow_services(monkeypatch: pytest.MonkeyPatch) -> Iterator[StubR
             "latest_asset_id": None,
         }
 
-        import asyncio
+        import anyio
 
         async def _mock_worker() -> None:
             await visual_plan_service.save_plan(run_id=run_id, scenes=[scene])
@@ -238,7 +238,7 @@ def visual_plan_flow_services(monkeypatch: pytest.MonkeyPatch) -> Iterator[StubR
                 update={"current_stage": "VISUAL_PLAN_REVIEW"}
             )
 
-        asyncio.get_event_loop().create_task(_mock_worker())
+        anyio.from_thread.run(_mock_worker)
         return "mock-visual-plan-task-1"
 
     for route in _iter_api_routes(app.routes):
