@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+from functools import partial
 from typing import Callable
 from uuid import uuid4
 
 from creator_service.task_dispatch_service import task_dispatch_service
+from creator_service.blocking_io import owned_operation, run_blocking, run_control
 from creator_service.task_tracking_service import task_tracking_service
 from creator_service.usage_service import cancel_workspace_quota_reservation
 from fastapi import HTTPException
@@ -29,17 +31,18 @@ def _is_cancelled(run) -> bool:
     return run is None or getattr(run, "status", None) == "cancelled"
 
 
-def _revoke_task(task_id: str) -> None:
+async def _revoke_task(task_id: str) -> None:
     """Best-effort revoke of a Celery task."""
     try:
-        task_dispatch_service.dispatcher.cancel(task_id)
+        await run_control(partial(task_dispatch_service.dispatcher.cancel, task_id))
     except Exception:
         logger.warning("Failed to revoke task %s", task_id)
 
 
+@owned_operation
 async def _revoke_and_mark(task_id: str) -> None:
     """Revoke a Celery task and mark it revoked in tracking."""
-    _revoke_task(task_id)
+    await _revoke_task(task_id)
     try:
         await task_tracking_service.mark_tasks_revoked([task_id])
     except Exception:
@@ -50,7 +53,7 @@ async def _publish_pending(run_id: int, task_type: str, dispatch: Callable[[str]
     task_id = str(uuid4())
     await task_tracking_service.record_task_pending(run_id, task_type, task_id)
     try:
-        dispatch(task_id)
+        await run_blocking(partial(dispatch, task_id))
         await task_tracking_service.promote_pending_to_queued(task_id)
     except Exception:
         await _revoke_and_mark(task_id)
@@ -58,6 +61,7 @@ async def _publish_pending(run_id: int, task_type: str, dispatch: Callable[[str]
     return task_id
 
 
+@owned_operation
 async def dispatch_storyboard_task_with_tracking(
     *,
     run_id: int,
@@ -101,6 +105,7 @@ async def dispatch_storyboard_task_with_tracking(
     return task_id
 
 
+@owned_operation
 async def dispatch_storyboard_task_bulk(
     *,
     run_id: int,
