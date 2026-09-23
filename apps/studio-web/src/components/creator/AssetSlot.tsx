@@ -57,12 +57,6 @@ function formatDuration(seconds: number): string {
   return m > 0 ? `${m}:${s.toString().padStart(2, "0")}` : `${s}s`;
 }
 
-/** Convert API artifact path → browser URL via Vite proxy. */
-function artifactUrl(path: string): string {
-  const match = path.match(/data\/artifacts\/(.*)/);
-  return match ? `/artifacts/${match[1]}` : `/artifacts/${path}`;
-}
-
 // --------------- styles ---------------
 
 const slotBase: React.CSSProperties = {
@@ -202,7 +196,7 @@ export default function AssetSlot({
     onPreview?.();
   };
 
-  const resolvedUrl = url ? artifactUrl(url) : null;
+  const resolvedUrl = url;
 
   // ---- empty ----
   if (status === "empty") {

@@ -3,11 +3,7 @@ import StoryboardView from "../../components/creator/StoryboardView";
 import { cardStyle, headerStyle, sectionTitle, editLinkStyle, metaStyle, previewBoxStyle } from "./reviewStyles";
 import { POST_AUDIO_STAGES, type ScriptData, type LegacyVisualPlanScene, type ReviewAssets } from "./useReviewData";
 import type { RunDetail } from "../../types/api";
-
-function legacyAssetUrl(path: string): string {
-  const match = path.match(/data\/artifacts\/(.*)/);
-  return match ? `/artifacts/${match[1]}` : `/artifacts/${path}`;
-}
+import { visualAssetUrl } from "../../api/mediaUrls";
 
 export function LegacyReviewSections({ run, script, scenes, assets }: {
   readonly run: RunDetail;
@@ -49,7 +45,7 @@ export function LegacyReviewSections({ run, script, scenes, assets }: {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 8 }}>
             {sceneAssets.map((asset, idx) => <div key={asset.asset_path}
               style={{ background: asset.is_active ? "#f0fdf4" : "#f9fafb", borderRadius: 6, border: asset.is_active ? "1px solid #bbf7d0" : "1px solid #e5e7eb", overflow: "hidden" }}>
-              <img src={legacyAssetUrl(asset.asset_path)} alt={`${sceneId} asset ${idx + 1}`}
+              <img src={visualAssetUrl(run.id, asset.id)} alt={`${sceneId} asset ${idx + 1}`}
                 style={{ width: "100%", aspectRatio: "9 / 16", objectFit: "cover", display: "block", background: "#e5e7eb" }} />
               <div style={{ padding: "6px 8px" }}>
                 <div style={{ fontSize: 11, color: "#374151", wordBreak: "break-all" }}>{asset.asset_path.split("/").pop()}</div>

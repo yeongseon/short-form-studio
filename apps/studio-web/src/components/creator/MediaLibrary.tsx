@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { listWorkspaceAssets } from "../../api/assets";
 import type { MediaAsset, MediaOrigin } from "../../api/assets";
+import { workspaceAssetUrl } from "../../api/mediaUrls";
 
 export type { MediaAsset } from "../../api/assets";
 
@@ -45,12 +46,6 @@ export function partitionByView(assets: MediaAsset[]): ViewPartition {
     }
   }
   return { uploaded, generated, brand };
-}
-
-/** Convert an artifact storage key/path into a browser URL via the Vite proxy. */
-function artifactUrl(key: string): string {
-  const match = key.match(/data\/artifacts\/(.*)/);
-  return match ? `/artifacts/${match[1]}` : `/artifacts/${key}`;
 }
 
 function assetsForView(assets: MediaAsset[], view: LibraryView): MediaAsset[] {
@@ -180,10 +175,18 @@ export default function MediaLibrary({
                 cursor: "pointer",
               }}
             >
-              {asset.storage_key !== null && asset.media_type !== "AUDIO" ? (
+              {asset.storage_key !== null && asset.media_type === "VIDEO" ? (
+                <video
+                  data-testid={`asset-preview-${asset.id}`}
+                  src={workspaceAssetUrl(asset)}
+                  muted
+                  preload="metadata"
+                  style={{ width: "100%", height: 80, objectFit: "cover", display: "block" }}
+                />
+              ) : asset.storage_key !== null && asset.media_type !== "AUDIO" ? (
                 <img
                   data-testid={`asset-preview-${asset.id}`}
-                  src={artifactUrl(asset.storage_key)}
+                  src={workspaceAssetUrl(asset)}
                   alt=""
                   style={{ width: "100%", height: 80, objectFit: "cover", display: "block" }}
                 />

@@ -13,12 +13,6 @@ import type {
 
 // --------------- helpers ---------------
 
-/** Convert API artifact path → browser URL via Vite proxy. */
-function artifactUrl(path: string): string {
-  const match = path.match(/data\/artifacts\/(.*)/);
-  return match ? `/artifacts/${match[1]}` : `/artifacts/${path}`;
-}
-
 const STATUS_COLORS: Record<string, { bg: string; border: string; text: string; label: string }> = {
   idle: { bg: "#f9fafb", border: "#e5e7eb", text: "#6b7280", label: "Idle" },
   generating_image: { bg: "#fdf4ff", border: "#e9d5ff", text: "#6b21a8", label: "Generating Image…" },
@@ -178,7 +172,7 @@ export default function StoryboardCard({
           <div>
             <div style={sectionLabelStyle}>Image</div>
             <img
-              src={artifactUrl(p.image_url)}
+              src={p.image_url}
               alt={`Scene for §${p.order + 1}`}
               style={{
                 width: "100%",
@@ -206,7 +200,7 @@ export default function StoryboardCard({
             <audio
               controls
               style={{ width: "100%", height: 32, borderRadius: 4 }}
-              src={artifactUrl(p.audio_url)}
+              src={p.audio_url}
             />
           </div>
         )}
