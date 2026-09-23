@@ -100,8 +100,10 @@ class DispatchCAS(DispatchRuntime):
                     run_id, updates, expected_stages=expected_stages, workspace_id=workspace_id,
                 )
         except ServiceError:
+            await cancel_quota(reserved_workspace, quota_operation_type, "during stage update")
             raise
         except Exception:
+            await cancel_quota(reserved_workspace, quota_operation_type, "during stage update")
             raise ServiceUnavailableError("Storage failure during dispatch stage update") from None
         if not ok:
             await cancel_quota(reserved_workspace, quota_operation_type)
