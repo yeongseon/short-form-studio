@@ -731,6 +731,9 @@ describe("ProjectPage", () => {
     expect(screen.getByTestId("review-link").getAttribute("href")).toBe(
       "/review/1",
     );
+    expect(await screen.findByRole("link", { name: "Download video" })).toHaveAttribute(
+      "href", "/api/creator/runs/1/artifacts/1/download",
+    );
   });
 
   it("shows scene cards inside StoryboardWorkspace", async () => {

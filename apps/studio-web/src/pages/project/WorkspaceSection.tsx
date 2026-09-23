@@ -17,7 +17,7 @@ interface WorkspaceSectionProps {
   onApproveVisualPlan: () => void;
   onRegenerateVisualPlan: () => void;
   isFinalReview: boolean;
-  previewVideoPath: string | null;
+  previewVideoUrl: string | null;
   showGoBack: boolean;
   onGoBack: () => void;
   goingBack: boolean;
@@ -37,7 +37,7 @@ export default function WorkspaceSection({
   onApproveVisualPlan,
   onRegenerateVisualPlan,
   isFinalReview,
-  previewVideoPath,
+  previewVideoUrl,
   showGoBack,
   onGoBack,
   goingBack,
@@ -87,7 +87,7 @@ export default function WorkspaceSection({
             <p style={{ margin: "0 0 16px", fontSize: 13 }}>
               All stages are done. Review the final output or restart from any stage.
             </p>
-            {typeof previewVideoPath === "string" && (
+            {previewVideoUrl && (
               <p
                 style={{
                   margin: "0 0 8px",
@@ -95,7 +95,7 @@ export default function WorkspaceSection({
                   color: "#374151",
                 }}
               >
-                Video: {previewVideoPath}
+                <a href={previewVideoUrl} download={`run-${run.id}.mp4`}>Download video</a>
               </p>
             )}
             <Link

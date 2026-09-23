@@ -50,19 +50,30 @@ export class ApiError extends Error {
  * `error` envelope when present and always preserving the legacy `detail`.
  */
 function toApiError(status: number, body: unknown): ApiError {
-  const record = (body ?? null) as Record<string, unknown> | null;
-  const detail = (record?.detail as string) ?? `Request failed (${status})`;
-  const envelope = record?.error as Record<string, unknown> | undefined;
-  if (envelope && typeof envelope === "object") {
+  const record = isRecord(body) ? body : null;
+  const rawDetail = record?.detail;
+  const detail = typeof rawDetail === "string"
+    ? rawDetail
+    : isRecord(rawDetail) && typeof rawDetail.error === "string"
+      ? rawDetail.error
+      : `Request failed (${status})`;
+  const envelope = record?.error;
+  if (isRecord(envelope)) {
     const steps = envelope.recovery_steps;
     return new ApiError(status, detail, {
       code: typeof envelope.code === "string" ? envelope.code : undefined,
       category: typeof envelope.category === "string" ? envelope.category : undefined,
       retryable: typeof envelope.retryable === "boolean" ? envelope.retryable : undefined,
-      recoverySteps: Array.isArray(steps) ? (steps as string[]) : undefined,
+      recoverySteps: Array.isArray(steps)
+        ? steps.filter((step: unknown): step is string => typeof step === "string")
+        : undefined,
     });
   }
   return new ApiError(status, detail);
+}
+
+export function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 /**

@@ -150,10 +150,11 @@ describe("IdeaForm", () => {
     expect(screen.getByLabelText(/Idea Brief/)).toHaveAttribute("required");
   });
 
-  it("has duration constraints min=10 max=180", () => {
+  it("offers the short-first presets and Custom instead of a capped numeric field", () => {
     renderIdeaForm();
-    const input = screen.getByLabelText(/Target Duration/) as HTMLInputElement;
-    expect(input.min).toBe("10");
-    expect(input.max).toBe("180");
+    expect(screen.getByRole("combobox", { name: /Target Duration/ })).toHaveValue("60");
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "15 seconds", "30 seconds", "45 seconds", "60 seconds", "90 seconds", "Custom",
+    ]);
   });
 });

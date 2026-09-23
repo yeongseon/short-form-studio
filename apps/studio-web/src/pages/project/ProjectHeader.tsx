@@ -123,7 +123,8 @@ export default function ProjectHeader({
           </button>
         )}
         {run &&
-          (run.status === "cancelled" || run.status === "failed" || run.status === "paused") && (
+          (run.status === "cancelled" || run.status === "failed" || run.status === "stopped" ||
+            (run.status === "paused" && !currentStage.endsWith("_REVIEW"))) && (
             <button
               type="button"
               onClick={() => setConfirmAction("resume")}

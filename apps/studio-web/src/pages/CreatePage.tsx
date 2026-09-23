@@ -1,9 +1,9 @@
 import { useState, useCallback, useRef } from "react";
-import { useNavigate } from "react-router-dom";
-import { apiFetch, API_BASE, ApiError } from "../api/client";
-import { startDemoShort } from "../api/demo";
+import { DemoShortCard } from "./create/DemoShortCard";
+import { useCreateProject } from "./create/useCreateProject";
+import { JSON_TEMPLATE } from "./create/jsonTemplate";
 import ModelSelector from "../components/creator/ModelSelector";
-import IdeaForm, { type IdeaFormData } from "../components/creator/IdeaForm";
+import IdeaForm from "../components/creator/IdeaForm";
 
 type Tab = "idea" | "json";
 
@@ -17,58 +17,7 @@ const RENDER_PROFILE_OPTIONS = [
   { value: "high_quality", label: "High Quality" },
   { value: "fast_preview", label: "Fast Preview" },
 ];
-const JSON_TEMPLATE = JSON.stringify(
-  {
-    scenes: [
-      {
-        type: "hook",
-        text: "여러분, AI가 60초 만에 영상을 만들어준다면 믿으시겠어요?",
-        image_prompt:
-          "A futuristic holographic AI interface floating in a dark studio, cinematic blue light",
-        speaker: "host",
-        mood: "exciting",
-        composition: "medium shot, centered",
-        style_tags: ["cinematic", "sci-fi"],
-      },
-      {
-        type: "body",
-        text: "최신 AI 기술을 활용하면 스크립트 작성부터 영상 렌더링까지 모든 과정이 자동화됩니다.",
-        image_prompt:
-          "Split screen showing code on left and rendered video on right, modern tech aesthetic",
-        speaker: "host",
-        mood: "informative",
-        composition: "wide shot",
-        style_tags: ["tech", "modern"],
-      },
-      {
-        type: "body",
-        text: "텍스트를 입력하면 AI가 장면별 이미지를 생성하고, 음성과 자막까지 자동으로 추가해줍니다.",
-        image_prompt:
-          "Hands typing on a glowing keyboard with AI-generated images appearing on screen",
-        speaker: "host",
-        mood: "demonstrative",
-        composition: "close-up on hands and screen",
-        style_tags: ["tech", "hands-on"],
-      },
-      {
-        type: "cta",
-        text: "지금 바로 시작해보세요! 링크는 설명란에 있습니다.",
-        image_prompt:
-          "Bright call-to-action screen with arrow pointing down, energetic gradient background",
-        speaker: "host",
-        mood: "urgent",
-        composition: "centered text overlay",
-        style_tags: ["vibrant", "cta"],
-      },
-    ],
-  },
-  null,
-  2,
-);
-
-
 export default function CreatePage() {
-  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<Tab>("idea");
 
   // JSON form state
@@ -81,39 +30,9 @@ export default function CreatePage() {
   const [stylePreset, setStylePreset] = useState("default");
   const [modelDefaults, setModelDefaults] = useState<Record<string, string>>({});
 
-  // Submission state
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // Demo Short state (one-click sample-backed run)
-  const [demoRunning, setDemoRunning] = useState(false);
-  const [demoError, setDemoError] = useState<string | null>(null);
-
-  const handleTryDemo = useCallback(async () => {
-    if (demoRunning) return;
-    setDemoRunning(true);
-    setDemoError(null);
-    try {
-      const result = await startDemoShort();
-      navigate(`/projects/${result.seeded_project_id}`);
-    } catch (err) {
-      const message =
-        err instanceof ApiError
-          ? err.recoverySteps?.length
-            ? `${err.detail} — ${err.recoverySteps.join("; ")}`
-            : err.detail
-          : "Could not start the demo Short.";
-      setDemoError(message);
-    } finally {
-      setDemoRunning(false);
-    }
-  }, [demoRunning, navigate]);
-
-  // Stable ref for modelDefaults so IdeaForm submit handler always has latest
-  const modelDefaultsRef = useRef(modelDefaults);
-  modelDefaultsRef.current = modelDefaults;
-  const stylePresetRef = useRef(stylePreset);
-  stylePresetRef.current = stylePreset;
+  const { submitting, error, handleIdeaSubmit, handleJsonSubmit } = useCreateProject({
+    models: modelDefaults, style: stylePreset,
+  });
   const ideaFormRef = useRef<HTMLDivElement>(null);
 
   const handleModelChange = useCallback((category: string, modelKey: string) => {
@@ -146,175 +65,11 @@ export default function CreatePage() {
     setModelDefaults((prev) => ({ ...prev, render_profile: renderProfile }));
   }, []);
 
-  const handleIdeaSubmit = useCallback(
-    async (data: IdeaFormData) => {
-      setSubmitting(true);
-      setError(null);
-      let projectId: number | null = null;
-
-      try {
-        // 1. Create project
-        const projRes = await apiFetch(`${API_BASE}/projects`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            title: data.title,
-            source_type: "idea",
-            idea_brief: data.ideaBrief,
-          }),
-        });
-
-        if (!projRes.ok) {
-          const body = await projRes.json().catch(() => null);
-          throw new Error(body?.detail ?? `Failed to create project (${projRes.status})`);
-        }
-
-        const project = await projRes.json();
-        projectId = project.id;
-
-        // 2. Create run
-        const runRes = await apiFetch(`${API_BASE}/projects/${project.id}/runs`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model_defaults: modelDefaultsRef.current,
-            style_preset: stylePresetRef.current,
-            metadata: {
-              content_goal: data.contentGoal || undefined,
-              target_duration: data.targetDuration,
-            },
-          }),
-        });
-
-        if (!runRes.ok) {
-          const body = await runRes.json().catch(() => null);
-          throw new Error(body?.detail ?? `Failed to create run (${runRes.status})`);
-        }
-
-        // 3. Navigate to project page
-        navigate(`/projects/${project.id}`);
-      } catch (err) {
-        // Clean up orphaned project if run creation failed
-        if (projectId !== null) {
-          await apiFetch(`${API_BASE}/projects/${projectId}`, { method: "DELETE" }).catch(() => {});
-        }
-        setError(err instanceof Error ? err.message : "An unexpected error occurred");
-      } finally {
-        setSubmitting(false);
-      }
-    },
-    [navigate],
-  );
-
-  const handleJsonSubmit = useCallback(async () => {
-    const title = jsonForm.title.trim();
-    const jsonScript = jsonForm.jsonScript.trim();
-    if (!jsonScript) return;
-
-    // Validate JSON locally before sending
-    try {
-      JSON.parse(jsonScript);
-    } catch {
-      setError("Invalid JSON \u2014 please check the syntax.");
-      return;
-    }
-
-    setSubmitting(true);
-    setError(null);
-    let projectId: number | null = null;
-
-    try {
-      // 1. Create project
-      const projRes = await apiFetch(`${API_BASE}/projects`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: title || "Untitled",
-          source_type: "pasted_json",
-          json_script: jsonScript,
-        }),
-      });
-
-      if (!projRes.ok) {
-        const body = await projRes.json().catch(() => null);
-        throw new Error(body?.detail ?? `Failed to create project (${projRes.status})`);
-      }
-
-      const project = await projRes.json();
-      projectId = project.id;
-
-      // 2. Import JSON (creates run + saves structured draft in one call)
-      const importRes = await apiFetch(`${API_BASE}/projects/${project.id}/script/import-json`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          json_script: jsonScript,
-          model_defaults: modelDefaultsRef.current,
-          style_preset: stylePresetRef.current,
-        }),
-      });
-
-      if (!importRes.ok) {
-        const body = await importRes.json().catch(() => null);
-        throw new Error(body?.detail ?? `Failed to import JSON (${importRes.status})`);
-      }
-
-      // 3. Navigate to project page
-      navigate(`/projects/${project.id}`);
-    } catch (err) {
-      // Clean up orphaned project if import failed
-      if (projectId !== null) {
-        await apiFetch(`${API_BASE}/projects/${projectId}`, { method: "DELETE" }).catch(() => {});
-      }
-      setError(err instanceof Error ? err.message : "An unexpected error occurred");
-    } finally {
-      setSubmitting(false);
-    }
-  }, [jsonForm, navigate]);
-
   return (
     <div style={{ maxWidth: 720, margin: "0 auto", padding: 24 }}>
       <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 24 }}>Create New Project</h1>
 
-      {/* One-click demo: seed a sample-backed Short and jump into it */}
-      <div style={{ marginBottom: 24, padding: 16, background: "#f0f7ff", borderRadius: 8, border: "1px solid #cfe3ff" }}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-          <div>
-            <div style={{ fontWeight: 600, fontSize: 14 }}>New here? Try a sample Short</div>
-            <div style={{ fontSize: 13, color: "#555" }}>
-              Creates a ready-made &ldquo;Demo Short&rdquo; project you can preview and edit.
-            </div>
-          </div>
-          <button
-            type="button"
-            data-testid="try-demo-button"
-            disabled={demoRunning}
-            onClick={handleTryDemo}
-            style={{
-              padding: "10px 20px",
-              background: demoRunning ? "#93b4f4" : "#4285f4",
-              color: "#fff",
-              border: "none",
-              borderRadius: 6,
-              fontSize: 14,
-              fontWeight: 600,
-              cursor: demoRunning ? "not-allowed" : "pointer",
-              whiteSpace: "nowrap",
-            }}
-          >
-            {demoRunning ? "Starting…" : "Try the demo"}
-          </button>
-        </div>
-        {demoError && (
-          <div
-            data-testid="demo-error"
-            role="alert"
-            style={{ marginTop: 12, padding: "8px 12px", background: "#fef2f2", border: "1px solid #fca5a5", borderRadius: 4, color: "#b91c1c", fontSize: 13 }}
-          >
-            {demoError}
-          </div>
-        )}
-      </div>
+      <DemoShortCard />
 
       {/* Tab list */}
       <div role="tablist" style={{ display: "flex", gap: 4, marginBottom: 16, borderBottom: "2px solid #ddd" }}>
@@ -483,7 +238,7 @@ export default function CreatePage() {
           onClick={activeTab === "idea" ? () => {
             const form = ideaFormRef.current?.querySelector<HTMLFormElement>('form');
             form?.requestSubmit();
-          } : handleJsonSubmit}
+          } : () => handleJsonSubmit(jsonForm)}
           style={{
             padding: "10px 24px",
             background: submitting ? "#93b4f4" : "#4285f4",

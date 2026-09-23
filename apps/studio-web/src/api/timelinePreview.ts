@@ -12,6 +12,7 @@ export type RenderSegmentKind = "image" | "video";
 export interface RenderSegment {
   kind: RenderSegmentKind;
   source: string;
+  readonly media_url?: string;
   timeline_start_seconds: number;
   duration_seconds: number;
   trim_start_seconds: number | null;
@@ -35,6 +36,7 @@ export interface EncodingProfile {
 }
 
 export interface RenderPlan {
+  readonly timeline_revision?: number;
   segments: RenderSegment[];
   output_spec: OutputSpec;
   encoding_profile: EncodingProfile;

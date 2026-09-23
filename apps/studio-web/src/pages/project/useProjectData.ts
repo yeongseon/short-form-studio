@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { apiFetch, apiJson, apiVoid, API_BASE } from "../../api/client";
+import type { RunPreview } from "../../api/runPreview";
 import {
   FINAL_REVIEW_STAGES,
   type ModelDefaults,
@@ -15,7 +16,7 @@ interface UseProjectDataResult {
   run: RunDetail | null;
   loading: boolean;
   error: string | null;
-  preview: Record<string, unknown> | null;
+  preview: RunPreview | null;
   modelSelection: ModelDefaults;
   onModelChange: (category: string, modelKey: string) => void;
   refreshRun: (runId: number) => Promise<void>;
@@ -26,7 +27,7 @@ export function useProjectData(projectId: number): UseProjectDataResult {
   const [run, setRun] = useState<RunDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [preview, setPreview] = useState<Record<string, unknown> | null>(null);
+  const [preview, setPreview] = useState<RunPreview | null>(null);
   const [modelSelection, setModelSelection] = useState<ModelDefaults>({});
 
   const fetchProjectAndRun = useCallback(async () => {
@@ -82,7 +83,7 @@ export function useProjectData(projectId: number): UseProjectDataResult {
       try {
         const res = await apiFetch(`${API_BASE}/runs/${run.id}/preview`);
         if (res.ok) {
-          const data = await res.json();
+          const data: RunPreview = await res.json();
           setPreview(data);
         }
       } catch {

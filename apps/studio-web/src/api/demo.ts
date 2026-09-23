@@ -17,6 +17,13 @@ export interface OnboardingGuidance {
   next_action: string;
 }
 
+export type ProviderConfigStatus =
+  | "not_configured"
+  | "configured_unverified"
+  | "configured_available"
+  | "configured_unavailable"
+  | "unknown";
+
 export interface ProviderConfigState {
   provider: string;
   label: string;
@@ -24,7 +31,7 @@ export interface ProviderConfigState {
   configured: boolean;
   is_local: boolean;
   requires_gpu: boolean;
-  status: string;
+  status: ProviderConfigStatus;
   categories: string[];
   unavailable_categories: string[];
   hint: string;
@@ -67,6 +74,10 @@ export function getProviderConfig(): Promise<ProviderConfigView> {
 
 export function getDemoPlan(projectId: number): Promise<DemoShortPlan> {
   return apiJson<DemoShortPlan>(`${API_BASE}/projects/${projectId}/demo-short/plan`);
+}
+
+export function getWorkspaceDemoPlan(workspaceId: number): Promise<DemoShortPlan> {
+  return apiJson<DemoShortPlan>(`${API_BASE}/workspaces/${workspaceId}/demo-short/plan`);
 }
 
 export function createDemoRun(workspaceId: number): Promise<DemoRunResult> {
