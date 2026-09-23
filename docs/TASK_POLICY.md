@@ -51,6 +51,11 @@ All tasks use Celery's built-in retry mechanism with:
 | `SoftTimeLimitExceeded` | Common runner attempts guarded `FAILED` transition and re-raises; it does not convert to a provider timeout |
 | Other unhandled | Task fails, stored in DLQ |
 
+`generate_audio` propagates a `SoftTimeLimitExceeded` reaching its per-section
+handler before generic fallback, without starting a second, single-pass provider
+call. Ordinary section failures retain the legacy single-pass fallback;
+the single-pass provider timeout/rate-limit retry policy remains unchanged.
+
 ### Backoff Calculation
 
 ```
@@ -103,7 +108,10 @@ If Redis is unavailable, failures are written to `DLQ_FALLBACK_PATH` (JSONL file
 ### Run Status on Failure
 
 When execution permanently fails in the common runner:
-1. Task tracking records `status = "failed"` and a safe categorized error code/message.
+1. General failure finalization records `status = "failed"` and a safe categorized
+   error code/message only while the tracking row is still `running`.
+   Success finalization uses the same guard; late outcomes preserve revoked,
+   rejected, or already successful rows.
    The read surface reconstructs actionable recovery guidance from that code;
    raw exception text and provider output are not persisted in this record.
 2. The run transitions to `current_stage = "FAILED"`, `status = "failed"` only
@@ -112,12 +120,21 @@ When execution permanently fails in the common runner:
 3. Malformed broker input is rejected before claim without modifying a run.
    Claim/context errors before execution and stage rejection do not fail a run.
    Claim/context errors retain the existing best-effort task-failure recording:
-   `mark_failed` updates an existing tracking row only; it never creates a row
-   when the claim failed before insertion. Malformed broker input bypasses even
+   `mark_failed_if_running` updates an existing running tracking row only; it
+   never creates a row when the claim failed before insertion. Malformed broker input bypasses even
    that recording, while stage rejection uses `mark_rejected`.
 4. Provider timeout/rate-limit failures with retry budget remaining mark the task
    failed so it can be reclaimed, but keep the run generating. Exhausted retries
    use the same guarded terminal-failure transition as other execution errors.
+
+The dedicated soft-timeout handler attempts the guarded run failure transition
+and re-raises to Celery, which reports the delivery as `FAILURE` and invokes the
+failure/DLQ signal. That handler does not finalize the application task-tracking
+row or perform partial-audio/quota cleanup. Propagation does not add those cleanup
+guarantees; they require separate lifecycle ownership.
+See [#837](https://github.com/yeongseon/short-form-studio/issues/837) for that
+lifecycle follow-up and [#836](https://github.com/yeongseon/short-form-studio/issues/836)
+for soft-timeout wrapping inside the Edge TTS adapter itself.
 
 Explicit `no_fail_transition_exceptions` overrides remain available for task-specific
 nonfatal contracts; the default exempts only `TaskInputError`. Do not exempt all
