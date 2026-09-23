@@ -25,6 +25,8 @@ import httpx
 
 from creator_provider.base import ImageProvider, ImageResult
 from creator_provider.exceptions import ProviderError
+from creator_provider.image.svg_repair import deduplicate_attrs, repair_svg_xml
+from creator_provider.image.svg_safety import finalize_svg, parse_svg, strip_svg_markup
 from creator_provider.validation import MAX_IMAGE_PROMPT_CHARS, validate_prompt_length
 
 logger = logging.getLogger(__name__)
@@ -57,6 +59,10 @@ _SVG_SYSTEM_PROMPT = (
 _SVG_GENERATION_MAX_RETRIES = 3
 
 
+def _deny_svg_resource(url: str, resource_type: str) -> bytes:
+    raise ProviderError("SVG resource loading is disabled")
+
+
 class GroqSvgImageProvider(ImageProvider):
     """Generates images by having Groq LLM produce SVG, then rasterizing to PNG."""
 
@@ -84,13 +90,13 @@ class GroqSvgImageProvider(ImageProvider):
         except ImportError as exc:
             raise ProviderError("cairosvg not installed: pip install cairosvg") from exc
 
-        png_bytes = cairosvg.svg2png(
+        png_bytes = cairosvg.surface.PNGSurface.convert(
             bytestring=svg_content.encode("utf-8"),
             output_width=width,
             output_height=height,
-            # Deny ALL external resource fetches to prevent SSRF from LLM-generated
-            # SVG containing <image href="http://169.254.169.254/..."> etc.
-            url_fetcher=lambda *args, **kwargs: None,
+            # The surface API forwards this per-render callback to every resource loader.
+            unsafe=False,
+            url_fetcher=_deny_svg_resource,
         )
 
         # Write output
@@ -150,7 +156,7 @@ class GroqSvgImageProvider(ImageProvider):
                     attempt + 1,
                     _SVG_GENERATION_MAX_RETRIES,
                 )
-                return sanitized_svg
+                return finalize_svg(sanitized_svg)
             except Exception as exc:
                 last_error = str(exc)
                 logger.warning(
@@ -164,7 +170,9 @@ class GroqSvgImageProvider(ImageProvider):
         logger.warning(
             "All SVG generation attempts failed. Using last repaired SVG with force cleanup."
         )
-        return self._force_cleanup_svg(repaired_svg, width, height)
+        final_svg = self._sanitize_svg(self._force_cleanup_svg(repaired_svg, width, height))
+        self._validate_svg_xml(final_svg)
+        return finalize_svg(final_svg)
 
     async def _call_groq_llm(self, prompt: str, width: int, height: int) -> str:
         """Call Groq LLM to generate SVG content with exponential backoff."""
@@ -236,76 +244,8 @@ class GroqSvgImageProvider(ImageProvider):
 
         return raw.strip()
 
-    @staticmethod
-    def _repair_svg_xml(svg: str) -> str:
-        """Repair common XML issues in LLM-generated SVG.
-
-        Fixes:
-        - xlink:href → href (unbound namespace prefix)
-        - xml:space → removes (unnecessary)
-        - Adds xmlns if missing
-        - Removes duplicate attributes on elements
-        - Removes xmlns:xlink declarations
-        """
-        # Remove xlink namespace declaration
-        svg = re.sub(r'\s+xmlns:xlink="[^"]*"', "", svg)
-
-        # Replace xlink:href with plain href
-        svg = svg.replace("xlink:href", "href")
-
-        # Remove xml:space attributes
-        svg = re.sub(r'\s+xml:space="[^"]*"', "", svg)
-
-        # Remove xml:lang attributes
-        svg = re.sub(r'\s+xml:lang="[^"]*"', "", svg)
-
-        # Ensure xmlns is present on the <svg> tag
-        if 'xmlns="http://www.w3.org/2000/svg"' not in svg:
-            svg = svg.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"', 1)
-
-        # Remove duplicate attributes on elements
-        svg = re.sub(r"<[^>]+>", GroqSvgImageProvider._deduplicate_attrs, svg)
-
-        return svg
-
-    @staticmethod
-    def _deduplicate_attrs(match: re.Match) -> str:
-        """Remove duplicate attributes from an XML tag match."""
-        tag = match.group(0)
-
-        # Don't process closing tags or comments
-        if tag.startswith("</") or tag.startswith("<!--"):
-            return tag
-
-        # Extract all attribute key=value pairs
-        attr_pattern = re.compile(r'(\s+)([\w\-]+(?::[\w\-]+)?)\s*=\s*"([^"]*)"')
-        seen: dict[str, tuple[str, str, str]] = {}  # attr_name -> (whitespace, name, value)
-        duplicates_found = False
-
-        for m in attr_pattern.finditer(tag):
-            ws, name, value = m.group(1), m.group(2), m.group(3)
-            if name in seen:
-                duplicates_found = True
-            else:
-                seen[name] = (ws, name, value)
-
-        if not duplicates_found:
-            return tag
-
-        # Rebuild tag without duplicates
-        # Get the tag name part (everything before first attribute)
-        tag_start_match = re.match(r"(<\s*[\w\-]+)", tag)
-        if not tag_start_match:
-            return tag
-
-        tag_name = tag_start_match.group(1)
-        is_self_closing = tag.rstrip().endswith("/>")
-        attrs_str = "".join(f' {name}="{value}"' for _, (_, name, value) in seen.items())
-
-        if is_self_closing:
-            return f"{tag_name}{attrs_str}/>"
-        else:
-            return f"{tag_name}{attrs_str}>"
+    _repair_svg_xml = staticmethod(repair_svg_xml)
+    _deduplicate_attrs = staticmethod(deduplicate_attrs)
 
     @staticmethod
     def _validate_svg_xml(svg: str) -> None:
@@ -314,37 +254,12 @@ class GroqSvgImageProvider(ImageProvider):
         Raises Exception if SVG is not valid XML.
         """
         try:
-            ET.fromstring(svg.encode("utf-8"))
+            parse_svg(svg)
         except ET.ParseError as exc:
             raise ValueError(f"SVG XML parse error: {exc}") from exc
 
-    @staticmethod
-    def _sanitize_svg(svg: str) -> str:
-        """Sanitize SVG to prevent XSS vectors.
+    _sanitize_svg = staticmethod(strip_svg_markup)
 
-        Removes:
-        - <script> elements
-        - <foreignObject> elements (can embed arbitrary HTML)
-        - Event handler attributes (on*)
-        - javascript: and data:text/html URIs in href/src attributes
-        """
-        # Remove <script>...</script> elements (case-insensitive)
-        svg = re.sub(r'<script[^>]*>.*?</script>', '', svg, flags=re.DOTALL | re.IGNORECASE)
-        svg = re.sub(r'<script[^>]*/>', '', svg, flags=re.IGNORECASE)
-
-        # Remove <foreignObject>...</foreignObject> elements
-        svg = re.sub(r'<foreignObject[^>]*>.*?</foreignObject>', '', svg, flags=re.DOTALL | re.IGNORECASE)
-        svg = re.sub(r'<foreignObject[^>]*/>', '', svg, flags=re.IGNORECASE)
-
-        # Remove event handler attributes (onload, onclick, onmouseover, etc.)
-        svg = re.sub(r'\s+on\w+\s*=\s*"[^"]*"', '', svg, flags=re.IGNORECASE)
-        svg = re.sub(r"\s+on\w+\s*=\s*'[^']*'", '', svg, flags=re.IGNORECASE)
-
-        # Remove javascript: URIs in href and src attributes
-        svg = re.sub(r'(href|src)\s*=\s*"\s*javascript:[^"]*"', r'\1=""', svg, flags=re.IGNORECASE)
-        svg = re.sub(r'(href|src)\s*=\s*"\s*data:text/html[^"]*"', r'\1=""', svg, flags=re.IGNORECASE)
-
-        return svg
     @staticmethod
     def _force_cleanup_svg(svg: str, width: int, height: int) -> str:
         """Last-resort cleanup: create a minimal valid SVG wrapper if parsing still fails.
@@ -360,7 +275,7 @@ class GroqSvgImageProvider(ImageProvider):
         aggressive = re.sub(r"<\?[^?]*\?>", "", aggressive)
 
         try:
-            ET.fromstring(aggressive.encode("utf-8"))
+            parse_svg(aggressive)
             return aggressive
         except ET.ParseError:
             pass
@@ -374,7 +289,7 @@ class GroqSvgImageProvider(ImageProvider):
                 f"{inner}</svg>"
             )
             try:
-                ET.fromstring(fallback.encode("utf-8"))
+                parse_svg(fallback)
                 return fallback
             except ET.ParseError:
                 pass
