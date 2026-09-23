@@ -4,7 +4,6 @@ import logging
 from pathlib import Path
 
 import pytest
-from creator_provider.exceptions import ProviderError
 
 from .scene_cancellation_support import SceneCase, scene_case as scene_case
 from .terminal_postgres_support import terminal_pool as terminal_pool
@@ -24,7 +23,7 @@ def test_unlink_failure_warns_without_losing_cancelled_result(
     async def generate(prompt: str, params: dict[str, str]):
         result = await original_generate(prompt, params)
         if prompt == "shot-0":
-            raise ProviderError("unavailable")
+            raise RuntimeError("unavailable")
         await case.cancel()
         return result
 

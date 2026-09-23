@@ -116,6 +116,7 @@ def generate_scene_image(
                 except Exception:
                     pass  # Non-critical enhancement
             gpu_lock = GpuLockContext(f"{ctx.task_id}:{target_scene.scene_id}")
+            provider_error: ProviderError | None = None
 
             try:
                 if entry.requires_gpu:
@@ -140,15 +141,14 @@ def generate_scene_image(
                             break  # Success — exit retry loop
                         except Ignore:
                             raise
+                        except ProviderError as exc:
+                            provider_error = exc
+                            raise
                         except (TimeoutError, ConnectionError) as exc:
                             raise ProviderTimeoutError(
                                 "Provider timed out during scene image generation "
                                 f"for run {run_id} scene {target_scene.scene_id}"
                             ) from exc
-                        except ProviderTimeoutError:
-                            raise
-                        except RateLimitError:
-                            raise
                         except SoftTimeLimitExceeded:
                             raise
                         except Exception as exc:
@@ -240,6 +240,8 @@ def generate_scene_image(
             except RateLimitError:
                 raise
             except Exception as exc:
+                if exc is provider_error:
+                    raise
                 scene_result.update({"status": "failed", "error": str(exc)})
                 batch.failures.append(scene_result)
                 logger.error(
