@@ -104,7 +104,7 @@ class PostgresRunStorage:
         if expected_version is not None:
             where_clauses.append(f"version = ${next_index}")
             values.append(expected_version)
-            assignments_parts.append("version = version + 1")
+        assignments_parts.append("version = version + 1")
         assignments = ", ".join(assignments_parts)
         query = (
             f"UPDATE creator_runs SET {assignments} WHERE {' AND '.join(where_clauses)} RETURNING *"
@@ -167,7 +167,8 @@ class PostgresRunStorage:
         if workspace_id is None:
             row = await fetch_one(
                 "UPDATE creator_runs "
-                "SET model_defaults_json = (COALESCE(model_defaults_json, '{}')::jsonb || $2::jsonb)::text "
+                "SET model_defaults_json = (COALESCE(model_defaults_json, '{}')::jsonb || $2::jsonb)::text, "
+                "version = version + 1 "
                 "WHERE id = $1 RETURNING *",
                 run_id,
                 updates_json,
@@ -175,7 +176,8 @@ class PostgresRunStorage:
         else:
             row = await fetch_one(
                 "UPDATE creator_runs "
-                "SET model_defaults_json = (COALESCE(model_defaults_json, '{}')::jsonb || $2::jsonb)::text "
+                "SET model_defaults_json = (COALESCE(model_defaults_json, '{}')::jsonb || $2::jsonb)::text, "
+                "version = version + 1 "
                 "WHERE id = $1 AND workspace_id = $3 RETURNING *",
                 run_id,
                 updates_json,
