@@ -125,10 +125,8 @@ def create_app() -> FastAPI:
 
     # add_middleware inserts at the front of the stack, so the LAST call is outermost.
     # Order (outermost → innermost at runtime):
-    #   CORS → request_logging → security_headers → shutdown_guard → [Telemetry] → ApiKey
-    # CORS must be outermost so auth failures (401/403/404/503) still get CORS headers (#600).
-    app.add_middleware(BaseHTTPMiddleware, dispatch=request_logging_middleware)
-    app.add_middleware(BaseHTTPMiddleware, dispatch=security_headers_middleware)
+    #   request_logging → security_headers → CORS → [Telemetry] → ApiKey → shutdown_guard
+    # Wrap CORS preflight as well as auth/shutdown returns; CORS still wraps auth (#600).
     app.add_middleware(BaseHTTPMiddleware, dispatch=shutdown_guard_middleware)
     app.add_middleware(ApiKeyMiddleware)
     if os.getenv("OTEL_ENABLED", "").lower() in ("true", "1", "yes", "on"):
@@ -142,6 +140,8 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(BaseHTTPMiddleware, dispatch=security_headers_middleware)
+    app.add_middleware(BaseHTTPMiddleware, dispatch=request_logging_middleware)
 
     @app.exception_handler(StarletteHTTPException)
     async def http_error_handler(request: Request, exc: StarletteHTTPException) -> Response:
