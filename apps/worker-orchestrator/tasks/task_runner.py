@@ -297,9 +297,9 @@ async def _run_task_inner(
     end_time = datetime.now(timezone.utc)
     try:
         if result.status == "success":
-            await _task_tracking_service.mark_success(task_id)
+            await _task_tracking_service.mark_success_if_running(task_id)
         else:
-            await _task_tracking_service.mark_failed(
+            await _task_tracking_service.mark_failed_if_running(
                 task_id, "task_result", f"status={result.status}"
             )
     except Exception:
@@ -337,7 +337,7 @@ async def _handle_general_failure(
     """Consolidate error-handler async work into a single coroutine."""
     try:
         code, message = _safe_failure_record(exc)
-        await _task_tracking_service.mark_failed(task_id, code, message)
+        await _task_tracking_service.mark_failed_if_running(task_id, code, message)
     except Exception:
         logger.warning("Failed to record task failure", exc_info=True)
     try:

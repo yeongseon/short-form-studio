@@ -101,7 +101,7 @@ def run_task(
             try:
                 code, message = runner._safe_failure_record(exc)
                 runner.run_in_worker_loop(
-                    runner._task_tracking_service.mark_failed(task_id, code, message)
+                    runner._task_tracking_service.mark_failed_if_running(task_id, code, message)
                 )
             except Exception:
                 runner.logger.warning("Failed to record task failure", exc_info=True)
@@ -114,7 +114,7 @@ def run_task(
             try:
                 code, message = runner._safe_failure_record(exc)
                 runner.run_in_worker_loop(
-                    runner._task_tracking_service.mark_failed(task_id, code, message)
+                    runner._task_tracking_service.mark_failed_if_running(task_id, code, message)
                 )
             except Exception:
                 runner.logger.warning("Failed to mark task as failed before retry", exc_info=True)

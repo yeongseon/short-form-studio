@@ -33,10 +33,10 @@ class _TrackingServiceStub:
         self.started += 1
         return SimpleNamespace(status="running")
 
-    async def mark_success(self, task_id: str) -> None:
+    async def mark_success_if_running(self, task_id: str) -> None:
         return None
 
-    async def mark_failed(self, task_id: str, error_code: str, error_message: str) -> None:
+    async def mark_failed_if_running(self, task_id: str, error_code: str, error_message: str) -> None:
         return None
 
 
@@ -254,10 +254,10 @@ def test_generate_script_passes_idempotency_key(monkeypatch) -> None:
         ) -> SimpleNamespace:
             return SimpleNamespace(status="running")
 
-        async def mark_success(self, task_id: str) -> None:
+        async def mark_success_if_running(self, task_id: str) -> None:
             return None
 
-        async def mark_failed(self, task_id: str, error_code: str, error_message: str) -> None:
+        async def mark_failed_if_running(self, task_id: str, error_code: str, error_message: str) -> None:
             return None
 
     script_service = _ScriptService()
@@ -298,10 +298,10 @@ class _TrackingServiceRaceStub:
         # Return status="success" to simulate concurrent completion
         return SimpleNamespace(status="success")
 
-    async def mark_success(self, task_id: str) -> None:
+    async def mark_success_if_running(self, task_id: str) -> None:
         return None
 
-    async def mark_failed(self, task_id: str, error_code: str, error_message: str) -> None:
+    async def mark_failed_if_running(self, task_id: str, error_code: str, error_message: str) -> None:
         return None
 
 
@@ -405,10 +405,10 @@ def test_task_runner_skips_when_claim_fails(monkeypatch) -> None:
         async def record_task_start(self, run_id: int, task_name: str, task_id: str) -> None:
             return None  # Claim failed
 
-        async def mark_success(self, task_id: str) -> None:
+        async def mark_success_if_running(self, task_id: str) -> None:
             return None
 
-        async def mark_failed(self, task_id: str, error_code: str, error_message: str) -> None:
+        async def mark_failed_if_running(self, task_id: str, error_code: str, error_message: str) -> None:
             return None
 
     monkeypatch.setattr(task_runner, "_task_tracking_service", _ClaimFailedTracking())
@@ -441,10 +441,10 @@ def test_task_runner_raises_when_claim_errors(monkeypatch) -> None:
         async def record_task_start(self, run_id: int, task_name: str, task_id: str) -> None:
             raise RuntimeError("DB connection lost")
 
-        async def mark_success(self, task_id: str) -> None:
+        async def mark_success_if_running(self, task_id: str) -> None:
             return None
 
-        async def mark_failed(self, task_id: str, error_code: str, error_message: str) -> None:
+        async def mark_failed_if_running(self, task_id: str, error_code: str, error_message: str) -> None:
             return None
 
     monkeypatch.setattr(task_runner, "_task_tracking_service", _ClaimErrorTracking())

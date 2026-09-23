@@ -189,7 +189,7 @@ def test_run_task_value_error_marks_task_failed_without_run_failed_transition(
         async def mark_running(self, task_id: str) -> None:
             return None
 
-        async def mark_failed(self, task_id: str, error_code: str, error_message: str) -> None:
+        async def mark_failed_if_running(self, task_id: str, error_code: str, error_message: str) -> None:
             self.failed_calls.append((task_id, error_code, error_message))
 
     class _StorageStub:
@@ -269,7 +269,7 @@ def test_run_task_provider_error_records_redacted_retryable_summary(
         async def mark_running(self, task_id):
             return None
 
-        async def mark_failed(self, task_id, error_code, error_message):
+        async def mark_failed_if_running(self, task_id, error_code, error_message):
             self.failed_calls.append((task_id, error_code, error_message))
 
     class _StorageStub:
