@@ -1,5 +1,6 @@
 """Cooperative scene checkpoints and guarded batch completion."""
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -9,6 +10,8 @@ from creator_domain.models.stage import RunStage
 from creator_service.run_service import RunService
 from tasks import task_runner
 from tasks.task_runner import TaskContext, TaskResult
+
+logger = logging.getLogger(__name__)
 
 SAFE_SUCCESS_STAGES = frozenset({
     RunStage.VISUAL_PLAN_REVIEW.value,
@@ -73,7 +76,10 @@ class SceneBatch:
                 self.cancelled = True
         if self.cancelled:
             for path in self.local_outputs:
-                path.unlink(missing_ok=True)
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("Scene local cleanup failed", extra={"run_id": self.ctx.run_id})
         return TaskResult(
             status="cancelled" if self.cancelled else status,
             extra={
