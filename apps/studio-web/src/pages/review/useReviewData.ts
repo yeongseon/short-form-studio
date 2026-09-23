@@ -8,7 +8,7 @@ export interface ScriptData {
   readonly structured_script: Record<string, unknown> | null;
 }
 export type LegacyVisualPlanScene = VisualPlanScene & { description?: string; image_prompt?: string };
-export type ReviewAssets = Record<string, { asset_path: string; model_used: string; is_active: boolean }[]>;
+export type ReviewAssets = Record<string, { id: number; asset_path: string; model_used: string; is_active: boolean }[]>;
 
 const POST_SCRIPT_STAGES = new Set(["SCRIPT_REVIEW", "VISUAL_PLAN_GENERATING", "VISUAL_PLAN_REVIEW", "VISUAL_ASSET_GENERATING", "VISUAL_ASSET_REVIEW", "AUDIO_GENERATING", "SUBTITLE_GENERATING", "RENDER_GENERATING", "FINAL_REVIEW", "PUBLISHED"]);
 const POST_VISUAL_PLAN_STAGES = new Set(["VISUAL_PLAN_REVIEW", "VISUAL_ASSET_GENERATING", "VISUAL_ASSET_REVIEW", "AUDIO_GENERATING", "SUBTITLE_GENERATING", "RENDER_GENERATING", "FINAL_REVIEW", "PUBLISHED"]);
