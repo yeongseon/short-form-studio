@@ -89,10 +89,71 @@ class TestMapHttpxError:
         result = map_httpx_error(exc, "test")
         assert isinstance(result, ProviderValidationError)
 
-    def test_prefix_included_in_message(self):
+    def test_prefix_omitted_when_containing_configured_endpoint(self):
+        # Given a caller-owned diagnostic containing an internal endpoint.
         exc = httpx.TimeoutException("timed out")
+        # When the shared mapper creates a public summary.
         result = map_httpx_error(exc, "Ollama at http://localhost:11434")
-        assert "Ollama at http://localhost:11434" in str(result)
+        # Then classification survives but configuration does not.
+        assert type(result) is ProviderTimeoutError
+        assert str(result) == "Provider: TimeoutException"
+
+
+@pytest.mark.parametrize("prefix", [
+    "SD at http://internal.invalid/private", "HTTPS://USER:PASS@internal.invalid/gsk_path",
+    "postgresql://user:password@db.invalid/private", "Bearer synthetic-credential",
+    "gsk_synthetic", "AIzaSynthetic", "sk-proj-synthetic_private",
+    "arbitrary opaque credential", "", "x" * 100_000,
+])
+@pytest.mark.parametrize("status,expected", [
+    (401, ProviderAuthError), (403, ProviderAuthError),
+    (400, ProviderValidationError), (422, ProviderValidationError),
+    (429, RateLimitError), (500, ProviderError),
+])
+def test_summary_discards_prefix_when_mapping_http_status(
+    prefix: str, status: int, expected: type[ProviderError],
+) -> None:
+    # Given untrusted prefix, HTTP diagnostics, body and delay metadata.
+    request = httpx.Request("POST", "https://user:password@internal.invalid/private")
+    response = httpx.Response(status, request=request, text="private body",
+                              headers={"Retry-After": "73"})
+    exc = httpx.HTTPStatusError("private diagnostic", request=request, response=response)
+    # When mapping the status independently of caller diagnostics.
+    result = map_httpx_error(exc, prefix)
+    # Then output is bounded and classification/metadata remain exact.
+    assert type(result) is expected
+    assert str(result) == f"Provider: HTTP {status}"
+    if isinstance(result, RateLimitError):
+        assert result.retry_after == "73"
+
+
+class OpaquePrefix(str):
+    def __str__(self) -> str:
+        raise AssertionError("prefix must not be stringified")
+
+    def __repr__(self) -> str:
+        raise AssertionError("prefix must not be represented")
+
+    def __format__(self, format_spec: str) -> str:
+        raise AssertionError("prefix must not be formatted")
+
+
+@pytest.mark.parametrize("error_type,expected", [
+    (httpx.ReadTimeout, ProviderTimeoutError), (httpx.ConnectError, ProviderTimeoutError),
+    (httpx.ReadError, ProviderTimeoutError), (httpx.RemoteProtocolError, ProviderError),
+    (httpx.HTTPError, ProviderError),
+])
+def test_summary_never_formats_prefix_when_mapping_transport_error(
+    error_type: type[httpx.HTTPError], expected: type[ProviderError],
+) -> None:
+    # Given an opaque string object satisfying the declared prefix contract.
+    prefix = OpaquePrefix("private diagnostic")
+    exc = error_type("private transport diagnostic")
+    # When mapping a transport exception.
+    result = map_httpx_error(exc, prefix)
+    # Then neither str/repr/format is invoked on the prefix.
+    assert type(result) is expected
+    assert str(result) == f"Provider: {error_type.__name__}"
 
 
 class TestExceptionHierarchy:
