@@ -134,8 +134,8 @@ class TestQwenTTSProviderGenerate(unittest.TestCase):
             with patch.dict("os.environ", {"ARTIFACT_ROOT": "/tmp"}):
                 self._run(provider.generate("test", params={"output_path": "/tmp/x.wav"}))
 
-        self.assertIn("Qwen3 TTS provider", str(ctx.exception))
-        self.assertIn("/synthesize", str(ctx.exception))
+        self.assertEqual(str(ctx.exception), "Provider: ConnectError")
+        self.assertNotIn("/synthesize", str(ctx.exception))
 
     @patch("creator_provider.tts.qwen_tts_provider.httpx.AsyncClient")
     def test_default_language_from_env(self, mock_client_cls: MagicMock) -> None:

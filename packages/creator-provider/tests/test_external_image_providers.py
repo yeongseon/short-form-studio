@@ -7,7 +7,7 @@ from unittest import mock
 
 import httpx
 import pytest
-from creator_provider.exceptions import ProviderAuthError
+from creator_provider.exceptions import ProviderAuthError, ProviderError
 
 
 class TestDalleProvider:
@@ -70,7 +70,7 @@ class TestDalleProvider:
             provider = DalleProvider(endpoint="https://api.openai.com", model_key="dall-e-3")
             with (
                 mock.patch("httpx.AsyncClient.post", return_value=mock_response),
-                pytest.raises(RuntimeError, match="DALL-E API request failed"),
+                pytest.raises(ProviderAuthError, match="^Provider: HTTP 401$"),
             ):
                 await provider.generate("test prompt")
 
@@ -163,7 +163,7 @@ class TestStabilityProvider:
             )
             with (
                 mock.patch("httpx.AsyncClient.post", return_value=mock_response),
-                pytest.raises(RuntimeError, match="Stability AI API request failed"),
+                pytest.raises(ProviderError, match="^Provider: HTTP 500$"),
             ):
                 await provider.generate("test prompt")
 
@@ -265,7 +265,7 @@ class TestImagenProvider:
             )
             with (
                 mock.patch("httpx.AsyncClient.post", return_value=mock_response),
-                pytest.raises(ProviderError, match="Imagen API request failed"),
+                pytest.raises(ProviderAuthError, match="^Provider: HTTP 401$"),
             ):
                 await provider.generate("test prompt")
 
@@ -292,7 +292,7 @@ class TestImagenProvider:
             )
             with (
                 mock.patch("httpx.AsyncClient.post", return_value=mock_response) as mock_post,
-                pytest.raises(ProviderError, match="Imagen API request failed") as exc_info,
+                pytest.raises(ProviderAuthError, match="^Provider: HTTP 401$") as exc_info,
             ):
                 await provider.generate("test prompt")
 
