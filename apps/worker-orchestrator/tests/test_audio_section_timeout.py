@@ -11,6 +11,7 @@ from celery.exceptions import SoftTimeLimitExceeded as CelerySoftTimeLimitExceed
 from creator_domain.models.script_draft import ScriptSection
 from creator_service.audio_service import AudioService, InMemoryAudioStorage
 from creator_service.script_service import InMemoryScriptStorage, ScriptService
+from creator_provider.tts.edge_tts_provider import EdgeTTSProvider
 from tasks import generate_audio as audio
 from worker_loop import run_in_worker_loop
 
@@ -80,6 +81,44 @@ def test_soft_timeout_escapes_section_without_fallback(audio_case: AudioCase) ->
     assert run_in_worker_loop(case.artifacts.storage.list_by_run_sections(case.runner.run_id)) == []
     saved = run_in_worker_loop(case.runner.runs.storage.get_run(case.runner.run_id))
     assert (saved["current_stage"], saved["status"]) == ("FAILED", "failed")
+
+
+def test_edge_sdk_timeout_reaches_audio_task_without_fallback(
+    audio_case: AudioCase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given the real Edge adapter whose SDK save raises a soft deadline.
+    case = audio_case
+    calls: list[str] = []
+
+    class FakeCommunicate:
+        def __init__(self, **_kwargs: str) -> None:
+            pass
+
+        async def save(self, path: str) -> None:
+            calls.append(path)
+            raise SoftTimeLimitExceeded()
+
+    provider = EdgeTTSProvider(endpoint="", model_key="edge-tts")
+    monkeypatch.setattr("creator_provider.tts.edge_tts_provider.edge_tts.Communicate", FakeCommunicate)
+    monkeypatch.setenv("ARTIFACT_ROOT", str(case.root))
+    monkeypatch.setattr(audio, "get_default_registry", lambda: SimpleNamespace(
+        resolve=Mock(return_value=SimpleNamespace(
+            requires_gpu=False, provider_type="edge_tts", default_params={}, endpoint="offline",
+        )),
+        get_provider=Mock(return_value=provider),
+    ))
+
+    # When the actual Celery task and runner invoke the adapter's SDK boundary.
+    result = audio.generate_audio.apply(
+        args=(case.runner.run_id,), kwargs={"tts_model": "edge-tts"},
+        task_id="edge-sdk-timeout", throw=False,
+    )
+
+    # Then the deadline identity and single invocation survive without fallback.
+    assert result.state == "FAILURE"
+    assert isinstance(result.result, SoftTimeLimitExceeded)
+    assert len(calls) == 1
+    case.usage.assert_not_awaited()
 
 
 @pytest.mark.parametrize("error", [
