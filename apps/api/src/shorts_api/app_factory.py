@@ -4,12 +4,16 @@ import time
 
 from creator_domain.exceptions import ServiceError
 from creator_service.actionable_errors import map_service_error, redact_error_message
+from creator_service.error_redaction import sanitize_error_json
 from creator_service.logging_config import setup_json_logging
 from creator_service.production_checks import validate_production_config
 from fastapi import APIRouter, FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
+from fastapi.utils import is_body_allowed_for_status_code
 from starlette import status
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from shorts_api.auth import ApiKeyMiddleware, CurrentUser
@@ -138,11 +142,26 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_error_handler(request: Request, exc: StarletteHTTPException) -> Response:
+        if not is_body_allowed_for_status_code(exc.status_code):
+            return Response(status_code=exc.status_code, headers=exc.headers)
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": sanitize_error_json(exc.detail)},
+            headers=exc.headers,
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+        return JSONResponse(status_code=422, content={"detail": sanitize_error_json(exc.errors())})
+
     @app.exception_handler(ServiceError)
     async def service_error_handler(request: Request, exc: ServiceError) -> JSONResponse:
         """Central mapping from typed service exceptions to HTTP responses.
 
-        Preserves the raw ``detail`` for backward compatibility and adds a static,
+        Preserves a redacted string ``detail`` and adds a static,
         actionable ``error`` envelope (category, retryability, recovery steps) so
         clients can recover without parsing free text.
         """
