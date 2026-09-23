@@ -97,14 +97,12 @@ def generate_subtitles(
             params["output_path"] = subtitle_path
             try:
                 await provider.transcribe(audio_path, params=params)
+            except ProviderError:
+                raise
             except (TimeoutError, ConnectionError) as exc:
                 raise ProviderTimeoutError(
                     f"Provider timed out during subtitle generation for run {run_id}"
                 ) from exc
-            except ProviderTimeoutError:
-                raise
-            except RateLimitError:
-                raise
             except SoftTimeLimitExceeded:
                 raise
             except Exception as exc:
