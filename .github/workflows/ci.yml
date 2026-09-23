@@ -124,7 +124,7 @@ jobs:
           python3 -m pytest packages/creator-service/tests/test_quota_stage_compensation.py packages/creator-service/tests/test_postgres_quota_compensation.py -v --basetemp=/tmp/quota-compensation-runtime
           PYTHONPATH=apps/worker-orchestrator python3 -m pytest packages/creator-service/tests/test_run_version_mutations.py packages/creator-service/tests/test_run_version_cas.py packages/creator-service/tests/test_run_version_boundaries.py apps/worker-orchestrator/tests/test_run_version_outcomes.py -v --basetemp=/tmp/run-version-runtime
           PYTHONPATH=apps/worker-orchestrator python3 -m pytest apps/worker-orchestrator/tests/test_scene_cancellation.py apps/worker-orchestrator/tests/test_scene_cancellation_boundaries.py -v --basetemp=/tmp/scene-cancellation-runtime
-          PYTHONPATH=apps/worker-orchestrator:apps/api/src python3 -m pytest apps/worker-orchestrator/tests/test_provider_failure_surfaces.py -k postgres -v --basetemp=/tmp/provider-boundary-runtime
+          PYTHONPATH=apps/worker-orchestrator:apps/api/src python3 -m pytest apps/worker-orchestrator/tests/test_provider_failure_surfaces.py apps/worker-orchestrator/tests/test_image_provider_http_surfaces.py -k postgres -v --basetemp=/tmp/provider-boundary-runtime
       - name: Verify API image lightweight execution and concurrent health
         env:
           LIGHTWEIGHT_TEST_IMAGE: first-short-api-lightweight

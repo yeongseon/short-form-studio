@@ -8,7 +8,7 @@ from unittest import mock
 import httpx
 import pytest
 from creator_provider.exceptions import ProviderAuthError
-from creator_provider.exceptions import ProviderAuthError
+from creator_provider.exceptions import ProviderError
 
 
 class TestElevenLabsProvider:
@@ -86,7 +86,7 @@ class TestElevenLabsProvider:
             )
             with (
                 mock.patch("httpx.AsyncClient.post", return_value=mock_response),
-                pytest.raises(RuntimeError, match="ElevenLabs API request failed"),
+                pytest.raises(ProviderAuthError, match="^Provider: HTTP 401$"),
             ):
                 await provider.generate("test text")
 
@@ -205,7 +205,7 @@ class TestOpenAITTSProvider:
             )
             with (
                 mock.patch("httpx.AsyncClient.post", return_value=mock_response),
-                pytest.raises(RuntimeError, match="OpenAI TTS API request failed"),
+                pytest.raises(ProviderError, match="^Provider: HTTP 500$"),
             ):
                 await provider.generate("test text")
 

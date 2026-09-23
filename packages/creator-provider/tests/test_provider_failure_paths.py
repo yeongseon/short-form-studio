@@ -42,14 +42,16 @@ class TestOllamaFailurePaths:
     @pytest.mark.asyncio
     async def test_connection_refused(self, provider: OllamaProvider):
         with patch("httpx.AsyncClient.post", side_effect=httpx.ConnectError("Connection refused")):
-            with pytest.raises(ProviderTimeoutError, match="Connection refused"):
+            with pytest.raises(ProviderTimeoutError, match="ConnectError") as caught:
                 await provider.generate("Hello")
+            assert "Connection refused" not in str(caught.value)
 
     @pytest.mark.asyncio
     async def test_timeout(self, provider: OllamaProvider):
         with patch("httpx.AsyncClient.post", side_effect=httpx.TimeoutException("read timeout")):
-            with pytest.raises(ProviderTimeoutError, match="read timeout"):
+            with pytest.raises(ProviderTimeoutError, match="TimeoutException") as caught:
                 await provider.generate("Hello")
+            assert "read timeout" not in str(caught.value)
 
     @pytest.mark.asyncio
     async def test_http_429_rate_limit(self, provider: OllamaProvider):
@@ -113,14 +115,16 @@ class TestSDLocalFailurePaths:
     @pytest.mark.asyncio
     async def test_connection_refused(self, provider: SDLocalProvider):
         with patch("httpx.AsyncClient.post", side_effect=httpx.ConnectError("Connection refused")):
-            with pytest.raises(ProviderTimeoutError, match="Connection refused"):
+            with pytest.raises(ProviderTimeoutError, match="ConnectError") as caught:
                 await provider.generate("a cat")
+            assert "Connection refused" not in str(caught.value)
 
     @pytest.mark.asyncio
     async def test_timeout(self, provider: SDLocalProvider):
         with patch("httpx.AsyncClient.post", side_effect=httpx.TimeoutException("GPU timeout")):
-            with pytest.raises(ProviderTimeoutError, match="GPU timeout"):
+            with pytest.raises(ProviderTimeoutError, match="TimeoutException") as caught:
                 await provider.generate("a cat")
+            assert "GPU timeout" not in str(caught.value)
 
     @pytest.mark.asyncio
     async def test_http_500(self, provider: SDLocalProvider):
@@ -184,14 +188,16 @@ class TestPiperTTSFailurePaths:
     @pytest.mark.asyncio
     async def test_connection_refused(self, provider: PiperTTSProvider):
         with patch("httpx.AsyncClient.post", side_effect=httpx.ConnectError("Connection refused")):
-            with pytest.raises(ProviderTimeoutError, match="Connection refused"):
+            with pytest.raises(ProviderTimeoutError, match="ConnectError") as caught:
                 await provider.generate("Hello world")
+            assert "Connection refused" not in str(caught.value)
 
     @pytest.mark.asyncio
     async def test_timeout(self, provider: PiperTTSProvider):
         with patch("httpx.AsyncClient.post", side_effect=httpx.TimeoutException("TTS timeout")):
-            with pytest.raises(ProviderTimeoutError, match="TTS timeout"):
+            with pytest.raises(ProviderTimeoutError, match="TimeoutException") as caught:
                 await provider.generate("Hello world")
+            assert "TTS timeout" not in str(caught.value)
 
     @pytest.mark.asyncio
     async def test_http_500(self, provider: PiperTTSProvider):

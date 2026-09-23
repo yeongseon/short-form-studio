@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 
 from creator_provider.base import ImageProvider, ImageResult
-from creator_provider.exceptions import ProviderError, ProviderTimeoutError
+from creator_provider.exceptions import ProviderError, map_httpx_error
 from creator_provider.validation import MAX_IMAGE_PROMPT_CHARS, validate_prompt_length
 
 # Free models (no HF token needed for serverless inference)
@@ -44,24 +44,19 @@ class HuggingFaceImageProvider(ImageProvider):
             "parameters": {"width": width, "height": height},
         }
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            response = await client.post(url, json=payload, headers=headers)
-
-        if response.status_code == 429:
-            from creator_provider.exceptions import RateLimitError
-
-            raise RateLimitError("HuggingFace rate limited (429)")
-
-        if response.status_code == 503:
-            # Model is loading — retry once after wait
-            await asyncio.sleep(20)
+        try:
             async with httpx.AsyncClient(timeout=120.0) as client:
                 response = await client.post(url, json=payload, headers=headers)
 
-        if response.status_code != 200:
-            raise ProviderError(
-                f"HuggingFace API error {response.status_code}: {response.text[:200]}"
-            )
+            if response.status_code == 503:
+                # Model is loading — retry once after wait
+                await asyncio.sleep(20)
+                async with httpx.AsyncClient(timeout=120.0) as client:
+                    response = await client.post(url, json=payload, headers=headers)
+
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise map_httpx_error(exc, "HuggingFace request failed") from None
 
         content_type = response.headers.get("content-type", "")
         if "image" not in content_type and "octet" not in content_type:
@@ -96,14 +91,14 @@ class HuggingFaceImageProvider(ImageProvider):
 
         try:
             image_bytes = await self._make_request(prompt, _DEFAULT_MODEL, width, height)
-        except (ProviderError, ProviderTimeoutError):
+        except ProviderError:
             raise
-        except httpx.TimeoutException as exc:
-            raise ProviderTimeoutError(f"HuggingFace request timed out: {exc}") from exc
         except Exception as exc:
             # Try fallback model
             try:
                 image_bytes = await self._make_request(prompt, _FALLBACK_MODEL, width, height)
+            except ProviderError:
+                raise
             except Exception as fallback_exc:
                 raise ProviderError(
                     f"HuggingFace image generation failed (both models): {exc}"

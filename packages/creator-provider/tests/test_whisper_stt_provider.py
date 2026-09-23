@@ -171,8 +171,8 @@ class TestWhisperSTTProviderTranscribe(unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             self._run(provider.transcribe(audio_path))
 
-        self.assertIn("Whisper STT provider", str(ctx.exception))
-        self.assertIn("/transcribe", str(ctx.exception))
+        self.assertEqual(str(ctx.exception), "Provider: ConnectError")
+        self.assertNotIn("/transcribe", str(ctx.exception))
 
 
 if __name__ == "__main__":
