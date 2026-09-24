@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from creator_domain.exceptions import ValidationError
 from creator_domain.models import MediaType
+from creator_service.media_file_ingestion import FileUpload
 from creator_service.media_asset_service import (
     MediaUploadRejected,
     media_asset_service,
@@ -32,17 +33,11 @@ async def upload_image_asset(
     for unauthorized workspaces — anti-enumeration). Validation, probing, and
     storage are delegated to ``media_asset_service``.
     """
-    data = await file.read(_MAX_IMAGE_BYTES + 1)
-    if len(data) > _MAX_IMAGE_BYTES:
-        raise ValidationError("Upload exceeds maximum allowed size")
-
     try:
-        asset = await media_asset_service.create_image_asset(
-            workspace_id=workspace_id,
-            filename=file.filename or "upload",
-            data=data,
-            content_type=file.content_type or "application/octet-stream",
-            max_bytes=_MAX_IMAGE_BYTES,
+        asset = await media_asset_service.create_file_asset(
+            file.file,
+            FileUpload(workspace_id, file.filename or "upload",
+                       file.content_type or "application/octet-stream", "image", _MAX_IMAGE_BYTES),
         )
     except MediaUploadRejected as error:
         raise ValidationError(str(error)) from error
@@ -62,17 +57,11 @@ async def upload_audio_asset(
     for unauthorized workspaces). The uploaded bytes are stored unchanged, and
     duration is probed by ``media_asset_service``.
     """
-    data = await file.read(_MAX_AUDIO_BYTES + 1)
-    if len(data) > _MAX_AUDIO_BYTES:
-        raise ValidationError("Upload exceeds maximum allowed size")
-
     try:
-        asset = await media_asset_service.create_audio_asset(
-            workspace_id=workspace_id,
-            filename=file.filename or "upload",
-            data=data,
-            content_type=file.content_type or "application/octet-stream",
-            max_bytes=_MAX_AUDIO_BYTES,
+        asset = await media_asset_service.create_file_asset(
+            file.file,
+            FileUpload(workspace_id, file.filename or "upload",
+                       file.content_type or "application/octet-stream", "audio", _MAX_AUDIO_BYTES),
         )
     except MediaUploadRejected as error:
         raise ValidationError(str(error)) from error
@@ -92,17 +81,11 @@ async def upload_video_asset(
     for unauthorized workspaces). The uploaded bytes are stored unchanged, and
     duration/dimensions are probed by ``media_asset_service``.
     """
-    data = await file.read(_MAX_VIDEO_BYTES + 1)
-    if len(data) > _MAX_VIDEO_BYTES:
-        raise ValidationError("Upload exceeds maximum allowed size")
-
     try:
-        asset = await media_asset_service.create_video_asset(
-            workspace_id=workspace_id,
-            filename=file.filename or "upload",
-            data=data,
-            content_type=file.content_type or "application/octet-stream",
-            max_bytes=_MAX_VIDEO_BYTES,
+        asset = await media_asset_service.create_file_asset(
+            file.file,
+            FileUpload(workspace_id, file.filename or "upload",
+                       file.content_type or "application/octet-stream", "video", _MAX_VIDEO_BYTES),
         )
     except MediaUploadRejected as error:
         raise ValidationError(str(error)) from error
