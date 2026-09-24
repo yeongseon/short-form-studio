@@ -52,8 +52,7 @@ async def require_admin(x_admin_key: str | None = Header(default=None)) -> str:
 
     expected = os.environ.get("ADMIN_API_KEY", "")
     environment = os.getenv("ENVIRONMENT", "development").strip().lower()
-    is_test_runtime = "PYTEST_CURRENT_TEST" in os.environ
-    if environment == "production" and not is_test_runtime and (not expected or len(expected) < 16):
+    if environment == "production" and (not expected or len(expected) < 16):
         logger.error("ADMIN_API_KEY is not set or too short (min 16 chars)")
         raise HTTPException(status_code=503, detail="Admin API not configured")
     if not expected or not hmac.compare_digest(x_admin_key, expected):

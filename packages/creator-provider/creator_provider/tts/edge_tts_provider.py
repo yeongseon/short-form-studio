@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import edge_tts
+from billiard.exceptions import SoftTimeLimitExceeded
 
 from creator_provider.base import AudioResult, TTSProvider
 from creator_provider.exceptions import ProviderError
@@ -70,6 +71,8 @@ class EdgeTTSProvider(TTSProvider):
                 text=text, voice=voice_name, rate=rate, pitch=pitch, volume=volume
             )
             await communicate.save(str(output_path))
+        except SoftTimeLimitExceeded:
+            raise
         except ConnectionError as exc:
             from creator_provider.exceptions import ProviderTimeoutError
             raise ProviderTimeoutError(f"Edge TTS connection failed: {exc}") from exc

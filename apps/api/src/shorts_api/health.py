@@ -100,10 +100,7 @@ async def health(request: Request) -> dict[str, object]:
         finally:
             await redis_client.aclose()
 
-        shutdown_blocking = (
-            shutdown_state.is_shutting_down and "PYTEST_CURRENT_TEST" not in os.environ
-        )
-        overall_ok = db_ok and redis_ok and not shutdown_blocking
+        overall_ok = db_ok and redis_ok and not shutdown_state.is_shutting_down
 
         response_payload: dict[str, object] = {
             "status": "ok" if overall_ok else "unavailable",

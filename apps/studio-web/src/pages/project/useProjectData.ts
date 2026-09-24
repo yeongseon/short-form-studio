@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { apiFetch, apiJson, apiVoid, API_BASE } from "../../api/client";
 import type { RunPreview } from "../../api/runPreview";
@@ -29,25 +29,53 @@ export function useProjectData(projectId: number): UseProjectDataResult {
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<RunPreview | null>(null);
   const [modelSelection, setModelSelection] = useState<ModelDefaults>({});
+  const activeProject = useRef<number | null>(projectId);
+  const projectSequence = useRef(0);
+  const runSequence = useRef(0);
+  const previewSequence = useRef(0);
+
+  useLayoutEffect(() => {
+    activeProject.current = projectId;
+    projectSequence.current += 1;
+    runSequence.current += 1;
+    previewSequence.current += 1;
+    setProject(null);
+    setRun(null);
+    setPreview(null);
+    setModelSelection({});
+    setError(null);
+    setLoading(true);
+    return () => { activeProject.current = null; };
+  }, [projectId]);
 
   const fetchProjectAndRun = useCallback(async () => {
+    if (activeProject.current !== projectId) return;
+    const sequence = ++projectSequence.current;
+    const ownsResponse = () => activeProject.current === projectId && projectSequence.current === sequence;
     setLoading(true);
     setError(null);
     try {
       const projData = await apiJson<ProjectDetail>(`${API_BASE}/projects/${projectId}`);
+      if (!ownsResponse()) return;
       setProject(projData);
 
       const res = await apiFetch(`${API_BASE}/projects/${projectId}/runs`);
       if (res.ok) {
         const runsData: { runs: RunDetail[]; total: number } = await res.json();
-        setRun(runsData.runs.length > 0 ? runsData.runs[0] : null);
+        if (ownsResponse()) {
+          runSequence.current += 1;
+          setRun(runsData.runs.length > 0 ? runsData.runs[0] : null);
+        }
       } else {
-        setRun(null);
+        if (ownsResponse()) {
+          runSequence.current += 1;
+          setRun(null);
+        }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "An unexpected error occurred");
+      if (ownsResponse()) setError(err instanceof Error ? err.message : "An unexpected error occurred");
     } finally {
-      setLoading(false);
+      if (ownsResponse()) setLoading(false);
     }
   }, [projectId]);
 
@@ -58,13 +86,16 @@ export function useProjectData(projectId: number): UseProjectDataResult {
   }, [projectId, fetchProjectAndRun]);
 
   const refreshRun = useCallback(async (runId: number) => {
+    const owner = activeProject.current;
+    if (owner === null || project?.id !== owner || run?.id !== runId) return;
+    const sequence = ++runSequence.current;
     try {
       const data = await apiJson<RunDetail>(`${API_BASE}/runs/${runId}`);
-      setRun(data);
+      if (activeProject.current === owner && runSequence.current === sequence && data.project_id === owner) setRun(data);
     } catch {
       return;
     }
-  }, []);
+  }, [project?.id, run?.id]);
 
   useEffect(() => {
     if (!run || !RUN_POLL_STAGES.has(run.current_stage)) return;
@@ -76,21 +107,25 @@ export function useProjectData(projectId: number): UseProjectDataResult {
 
   useEffect(() => {
     if (!run || !FINAL_REVIEW_STAGES.has(run.current_stage)) {
+      previewSequence.current += 1;
       setPreview(null);
       return;
     }
+    const owner = projectId;
+    const runId = run.id;
+    const sequence = ++previewSequence.current;
     (async () => {
       try {
-        const res = await apiFetch(`${API_BASE}/runs/${run.id}/preview`);
+        const res = await apiFetch(`${API_BASE}/runs/${runId}/preview`);
         if (res.ok) {
           const data: RunPreview = await res.json();
-          setPreview(data);
+          if (activeProject.current === owner && previewSequence.current === sequence) setPreview(data);
         }
       } catch {
         return;
       }
     })();
-  }, [run]);
+  }, [projectId, run]);
 
   useEffect(() => {
     if (run?.model_defaults) {
@@ -115,6 +150,7 @@ export function useProjectData(projectId: number): UseProjectDataResult {
       if (!field) return;
 
       const previousValue = modelSelection[field];
+      const owner = projectId;
 
       setModelSelection((prev) => ({ ...prev, [field]: modelKey }));
 
@@ -127,7 +163,9 @@ export function useProjectData(projectId: number): UseProjectDataResult {
               body: JSON.stringify({ [field]: modelKey }),
             });
           } catch (err) {
+            if (activeProject.current !== owner) return;
             setModelSelection((prev) => {
+              if (prev[field] !== modelKey) return prev;
               if (previousValue === undefined) {
                 const next = { ...prev };
                 delete next[field];
@@ -140,7 +178,7 @@ export function useProjectData(projectId: number): UseProjectDataResult {
         })();
       }
     },
-    [modelSelection, run],
+    [modelSelection, projectId, run],
   );
 
   return {

@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useLayoutEffect, useRef } from "react";
 import { apiFetch, API_BASE } from "../../api/client";
 
 import type {
@@ -34,9 +34,19 @@ export function useMediaActions({
 }: UseMediaActionsArgs) {
   void storyboard;
   const [bulkGenerating, setBulkGenerating] = useState(false);
+  const activeRun = useRef<number | null>(runId);
+  const ownerSequence = useRef(0);
+  useLayoutEffect(() => {
+    activeRun.current = runId;
+    ownerSequence.current += 1;
+    setBulkGenerating(false);
+    return () => { activeRun.current = null; };
+  }, [runId]);
 
   const onGenerateImage = useCallback(
     async (sceneId: string) => {
+      if (activeRun.current !== runId) return;
+      const sequence = ownerSequence.current;
       try {
         const res = await apiFetch(`${API_BASE}/runs/${runId}/visual-plan/scenes/${sceneId}/generate-image`, {
           method: "POST",
@@ -47,6 +57,7 @@ export function useMediaActions({
           const body = await res.json().catch(() => null);
           throw new Error(body?.detail ?? `Image generation failed (${res.status})`);
         }
+        if (activeRun.current !== runId || ownerSequence.current !== sequence) return;
         onStatusMessage?.(`Image generation started for scene ${sceneId}`);
         setStoryboard((prev) => {
           if (!prev) return prev;
@@ -58,7 +69,7 @@ export function useMediaActions({
           };
         });
       } catch (err) {
-        onStatusMessage?.(err instanceof Error ? err.message : "Image generation failed");
+        if (activeRun.current === runId && ownerSequence.current === sequence) onStatusMessage?.(err instanceof Error ? err.message : "Image generation failed");
       }
     },
     [runId, imageModel, onStatusMessage, setStoryboard],
@@ -66,11 +77,14 @@ export function useMediaActions({
 
   const onGenerateAudio = useCallback(
     async (sectionId: string, params: ParagraphAudioParams = {}) => {
+      if (activeRun.current !== runId) return;
+      const sequence = ownerSequence.current;
       try {
         await generateParagraphAudio(runId, sectionId, {
           ...params,
           tts_model: params.tts_model || ttsModel,
         });
+        if (activeRun.current !== runId || ownerSequence.current !== sequence) return;
         onStatusMessage?.(`Audio generation started for #${sectionId}`);
         setStoryboard((prev) => {
           if (!prev) return prev;
@@ -82,7 +96,7 @@ export function useMediaActions({
           };
         });
       } catch (err) {
-        onStatusMessage?.(err instanceof Error ? err.message : "Audio generation failed");
+        if (activeRun.current === runId && ownerSequence.current === sequence) onStatusMessage?.(err instanceof Error ? err.message : "Audio generation failed");
       }
     },
     [runId, ttsModel, onStatusMessage, setStoryboard],
@@ -90,11 +104,14 @@ export function useMediaActions({
 
   const onGenerateSubtitles = useCallback(
     async (sectionId: string, params: ParagraphSubtitlesParams = {}) => {
+      if (activeRun.current !== runId) return;
+      const sequence = ownerSequence.current;
       try {
         await generateParagraphSubtitles(runId, sectionId, {
           ...params,
           subtitle_model: params.subtitle_model || subtitleModel,
         });
+        if (activeRun.current !== runId || ownerSequence.current !== sequence) return;
         onStatusMessage?.(`Subtitle generation started for #${sectionId}`);
         setStoryboard((prev) => {
           if (!prev) return prev;
@@ -106,13 +123,15 @@ export function useMediaActions({
           };
         });
       } catch (err) {
-        onStatusMessage?.(err instanceof Error ? err.message : "Subtitle generation failed");
+        if (activeRun.current === runId && ownerSequence.current === sequence) onStatusMessage?.(err instanceof Error ? err.message : "Subtitle generation failed");
       }
     },
     [runId, subtitleModel, onStatusMessage, setStoryboard],
   );
 
   const onBulkImages = useCallback(async () => {
+    if (activeRun.current !== runId) return;
+    const sequence = ownerSequence.current;
     setBulkGenerating(true);
     try {
       const res = await apiFetch(`${API_BASE}/runs/${runId}/generate-visual-assets`, {
@@ -124,6 +143,7 @@ export function useMediaActions({
         const body = await res.json().catch(() => null);
         throw new Error(body?.detail ?? `Bulk image generation failed (${res.status})`);
       }
+      if (activeRun.current !== runId || ownerSequence.current !== sequence) return;
       onStatusMessage?.("Bulk image generation started");
       setStoryboard((prev) => {
         if (!prev) return prev;
@@ -135,16 +155,19 @@ export function useMediaActions({
         };
       });
     } catch (err) {
-      onStatusMessage?.(err instanceof Error ? err.message : "Bulk image generation failed");
+      if (activeRun.current === runId && ownerSequence.current === sequence) onStatusMessage?.(err instanceof Error ? err.message : "Bulk image generation failed");
     } finally {
-      setBulkGenerating(false);
+      if (activeRun.current === runId && ownerSequence.current === sequence) setBulkGenerating(false);
     }
   }, [runId, imageModel, onStatusMessage, setStoryboard]);
 
   const onBulkAudio = useCallback(async () => {
+    if (activeRun.current !== runId) return;
+    const sequence = ownerSequence.current;
     setBulkGenerating(true);
     try {
       const result = await generateAllParagraphAudio(runId, { tts_model: ttsModel });
+      if (activeRun.current !== runId || ownerSequence.current !== sequence) return;
       const successIds = new Set(
         result.tasks.filter((t) => !t.error).map((t) => t.section_id),
       );
@@ -165,16 +188,19 @@ export function useMediaActions({
         };
       });
     } catch (err) {
-      onStatusMessage?.(err instanceof Error ? err.message : "Bulk audio generation failed");
+      if (activeRun.current === runId && ownerSequence.current === sequence) onStatusMessage?.(err instanceof Error ? err.message : "Bulk audio generation failed");
     } finally {
-      setBulkGenerating(false);
+      if (activeRun.current === runId && ownerSequence.current === sequence) setBulkGenerating(false);
     }
   }, [runId, ttsModel, onStatusMessage, setStoryboard]);
 
   const onBulkSubtitles = useCallback(async () => {
+    if (activeRun.current !== runId) return;
+    const sequence = ownerSequence.current;
     setBulkGenerating(true);
     try {
       const result = await generateAllParagraphSubtitles(runId, { subtitle_model: subtitleModel });
+      if (activeRun.current !== runId || ownerSequence.current !== sequence) return;
       const successIds = new Set(
         result.tasks.filter((t) => !t.error).map((t) => t.section_id),
       );
@@ -195,9 +221,9 @@ export function useMediaActions({
         };
       });
     } catch (err) {
-      onStatusMessage?.(err instanceof Error ? err.message : "Bulk subtitle generation failed");
+      if (activeRun.current === runId && ownerSequence.current === sequence) onStatusMessage?.(err instanceof Error ? err.message : "Bulk subtitle generation failed");
     } finally {
-      setBulkGenerating(false);
+      if (activeRun.current === runId && ownerSequence.current === sequence) setBulkGenerating(false);
     }
   }, [runId, subtitleModel, onStatusMessage, setStoryboard]);
 

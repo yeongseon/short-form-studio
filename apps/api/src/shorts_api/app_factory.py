@@ -114,8 +114,6 @@ def create_app() -> FastAPI:
         return response
 
     async def shutdown_guard_middleware(request: Request, call_next):
-        if "PYTEST_CURRENT_TEST" in os.environ:
-            return await call_next(request)
         if shutdown_state.is_shutting_down and request.url.path != "/healthz":
             return JSONResponse(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

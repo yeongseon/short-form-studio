@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useLayoutEffect, useRef } from "react";
 
 import PipelineOverviewBar from "./PipelineOverviewBar";
 import BulkActionBar from "./BulkActionBar";
@@ -78,6 +78,17 @@ export default function UnifiedSceneWorkspace({
   const [storyboard, setStoryboard] = useState<StoryboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const activeRun = useRef<number | null>(runId);
+  const storyboardSequence = useRef(0);
+
+  useLayoutEffect(() => {
+    activeRun.current = runId;
+    storyboardSequence.current += 1;
+    setStoryboard(null);
+    setError(null);
+    setLoading(true);
+    return () => { activeRun.current = null; };
+  }, [runId]);
 
   const relayStatusMessage = useCallback(
     (msg: string | null) => {
@@ -102,14 +113,18 @@ export default function UnifiedSceneWorkspace({
     storyboard?.paragraphs.some((p) => p.status.startsWith("generating_")) ?? false;
 
   const loadStoryboard = useCallback(async () => {
+    if (activeRun.current !== runId) return;
+    const sequence = ++storyboardSequence.current;
+    const ownsResponse = () => activeRun.current === runId && storyboardSequence.current === sequence;
     try {
       const data = await fetchStoryboard(runId);
+      if (!ownsResponse()) return;
       setStoryboard(data);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load storyboard");
+      if (ownsResponse()) setError(err instanceof Error ? err.message : "Failed to load storyboard");
     } finally {
-      setLoading(false);
+      if (ownsResponse()) setLoading(false);
     }
   }, [runId]);
 
