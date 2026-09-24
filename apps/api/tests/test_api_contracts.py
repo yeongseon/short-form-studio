@@ -113,17 +113,15 @@ def contract_services(
 
     monkeypatch.setattr("creator_service.run_service.run_service", run_svc)
 
-    task_counter = {"value": 0}
-
     def dispatch_audio(**kwargs: object) -> str:
-        _ = kwargs
-        task_counter["value"] += 1
-        return f"audio-task-{task_counter['value']}"
+        task_id = kwargs["task_id"]
+        assert isinstance(task_id, str)
+        return task_id
 
     def dispatch_subtitles(**kwargs: object) -> str:
-        _ = kwargs
-        task_counter["value"] += 1
-        return f"subtitle-task-{task_counter['value']}"
+        task_id = kwargs["task_id"]
+        assert isinstance(task_id, str)
+        return task_id
 
     def validate_model_key(model_key: str, expected_category: str | None = None) -> None:
         _ = model_key

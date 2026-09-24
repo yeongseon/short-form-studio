@@ -54,20 +54,23 @@ def boundary(monkeypatch: pytest.MonkeyPatch):
     tracking = Tracking()
     cancellation = Cancellation()
     quota: list[tuple[int, str]] = []
+    owners: dict[str, tuple[int, str]] = {}
 
     async def fresh_run(run_id: int, workspace_id: int):
         return SimpleNamespace(status="running")
 
-    async def release(workspace_id: int, operation_type: str) -> None:
-        quota.append((workspace_id, operation_type))
+    async def release(owner_id: str) -> bool:
+        quota.append(owners.pop(owner_id))
+        return True
 
-    async def reserve(workspace_id: int, operation_type: str) -> tuple[bool, str]:
+    async def reserve(workspace_id: int, operation_type: str, owner_id: str) -> tuple[bool, str]:
+        owners[owner_id] = (workspace_id, operation_type)
         return True, "ok"
 
     monkeypatch.setattr(dispatch_module, "task_tracking_service", tracking)
     monkeypatch.setattr(dispatch_module, "_get_fresh_run_for_dispatch", fresh_run)
-    monkeypatch.setattr(dispatch_module, "cancel_workspace_quota_reservation", release)
-    monkeypatch.setattr("creator_service.usage_service.check_workspace_quota", reserve)
+    monkeypatch.setattr(dispatch_module, "cancel_owned_quota_reservation", release)
+    monkeypatch.setattr(dispatch_module, "reserve_owned_quota", reserve)
     monkeypatch.setattr("creator_service.task_dispatch_service.task_dispatch_service.dispatcher.cancel", cancellation.cancel)
     return tracking, cancellation, quota
 
@@ -200,3 +203,40 @@ async def test_post_publish_cancellation_revokes_preregistered_task(boundary, mo
     assert tasks[0].status == "revoked"
     assert cancellation.calls == [tasks[0].celery_task_id]
     assert quota == [(8, "tts")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bulk", [False, True])
+async def test_storyboard_dispatch_reserves_and_cancels_only_task_owner(
+    boundary, monkeypatch: pytest.MonkeyPatch, bulk: bool,
+) -> None:
+    # Given two independent deliveries with capacity for one more task.
+    tracking, _, _ = boundary
+    reserved: list[str] = []
+    cancelled: list[str] = []
+
+    async def reserve(_workspace_id: int, _operation_type: str, owner_id: str) -> tuple[bool, str]:
+        reserved.append(owner_id)
+        return True, "ok"
+
+    async def cancel(owner_id: str) -> bool:
+        cancelled.append(owner_id)
+        return True
+
+    monkeypatch.setattr(dispatch_module, "reserve_owned_quota", reserve)
+    monkeypatch.setattr(dispatch_module, "cancel_owned_quota_reservation", cancel)
+    tracking.fail_promotion = True
+
+    # When the new delivery fails during promotion after publishing.
+    if bulk:
+        result = await invoke(True, lambda task_id: task_id)
+        assert result["error"] == "dispatch_failed"
+    else:
+        with pytest.raises(HTTPException) as failure:
+            await invoke(False, lambda task_id: task_id)
+        assert failure.value.status_code == 503
+
+    # Then the preassigned task ID is the sole reservation and cancellation owner.
+    assert len(reserved) == 1
+    assert cancelled == reserved
+    assert tracking.events == [("pending", reserved[0]), ("promote", reserved[0])]

@@ -10,7 +10,7 @@ from uuid import uuid4
 from creator_service.task_dispatch_service import task_dispatch_service
 from creator_service.blocking_io import owned_operation, run_blocking, run_control
 from creator_service.task_tracking_service import task_tracking_service
-from creator_service.usage_service import cancel_workspace_quota_reservation
+from creator_service.usage_service import cancel_owned_quota_reservation, reserve_owned_quota
 from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
@@ -49,11 +49,12 @@ async def _revoke_and_mark(task_id: str) -> None:
         logger.warning("Failed to mark task %s as revoked in tracking", task_id)
 
 
-async def _publish_pending(run_id: int, task_type: str, dispatch: Callable[[str], str]) -> str:
-    task_id = str(uuid4())
+async def _publish_pending(run_id: int, task_type: str, dispatch: Callable[[str], str], task_id: str) -> str:
     await task_tracking_service.record_task_pending(run_id, task_type, task_id)
     try:
-        await run_blocking(partial(dispatch, task_id))
+        published_id = await run_blocking(partial(dispatch, task_id))
+        if published_id != task_id:
+            raise RuntimeError("Dispatch task ID mismatch")
         await task_tracking_service.promote_pending_to_queued(task_id)
     except Exception:
         await _revoke_and_mark(task_id)
@@ -83,23 +84,27 @@ async def dispatch_storyboard_task_with_tracking(
 
     Returns the Celery task_id on success.
     """
+    task_id = str(uuid4())
+    allowed, reason = await reserve_owned_quota(workspace_id, operation_type, task_id)
+    if not allowed:
+        raise HTTPException(status_code=429, detail=reason)
     # Pre-dispatch cancel check
     fresh_run = await _get_fresh_run_for_dispatch(run_id, workspace_id)
     if _is_cancelled(fresh_run):
-        await cancel_workspace_quota_reservation(workspace_id, operation_type)
+        await cancel_owned_quota_reservation(task_id)
         raise HTTPException(status_code=409, detail="Run was cancelled before dispatch")
 
     try:
-        task_id = await _publish_pending(run_id, task_type, dispatch)
+        await _publish_pending(run_id, task_type, dispatch, task_id)
     except Exception:
-        await cancel_workspace_quota_reservation(workspace_id, operation_type)
+        await cancel_owned_quota_reservation(task_id)
         raise HTTPException(status_code=503, detail=error_detail) from None
 
     # Post-dispatch cancel check (TOCTOU window close)
     post_run = await _get_fresh_run_for_dispatch(run_id, workspace_id)
     if _is_cancelled(post_run):
         await _revoke_and_mark(task_id)
-        await cancel_workspace_quota_reservation(workspace_id, operation_type)
+        await cancel_owned_quota_reservation(task_id)
         raise HTTPException(status_code=409, detail="Run was cancelled during dispatch")
 
     return task_id
@@ -121,28 +126,27 @@ async def dispatch_storyboard_task_bulk(
     failures — it returns an error dict so the loop can continue.
     Raises HTTPException only on post-dispatch cancellation (hard stop).
     """
-    from creator_service.usage_service import check_workspace_quota
-
-    allowed, reason = await check_workspace_quota(workspace_id, operation_type=operation_type)
+    task_id = str(uuid4())
+    allowed, reason = await reserve_owned_quota(workspace_id, operation_type, task_id)
     if not allowed:
         raise HTTPException(status_code=429, detail=reason)
 
     fresh_run = await _get_fresh_run_for_dispatch(run_id, workspace_id)
     if _is_cancelled(fresh_run):
-        await cancel_workspace_quota_reservation(workspace_id, operation_type)
+        await cancel_owned_quota_reservation(task_id)
         return {"section_id": section_id, "task_id": "", "error": "dispatch_failed"}
 
     try:
-        task_id = await _publish_pending(run_id, task_type, dispatch)
+        await _publish_pending(run_id, task_type, dispatch, task_id)
     except Exception:
-        await cancel_workspace_quota_reservation(workspace_id, operation_type)
+        await cancel_owned_quota_reservation(task_id)
         logger.exception("Failed to dispatch %s for section %s of run %s", task_type, section_id, run_id)
         return {"section_id": section_id, "task_id": "", "error": "dispatch_failed"}
 
     post_run = await _get_fresh_run_for_dispatch(run_id, workspace_id)
     if _is_cancelled(post_run):
         await _revoke_and_mark(task_id)
-        await cancel_workspace_quota_reservation(workspace_id, operation_type)
+        await cancel_owned_quota_reservation(task_id)
         raise HTTPException(status_code=409, detail="Run was cancelled during dispatch")
 
     return {"section_id": section_id, "task_id": task_id}

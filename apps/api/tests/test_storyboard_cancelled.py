@@ -12,6 +12,18 @@ from shorts_api.main import app
 from shorts_api.routes import creator_runs_storyboard, storyboard_dispatch
 
 
+@pytest.fixture(autouse=True)
+def owned_storyboard_quota(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def reserve(_workspace_id: int, _operation_type: str, _task_id: str) -> tuple[bool, str]:
+        return True, "ok"
+
+    async def cancel(_task_id: str) -> bool:
+        return True
+
+    monkeypatch.setattr(storyboard_dispatch, "reserve_owned_quota", reserve)
+    monkeypatch.setattr(storyboard_dispatch, "cancel_owned_quota_reservation", cancel)
+
+
 def _make_cancelled_run() -> Any:
     return SimpleNamespace(
         id=1,
@@ -266,11 +278,8 @@ async def test_post_dispatch_revoke_on_concurrent_cancellation(
         _ = operation_type
         return True, "ok"
 
-    async def _mock_cancel_workspace_quota_reservation(
-        _workspace_id: int, operation_type: str
-    ) -> None:
-        _ = operation_type
-        return None
+    async def _mock_cancel_workspace_quota_reservation(_task_id: str) -> bool:
+        return True
 
     states = [
         SimpleNamespace(id=1, status="running", current_stage="VISUAL_ASSET_REVIEW"),
@@ -307,7 +316,7 @@ async def test_post_dispatch_revoke_on_concurrent_cancellation(
         _mock_check_workspace_quota,
     )
     monkeypatch.setattr(
-        "shorts_api.routes.storyboard_dispatch.cancel_workspace_quota_reservation",
+        "shorts_api.routes.storyboard_dispatch.cancel_owned_quota_reservation",
         _mock_cancel_workspace_quota_reservation,
     )
     monkeypatch.setattr(
@@ -383,11 +392,8 @@ async def test_bulk_audio_post_dispatch_revoke_on_concurrent_cancellation(
         _ = operation_type
         return True, "ok"
 
-    async def _mock_cancel_workspace_quota_reservation(
-        _workspace_id: int, operation_type: str
-    ) -> None:
-        _ = operation_type
-        return None
+    async def _mock_cancel_workspace_quota_reservation(_task_id: str) -> bool:
+        return True
 
     states = [
         SimpleNamespace(id=1, status="running", current_stage="VISUAL_ASSET_REVIEW"),
@@ -427,7 +433,7 @@ async def test_bulk_audio_post_dispatch_revoke_on_concurrent_cancellation(
         _mock_check_workspace_quota,
     )
     monkeypatch.setattr(
-        "shorts_api.routes.storyboard_dispatch.cancel_workspace_quota_reservation",
+        "shorts_api.routes.storyboard_dispatch.cancel_owned_quota_reservation",
         _mock_cancel_workspace_quota_reservation,
     )
     monkeypatch.setattr(
@@ -507,11 +513,8 @@ async def test_bulk_subtitles_record_failure_revokes_task(
         _ = operation_type
         return True, "ok"
 
-    async def _mock_cancel_workspace_quota_reservation(
-        _workspace_id: int, operation_type: str
-    ) -> None:
-        _ = operation_type
-        return None
+    async def _mock_cancel_workspace_quota_reservation(_task_id: str) -> bool:
+        return True
 
     async def _mock_get_fresh_run_for_dispatch(_run_id: int, _workspace_id: int) -> Any:
         return SimpleNamespace(id=1, status="running", current_stage="VISUAL_ASSET_REVIEW")
@@ -550,7 +553,7 @@ async def test_bulk_subtitles_record_failure_revokes_task(
         _mock_check_workspace_quota,
     )
     monkeypatch.setattr(
-        "shorts_api.routes.storyboard_dispatch.cancel_workspace_quota_reservation",
+        "shorts_api.routes.storyboard_dispatch.cancel_owned_quota_reservation",
         _mock_cancel_workspace_quota_reservation,
     )
     monkeypatch.setattr(
@@ -647,8 +650,9 @@ async def test_pre_dispatch_reread_exception_fails_closed(
 
     cancel_quota_calls: list[str] = []
 
-    async def _mock_cancel_quota(_workspace_id: int, operation_type: str) -> None:
-        cancel_quota_calls.append(operation_type)
+    async def _mock_cancel_quota(task_id: str) -> bool:
+        cancel_quota_calls.append(task_id)
+        return True
 
     # Make run_service.get_run raise — exercises the real _get_fresh_run_for_dispatch wrapper
     async def _raising_get_run(_run_id: int, **kwargs: Any) -> None:
@@ -667,7 +671,7 @@ async def test_pre_dispatch_reread_exception_fails_closed(
         _mock_check_workspace_quota,
     )
     monkeypatch.setattr(
-        "shorts_api.routes.storyboard_dispatch.cancel_workspace_quota_reservation",
+        "shorts_api.routes.storyboard_dispatch.cancel_owned_quota_reservation",
         _mock_cancel_quota,
     )
     monkeypatch.setattr(
@@ -683,7 +687,7 @@ async def test_pre_dispatch_reread_exception_fails_closed(
         # _get_fresh_run_for_dispatch catches exception → returns None → 409 + quota cancel
         assert resp.status_code == 409
         assert "cancelled" in resp.json()["detail"].lower()
-        assert cancel_quota_calls == ["tts"]
+        assert len(cancel_quota_calls) == 1
     finally:
         app.dependency_overrides.pop(require_run_access, None)
 
@@ -716,8 +720,9 @@ async def test_post_dispatch_reread_exception_revokes_task(
 
     cancel_quota_calls: list[str] = []
 
-    async def _mock_cancel_quota(_workspace_id: int, operation_type: str) -> None:
-        cancel_quota_calls.append(operation_type)
+    async def _mock_cancel_quota(task_id: str) -> bool:
+        cancel_quota_calls.append(task_id)
+        return True
 
     call_count = 0
 
@@ -757,7 +762,7 @@ async def test_post_dispatch_reread_exception_revokes_task(
         _mock_check_workspace_quota,
     )
     monkeypatch.setattr(
-        "shorts_api.routes.storyboard_dispatch.cancel_workspace_quota_reservation",
+        "shorts_api.routes.storyboard_dispatch.cancel_owned_quota_reservation",
         _mock_cancel_quota,
     )
     monkeypatch.setattr(
@@ -792,6 +797,6 @@ async def test_post_dispatch_reread_exception_revokes_task(
         assert resp.status_code == 409
         assert revoke_calls == [("task-123", True)]
         assert mark_tasks_revoked_calls == [["task-123"]]
-        assert cancel_quota_calls == ["tts"]
+        assert cancel_quota_calls == ["task-123"]
     finally:
         app.dependency_overrides.pop(require_run_access, None)
