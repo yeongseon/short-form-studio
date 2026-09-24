@@ -56,7 +56,11 @@ async def test_successful_dispatch_consumes_quota_when_usage_is_recorded(quota_d
     # When dispatch succeeds and its provider usage is recorded.
     result = await case.dispatch()
     assert (await case.usage.check_quota(1, "render"))[0] is False
-    await case.usage.record_usage(1, case.run_id, "test", "test", "render")
+    await case.usage.record_usage(
+        1, case.run_id, "test", "test", "render",
+        idempotency_key=f"{result['task_id']}:render",
+        reservation_owner_id=str(result["task_id"]),
+    )
     # Then usage, rather than a leaked reservation, continues to consume the quota.
     assert result["current_stage"] == "RENDER_GENERATING"
     assert len(case.port.submissions) == 1

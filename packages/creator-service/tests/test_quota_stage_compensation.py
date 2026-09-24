@@ -17,8 +17,8 @@ async def test_capacity_restored_when_stage_storage_raises(
     case = quota_dispatch
     original = ServiceError("stage unavailable") if typed else OSError("private-storage-token")
     before = await case.runs.get_run(case.run_id, workspace_id=1)
-    cancel = AsyncMock(wraps=case.usage.storage.cancel_reservation)
-    monkeypatch.setattr(case.usage.storage, "cancel_reservation", cancel)
+    cancel = AsyncMock(wraps=case.usage.storage.cancel_owned)
+    monkeypatch.setattr(case.usage.storage, "cancel_owned", cancel)
     monkeypatch.setattr(case.runs.storage, "conditional_update_run", AsyncMock(side_effect=original))
     # When dispatch cannot advance the stage.
     with pytest.raises(ServiceError) as caught:
@@ -26,7 +26,8 @@ async def test_capacity_restored_when_stage_storage_raises(
     # Then exactly its reservation is returned without enqueueing or changing the run.
     assert (await case.usage.check_quota(1, "render"))[0] is True
     assert (await case.usage.check_quota(1, "render"))[0] is False
-    cancel.assert_awaited_once_with(1, "render", units=1)
+    cancel.assert_awaited_once()
+    assert isinstance(cancel.await_args.args[0], str)
     assert case.port.submissions == []
     assert await case.tracking.list_run_tasks(case.run_id) == []
     assert await case.runs.get_run(case.run_id, workspace_id=1) == before
@@ -48,23 +49,23 @@ async def test_cleanup_failure_preserves_primary_error_without_secrets_or_retry(
     await case.usage.set_quota(1, monthly_tts_requests=2)
     assert (await case.usage.check_quota(1, "render"))[0]
     original = ServiceError("primary-stage-token")
-    cancel = case.usage.storage.cancel_reservation
-    calls: list[int] = []
+    cancel = case.usage.storage.cancel_owned
+    calls: list[str] = []
 
-    async def fail_cancel(workspace_id: int, operation_type: str, units: int = 1) -> None:
-        calls.append(units)
+    async def fail_cancel(owner_id: str) -> bool:
+        calls.append(owner_id)
         if release_applied:
-            await cancel(workspace_id, operation_type, units)
+            await cancel(owner_id)
         raise OSError("postgresql://user:cleanup-secret@host/db")
 
-    monkeypatch.setattr(case.usage.storage, "cancel_reservation", fail_cancel)
+    monkeypatch.setattr(case.usage.storage, "cancel_owned", fail_cancel)
     monkeypatch.setattr(case.runs.storage, "conditional_update_run", AsyncMock(side_effect=original))
     # When both stage storage and cleanup fail.
     with pytest.raises(ServiceError) as caught:
         await case.dispatch()
     # Then cleanup is attempted once, never retried against somebody else's slot.
     assert caught.value is original
-    assert calls == [1]
+    assert len(calls) == 1
     assert (await case.usage.check_quota(1, "render"))[0] is release_applied
     assert (await case.usage.check_quota(1, "render"))[0] is False
     assert case.port.submissions == []
@@ -82,8 +83,8 @@ async def test_existing_dispatch_paths_keep_quota_ownership(
     case = quota_dispatch
     await case.usage.set_quota(1, monthly_tts_requests=2)
     assert (await case.usage.check_quota(1, "render"))[0]
-    cancel = AsyncMock(wraps=case.usage.storage.cancel_reservation)
-    monkeypatch.setattr(case.usage.storage, "cancel_reservation", cancel)
+    cancel = AsyncMock(wraps=case.usage.storage.cancel_owned)
+    monkeypatch.setattr(case.usage.storage, "cancel_owned", cancel)
     if outcome == "enqueue":
         from unittest.mock import Mock
         monkeypatch.setattr(case.port, "dispatch", Mock(side_effect=OSError("broker unavailable")))
