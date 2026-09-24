@@ -82,7 +82,7 @@ async def test_auth_and_cross_workspace_return_no_approval(tmp_path, monkeypatch
     async with env.client as client:
         seed = (await client.post("/api/creator/workspaces/1/demo-short/runs")).json()
         run_id = seed["run"]["id"]
-        await env.runs.storage.update_run(run_id, {"workspace_id": 2})
+        env.runs.storage._rows[run_id]["workspace_id"] = 2  # workspace_id is storage-owned; move the fixture row directly.
         response = await client.post(
             f"/api/creator/runs/{run_id}/approve-timeline-render", json={"expected_revision": 1},
         )
