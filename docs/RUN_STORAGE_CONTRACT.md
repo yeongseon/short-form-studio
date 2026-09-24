@@ -2,10 +2,12 @@
 
 The in-memory and PostgreSQL run adapters share these boundaries:
 
-- `update_run` accepts only columns in `UPDATABLE_RUN_COLUMNS`. An empty patch
-  is a workspace-scoped read that checks `expected_version` when provided; it
-  never advances the version. A stale version returns `None`.
-- `conditional_update_run` also rejects unknown and storage-owned columns. An
+- `update_run` accepts only columns in `UPDATABLE_RUN_COLUMNS`. Storage-owned
+  columns (`id`, `version`, `project_id`, `workspace_id`) and unknown columns
+  are rejected with `ValueError`. An empty patch is a workspace-scoped read that
+  checks `expected_version` when provided; it never advances the version. A
+  stale version returns `None`.
+- `conditional_update_run` also rejects storage-owned and unknown columns. An
   empty patch reads the scoped run, accepts only an expected stage that is not
   in `rejected_statuses`, and does not advance the version. A missing or
   out-of-workspace run returns `(False, None)`.
