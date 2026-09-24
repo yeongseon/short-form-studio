@@ -49,6 +49,8 @@ export function useRunActions({
 
   activeProjectId.current = numericProjectId;
   activeRunId.current = run?.id;
+  const ownsProject = useCallback((projectId: number, sequence: number) =>
+    mounted.current && activeProjectId.current === projectId && ownerSequence.current === sequence, []);
   const ownsRun = useCallback((projectId: number, runId: number, sequence: number) =>
     mounted.current && activeProjectId.current === projectId &&
     activeRunId.current === runId && ownerSequence.current === sequence, []);
@@ -95,6 +97,7 @@ export function useRunActions({
     const trimmed = titleDraft.trim();
     if (!trimmed || trimmed === project?.title) return;
     const sequence = ownerSequence.current;
+    if (!ownsProject(numericProjectId, sequence)) return;
     setSavingTitle(true);
     try {
       const data = await apiJson<{ title: string }>(`${API_BASE}/projects/${numericProjectId}`, {
@@ -112,7 +115,7 @@ export function useRunActions({
     } finally {
       if (mounted.current && activeProjectId.current === numericProjectId && ownerSequence.current === sequence) setSavingTitle(false);
     }
-   }, [titleDraft, project?.title, numericProjectId, setProject, showToast]);
+  }, [titleDraft, project?.title, numericProjectId, setProject, showToast, ownsProject]);
 
   useEffect(() => {
     if (project && titleOwner.current !== project.id) {
@@ -127,6 +130,7 @@ export function useRunActions({
     const owner = numericProjectId;
     const runId = run.id;
     const sequence = ownerSequence.current;
+    if (!ownsRun(owner, runId, sequence)) return;
     const isCurrent = () => ownsRun(owner, runId, sequence);
     setGoingBack(true);
     try {
@@ -146,6 +150,7 @@ export function useRunActions({
     const owner = numericProjectId;
     const runId = run.id;
     const sequence = ownerSequence.current;
+    if (!ownsRun(owner, runId, sequence)) return;
     const isCurrent = () => ownsRun(owner, runId, sequence);
     setApproving(true);
     try {
@@ -169,6 +174,7 @@ export function useRunActions({
     const owner = numericProjectId;
     const runId = run.id;
     const sequence = ownerSequence.current;
+    if (!ownsRun(owner, runId, sequence)) return;
     const isCurrent = () => ownsRun(owner, runId, sequence);
     setGenerating(true);
     try {
@@ -194,6 +200,7 @@ export function useRunActions({
     const owner = numericProjectId;
     const runId = run.id;
     const sequence = ownerSequence.current;
+    if (!ownsRun(owner, runId, sequence)) return;
     setRestarting(true);
     try {
       await apiVoid(`${API_BASE}/runs/${run.id}/restart`, {
@@ -225,6 +232,7 @@ export function useRunActions({
     const owner = numericProjectId;
     const runId = run.id;
     const sequence = ownerSequence.current;
+    if (!ownsRun(owner, runId, sequence)) return;
     setApproving(true);
     try {
       await apiVoid(`${API_BASE}/runs/${run.id}/approve-visual-plan`, {
@@ -247,6 +255,7 @@ export function useRunActions({
     const owner = numericProjectId;
     const runId = run.id;
     const sequence = ownerSequence.current;
+    if (!ownsRun(owner, runId, sequence)) return;
     setGenerating(true);
     try {
       await apiVoid(`${API_BASE}/runs/${run.id}/generate-visual-plan`, {
@@ -271,6 +280,7 @@ export function useRunActions({
     const owner = numericProjectId;
     const runId = run.id;
     const sequence = ownerSequence.current;
+    if (!ownsRun(owner, runId, sequence)) return;
     setRestarting(true);
     try {
       await apiVoid(`${API_BASE}/runs/${run.id}/restart`, {
@@ -302,6 +312,7 @@ export function useRunActions({
     const owner = numericProjectId;
     const runId = run.id;
     const sequence = ownerSequence.current;
+    if (!ownsRun(owner, runId, sequence)) return;
     setGenerating(true);
     try {
       await apiVoid(`${API_BASE}/runs/${run.id}/render`, {
@@ -326,6 +337,7 @@ export function useRunActions({
     const owner = numericProjectId;
     const runId = run.id;
     const sequence = ownerSequence.current;
+    if (!ownsRun(owner, runId, sequence)) return;
     setApproving(true);
     try {
       await apiVoid(`${API_BASE}/runs/${run.id}/approve-final`, {
@@ -348,6 +360,7 @@ export function useRunActions({
     const owner = numericProjectId;
     const runId = run.id;
     const sequence = ownerSequence.current;
+    if (!ownsRun(owner, runId, sequence)) return;
     setStopping(true);
     try {
       await apiVoid(`${API_BASE}/runs/${run.id}/stop`, { method: "POST" });
@@ -366,6 +379,7 @@ export function useRunActions({
     const owner = numericProjectId;
     const runId = run.id;
     const sequence = ownerSequence.current;
+    if (!ownsRun(owner, runId, sequence)) return;
     setResuming(true);
     try {
       await apiVoid(`${API_BASE}/runs/${run.id}/resume`, { method: "POST" });
@@ -382,6 +396,7 @@ export function useRunActions({
   const handleDeleteProject = useCallback(async () => {
     const owner = numericProjectId;
     const sequence = ownerSequence.current;
+    if (!ownsProject(owner, sequence)) return;
     setDeleting(true);
     try {
       await apiVoid(`${API_BASE}/projects/${numericProjectId}`, { method: "DELETE" });
@@ -391,7 +406,7 @@ export function useRunActions({
     } finally {
       if (mounted.current && activeProjectId.current === owner && ownerSequence.current === sequence) setDeleting(false);
     }
-  }, [numericProjectId, navigate, showToast]);
+  }, [numericProjectId, navigate, showToast, ownsProject]);
 
   return {
     // Handlers
