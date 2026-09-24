@@ -5,11 +5,14 @@ import uuid
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from functools import partial
+from pathlib import Path
+from typing import BinaryIO
 
 import anyio
 from creator_domain.models import MediaAsset, MediaOrigin, MediaType
 from pydantic import JsonValue
 from creator_service.blocking_io import BlockingIO
+from .media_file_ingestion import FileUpload, prepare_upload
 
 from .media_asset_storage import (
     AssetPage as AssetPage,
@@ -80,6 +83,16 @@ class MediaAssetService:
             metadata=dict(metadata) if metadata is not None else None,
         )
 
+    async def create_file_asset(self, source: BinaryIO, upload: FileUpload) -> MediaAsset:
+        async with prepare_upload(source, upload, self._io) as prepared:
+            return await self._store_asset(
+                workspace_id=upload.workspace_id, safe_name=prepared.safe_name,
+                data=prepared.path, canonical_mime=prepared.mime_type,
+                media_type=MediaType(upload.kind.upper()),
+                probed=_ProbedMetadata(prepared.probe.width, prepared.probe.height, prepared.probe.duration_seconds),
+                project_id=None, run_id=None,
+            )
+
     async def create_generated_image_asset(
         self, *, workspace_id: int, project_id: int, filename: str, data: bytes,
         metadata: dict[str, object] | None = None,
@@ -132,7 +145,7 @@ class MediaAssetService:
         )
 
     async def _store_asset(
-        self, *, workspace_id: int, safe_name: str, data: bytes,
+        self, *, workspace_id: int, safe_name: str, data: bytes | Path,
         canonical_mime: str, media_type: MediaType, probed: _ProbedMetadata,
         project_id: int | None, run_id: int | None,
         origin: MediaOrigin = MediaOrigin.UPLOADED, metadata: dict[str, object] | None = None,
@@ -148,9 +161,13 @@ class MediaAssetService:
         await anyio.lowlevel.checkpoint()
         # Once upload starts, retain ownership through the async metadata save.
         with anyio.CancelScope(shield=True):
-            result = await self._io.run(
-                lambda: self._backend().upload(storage_key, data, content_type=canonical_mime),
-            )
+            def upload_data():
+                if isinstance(data, Path):
+                    with data.open("rb") as stream:
+                        return self._backend().upload(storage_key, stream, content_type=canonical_mime)
+                return self._backend().upload(storage_key, data, content_type=canonical_mime)
+
+            result = await self._io.run(upload_data)
             row: dict[str, object] = {
                 "workspace_id": workspace_id, "project_id": project_id, "run_id": run_id,
                 "media_type": media_type.value, "origin": origin.value,

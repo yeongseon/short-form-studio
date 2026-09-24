@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import io
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 from PIL import Image, UnidentifiedImageError
 
@@ -28,20 +28,20 @@ class MediaUploadRejected(ValueError):
     """Raised before storage when media bytes or filenames fail validation."""
 
 
-def _probe_image_dimensions(data: bytes) -> tuple[int, int]:
+def _probe_image_dimensions(data: bytes | Path) -> tuple[int, int]:
     try:
-        with Image.open(io.BytesIO(data)) as image:
+        with Image.open(io.BytesIO(data) if isinstance(data, bytes) else data) as image:
             image.verify()
-        with Image.open(io.BytesIO(data)) as image:
+        with Image.open(io.BytesIO(data) if isinstance(data, bytes) else data) as image:
             width, height = image.size
     except (UnidentifiedImageError, OSError, ValueError) as error:
         raise MediaUploadRejected("File is not a valid image") from error
     return int(width), int(height)
 
 
-def _detect_image_mime(data: bytes) -> str | None:
+def _detect_image_mime(data: bytes | Path) -> str | None:
     try:
-        with Image.open(io.BytesIO(data)) as image:
+        with Image.open(io.BytesIO(data) if isinstance(data, bytes) else data) as image:
             fmt = image.format
     except (UnidentifiedImageError, OSError, ValueError):
         return None
