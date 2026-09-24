@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import wave
 
 import re
@@ -13,6 +14,7 @@ from pathlib import Path
 from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
+from creator_domain.sanitize import sanitize_path_component
 from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
 from creator_provider.registry import get_default_registry
 from creator_service.audio_service import audio_service as _audio_service
@@ -153,8 +155,13 @@ def generate_audio(
 
         # Use .mp3 for edge-tts, .wav for others
         ext = ".mp3" if entry.provider_type == "edge_tts" else ".wav"
-        audio_path = f"{_ARTIFACT_ROOT}/{run_id}/audio/audio{ext}"
+        delivery_dir = Path(_ARTIFACT_ROOT) / str(run_id) / "audio" / sanitize_path_component(
+            ctx.task_id, label="task_id",
+        )
+        audio_path = str(delivery_dir / f"audio{ext}")
         try:
+            if delivery_dir.is_symlink():
+                raise ValueError("Audio delivery directory is a symlink")
             os.makedirs(os.path.dirname(audio_path), exist_ok=True)
 
             # --- Per-section TTS with beat-aware rate variation ---
@@ -189,7 +196,7 @@ def generate_audio(
                         if idx == len(sections) - 2 and len(sections) >= 4:
                             section_text = "..." + section_text
 
-                        section_path = f"{_ARTIFACT_ROOT}/{run_id}/audio/section_{idx}{ext}"
+                        section_path = str(delivery_dir / f"section_{idx}{ext}")
                         section_params = dict(entry.default_params or {})
                         section_params["output_path"] = section_path
                         section_params["rate"] = rate
@@ -260,6 +267,13 @@ def generate_audio(
                             f"Provider rate limited audio generation for run {run_id}"
                         ) from exc
                     raise ProviderError(f"Provider failed audio generation for run {run_id}") from exc
+        except BaseException:
+            if delivery_dir.is_dir() and not delivery_dir.is_symlink():
+                try:
+                    shutil.rmtree(delivery_dir)
+                except OSError:
+                    logger.warning("Failed to remove delivery audio", exc_info=True)
+            raise
         finally:
             if entry.requires_gpu:
                 gpu_lock.release()
@@ -275,8 +289,11 @@ def generate_audio(
                 workspace_id=ctx.workspace_id,
                 project_id=ctx.project_id,
                 idempotency_key=ctx.task_id,
+                reservation_owner_id=ctx.reservation_owner_id,
             )
         except Exception:
+            if ctx.reservation_owner_id is not None:
+                raise
             logger.warning("Failed to record provider usage", exc_info=True)
 
         from creator_service.artifact_storage_integration import store_artifact_file

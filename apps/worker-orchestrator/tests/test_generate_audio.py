@@ -175,7 +175,7 @@ def test_generate_audio_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result["audio_artifact_id"] == 33
     assert result["provider_type"] == "qwen_tts"
     assert result["endpoint"] == "http://tts-qwen3:8100"
-    assert result["audio_path"] == "data/artifacts/101/audio/audio.wav"
+    assert result["audio_path"] == "data/artifacts/101/audio/run-101/audio.wav"
 
     assert provider.calls == [
         (
@@ -183,7 +183,7 @@ def test_generate_audio_success(monkeypatch: pytest.MonkeyPatch) -> None:
             "en_US-lessac-medium",
             {
                 "temperature": 0.2,
-                "output_path": "data/artifacts/101/audio/audio.wav",
+                "output_path": "data/artifacts/101/audio/run-101/audio.wav",
             },
         )
     ]
@@ -194,7 +194,7 @@ def test_generate_audio_success(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(audio_service.calls) == 1
     call = audio_service.calls[0]
     assert call["run_id"] == 101
-    assert call["path"] == "data/artifacts/101/audio/audio.wav"
+    assert call["path"] == "data/artifacts/101/audio/run-101/audio.wav"
     assert call["model_used"] == "qwen3-tts"
     assert call["provider_type"] == "qwen_tts"
     assert call["voice"] == "en_US-lessac-medium"

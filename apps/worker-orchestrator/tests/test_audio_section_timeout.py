@@ -157,3 +157,127 @@ def test_celery_marks_section_timeout_delivery_failed(
     case.provider.generate.assert_awaited_once()
     dlq.assert_called_once()
     assert isinstance(dlq.call_args.kwargs["exception"], SoftTimeLimitExceeded)
+
+
+def test_celery_timeout_finalizes_owned_task_tracking(audio_case: AudioCase) -> None:
+    # Given a claimed delivery interrupted in the first section.
+    case = audio_case
+    case.provider.generate.side_effect = SoftTimeLimitExceeded()
+    # When Celery records the failed delivery.
+    result = audio.generate_audio.apply(
+        args=(case.runner.run_id,), kwargs={"tts_model": "edge-tts"},
+        task_id="audio-tracking-timeout", throw=False,
+    )
+    # Then the task row is terminal rather than stuck running.
+    assert result.state == "FAILURE"
+    tracked = run_in_worker_loop(case.runner.tracking.list_run_tasks(case.runner.run_id))
+    assert [(task.status, task.error_code) for task in tracked] == [("failed", "INTERNAL")]
+
+
+def test_celery_timeout_does_not_overwrite_revoked_task(audio_case: AudioCase) -> None:
+    # Given a task revoked while its provider is executing.
+    case = audio_case
+
+    async def revoke_then_timeout(*_args: str, **_kwargs: str) -> None:
+        await case.runner.tracking.mark_revoked("audio-revoked-timeout")
+        raise SoftTimeLimitExceeded()
+
+    case.provider.generate.side_effect = revoke_then_timeout
+    # When its original delivery times out.
+    result = audio.generate_audio.apply(
+        args=(case.runner.run_id,), kwargs={"tts_model": "edge-tts"},
+        task_id="audio-revoked-timeout", throw=False,
+    )
+    # Then the delivery fails but the revoked task row is not overwritten.
+    assert result.state == "FAILURE"
+    tracked = run_in_worker_loop(case.runner.tracking.list_run_tasks(case.runner.run_id))
+    assert [task.status for task in tracked] == ["revoked"]
+
+
+def test_timeout_removes_only_its_delivery_audio(audio_case: AudioCase) -> None:
+    # Given another delivery's complete audio and this delivery's partial output.
+    case = audio_case
+    other = case.root / str(case.runner.run_id) / "audio" / "other-delivery" / "audio.mp3"
+    other.parent.mkdir(parents=True)
+    other.write_bytes(b"complete")
+    generated: list[Path] = []
+
+    async def interrupted(*_args: str, **kwargs: object) -> None:
+        params = kwargs["params"]
+        assert isinstance(params, dict)
+        path = Path(params["output_path"])
+        generated.append(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"partial")
+        raise SoftTimeLimitExceeded()
+
+    case.provider.generate.side_effect = interrupted
+    # When a section times out after writing some bytes.
+    result = audio.generate_audio.apply(
+        args=(case.runner.run_id,), kwargs={"tts_model": "edge-tts"},
+        task_id="current-delivery", throw=False,
+    )
+
+    # Then only the current delivery's partial output is removed.
+    assert result.state == "FAILURE"
+    assert len(generated) == 1
+    assert generated[0].parent.name == "current-delivery"
+    assert not generated[0].exists()
+    assert other.read_bytes() == b"complete"
+
+
+def test_cleanup_failure_does_not_replace_soft_timeout(
+    audio_case: AudioCase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a partial output and a cleanup error after the provider deadline.
+    case = audio_case
+    timeout = SoftTimeLimitExceeded()
+
+    async def interrupted(*_args: str, **kwargs: object) -> None:
+        params = kwargs["params"]
+        assert isinstance(params, dict)
+        Path(params["output_path"]).write_bytes(b"partial")
+        raise timeout
+
+    case.provider.generate.side_effect = interrupted
+
+    def failed_cleanup(_path: Path) -> None:
+        raise OSError("cleanup failed")
+
+    monkeypatch.setattr(audio.shutil, "rmtree", failed_cleanup)
+    # When the worker handles the timeout and fails to clean its own directory.
+    case_task = audio.generate_audio
+    case_task.push_request(id="audio-cleanup-failure", retries=0, args=(), kwargs={})
+    try:
+        with pytest.raises(SoftTimeLimitExceeded) as raised:
+            case_task.run(case.runner.run_id, tts_model="edge-tts")
+    finally:
+        case_task.pop_request()
+
+    # Then the timeout identity remains the reported failure.
+    assert raised.value is timeout
+
+
+def test_symlink_delivery_directory_cannot_write_outside_artifacts(audio_case: AudioCase) -> None:
+    # Given a delivery directory redirected to another task's existing output.
+    case = audio_case
+    other = case.root / "other-delivery"
+    other.mkdir()
+    marker = other / "audio.mp3"
+    marker.write_bytes(b"complete")
+    link = case.root / str(case.runner.run_id) / "audio" / "symlink-delivery"
+    link.parent.mkdir(parents=True)
+    link.symlink_to(other, target_is_directory=True)
+
+    # When the task attempts to stage its own audio.
+    task = audio.generate_audio
+    task.push_request(id="symlink-delivery", retries=0, args=(), kwargs={})
+    try:
+        with pytest.raises(ValueError, match="symlink|artifact"):
+            task.run(case.runner.run_id, tts_model="edge-tts")
+    finally:
+        task.pop_request()
+
+    # Then the pre-existing output stays untouched and no provider is invoked.
+    assert marker.read_bytes() == b"complete"
+    case.provider.generate.assert_not_awaited()

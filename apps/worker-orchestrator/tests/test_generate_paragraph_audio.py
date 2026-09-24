@@ -173,7 +173,7 @@ def test_generate_paragraph_audio_success(monkeypatch: pytest.MonkeyPatch) -> No
     assert result["voice"] == "en_US-lessac-medium"
     assert result["provider_type"] == "qwen_tts"
     assert result["endpoint"] == "http://tts-qwen3:8100"
-    assert result["audio_path"] == "data/artifacts/101/audio/hook-1.wav"
+    assert result["audio_path"] == "data/artifacts/101/audio/run-101/hook-1.wav"
     assert result["gpu_lock_acquired_at"] is None
     assert result["gpu_lock_released_at"] is None
 
@@ -183,7 +183,7 @@ def test_generate_paragraph_audio_success(monkeypatch: pytest.MonkeyPatch) -> No
             "en_US-lessac-medium",
             {
                 "temperature": 0.2,
-                "output_path": "data/artifacts/101/audio/hook-1.wav",
+                "output_path": "data/artifacts/101/audio/run-101/hook-1.wav",
             },
         )
     ]
@@ -191,7 +191,7 @@ def test_generate_paragraph_audio_success(monkeypatch: pytest.MonkeyPatch) -> No
     call = audio_service.calls[0]
     assert call["run_id"] == 101
     assert call["section_id"] == "hook-1"
-    assert call["path"] == "data/artifacts/101/audio/hook-1.wav"
+    assert call["path"] == "data/artifacts/101/audio/run-101/hook-1.wav"
     assert call["model_used"] == "qwen3-tts"
     assert call["provider_type"] == "qwen_tts"
     assert call["voice"] == "en_US-lessac-medium"
@@ -320,11 +320,11 @@ def test_generate_paragraph_audio_sanitizes_section_id(monkeypatch: pytest.Monke
     result = _invoke_task(run_id=107, section_id="hook:1")
 
     assert result["status"] == "success"
-    assert result["audio_path"] == "data/artifacts/107/audio/san-hook:1.wav"
+    assert result["audio_path"] == "data/artifacts/107/audio/san-run-107/san-hook:1.wav"
     params = provider.calls[0][2]
     assert params is not None
-    assert params["output_path"] == "data/artifacts/107/audio/san-hook:1.wav"
-    assert audio_service.calls[0]["path"] == "data/artifacts/107/audio/san-hook:1.wav"
+    assert params["output_path"] == "data/artifacts/107/audio/san-run-107/san-hook:1.wav"
+    assert audio_service.calls[0]["path"] == "data/artifacts/107/audio/san-run-107/san-hook:1.wav"
 
 
 def test_generate_paragraph_audio_section_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
