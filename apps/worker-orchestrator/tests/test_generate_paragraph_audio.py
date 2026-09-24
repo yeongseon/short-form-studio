@@ -173,7 +173,7 @@ def test_generate_paragraph_audio_success(monkeypatch: pytest.MonkeyPatch) -> No
     assert result["voice"] == "en_US-lessac-medium"
     assert result["provider_type"] == "qwen_tts"
     assert result["endpoint"] == "http://tts-qwen3:8100"
-    assert result["audio_path"] == "data/artifacts/101/audio/hook-1.wav"
+    assert result["audio_path"] == "data/artifacts/101/audio/run-101/hook-1.wav"
     assert result["gpu_lock_acquired_at"] is None
     assert result["gpu_lock_released_at"] is None
 
@@ -183,7 +183,7 @@ def test_generate_paragraph_audio_success(monkeypatch: pytest.MonkeyPatch) -> No
             "en_US-lessac-medium",
             {
                 "temperature": 0.2,
-                "output_path": "data/artifacts/101/audio/hook-1.wav",
+                "output_path": "data/artifacts/101/audio/run-101/hook-1.wav",
             },
         )
     ]
@@ -191,7 +191,7 @@ def test_generate_paragraph_audio_success(monkeypatch: pytest.MonkeyPatch) -> No
     call = audio_service.calls[0]
     assert call["run_id"] == 101
     assert call["section_id"] == "hook-1"
-    assert call["path"] == "data/artifacts/101/audio/hook-1.wav"
+    assert call["path"] == "data/artifacts/101/audio/run-101/hook-1.wav"
     assert call["model_used"] == "qwen3-tts"
     assert call["provider_type"] == "qwen_tts"
     assert call["voice"] == "en_US-lessac-medium"
@@ -320,11 +320,11 @@ def test_generate_paragraph_audio_sanitizes_section_id(monkeypatch: pytest.Monke
     result = _invoke_task(run_id=107, section_id="hook:1")
 
     assert result["status"] == "success"
-    assert result["audio_path"] == "data/artifacts/107/audio/san-hook:1.wav"
+    assert result["audio_path"] == "data/artifacts/107/audio/san-run-107/san-hook:1.wav"
     params = provider.calls[0][2]
     assert params is not None
-    assert params["output_path"] == "data/artifacts/107/audio/san-hook:1.wav"
-    assert audio_service.calls[0]["path"] == "data/artifacts/107/audio/san-hook:1.wav"
+    assert params["output_path"] == "data/artifacts/107/audio/san-run-107/san-hook:1.wav"
+    assert audio_service.calls[0]["path"] == "data/artifacts/107/audio/san-run-107/san-hook:1.wav"
 
 
 def test_generate_paragraph_audio_section_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -412,3 +412,35 @@ def test_generate_paragraph_audio_uses_active_draft_not_run_script_data(
     assert result["status"] == "success"
     assert provider.calls[0][0] == "Text from active draft"
     assert script_service.calls == [110]
+
+
+def test_paragraph_audio_cleanup_failure_preserves_soft_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pathlib import PosixPath
+
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    class UnremovablePath(PosixPath):
+        def unlink(self, missing_ok: bool = False) -> None:
+            raise PermissionError("partial file is locked")
+
+    provider = FakeProvider(error=SoftTimeLimitExceeded())
+    _patch_registry(monkeypatch, FakeRegistry(entry=FakeEntry(), provider=provider))
+    _patch_redis(monkeypatch, object())
+    monkeypatch.setattr(
+        "tasks.task_runner._run_service",
+        FakeRunService({"current_stage": "AUDIO_GENERATING"}),
+    )
+    monkeypatch.setattr(
+        module,
+        "_script_service",
+        FakeScriptService(
+            FakeDraft(structured_script=[FakeSection(section_id="hook-9", text="Slow paragraph")])
+        ),
+    )
+    monkeypatch.setattr(module, "_audio_service", FakeAudioService())
+    monkeypatch.setattr(module, "Path", UnremovablePath)
+
+    with pytest.raises(SoftTimeLimitExceeded):
+        _invoke_task(run_id=109, section_id="hook-9")

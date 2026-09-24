@@ -135,7 +135,9 @@ class PostgresUsageStorage:
             raise ValueError(f"Failed to set quota for workspace {workspace_id}")
         return saved
 
-    async def try_reserve_quota(self, workspace_id: int, operation_type: str) -> bool:
+    async def try_reserve_quota(
+        self, workspace_id: int, operation_type: str, owner_id: str | None = None,
+    ) -> bool:
         if operation_type not in {"llm", "image_gen", "tts", "stt", "render"}:
             return True
 
@@ -143,6 +145,17 @@ class PostgresUsageStorage:
         async with pool.acquire() as connection:
             async with connection.transaction():
                 await connection.execute("SELECT pg_advisory_xact_lock($1)", workspace_id)
+                if owner_id is not None:
+                    existing = await connection.fetchrow(
+                        "SELECT workspace_id, operation_type, status FROM workspace_quota_reservation_owners WHERE owner_id = $1",
+                        owner_id,
+                    )
+                    if existing is not None:
+                        return (
+                            existing["workspace_id"] == workspace_id
+                            and existing["operation_type"] == operation_type
+                            and existing["status"] == "reserved"
+                        )
                 quota = await connection.fetchrow(
                     "SELECT * FROM workspace_quotas WHERE workspace_id = $1",
                     workspace_id,
@@ -253,7 +266,113 @@ class PostgresUsageStorage:
                     image_increment,
                     tts_increment,
                 )
+                if owner_id is not None:
+                    await connection.execute(
+                        """INSERT INTO workspace_quota_reservation_owners
+                           (owner_id, workspace_id, period_start, operation_type, status)
+                           VALUES ($1, $2, $3, $4, 'reserved')""",
+                        owner_id, workspace_id, month_start, operation_type,
+                    )
                 return True
+
+    async def try_reserve_owned(self, workspace_id: int, operation_type: str, owner_id: str) -> bool:
+        return await self.try_reserve_quota(workspace_id, operation_type, owner_id)
+
+    async def reservation_owner_id(self, task_id: str) -> str | None:
+        pool = await get_pool()
+        async with pool.acquire() as connection:
+            row = await connection.fetchrow(
+                "SELECT owner_id, status FROM workspace_quota_reservation_owners WHERE owner_id = $1",
+                task_id,
+            )
+            if row is not None and row["status"] == "cancelled":
+                raise ValueError("Cancelled reservation owner")
+            return row["owner_id"] if row is not None else None
+
+    async def cancel_owned(self, owner_id: str) -> bool:
+        pool = await get_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                owner = await connection.fetchrow(
+                    "SELECT workspace_id FROM workspace_quota_reservation_owners WHERE owner_id = $1",
+                    owner_id,
+                )
+                if owner is None:
+                    return False
+                workspace_id = int(owner["workspace_id"])
+                await connection.execute("SELECT pg_advisory_xact_lock($1)", workspace_id)
+                owned = await connection.fetchrow(
+                    """UPDATE workspace_quota_reservation_owners SET status = 'cancelled'
+                       WHERE owner_id = $1 AND status = 'reserved'
+                       RETURNING period_start, operation_type""",
+                    owner_id,
+                )
+                if owned is None:
+                    return False
+                await connection.execute(
+                    """UPDATE workspace_quota_reservations SET
+                       llm_count = llm_count - $3,
+                       image_count = image_count - $4,
+                       tts_request_count = tts_request_count - $5,
+                       updated_at = NOW()
+                       WHERE workspace_id = $1 AND period_start = $2""",
+                    workspace_id, owned["period_start"],
+                    int(owned["operation_type"] == "llm"),
+                    int(owned["operation_type"] == "image_gen"),
+                    int(owned["operation_type"] in {"tts", "stt", "render"}),
+                )
+                return True
+
+    async def record_owned_event(self, row: dict[str, Any], owner_id: str) -> dict[str, Any]:
+        pool = await get_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                owner = await connection.fetchrow(
+                    "SELECT workspace_id FROM workspace_quota_reservation_owners WHERE owner_id = $1",
+                    owner_id,
+                )
+                if owner is None:
+                    raise ValueError("Unknown reservation owner")
+                workspace_id = int(owner["workspace_id"])
+                await connection.execute("SELECT pg_advisory_xact_lock($1)", workspace_id)
+                owned = await connection.fetchrow(
+                    """SELECT period_start, operation_type, status
+                       FROM workspace_quota_reservation_owners WHERE owner_id = $1 FOR UPDATE""",
+                    owner_id,
+                )
+                if owned is None or row.get("workspace_id") != workspace_id or row.get("operation_type") != owned["operation_type"]:
+                    raise ValueError("Usage event owner mismatch")
+                if owned["status"] == "cancelled":
+                    raise ValueError("Cancelled reservation owner")
+                saved = await connection.fetchrow(
+                    """INSERT INTO usage_events (workspace_id, project_id, run_id, provider,
+                       model_key, operation_type, input_tokens, output_tokens, image_count,
+                       audio_seconds, estimated_cost_usd, cost_config_version, idempotency_key)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+                       ON CONFLICT (idempotency_key) DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
+                       RETURNING *""",
+                    row.get("workspace_id"), row.get("project_id"), row.get("run_id"),
+                    row.get("provider"), row.get("model_key"), row.get("operation_type"),
+                    row.get("input_tokens"), row.get("output_tokens"), row.get("image_count"),
+                    row.get("audio_seconds"), row.get("estimated_cost_usd"),
+                    row.get("cost_config_version"), row.get("idempotency_key"),
+                )
+                if owned["status"] == "reserved":
+                    await connection.execute(
+                        "UPDATE workspace_quota_reservation_owners SET status = 'consumed' WHERE owner_id = $1",
+                        owner_id,
+                    )
+                    await connection.execute(
+                        """UPDATE workspace_quota_reservations SET
+                           llm_count = llm_count - $3, image_count = image_count - $4,
+                           tts_request_count = tts_request_count - $5, updated_at = NOW()
+                           WHERE workspace_id = $1 AND period_start = $2""",
+                        workspace_id, owned["period_start"],
+                        int(owned["operation_type"] == "llm"),
+                        int(owned["operation_type"] == "image_gen"),
+                        int(owned["operation_type"] in {"tts", "stt", "render"}),
+                    )
+                return dict(saved)
 
     async def release_reservation(
         self, workspace_id: int, operation_type: str, units: int = 1
@@ -291,9 +410,21 @@ class PostgresUsageStorage:
                     """
                     UPDATE workspace_quota_reservations
                     SET
-                        llm_count = GREATEST(0, llm_count - $3),
-                        image_count = GREATEST(0, image_count - $4),
-                        tts_request_count = GREATEST(0, tts_request_count - $5),
+                        llm_count = GREATEST(llm_count - $3, (
+                            SELECT COUNT(*) FROM workspace_quota_reservation_owners
+                            WHERE workspace_id = $1 AND period_start = $2
+                              AND status = 'reserved' AND operation_type = 'llm'
+                        )),
+                        image_count = GREATEST(image_count - $4, (
+                            SELECT COUNT(*) FROM workspace_quota_reservation_owners
+                            WHERE workspace_id = $1 AND period_start = $2
+                              AND status = 'reserved' AND operation_type = 'image_gen'
+                        )),
+                        tts_request_count = GREATEST(tts_request_count - $5, (
+                            SELECT COUNT(*) FROM workspace_quota_reservation_owners
+                            WHERE workspace_id = $1 AND period_start = $2
+                              AND status = 'reserved' AND operation_type IN ('tts', 'stt', 'render')
+                        )),
                         updated_at = NOW()
                     WHERE workspace_id = $1 AND period_start = $2
                     """,

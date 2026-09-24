@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .run_service import InMemoryRunStorage
 
 
 class InMemoryTaskTrackingStorage:
@@ -22,12 +25,14 @@ class InMemoryTaskTrackingStorage:
                 incoming_status = row.get("status", "queued")
                 existing["status"] = incoming_status
                 if incoming_status == "queued":
+                    existing["claim_token"] = None
                     existing["attempt"] = int(existing.get("attempt", 0)) + 1
                     existing["started_at"] = None
                     existing["finished_at"] = None
                     existing["error_code"] = None
                     existing["error_message"] = None
                 elif incoming_status == "running":
+                    existing["claim_token"] = row.get("claim_token")
                     existing["started_at"] = row.get("started_at")
                     existing["finished_at"] = None
                     existing["error_code"] = None
@@ -45,6 +50,7 @@ class InMemoryTaskTrackingStorage:
             "finished_at": None,
             "error_code": None,
             "error_message": None,
+            "claim_token": None,
             **row,
         }
         self._rows[self._next_id] = saved
@@ -97,6 +103,38 @@ class InMemoryTaskTrackingStorage:
         self._rows[task_id] = row
         return dict(row)
 
+    async def finish_if_claimed(
+        self, celery_task_id: str, token: str, status: str,
+        error_code: str | None = None, error_message: str | None = None,
+    ) -> dict[str, Any] | None:
+        row_id = self._rows_by_celery_task_id.get(celery_task_id)
+        if row_id is None:
+            return None
+        row = self._rows[row_id]
+        if row.get("status") != "running" or row.get("claim_token") != token:
+            return None
+        row.update(status=status, claim_token=None, finished_at=datetime.now(timezone.utc),
+                   error_code=error_code, error_message=error_message)
+        return dict(row)
+
+    async def finish_claimed_run(
+        self, celery_task_id: str, token: str, status: str, run_storage: InMemoryRunStorage,
+        run_id: int, run_updates: dict[str, str], expected_stages: frozenset[str],
+        rejected_statuses: frozenset[str], error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> bool:
+        row_id = self._rows_by_celery_task_id.get(celery_task_id)
+        if row_id is None:
+            return False
+        row = self._rows[row_id]
+        if row.get("status") != "running" or row.get("claim_token") != token or row.get("run_id") != run_id:
+            return False
+        await run_storage.conditional_update_run(
+            run_id, run_updates, expected_stages, rejected_statuses=rejected_statuses,
+        )
+        await self.finish_if_claimed(celery_task_id, token, status, error_code, error_message)
+        return True
+
     async def claim_running(self, task_id: int, **kwargs: Any) -> dict[str, Any] | None:
         """Atomically claim a task: only transition from pending/queued/failed to running."""
         row = self._rows.get(task_id)
@@ -105,6 +143,7 @@ class InMemoryTaskTrackingStorage:
         if row.get("status") not in ("pending", "queued", "failed"):
             return None
         row["status"] = "running"
+        row["claim_token"] = kwargs.get("claim_token")
         if "started_at" in kwargs:
             row["started_at"] = kwargs["started_at"]
         row["finished_at"] = None

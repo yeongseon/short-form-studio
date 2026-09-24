@@ -72,8 +72,11 @@ async def execute_render(ctx: TaskContext, render_profile: str = "shorts_default
         await record_provider_call(
             ctx.run_id, "ffmpeg", render_profile, "render", cost_usd=COST_RENDER_VIDEO,
             workspace_id=ctx.workspace_id, project_id=ctx.project_id, idempotency_key=ctx.task_id,
+            reservation_owner_id=ctx.reservation_owner_id,
         )
     except Exception:
+        if ctx.reservation_owner_id is not None:
+            raise
         logger.warning("Failed to record provider usage", exc_info=True)
     from creator_service.artifact_storage_integration import store_artifact_file
 

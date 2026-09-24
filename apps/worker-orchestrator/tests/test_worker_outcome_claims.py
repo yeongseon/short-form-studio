@@ -67,3 +67,65 @@ def test_active_task_cancellation_remains_allowed(runner_case: RunnerCase, statu
     result = run_in_worker_loop(case.tracking.mark_revoked("validation-task"))
     # Then the active task can still be revoked.
     assert result is not None and result.status == "revoked"
+
+
+def test_superseded_delivery_cannot_advance_run(runner_case: RunnerCase) -> None:
+    # Given A loses its claim to B while producing a successful result.
+    case = runner_case
+
+    async def superseded(_ctx: task_runner.TaskContext) -> task_runner.TaskResult:
+        row = await case.tracking.storage.get_by_celery_id("validation-task")
+        assert row is not None
+        token = row["claim_token"]
+        assert isinstance(token, str)
+        assert await case.tracking.mark_failed_if_claimed("validation-task", token, "INTERNAL", "retry")
+        assert await case.tracking.record_task_start(
+            case.run_id, "generate_script", "validation-task", claim_token="new-owner",
+        )
+        return task_runner.TaskResult()
+
+    # When A finishes after B takes over the task.
+    result = task_runner.run_task(case.delivery(), case.run_id, case.config, superseded)
+
+    # Then A cannot advance B's run, and the caller still sees A's result.
+    assert result["status"] == "success"
+    assert run_in_worker_loop(case.tracking.list_run_tasks(case.run_id))[0].status == "running"
+    assert run_in_worker_loop(case.runs.storage.get_run(case.run_id))["current_stage"] == "SCRIPT_GENERATING"
+
+
+def test_cancelled_run_does_not_claim_successful_stage_transition(runner_case: RunnerCase) -> None:
+    # Given an owned delivery whose run is cancelled during execution.
+    case = runner_case
+
+    async def cancelled(_ctx: task_runner.TaskContext) -> task_runner.TaskResult:
+        await case.runs.cancel_run(case.run_id, workspace_id=1)
+        return task_runner.TaskResult()
+
+    # When the original owner returns its result after cancellation.
+    result = task_runner.run_task(case.delivery(), case.run_id, case.config, cancelled)
+
+    # Then the run remains cancelled; the completed delivery is tracked consistently.
+    assert result["status"] == "success"
+    run = run_in_worker_loop(case.runs.storage.get_run(case.run_id))
+    task = run_in_worker_loop(case.tracking.list_run_tasks(case.run_id))[0]
+    assert (run["current_stage"], run["status"]) == ("SCRIPT_GENERATING", "cancelled")
+    assert task.status == "success"
+
+
+def test_stage_advance_preserves_owned_delivery_result_without_rewinding_run(
+    runner_case: RunnerCase,
+) -> None:
+    # Given another transition advances the run during an owned delivery.
+    case = runner_case
+
+    async def advanced(_ctx: task_runner.TaskContext) -> task_runner.TaskResult:
+        await case.runs.storage.update_run(case.run_id, {"current_stage": "SCRIPT_REVIEW"})
+        return task_runner.TaskResult()
+
+    # When the original delivery completes after the stage change.
+    result = task_runner.run_task(case.delivery(), case.run_id, case.config, advanced)
+
+    # Then it keeps the newer stage and records only its own task result.
+    assert result["status"] == "success"
+    assert run_in_worker_loop(case.runs.storage.get_run(case.run_id))["current_stage"] == "SCRIPT_REVIEW"
+    assert run_in_worker_loop(case.tracking.list_run_tasks(case.run_id))[0].status == "success"

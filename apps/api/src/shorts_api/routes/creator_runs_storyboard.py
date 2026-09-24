@@ -233,10 +233,6 @@ async def generate_paragraph_audio_endpoint(
         raise HTTPException(status_code=404, detail=f"Section '{section_id}' not found")
 
     validate_model_key(effective.tts_model, expected_category="tts")
-    allowed, reason = await check_workspace_quota(user.workspace_id, operation_type="tts")
-    if not allowed:
-        raise HTTPException(status_code=429, detail=reason)
-
     task_id = await dispatch_storyboard_task_with_tracking(
         run_id=run_id,
         workspace_id=user.workspace_id,
@@ -295,10 +291,6 @@ async def generate_paragraph_subtitles_endpoint(
         )
 
     validate_model_key(effective.subtitle_model, expected_category="stt")
-    allowed, reason = await check_workspace_quota(user.workspace_id, operation_type="stt")
-    if not allowed:
-        raise HTTPException(status_code=429, detail=reason)
-
     task_id = await dispatch_storyboard_task_with_tracking(
         run_id=run_id,
         workspace_id=user.workspace_id,

@@ -83,8 +83,11 @@ class DispatchCAS(DispatchRuntime):
         if getattr(pre_run, "status", None) == "cancelled":
             raise ConflictError("Run is cancelled; cannot dispatch new tasks")
 
+        task_type = _DISPATCH_TASK_TYPES.get(getattr(dispatcher, "__name__", ""), "unknown")
+        owner_id = str(uuid4()) if quota_operation_type is not None and task_type != "unknown" else None
         reserved_workspace = await reserve_quota(
             run_service, run_id, workspace_id=workspace_id, operation_type=quota_operation_type,
+            owner_id=owner_id,
         )
         if reserved_workspace is not None:
             workspace_id = reserved_workspace
@@ -103,38 +106,39 @@ class DispatchCAS(DispatchRuntime):
                     run_id, updates, expected_stages=expected_stages, workspace_id=workspace_id,
                 )
         except ServiceError:
-            await cancel_quota(reserved_workspace, quota_operation_type, "during stage update")
+            await cancel_quota(reserved_workspace, quota_operation_type, "during stage update", owner_id)
             raise
         except Exception:
-            await cancel_quota(reserved_workspace, quota_operation_type, "during stage update")
+            await cancel_quota(reserved_workspace, quota_operation_type, "during stage update", owner_id)
             raise ServiceUnavailableError("Storage failure during dispatch stage update") from None
         if not ok:
-            await cancel_quota(reserved_workspace, quota_operation_type)
+            await cancel_quota(reserved_workspace, quota_operation_type, owner_id=owner_id)
             if row is None:
                 raise NotFoundError("Run not found")
             raise ConflictError(f"Stage conflict: run is now in '{row.get('current_stage')}'")
 
-        task_type = _DISPATCH_TASK_TYPES.get(getattr(dispatcher, "__name__", ""), "unknown")
         pending_id: str | None = None
         if self._use_celery_dispatch() and task_type != "unknown":
-            pending_id = str(uuid4())
+            pending_id = owner_id or str(uuid4())
             try:
                 await task_tracking_service.record_task_pending(run_id, task_type, pending_id)
             except Exception:
                 logger.exception("Failed to record pending task", extra={"run_id": run_id})
                 await rollback.apply(run_service)
-                await cancel_quota(reserved_workspace, quota_operation_type)
+                await cancel_quota(reserved_workspace, quota_operation_type, owner_id=owner_id)
                 raise ServiceUnavailableError(enqueue_error_detail) from None
         try:
             dispatch_kwargs = dict(dispatcher_args)
-            if pending_id is not None:
-                dispatch_kwargs["task_id"] = pending_id
+            if pending_id is not None or owner_id is not None:
+                dispatch_kwargs["task_id"] = pending_id or owner_id
             task_id = await run_blocking(partial(dispatcher, **dispatch_kwargs))
+            if owner_id is not None and task_id != owner_id:
+                raise ServiceUnavailableError("Task identity changed during dispatch")
         except SynchronousTaskExecutionError:
-            await cancel_quota(reserved_workspace, quota_operation_type)
+            await cancel_quota(reserved_workspace, quota_operation_type, owner_id=owner_id)
             raise ServiceError("Task execution failed") from None
         except Exception:
-            await cancel_quota(reserved_workspace, quota_operation_type)
+            await cancel_quota(reserved_workspace, quota_operation_type, owner_id=owner_id)
             await rollback.apply(run_service)
             raise ServiceUnavailableError(enqueue_error_detail) from None
 
@@ -150,7 +154,7 @@ class DispatchCAS(DispatchRuntime):
                 await task_tracking_service.mark_revoked(task_id)
             except Exception:
                 logger.warning("Failed to mark task revoked during rollback", extra={"task_id": task_id}, exc_info=True)
-            await cancel_quota(reserved_workspace, quota_operation_type, "during rollback")
+            await cancel_quota(reserved_workspace, quota_operation_type, "during rollback", owner_id)
             await rollback.apply(run_service)
             raise ServiceUnavailableError(enqueue_error_detail) from None
 
@@ -165,6 +169,6 @@ class DispatchCAS(DispatchRuntime):
             except Exception:
                 logger.warning("Failed to mark task revoked", extra={"task_id": task_id}, exc_info=True)
             await rollback.apply(run_service)
-            await cancel_quota(reserved_workspace, quota_operation_type, "during concurrent cancel")
+            await cancel_quota(reserved_workspace, quota_operation_type, "during concurrent cancel", owner_id)
             raise ConflictError("Run was cancelled during dispatch")
         return {"task_id": task_id, "run_id": run_id, "current_stage": target_stage}

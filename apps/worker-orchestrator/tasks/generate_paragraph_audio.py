@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 import os
 import wave
+from pathlib import Path
 
 from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
@@ -85,7 +86,10 @@ def generate_paragraph_audio(
             gpu_lock.acquire(lock_id=lock_id)
 
         safe_section_id = sanitize_path_component(section_id, label="section_id")
-        audio_path = f"{_ARTIFACT_ROOT}/{run_id}/audio/{safe_section_id}.wav"
+        delivery_dir = Path(_ARTIFACT_ROOT) / str(run_id) / "audio" / sanitize_path_component(
+            ctx.task_id, label="task_id",
+        )
+        audio_path = str(delivery_dir / f"{safe_section_id}.wav")
         try:
             os.makedirs(os.path.dirname(audio_path), exist_ok=True)
             params = dict(entry.default_params or {})
@@ -112,6 +116,12 @@ def generate_paragraph_audio(
                     "Provider failed paragraph audio generation "
                     f"for run {run_id} section {section_id}"
                 ) from exc
+        except BaseException:
+            try:
+                Path(audio_path).unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Failed to remove partial paragraph audio", extra={"run_id": run_id}, exc_info=True)
+            raise
         finally:
             if entry.requires_gpu:
                 gpu_lock.release(lock_id=lock_id)
@@ -127,8 +137,11 @@ def generate_paragraph_audio(
                 workspace_id=ctx.workspace_id,
                 project_id=ctx.project_id,
                 idempotency_key=ctx.task_id,
+                reservation_owner_id=ctx.reservation_owner_id,
             )
         except Exception:
+            if ctx.reservation_owner_id is not None:
+                raise
             logger.warning("Failed to record provider usage", exc_info=True)
 
         from creator_service.artifact_storage_integration import store_artifact_file

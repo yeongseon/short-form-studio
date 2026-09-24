@@ -172,6 +172,13 @@ class DispatchReconciler:
 
             if marked is not None:
                 result.stuck_failed += 1
+                try:
+                    from creator_service.usage_service import usage_service
+
+                    await usage_service.cancel_owned(celery_task_id)
+                except Exception as exc:
+                    logger.warning("Reconciler: failed to cancel owned reservation", exc_info=True)
+                    result.errors.append(f"Reservation cleanup failed for task {celery_task_id}: {type(exc).__name__}")
                 logger.info(
                     "Reconciler: marked stuck running task %s (run %d) as failed",
                     celery_task_id,

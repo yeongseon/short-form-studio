@@ -117,6 +117,7 @@ def generate_scene_image(
                     pass  # Non-critical enhancement
             gpu_lock = GpuLockContext(f"{ctx.task_id}:{target_scene.scene_id}")
             provider_error: ProviderError | None = None
+            usage_error: Exception | None = None
 
             try:
                 if entry.requires_gpu:
@@ -200,8 +201,12 @@ def generate_scene_image(
                         workspace_id=ctx.workspace_id,
                         project_id=ctx.project_id,
                         idempotency_key=f"{ctx.task_id}:{target_scene.scene_id}",
+                        reservation_owner_id=ctx.reservation_owner_id,
                     )
-                except Exception:
+                except Exception as exc:
+                    if ctx.reservation_owner_id is not None:
+                        usage_error = exc
+                        raise
                     logger.warning("Failed to record provider usage", exc_info=True)
 
                 uploaded = await batch.upload(target_path)
@@ -240,7 +245,7 @@ def generate_scene_image(
             except RateLimitError:
                 raise
             except Exception as exc:
-                if exc is provider_error:
+                if exc is provider_error or exc is usage_error:
                     raise
                 scene_result.update({"status": "failed", "error": str(exc)})
                 batch.failures.append(scene_result)

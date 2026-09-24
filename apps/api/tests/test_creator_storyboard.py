@@ -161,6 +161,7 @@ def _patch_quota_functions(
 ) -> dict[str, list[tuple[int, str]]]:
     quota_calls: list[tuple[int, str]] = []
     cancel_calls: list[tuple[int, str]] = []
+    owners: dict[str, tuple[int, str]] = {}
     results = list(outcomes or [])
 
     async def _check_workspace_quota(
@@ -171,28 +172,28 @@ def _patch_quota_functions(
             return results.pop(0)
         return True, "ok"
 
-    async def _cancel_workspace_quota_reservation(workspace_id: int, operation_type: str) -> None:
-        cancel_calls.append((workspace_id, operation_type))
+    async def reserve_owned(workspace_id: int, operation_type: str, owner_id: str) -> tuple[bool, str]:
+        allowed, reason = await _check_workspace_quota(workspace_id, operation_type)
+        if allowed:
+            owners[owner_id] = (workspace_id, operation_type)
+        return allowed, reason
+
+    async def cancel_owned(owner_id: str) -> bool:
+        cancel_calls.append(owners.pop(owner_id))
+        return True
 
     for route in _iter_api_routes(runs_router.routes):
         if route.name in route_names:
             monkeypatch.setitem(
                 route.endpoint.__globals__, "check_workspace_quota", _check_workspace_quota
             )
-            monkeypatch.setitem(
-                route.endpoint.__globals__,
-                "cancel_workspace_quota_reservation",
-                _cancel_workspace_quota_reservation,
-            )
 
     monkeypatch.setattr(
         "creator_service.usage_service.check_workspace_quota",
         _check_workspace_quota,
     )
-    monkeypatch.setattr(
-        "shorts_api.routes.storyboard_dispatch.cancel_workspace_quota_reservation",
-        _cancel_workspace_quota_reservation,
-    )
+    monkeypatch.setattr("shorts_api.routes.storyboard_dispatch.reserve_owned_quota", reserve_owned)
+    monkeypatch.setattr("shorts_api.routes.storyboard_dispatch.cancel_owned_quota_reservation", cancel_owned)
 
     return {"quota": quota_calls, "cancel": cancel_calls}
 

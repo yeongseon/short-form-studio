@@ -45,6 +45,14 @@ class UsageStorageBackend(Protocol):
         self, workspace_id: int, operation_type: str, units: int = 1
     ) -> None: ...
 
+    async def try_reserve_owned(self, workspace_id: int, operation_type: str, owner_id: str) -> bool: ...
+
+    async def cancel_owned(self, owner_id: str) -> bool: ...
+
+    async def reservation_owner_id(self, task_id: str) -> str | None: ...
+
+    async def record_owned_event(self, row: dict[str, Any], owner_id: str) -> dict[str, Any]: ...
+
 
 class InMemoryUsageStorage:
     def __init__(self) -> None:
@@ -52,6 +60,7 @@ class InMemoryUsageStorage:
         self._events_by_idempotency_key: dict[str, dict[str, Any]] = {}
         self._quotas: dict[int, dict[str, Any]] = {}
         self._reservations: dict[tuple[int, datetime], dict[str, int]] = {}
+        self._owned: dict[str, tuple[int, datetime, str, str]] = {}
         self._locks: dict[int, asyncio.Lock] = {}
         self._next_event_id = 1
         self._next_quota_id = 1
@@ -121,11 +130,16 @@ class InMemoryUsageStorage:
         self._quotas[workspace_id] = saved
         return dict(saved)
 
-    async def try_reserve_quota(self, workspace_id: int, operation_type: str) -> bool:
+    async def try_reserve_quota(
+        self, workspace_id: int, operation_type: str, owner_id: str | None = None,
+    ) -> bool:
         now = datetime.now(timezone.utc)
         period_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
         key = (workspace_id, period_start)
         async with self._lock_for_workspace(workspace_id):
+            if owner_id is not None and owner_id in self._owned:
+                old_workspace, _, old_operation, old_status = self._owned[owner_id]
+                return (old_workspace, old_operation, old_status) == (workspace_id, operation_type, "reserved")
             quota = await self.get_workspace_quota(workspace_id)
             if quota is None:
                 quota = await self.set_workspace_quota(
@@ -158,6 +172,8 @@ class InMemoryUsageStorage:
                 if usage["llm"] + reserved["llm"] >= int(quota["monthly_llm_calls"]):
                     return False
                 reserved["llm"] += 1
+                if owner_id is not None:
+                    self._owned[owner_id] = (workspace_id, period_start, operation_type, "reserved")
                 return True
             if operation_type == "image_gen":
                 if usage["image_gen"] + reserved["image_gen"] >= int(
@@ -165,6 +181,8 @@ class InMemoryUsageStorage:
                 ):
                     return False
                 reserved["image_gen"] += 1
+                if owner_id is not None:
+                    self._owned[owner_id] = (workspace_id, period_start, operation_type, "reserved")
                 return True
             # STT/render intentionally share the TTS reservation bucket until
             # dedicated monthly_stt/monthly_render quota fields are added.
@@ -175,8 +193,51 @@ class InMemoryUsageStorage:
                 ):
                     return False
                 reserved["tts_requests"] += 1
+                if owner_id is not None:
+                    self._owned[owner_id] = (workspace_id, period_start, operation_type, "reserved")
                 return True
             return True
+
+    async def try_reserve_owned(self, workspace_id: int, operation_type: str, owner_id: str) -> bool:
+        return await self.try_reserve_quota(workspace_id, operation_type, owner_id)
+
+    def _finish_owned(self, owner_id: str, status: str) -> bool:
+        owned = self._owned.get(owner_id)
+        if owned is None or owned[3] != "reserved":
+            return False
+        workspace_id, period_start, operation_type, _ = owned
+        bucket = "tts_requests" if operation_type in {"tts", "stt", "render"} else operation_type
+        self._reservations[(workspace_id, period_start)][bucket] -= 1
+        self._owned[owner_id] = (workspace_id, period_start, operation_type, status)
+        return True
+
+    async def cancel_owned(self, owner_id: str) -> bool:
+        owned = self._owned.get(owner_id)
+        if owned is None:
+            return False
+        async with self._lock_for_workspace(owned[0]):
+            return self._finish_owned(owner_id, "cancelled")
+
+    async def reservation_owner_id(self, task_id: str) -> str | None:
+        owned = self._owned.get(task_id)
+        if owned is not None and owned[3] == "cancelled":
+            raise ValueError("Cancelled reservation owner")
+        return task_id if owned is not None else None
+
+    async def record_owned_event(self, row: dict[str, Any], owner_id: str) -> dict[str, Any]:
+        owned = self._owned.get(owner_id)
+        if owned is None:
+            raise ValueError("Unknown reservation owner")
+        workspace_id, _, operation_type, status = owned
+        if row.get("workspace_id") != workspace_id or row.get("operation_type") != operation_type:
+            raise ValueError("Usage event owner mismatch")
+        if status == "cancelled":
+            raise ValueError("Cancelled reservation owner")
+        async with self._lock_for_workspace(workspace_id):
+            saved = await self.record_event(row)
+            if status == "reserved":
+                self._finish_owned(owner_id, "consumed")
+            return saved
 
     async def release_reservation(
         self, workspace_id: int, operation_type: str, units: int = 1
@@ -206,12 +267,21 @@ class InMemoryUsageStorage:
             if reserved is None:
                 return
 
+            owned = sum(
+                1 for ws, period, op, status in self._owned.values()
+                if ws == workspace_id and period == period_start and status == "reserved"
+                and (
+                    op == operation_type if operation_type in {"llm", "image_gen"}
+                    else op in {"tts", "stt", "render"}
+                )
+            )
+
             if operation_type == "llm":
-                reserved["llm"] = max(0, reserved["llm"] - decrement)
+                reserved["llm"] = max(owned, reserved["llm"] - decrement)
             elif operation_type == "image_gen":
-                reserved["image_gen"] = max(0, reserved["image_gen"] - decrement)
+                reserved["image_gen"] = max(owned, reserved["image_gen"] - decrement)
             elif operation_type in {"tts", "stt", "render"}:
-                reserved["tts_requests"] = max(0, reserved["tts_requests"] - decrement)
+                reserved["tts_requests"] = max(owned, reserved["tts_requests"] - decrement)
 
 
 class UsageService:
@@ -225,6 +295,19 @@ class UsageService:
 
     def __init__(self, storage: UsageStorageBackend):
         self.storage = storage
+
+    async def reserve_owned(self, workspace_id: int, operation_type: str, owner_id: str) -> bool:
+        summary = await self.get_monthly_summary(workspace_id)
+        quota = await self.get_quota(workspace_id)
+        if self._quota_exceeded_reason(summary, quota, operation_type) is not None:
+            return False
+        return await self.storage.try_reserve_owned(workspace_id, operation_type, owner_id)
+
+    async def cancel_owned(self, owner_id: str) -> bool:
+        return await self.storage.cancel_owned(owner_id)
+
+    async def reservation_owner_id(self, task_id: str) -> str | None:
+        return await self.storage.reservation_owner_id(task_id)
 
     async def record_usage(
         self,
@@ -242,9 +325,9 @@ class UsageService:
         cost_config_version: str | None = None,
         project_id: int | None = None,
         idempotency_key: str | None = None,
+        reservation_owner_id: str | None = None,
     ) -> UsageEvent:
-        row = await self.storage.record_event(
-            {
+        payload = {
                 "workspace_id": workspace_id,
                 "project_id": project_id,
                 "run_id": run_id,
@@ -259,8 +342,11 @@ class UsageService:
                 "cost_config_version": cost_config_version,
                 "idempotency_key": idempotency_key,
             }
-        )
-        if workspace_id is not None:
+        if reservation_owner_id is not None:
+            row = await self.storage.record_owned_event(payload, reservation_owner_id)
+        else:
+            row = await self.storage.record_event(payload)
+        if workspace_id is not None and reservation_owner_id is None:
             await self.storage.release_reservation(workspace_id, operation_type, units=1)
         return UsageEvent.from_row(row)
 
@@ -406,6 +492,7 @@ async def record_provider_call(
     workspace_id: int | None = None,
     project_id: int | None = None,
     idempotency_key: str | None = None,
+    reservation_owner_id: str | None = None,
 ) -> UsageEvent:
     """Record a provider call from a worker task.
 
@@ -455,6 +542,7 @@ async def record_provider_call(
         cost_config_version=cost_config_version,
         project_id=project_id,
         idempotency_key=idempotency_key,
+        reservation_owner_id=reservation_owner_id,
     )
 
 
@@ -506,3 +594,14 @@ async def cancel_workspace_quota_reservation(
     units: int = 1,
 ) -> None:
     await usage_service.storage.cancel_reservation(workspace_id, operation_type, units=units)
+
+
+async def reserve_owned_quota(
+    workspace_id: int, operation_type: str, owner_id: str,
+) -> tuple[bool, str]:
+    allowed = await usage_service.reserve_owned(workspace_id, operation_type, owner_id)
+    return allowed, "ok" if allowed else "Quota exceeded"
+
+
+async def cancel_owned_quota_reservation(owner_id: str) -> bool:
+    return await usage_service.cancel_owned(owner_id)

@@ -1427,6 +1427,7 @@ class StubImageDispatcher:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
         self.task_id = "test-img-task-id-789"
+        self.last_task_id: str | None = None
 
     def __call__(
         self,
@@ -1436,7 +1437,9 @@ class StubImageDispatcher:
         prompt_override: str | None,
         is_active: bool,
         image_params: dict[str, object] | None = None,
+        task_id: str | None = None,
     ) -> str:
+        self.last_task_id = task_id
         self.calls.append(
             {
                 "run_id": run_id,
@@ -1447,7 +1450,7 @@ class StubImageDispatcher:
                 "image_params": image_params,
             }
         )
-        return self.task_id
+        return task_id or self.task_id
 
 
 @pytest.fixture
@@ -1706,6 +1709,19 @@ def stub_single_scene_services(
         "shorts_api.routes.scene_image_dispatch.dispatch_generate_scene_image", dispatcher
     )
 
+    async def _reserve_owned(_workspace_id: int, _operation_type: str, _task_id: str) -> tuple[bool, str]:
+        return True, "ok"
+
+    async def _pending(_run_id: int, _task_type: str, _task_id: str) -> None:
+        return None
+
+    async def _promote(_task_id: str) -> None:
+        return None
+
+    monkeypatch.setattr("shorts_api.routes.scene_image_dispatch.reserve_owned_quota", _reserve_owned)
+    monkeypatch.setattr("shorts_api.routes.scene_image_dispatch.task_tracking_service.record_task_pending", _pending)
+    monkeypatch.setattr("shorts_api.routes.scene_image_dispatch.task_tracking_service.promote_pending_to_queued", _promote)
+
     async def _get_project(_project_id: int, workspace_id: int | None = None):
         _ = workspace_id
 
@@ -1747,7 +1763,7 @@ async def test_generate_scene_image_from_visual_plan_review(client, stub_single_
 
     assert response.status_code == 202
     body = response.json()
-    assert body["task_id"] == "test-img-task-id-789"
+    assert body["task_id"] == dispatcher.last_task_id
     assert body["run_id"] == 70
     assert body["scene_id"] == "scene-sec-0"
     assert body["current_stage"] == "VISUAL_PLAN_REVIEW"
@@ -1761,7 +1777,7 @@ async def test_generate_scene_image_from_visual_plan_review(client, stub_single_
             "image_params": None,
         }
     ]
-    assert run_svc.get_run_workspace_ids == [1]
+    assert run_svc.get_run_workspace_ids == [1, 1]
 
 
 @pytest.mark.asyncio
@@ -1840,7 +1856,7 @@ async def test_regenerate_scene_image_success(client, stub_single_scene_services
 
     assert response.status_code == 202
     body = response.json()
-    assert body["task_id"] == "test-img-task-id-789"
+    assert body["task_id"] == dispatcher.last_task_id
     assert body["run_id"] == 80
     assert body["scene_id"] == "scene-sec-0"
     assert body["current_stage"] == "VISUAL_ASSET_REVIEW"
