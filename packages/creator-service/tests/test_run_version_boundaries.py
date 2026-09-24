@@ -88,12 +88,12 @@ async def test_model_default_scope_miss_preserves_version(version_runs: RunServi
 
 @pytest.mark.parametrize("version_runs", ["postgres"], indirect=True)
 async def test_database_rejection_rolls_back_version_with_fields(version_runs: RunService) -> None:
-    # Given a valid run and a project ID that violates the migrated foreign key.
+    # Given a valid run and a status that violates the migrated CHECK constraint.
     run = await version_runs.create_run(1, None, "default", workspace_id=1)
     # When PostgreSQL rejects the actual UPDATE statement.
-    with pytest.raises(asyncpg.ForeignKeyViolationError):
+    with pytest.raises(asyncpg.CheckViolationError):
         await version_runs.storage.update_run(
-            run.id, {"project_id": 999, "status": "completed"}, workspace_id=1,
+            run.id, {"current_stage": "SCRIPT_REVIEW", "status": "not-a-status"}, workspace_id=1,
         )
     # Then neither the fields nor the version partially commits.
     assert await version_runs.get_run(run.id, workspace_id=1) == run
