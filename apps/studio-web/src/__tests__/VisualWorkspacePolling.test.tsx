@@ -1,11 +1,29 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import UnifiedSceneWorkspace from "../components/creator/UnifiedSceneWorkspace";
-import { json, plan, scene, storyboard } from "./visualPlanFixtures";
+import { deferred, json, plan, scene, storyboard } from "./visualPlanFixtures";
 
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("mounted workspace generation polling", () => {
+  it("ignores an old run storyboard arriving after navigation", async () => {
+    // Given run A's storyboard request is pending when the workspace switches to B.
+    const old = deferred<Response>();
+    const fetchMock = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>().mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith("/runs/1/storyboard")) return old.promise;
+      if (url.endsWith("/runs/2/storyboard")) return json({ ...storyboard(), run_id: 2, paragraphs: [] });
+      return json(plan());
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const view = render(<UnifiedSceneWorkspace runId={1} currentStage="SCRIPT_REVIEW" />);
+    view.rerender(<UnifiedSceneWorkspace runId={2} currentStage="SCRIPT_REVIEW" />);
+    await act(async () => { await Promise.resolve(); });
+    // When A's response arrives after B.
+    await act(async () => { old.resolve(json(storyboard())); });
+    // Then run A's scenes are not displayed in B's workspace.
+    expect(screen.queryByTestId("scene-card-sec-0")).not.toBeInTheDocument();
+  });
   it("retains the editor value and dirty indicator across the actual 4s timer while assets update", async () => {
     // Given the real workspace, real hook/client and an active generation paragraph.
     vi.useFakeTimers();
