@@ -55,23 +55,24 @@ async def test_postgres_rejects_user_version_and_invalid_field_overrides(
 
 
 @pytest.mark.parametrize("version_runs", ["memory"], indirect=True)
-async def test_memory_owns_version_despite_caller_override(version_runs: RunService) -> None:
-    # Given the existing memory adapter accepts a version key.
+async def test_memory_rejects_caller_version_override(version_runs: RunService) -> None:
+    # Given a valid run with a storage-owned version.
     run = await version_runs.create_run(1, None, "default", workspace_id=1)
     # When a caller tries to select an arbitrary version.
-    saved = await version_runs.storage.update_run(run.id, {"version": 500}, workspace_id=1)
-    # Then its existing contract increments from the stored version instead.
-    assert saved is not None and saved["version"] == run.version + 1
+    with pytest.raises(ValueError, match="Invalid update columns"):
+        await version_runs.storage.update_run(run.id, {"version": 500}, workspace_id=1)
+    # Then no version or state changes.
+    assert await version_runs.get_run(run.id, workspace_id=1) == run
 
 
 @pytest.mark.parametrize("version_runs", ["postgres"], indirect=True)
-async def test_postgres_empty_update_retains_existing_read_only_behavior(version_runs: RunService) -> None:
+async def test_postgres_empty_update_checks_version(version_runs: RunService) -> None:
     # Given an empty patch, which is historically a scoped read in PostgreSQL.
     run = await version_runs.create_run(1, None, "default", workspace_id=1)
-    # When no fields are supplied, even with a stale expected version.
+    # When no fields are supplied with a stale expected version.
     saved = await version_runs.storage.update_run(run.id, {}, workspace_id=1, expected_version=-1)
-    # Then the existing read-only result is preserved.
-    assert saved is not None and saved["version"] == run.version
+    # Then stale reads do not masquerade as accepted updates.
+    assert saved is None
     assert await version_runs.get_run(run.id, workspace_id=1) == run
 
 
@@ -87,22 +88,22 @@ async def test_model_default_scope_miss_preserves_version(version_runs: RunServi
 
 @pytest.mark.parametrize("version_runs", ["postgres"], indirect=True)
 async def test_database_rejection_rolls_back_version_with_fields(version_runs: RunService) -> None:
-    # Given a valid run and a project ID that violates the migrated foreign key.
+    # Given a valid run and a status that violates the migrated CHECK constraint.
     run = await version_runs.create_run(1, None, "default", workspace_id=1)
     # When PostgreSQL rejects the actual UPDATE statement.
-    with pytest.raises(asyncpg.ForeignKeyViolationError):
+    with pytest.raises(asyncpg.CheckViolationError):
         await version_runs.storage.update_run(
-            run.id, {"project_id": 999, "status": "completed"}, workspace_id=1,
+            run.id, {"current_stage": "SCRIPT_REVIEW", "status": "not-a-status"}, workspace_id=1,
         )
     # Then neither the fields nor the version partially commits.
     assert await version_runs.get_run(run.id, workspace_id=1) == run
 
 
 @pytest.mark.parametrize("version_runs", ["memory"], indirect=True)
-async def test_memory_empty_update_retains_existing_increment(version_runs: RunService) -> None:
+async def test_memory_empty_update_is_read_only(version_runs: RunService) -> None:
     # Given an empty patch in the existing memory adapter.
     run = await version_runs.create_run(1, None, "default", workspace_id=1)
     # When its current version matches the CAS precondition.
     saved = await version_runs.storage.update_run(run.id, {}, expected_version=run.version)
-    # Then its historical version increment is retained.
-    assert saved is not None and saved["version"] == run.version + 1
+    # Then the version is not advanced by an empty patch.
+    assert saved is not None and saved["version"] == run.version

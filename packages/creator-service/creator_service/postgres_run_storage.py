@@ -4,20 +4,7 @@ from typing import Any
 
 from .db import fetch_all, fetch_one
 from .run_service import ConflictError
-
-_UPDATABLE_COLUMNS = {
-    "project_id",
-    "workspace_id",
-    "current_stage",
-    "status",
-    "review_stage",
-    "restart_from",
-    "model_defaults_json",
-    "metadata_json",
-    "style_preset",
-    "started_at",
-    "finished_at",
-}
+from .run_update_columns import UPDATABLE_RUN_COLUMNS
 
 
 class PostgresRunStorage:
@@ -85,9 +72,11 @@ class PostgresRunStorage:
             current = await self.get_run(run_id, workspace_id=workspace_id)
             if current is None:
                 raise ValueError(f"Run {run_id} not found")
+            if expected_version is not None and current["version"] != expected_version:
+                return None
             return current
 
-        invalid_columns = set(updates) - _UPDATABLE_COLUMNS
+        invalid_columns = set(updates) - UPDATABLE_RUN_COLUMNS
         if invalid_columns:
             invalid_list = ", ".join(sorted(invalid_columns))
             raise ValueError(f"Invalid update columns: {invalid_list}")
@@ -126,11 +115,13 @@ class PostgresRunStorage:
             current = await self.get_run(run_id, workspace_id=workspace_id)
             if current is None:
                 return False, None
+            if rejected_statuses and current.get("status") in rejected_statuses:
+                return False, current
             if current.get("current_stage") in expected_stages:
                 return True, current
             return False, current
 
-        invalid_columns = set(updates) - _UPDATABLE_COLUMNS
+        invalid_columns = set(updates) - UPDATABLE_RUN_COLUMNS
         if invalid_columns:
             invalid_list = ", ".join(sorted(invalid_columns))
             raise ValueError(f"Invalid update columns: {invalid_list}")
