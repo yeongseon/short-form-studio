@@ -1,7 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
+if TYPE_CHECKING:
+    from .postgres_run_storage import PostgresRunStorage
+
+from . import db
 from .db import fetch_all, fetch_one
 
 
@@ -18,9 +22,9 @@ class PostgresTaskTrackingStorage:
                 started_at,
                 finished_at,
                 error_code,
-                error_message
+                error_message, claim_token
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
             ON CONFLICT (celery_task_id) DO UPDATE
             SET status = EXCLUDED.status,
                 attempt = CASE
@@ -44,7 +48,10 @@ class PostgresTaskTrackingStorage:
                 error_message = CASE
                     WHEN EXCLUDED.status IN ('queued', 'running') THEN NULL
                     ELSE creator_run_tasks.error_message
-                END
+                END,
+                claim_token = CASE WHEN EXCLUDED.status = 'running' THEN EXCLUDED.claim_token
+                                   WHEN EXCLUDED.status = 'queued' THEN NULL
+                                   ELSE creator_run_tasks.claim_token END
             WHERE creator_run_tasks.status NOT IN ('success', 'running')
             RETURNING *
             """,
@@ -57,6 +64,7 @@ class PostgresTaskTrackingStorage:
             row.get("finished_at"),
             row.get("error_code"),
             row.get("error_message"),
+            row.get("claim_token"),
         )
         return saved
 
@@ -120,14 +128,57 @@ class PostgresTaskTrackingStorage:
                 started_at = $2,
                 finished_at = NULL,
                 error_code = NULL,
-                error_message = NULL
+                error_message = NULL, claim_token = $3
             WHERE id = $1 AND status IN ('pending', 'queued', 'failed')
             RETURNING *
             """,
             task_id,
             kwargs.get("started_at"),
+            kwargs.get("claim_token"),
         )
         return claimed
+
+    async def finish_if_claimed(
+        self, celery_task_id: str, token: str, status: str,
+        error_code: str | None = None, error_message: str | None = None,
+    ) -> dict[str, Any] | None:
+        return await fetch_one(
+            """UPDATE creator_run_tasks SET status=$3, claim_token=NULL, finished_at=NOW(),
+               error_code=$4, error_message=$5
+               WHERE celery_task_id=$1 AND claim_token=$2 AND status='running' RETURNING *""",
+            celery_task_id, token, status, error_code, error_message,
+        )
+
+    async def finish_claimed_run(
+        self, celery_task_id: str, token: str, status: str, run_storage: PostgresRunStorage,
+        run_id: int, run_updates: dict[str, str], expected_stages: frozenset[str],
+        rejected_statuses: frozenset[str], error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> bool:
+        pool = await db.get_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                claimed = await connection.fetchrow(
+                    """SELECT id FROM creator_run_tasks WHERE celery_task_id=$1
+                       AND claim_token=$2 AND status='running' AND run_id=$3 FOR UPDATE""",
+                    celery_task_id, token, run_id,
+                )
+                if claimed is None:
+                    return False
+                await connection.fetchrow(
+                    """UPDATE creator_runs SET current_stage=$2, status=$3, version=version+1
+                       WHERE id=$1 AND current_stage=ANY($4::text[])
+                       AND status != ALL($5::text[]) RETURNING id""",
+                    run_id, run_updates["current_stage"], run_updates["status"],
+                    list(expected_stages), list(rejected_statuses),
+                )
+                await connection.fetchrow(
+                    """UPDATE creator_run_tasks SET status=$2, claim_token=NULL,
+                       finished_at=NOW(), error_code=$3, error_message=$4
+                       WHERE id=$1 RETURNING id""",
+                    claimed["id"], status, error_code, error_message,
+                )
+                return True
 
     async def get_by_celery_id(self, celery_task_id: str) -> dict[str, Any] | None:
         return await fetch_one(

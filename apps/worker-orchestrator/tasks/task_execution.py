@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Protocol
+from uuid import uuid4
 
 from celery.exceptions import Ignore, SoftTimeLimitExceeded
 from creator_provider.exceptions import ProviderTimeoutError, RateLimitError
@@ -62,6 +63,26 @@ def run_task(
     task_id = str(getattr(request, "id", None) or f"run-{validated_run_id}")
     safe_failure_stages = config.safe_failure_stages or config.safe_stages
     execution_started = False
+    claimed = False
+    from creator_service.task_tracking_service import TaskTrackingService
+
+    claim_token = (
+        uuid4().hex
+        if not task_id.startswith("run-") and isinstance(runner._task_tracking_service, TaskTrackingService)
+        else None
+    )
+
+    def mark_claimed() -> None:
+        nonlocal claimed
+        claimed = True
+
+    def cancel_owned() -> None:
+        from creator_service.usage_service import usage_service
+
+        try:
+            runner.run_in_worker_loop(usage_service.cancel_owned(task_id))
+        except Exception:
+            runner.logger.warning("Failed to cancel owned quota reservation", exc_info=True)
 
     async def execute_owned(ctx: TaskContext) -> TaskResult:
         nonlocal execution_started
@@ -70,18 +91,40 @@ def run_task(
 
     try:
         return runner.run_in_worker_loop(
-            runner._run_task_inner(validated_run_id, task_id, config, execute_owned)
+            runner._run_task_inner(
+                validated_run_id, task_id, config, execute_owned,
+                claim_token=claim_token, on_claim=mark_claimed,
+            )
         )
     except runner.StageGuardError:
         try:
-            runner.run_in_worker_loop(runner._task_tracking_service.mark_rejected(task_id, "stage_guard"))
+            if claim_token is not None:
+                runner.run_in_worker_loop(
+                    runner._task_tracking_service.mark_rejected_if_claimed(task_id, claim_token)
+                )
+            else:
+                runner.run_in_worker_loop(runner._task_tracking_service.mark_rejected(task_id, "stage_guard"))
         except Exception:
             runner.logger.warning("Failed to record task rejection", exc_info=True)
         if config.raise_on_stage_guard:
             raise
         raise Ignore()
-    except SoftTimeLimitExceeded:
+    except SoftTimeLimitExceeded as exc:
         runner.logger.error("Task %s timed out for run %s", config.task_name, validated_run_id)
+        if claim_token is not None:
+            try:
+                code, message = runner._safe_failure_record(exc)
+                outcome = runner.run_in_worker_loop(
+                    runner._task_tracking_service.mark_failed_if_claimed(task_id, claim_token, code, message)
+                )
+            except Exception:
+                runner.logger.warning("Failed to record task timeout", exc_info=True)
+                raise
+            if outcome is None:
+                raise
+        elif not claimed:
+            raise
+        cancel_owned()
         try:
             runner.run_in_worker_loop(
                 runner._run_service.storage.conditional_update_run(
@@ -100,9 +143,14 @@ def run_task(
         if not execution_started or isinstance(exc, config.no_fail_transition_exceptions):
             try:
                 code, message = runner._safe_failure_record(exc)
-                runner.run_in_worker_loop(
-                    runner._task_tracking_service.mark_failed_if_running(task_id, code, message)
-                )
+                if claim_token is not None:
+                    runner.run_in_worker_loop(
+                        runner._task_tracking_service.mark_failed_if_claimed(task_id, claim_token, code, message)
+                    )
+                else:
+                    runner.run_in_worker_loop(
+                        runner._task_tracking_service.mark_failed_if_running(task_id, code, message)
+                    )
             except Exception:
                 runner.logger.warning("Failed to record task failure", exc_info=True)
             raise
@@ -113,18 +161,25 @@ def run_task(
             # Failed tracking remains reclaimable by Celery's retried delivery.
             try:
                 code, message = runner._safe_failure_record(exc)
-                runner.run_in_worker_loop(
-                    runner._task_tracking_service.mark_failed_if_running(task_id, code, message)
-                )
+                if claim_token is not None:
+                    runner.run_in_worker_loop(
+                        runner._task_tracking_service.mark_failed_if_claimed(task_id, claim_token, code, message)
+                    )
+                else:
+                    runner.run_in_worker_loop(
+                        runner._task_tracking_service.mark_failed_if_running(task_id, code, message)
+                    )
             except Exception:
                 runner.logger.warning("Failed to mark task as failed before retry", exc_info=True)
             raise
         try:
-            runner.run_in_worker_loop(
+            finalized = runner.run_in_worker_loop(
                 runner._handle_general_failure(
-                    task_id, validated_run_id, config.task_name, safe_failure_stages, exc,
+                    task_id, validated_run_id, config.task_name, safe_failure_stages, exc, claim_token,
                 )
             )
+            if claimed and finalized:
+                cancel_owned()
         except Exception:
             runner.logger.exception("Failed error cleanup for run %d", validated_run_id)
         raise

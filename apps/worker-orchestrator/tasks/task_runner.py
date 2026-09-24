@@ -42,7 +42,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from celery.exceptions import Ignore
+from celery.exceptions import Ignore, SoftTimeLimitExceeded
 from creator_domain.models.stage import REVIEW_STAGES, RunStage
 from creator_provider.gpu_lock import (
     GPU_LOCK_TIMEOUT_SECONDS,
@@ -101,6 +101,7 @@ class TaskContext:
     workspace_id: int | None
     project_id: int | None
     start_time: datetime
+    reservation_owner_id: str | None = None
 
 
 @dataclass
@@ -138,6 +139,8 @@ async def _run_task_inner(
     task_id: str,
     config: TaskRunnerConfig,
     execute: Callable[[TaskContext], Awaitable[TaskResult]],
+    claim_token: str | None = None,
+    on_claim: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     """Inner async execution with full lifecycle management."""
     # Reject new work if graceful shutdown is in progress
@@ -171,14 +174,19 @@ async def _run_task_inner(
                 "end_time": end_time.isoformat(),
                 "duration_seconds": 0.0,
             }
+    except SoftTimeLimitExceeded:
+        raise
     except Exception:
         logger.warning("Failed idempotency guard lookup", exc_info=True)
 
     # 1. Task tracking: exclusive claim (only one worker executes per task)
     try:
-        start_result = await _task_tracking_service.record_task_start(
-            run_id, config.task_name, task_id
-        )
+        if claim_token is not None:
+            start_result = await _task_tracking_service.record_task_start(
+                run_id, config.task_name, task_id, claim_token=claim_token,
+            )
+        else:
+            start_result = await _task_tracking_service.record_task_start(run_id, config.task_name, task_id)
         if not task_id.startswith("run-"):
             if start_result is None:
                 logger.info("Task %s already claimed by another worker, skipping", task_id)
@@ -206,6 +214,10 @@ async def _run_task_inner(
                     "end_time": end_time.isoformat(),
                     "duration_seconds": 0.0,
                 }
+        if start_result is not None and start_result.status == "running" and on_claim is not None:
+            on_claim()
+    except SoftTimeLimitExceeded:
+        raise
     except Exception:
         if not task_id.startswith("run-"):
             logger.error("Failed to record task start — refusing to execute without claim", exc_info=True)
@@ -250,6 +262,9 @@ async def _run_task_inner(
     )
 
     # 4. Execute task-specific logic
+    from creator_service.usage_service import usage_service
+
+    reservation_owner_id = await usage_service.reservation_owner_id(task_id)
     ctx = TaskContext(
         run_id=run_id,
         task_id=task_id,
@@ -257,9 +272,34 @@ async def _run_task_inner(
         workspace_id=workspace_id,
         project_id=project_id,
         start_time=start_time,
+        reservation_owner_id=reservation_owner_id,
     )
 
     result = await execute(ctx)
+
+    if claim_token is not None and config.success_stage is not None:
+        success = result.status == "success"
+        target_stage = config.success_stage if success else RunStage.FAILED.value
+        target_status = (
+            "paused" if target_stage in {stage.value for stage in REVIEW_STAGES} else "running"
+        ) if success else "failed"
+        accepted = await _task_tracking_service.finish_claimed_run(
+            task_id, claim_token, "success" if success else "failed", _run_service.storage,
+            run_id, {"current_stage": target_stage, "status": target_status},
+            config.safe_stages if success else config.safe_failure_stages or config.safe_stages,
+            _TERMINAL_STATUSES,
+            None if success else "task_result",
+            None if success else f"status={result.status}",
+        )
+        if not accepted:
+            logger.info("Task %s lost its claim; skipping run transition", task_id)
+        end_time = datetime.now(timezone.utc)
+        return {
+            "task_id": task_id, "run_id": run_id, "start_time": start_time.isoformat(),
+            "end_time": end_time.isoformat(),
+            "duration_seconds": (end_time - start_time).total_seconds(),
+            "status": result.status, **result.extra, "asset_versions": get_loaded_asset_versions(),
+        }
 
     # 5. Stage transition based on result status
     if config.success_stage is not None:
@@ -333,13 +373,20 @@ async def _handle_general_failure(
     config_task_name: str,
     safe_failure_stages: frozenset[str],
     exc: Exception,
-) -> None:
+    claim_token: str | None = None,
+) -> bool:
     """Consolidate error-handler async work into a single coroutine."""
     try:
         code, message = _safe_failure_record(exc)
-        await _task_tracking_service.mark_failed_if_running(task_id, code, message)
+        if claim_token is not None:
+            outcome = await _task_tracking_service.mark_failed_if_claimed(task_id, claim_token, code, message)
+            if outcome is None:
+                return False
+        else:
+            outcome = await _task_tracking_service.mark_failed_if_running(task_id, code, message)
     except Exception:
         logger.warning("Failed to record task failure", exc_info=True)
+        return False
     try:
         applied, _ = await _run_service.storage.conditional_update_run(
             run_id,
@@ -355,6 +402,7 @@ async def _handle_general_failure(
             )
     except Exception:
         logger.exception("Failed to mark run %d as FAILED after task error", run_id)
+    return outcome is not None
 
 
 # --- GPU Lock helpers for use in execute() callbacks ---

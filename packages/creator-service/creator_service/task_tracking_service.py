@@ -3,7 +3,10 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timezone
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from .run_service import RunStorageBackend
 
 from creator_domain.models import RunTask
 
@@ -34,6 +37,18 @@ class TaskTrackingStorageBackend(Protocol):
     async def update_task_status_if_running(
         self, task_id: int, status: str, **kwargs: Any
     ) -> dict[str, Any] | None: ...
+
+    async def finish_if_claimed(
+        self, celery_task_id: str, token: str, status: str,
+        error_code: str | None = None, error_message: str | None = None,
+    ) -> dict[str, Any] | None: ...
+
+    async def finish_claimed_run(
+        self, celery_task_id: str, token: str, status: str, run_storage: RunStorageBackend,
+        run_id: int, run_updates: dict[str, str], expected_stages: frozenset[str],
+        rejected_statuses: frozenset[str], error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> bool: ...
 
 
 class TaskTrackingService:
@@ -93,7 +108,9 @@ class TaskTrackingService:
             raise ValueError(f"Failed to queue task {celery_task_id}: task is already running or succeeded")
         return RunTask.from_row(row)
 
-    async def record_task_start(self, run_id: int, task_type: str, celery_task_id: str) -> RunTask | None:
+    async def record_task_start(
+        self, run_id: int, task_type: str, celery_task_id: str, *, claim_token: str | None = None,
+    ) -> RunTask | None:
         """Attempt to exclusively claim a task for execution.
 
         Returns:
@@ -122,6 +139,7 @@ class TaskTrackingService:
                     "finished_at": None,
                     "error_code": None,
                     "error_message": None,
+                    "claim_token": claim_token,
                 }
             )
             if row is None:
@@ -135,11 +153,39 @@ class TaskTrackingService:
             existing["id"],
             attempt=attempt,
             started_at=started_at,
+            claim_token=claim_token,
         )
         if row is None:
             # Concurrent claim or task already succeeded — cannot claim
             return None
         return RunTask.from_row(row)
+
+    async def mark_failed_if_claimed(
+        self, celery_task_id: str, token: str, code: str, message: str,
+    ) -> RunTask | None:
+        row = await self.storage.finish_if_claimed(celery_task_id, token, "failed", code, message)
+        return RunTask.from_row(row) if row is not None else None
+
+    async def mark_success_if_claimed(self, celery_task_id: str, token: str) -> RunTask | None:
+        row = await self.storage.finish_if_claimed(celery_task_id, token, "success")
+        return RunTask.from_row(row) if row is not None else None
+
+    async def mark_rejected_if_claimed(self, celery_task_id: str, token: str) -> RunTask | None:
+        row = await self.storage.finish_if_claimed(
+            celery_task_id, token, "rejected", "rejected", "stage_guard",
+        )
+        return RunTask.from_row(row) if row is not None else None
+
+    async def finish_claimed_run(
+        self, celery_task_id: str, token: str, status: str, run_storage: RunStorageBackend,
+        run_id: int, run_updates: dict[str, str], expected_stages: frozenset[str],
+        rejected_statuses: frozenset[str], error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> bool:
+        return await self.storage.finish_claimed_run(
+            celery_task_id, token, status, run_storage, run_id,
+            run_updates, expected_stages, rejected_statuses, error_code, error_message,
+        )
 
     async def mark_running(self, celery_task_id: str) -> RunTask | None:
         task = await self.storage.get_by_celery_id(celery_task_id)
