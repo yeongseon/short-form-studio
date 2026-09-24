@@ -20,10 +20,14 @@ from typing import Any
 import pytest
 
 from creator_service.dispatch_reconciler import DispatchReconciler, ReconcileResult
+from creator_service.usage_service import InMemoryUsageStorage, UsageService
+from creator_service.postgres_usage_storage import PostgresUsageStorage
+from creator_service.postgres_task_tracking_storage import PostgresTaskTrackingStorage
 from creator_service.task_tracking_service import (
     InMemoryTaskTrackingStorage,
     TaskTrackingService,
 )
+from .quota_dispatch_support import quota_pool as quota_pool
 
 
 # ---------------------------------------------------------------------------
@@ -32,6 +36,40 @@ from creator_service.task_tracking_service import (
 
 async def _noop_enqueue(celery_task_id: str, task_type: str, run_id: int) -> bool:
     return False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("quota_pool", ["memory", "postgres"], indirect=True)
+async def test_stuck_running_task_releases_only_its_owned_quota(
+    monkeypatch: pytest.MonkeyPatch, quota_pool: object,
+) -> None:
+    # Given a stale claimed task and another delivery's reserved quota.
+    storage = PostgresTaskTrackingStorage() if quota_pool is not None else InMemoryTaskTrackingStorage()
+    tracking = TaskTrackingService(storage)
+    usage = UsageService(PostgresUsageStorage() if quota_pool is not None else InMemoryUsageStorage())
+    if quota_pool is not None:
+        await quota_pool.execute("INSERT INTO creator_projects (id, workspace_id) VALUES (1, 1)")
+        await quota_pool.execute("INSERT INTO creator_runs (id, project_id, workspace_id, current_stage) VALUES (1, 1, 1, 'AUDIO_GENERATING')")
+    await usage.set_quota(1, monthly_tts_requests=2)
+    assert await usage.reserve_owned(1, "tts", "stuck-task")
+    assert await usage.reserve_owned(1, "tts", "other-task")
+    monkeypatch.setattr("creator_service.usage_service.usage_service", usage)
+    await storage.create_task({
+        "run_id": 1, "task_type": "generate_audio", "celery_task_id": "stuck-task",
+        "status": "running", "started_at": datetime.now(timezone.utc) - timedelta(seconds=1200),
+    })
+
+    # When the reconciler successfully finalizes the stale running task.
+    result = await DispatchReconciler(
+        task_tracking_service=tracking, enqueue_fn=_noop_enqueue,
+        stuck_threshold_seconds=900,
+    ).reconcile()
+
+    # Then only the stale task's reservation is returned.
+    assert result.stuck_failed == 1
+    assert not await usage.cancel_owned("stuck-task")
+    assert await usage.reserve_owned(1, "tts", "replacement")
+    assert not await usage.reserve_owned(1, "tts", "overflow")
 
 
 # ---------------------------------------------------------------------------

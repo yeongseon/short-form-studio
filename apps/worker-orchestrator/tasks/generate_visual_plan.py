@@ -184,8 +184,11 @@ def generate_visual_plan(
                 workspace_id=ctx.workspace_id,
                 project_id=ctx.project_id,
                 idempotency_key=ctx.task_id,
+                reservation_owner_id=ctx.reservation_owner_id,
             )
         except Exception:
+            if ctx.reservation_owner_id is not None:
+                raise
             logger.warning("Failed to record provider usage", exc_info=True)
 
         visual_scenes = _parse_llm_response(raw_response, sections)
