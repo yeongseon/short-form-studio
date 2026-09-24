@@ -42,9 +42,11 @@ async def _dispatch_image(run_id: int, workspace_id: int, **kwargs: object) -> s
     allowed, reason = await reserve_owned_quota(workspace_id, "image_gen", task_id)
     if not allowed:
         raise HTTPException(status_code=429, detail=reason)
+    pending_created = False
     published = False
     try:
         await task_tracking_service.record_task_pending(run_id, "generate_scene_image", task_id)
+        pending_created = True
         returned_id = await run_blocking(partial(dispatch_generate_scene_image, run_id=run_id, task_id=task_id, **kwargs))
         published = True
         if returned_id != task_id:
@@ -60,7 +62,11 @@ async def _dispatch_image(run_id: int, workspace_id: int, **kwargs: object) -> s
                 await run_control(partial(task_dispatch_service.dispatcher.cancel, task_id))
             except Exception:
                 logger.warning("Failed to revoke image task", extra={"task_id": task_id}, exc_info=True)
-            await task_tracking_service.mark_tasks_revoked([task_id])
+        if pending_created:
+            try:
+                await task_tracking_service.mark_tasks_revoked([task_id])
+            except Exception:
+                logger.warning("Failed to mark image task revoked", extra={"task_id": task_id}, exc_info=True)
         await cancel_owned_quota_reservation(task_id)
         if isinstance(exc, HTTPException):
             raise

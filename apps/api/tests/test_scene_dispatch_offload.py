@@ -102,3 +102,48 @@ async def test_scene_dispatch_releases_only_its_owner_on_failure(monkeypatch, st
     assert error.value.status_code == (409 if status == "cancelled" else 503)
     assert len(owners) == 1
     assert cancelled == revoked == owners
+
+
+@pytest.mark.asyncio
+async def test_scene_dispatch_terminalizes_pending_task_when_publish_raises(monkeypatch):
+    # Given a pending task recorded before the broker publish raises.
+    owners: list[str] = []
+    cancelled: list[str] = []
+    revoked: list[list[str]] = []
+    dispatcher_cancel: list[str] = []
+    monkeypatch.setattr(routes, "validate_model_key", lambda *a, **kw: None)
+    monkeypatch.setattr(routes, "_enforce_run_quota", AsyncMock(return_value=1))
+
+    async def reserve(_workspace_id, _operation_type, owner_id):
+        owners.append(owner_id)
+        return True, "ok"
+
+    async def cancel(owner_id):
+        cancelled.append(owner_id)
+        return True
+
+    async def mark_revoked(ids):
+        revoked.append(list(ids))
+
+    def boom(**_kwargs):
+        raise ConnectionError("broker down")
+
+    monkeypatch.setattr(routes, "reserve_owned_quota", reserve)
+    monkeypatch.setattr(routes, "cancel_owned_quota_reservation", cancel)
+    monkeypatch.setattr(routes, "dispatch_generate_scene_image", boom)
+    monkeypatch.setattr(routes.task_tracking_service, "record_task_pending", AsyncMock())
+    monkeypatch.setattr(routes.task_tracking_service, "mark_tasks_revoked", mark_revoked)
+    monkeypatch.setattr(routes.task_dispatch_service.dispatcher, "cancel", dispatcher_cancel.append, raising=False)
+
+    # When the endpoint dispatches.
+    with pytest.raises(HTTPException) as exc_info:
+        await routes.generate_scene_image_endpoint(
+            1, "scene-1", GenerateSceneImageRequest(),
+            (SimpleNamespace(workspace_id=1), SimpleNamespace(current_stage="VISUAL_ASSET_REVIEW")),
+        )
+
+    # Then the pending row is terminal, quota released, and no broker cancel is sent.
+    assert exc_info.value.status_code == 503
+    assert revoked == [owners]
+    assert cancelled == owners
+    assert dispatcher_cancel == []

@@ -117,7 +117,10 @@ def generate_paragraph_audio(
                     f"for run {run_id} section {section_id}"
                 ) from exc
         except BaseException:
-            Path(audio_path).unlink(missing_ok=True)
+            try:
+                Path(audio_path).unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Failed to remove partial paragraph audio", extra={"run_id": run_id}, exc_info=True)
             raise
         finally:
             if entry.requires_gpu:

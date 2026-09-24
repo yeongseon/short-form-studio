@@ -412,3 +412,35 @@ def test_generate_paragraph_audio_uses_active_draft_not_run_script_data(
     assert result["status"] == "success"
     assert provider.calls[0][0] == "Text from active draft"
     assert script_service.calls == [110]
+
+
+def test_paragraph_audio_cleanup_failure_preserves_soft_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pathlib import PosixPath
+
+    from celery.exceptions import SoftTimeLimitExceeded
+
+    class UnremovablePath(PosixPath):
+        def unlink(self, missing_ok: bool = False) -> None:
+            raise PermissionError("partial file is locked")
+
+    provider = FakeProvider(error=SoftTimeLimitExceeded())
+    _patch_registry(monkeypatch, FakeRegistry(entry=FakeEntry(), provider=provider))
+    _patch_redis(monkeypatch, object())
+    monkeypatch.setattr(
+        "tasks.task_runner._run_service",
+        FakeRunService({"current_stage": "AUDIO_GENERATING"}),
+    )
+    monkeypatch.setattr(
+        module,
+        "_script_service",
+        FakeScriptService(
+            FakeDraft(structured_script=[FakeSection(section_id="hook-9", text="Slow paragraph")])
+        ),
+    )
+    monkeypatch.setattr(module, "_audio_service", FakeAudioService())
+    monkeypatch.setattr(module, "Path", UnremovablePath)
+
+    with pytest.raises(SoftTimeLimitExceeded):
+        _invoke_task(run_id=109, section_id="hook-9")
