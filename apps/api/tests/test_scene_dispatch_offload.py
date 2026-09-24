@@ -79,7 +79,7 @@ async def test_scene_dispatch_releases_only_its_owner_on_failure(monkeypatch, st
     monkeypatch.setattr(routes, "cancel_owned_quota_reservation", cancel)
     monkeypatch.setattr(routes, "dispatch_generate_scene_image", lambda **kwargs: kwargs["task_id"])
     monkeypatch.setattr(routes, "run_control", lambda callback: anyio.to_thread.run_sync(callback))
-    monkeypatch.setattr("celery_app.celery_app.control.revoke", lambda task_id, terminate: revoked.append(task_id))
+    monkeypatch.setattr(routes.task_dispatch_service.dispatcher, "cancel", lambda task_id: revoked.append(task_id))
     monkeypatch.setattr(routes.task_tracking_service, "record_task_pending", AsyncMock())
     monkeypatch.setattr(
         routes.task_tracking_service, "promote_pending_to_queued",

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from creator_service.blocking_io import owned_operation, run_blocking, run_control
 from creator_service.project_service import project_service
 from creator_service.run_service import run_service
-from creator_service.task_dispatch_service import dispatch_generate_scene_image
+from creator_service.task_dispatch_service import dispatch_generate_scene_image, task_dispatch_service
 from creator_service.task_tracking_service import task_tracking_service
 from creator_service.usage_service import reserve_owned_quota, cancel_owned_quota_reservation
 from fastapi import APIRouter, Depends, HTTPException
@@ -57,7 +57,7 @@ async def _dispatch_image(run_id: int, workspace_id: int, **kwargs: object) -> s
     except Exception as exc:
         if published:
             try:
-                await run_control(partial(__import__("celery_app").celery_app.control.revoke, task_id, terminate=True))
+                await run_control(partial(task_dispatch_service.dispatcher.cancel, task_id))
             except Exception:
                 logger.warning("Failed to revoke image task", extra={"task_id": task_id}, exc_info=True)
             await task_tracking_service.mark_tasks_revoked([task_id])
