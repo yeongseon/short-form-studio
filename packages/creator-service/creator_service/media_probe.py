@@ -54,20 +54,26 @@ class _ProbeDocument(BaseModel):
     format: _ProbeFormat | None = None
 
 
-def _run_ffprobe(data: bytes) -> _ProbeDocument:
+def _run_ffprobe(data: bytes | Path) -> _ProbeDocument:
+    if isinstance(data, Path):
+        return _run_ffprobe_path(data)
     with tempfile.TemporaryDirectory() as tmp:
         probe_path = Path(tmp) / "probe"
         probe_path.write_bytes(data)
-        cmd = [
-            "ffprobe", "-v", "error", "-print_format", "json",
-            "-show_streams", "-show_format", str(probe_path),
-        ]
-        try:
-            proc = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=_PROBE_TIMEOUT_SECONDS,
-            )
-        except (subprocess.TimeoutExpired, OSError) as error:
-            raise MediaUploadRejected("Failed to probe media file") from error
+        return _run_ffprobe_path(probe_path)
+
+
+def _run_ffprobe_path(probe_path: Path) -> _ProbeDocument:
+    cmd = [
+        "ffprobe", "-v", "error", "-print_format", "json",
+        "-show_streams", "-show_format", str(probe_path),
+    ]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=_PROBE_TIMEOUT_SECONDS,
+        )
+    except (subprocess.TimeoutExpired, OSError) as error:
+        raise MediaUploadRejected("Failed to probe media file") from error
     if proc.returncode != 0:
         raise MediaUploadRejected("File content is not a recognized media file")
     try:
@@ -77,21 +83,22 @@ def _run_ffprobe(data: bytes) -> _ProbeDocument:
 
 
 def probe_media_metadata(
-    data: bytes, *, kind: str, max_bytes: int | None = None,
+    data: bytes | Path, *, kind: str, max_bytes: int | None = None,
 ) -> ProbeResult:
     """Probe image/video/audio bytes without changing the source media."""
     if kind not in ("image", "video", "audio"):
         raise ValueError(f"Unsupported probe kind: {kind!r}")
-    if not data:
+    size = len(data) if isinstance(data, bytes) else data.stat().st_size
+    if not size:
         raise MediaUploadRejected("Empty upload")
-    if max_bytes is not None and len(data) > max_bytes:
+    if max_bytes is not None and size > max_bytes:
         raise MediaUploadRejected("Upload exceeds maximum allowed size")
     if kind == "image":
         mime = _detect_image_mime(data)
         if mime is None:
             raise MediaUploadRejected("File content is not a recognized image")
         width, height = _probe_image_dimensions(data)
-        return ProbeResult(width, height, None, mime, len(data))
+        return ProbeResult(width, height, None, mime, size)
 
     parsed = _run_ffprobe(data)
     matching = [stream for stream in (parsed.streams or []) if stream.codec_type == kind]
@@ -107,7 +114,7 @@ def probe_media_metadata(
         duration = None
     if duration is not None and duration <= 0:
         duration = None
-    return ProbeResult(stream.width, stream.height, duration, _ffprobe_mime(parsed, kind), len(data))
+    return ProbeResult(stream.width, stream.height, duration, _ffprobe_mime(parsed, kind), size)
 
 
 def _ffprobe_mime(parsed: _ProbeDocument, kind: str) -> str | None:
