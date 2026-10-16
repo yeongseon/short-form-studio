@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 
 import pytest
+from creator_service.storage_policy import StorageBudgetExceeded
 from PIL import Image
 from shorts_api.auth import CurrentUser, require_workspace_access
 from shorts_api.main import app
@@ -100,3 +101,50 @@ async def test_upload_image_requires_api_key() -> None:
             files={"file": ("hero.png", _png_bytes(), "image/png")},
         )
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_upload_over_workspace_budget_returns_clear_413(
+    client, override_workspace_access, monkeypatch
+) -> None:
+    async def reject(*args, **kwargs):
+        raise StorageBudgetExceeded(
+            workspace_id=1, incoming_bytes=10, stored_bytes=90,
+            reserved_bytes=10, max_stored_bytes=100,
+        )
+
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_assets.media_asset_service.create_file_asset", reject,
+    )
+    response = await client.post(
+        "/api/creator/workspaces/1/assets",
+        files={"file": ("hero.png", _png_bytes(), "image/png")},
+    )
+
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "STORAGE_BUDGET"
+
+
+@pytest.mark.asyncio
+async def test_storage_usage_reports_limits(client, override_workspace_access, monkeypatch) -> None:
+    from creator_service.storage_policy import StorageUsage
+
+    async def usage(workspace_id: int):
+        assert workspace_id == 1
+        return StorageUsage(20, 2, 5, 1, 100, 10, 50)
+
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_assets.media_asset_service.get_storage_usage", usage,
+    )
+    response = await client.get("/api/creator/workspaces/1/assets/storage-usage")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "stored_bytes": 20,
+        "stored_asset_count": 2,
+        "reserved_bytes": 5,
+        "reserved_asset_count": 1,
+        "max_stored_bytes": 100,
+        "max_asset_count": 10,
+        "max_reserved_bytes": 50,
+    }
