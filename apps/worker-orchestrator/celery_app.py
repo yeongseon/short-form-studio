@@ -114,11 +114,8 @@ BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
     "reconcile-media-uploads": {"task": "reconcile_media_uploads", "schedule": 600.0},
 }
 
-celery_app = Celery(
-    "worker-orchestrator",
-    broker=redis_url,
-    backend=redis_url,
-    include=[
+def _worker_task_modules() -> list[str]:
+    modules = [
         "tasks.generate_script",
         "tasks.generate_visual_plan",
         "tasks.generate_scene_image",
@@ -131,9 +128,18 @@ celery_app = Celery(
         "tasks.retry_failed_artifact_deletions",
         "tasks.sweep_expired_artifacts",
         "tasks.reconcile_media_uploads",
-        "tasks.runtime_topology_probe",
         "tasks.revoked_quota",
-    ],
+    ]
+    if os.getenv("WORKER_TOPOLOGY_PROBE_ENABLED") == "1":
+        modules.append("tasks.runtime_topology_probe")
+    return modules
+
+
+celery_app = Celery(
+    "worker-orchestrator",
+    broker=redis_url,
+    backend=redis_url,
+    include=_worker_task_modules(),
 )
 celery_app.conf.task_default_queue = "creator"
 

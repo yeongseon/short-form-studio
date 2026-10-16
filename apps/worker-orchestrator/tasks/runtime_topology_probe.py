@@ -7,6 +7,7 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Literal, assert_never
+from urllib.parse import urlsplit
 from urllib.request import urlopen
 
 from celery import Task
@@ -18,6 +19,21 @@ from tasks.hard_timeout import finalize_hard_timeout
 from tasks.task_runner import TaskContext, TaskResult, TaskRunnerConfig, run_task
 
 type ProbeMode = Literal["complete", "cooperative", "ffmpeg_hang", "wait"]
+
+
+def _evidence_file(name: str) -> Path:
+    root = Path(os.environ["WORKER_TOPOLOGY_EVIDENCE_DIR"]).resolve()
+    candidate = (root / name).resolve()
+    if candidate.parent != root:
+        raise ValueError("Invalid topology evidence path")
+    return candidate
+
+
+def _provider_url(candidate: str) -> str:
+    configured = os.environ["WORKER_TOPOLOGY_PROVIDER_URL"].rstrip("/")
+    if urlsplit(candidate) != urlsplit(configured):
+        raise ValueError("Invalid topology provider URL")
+    return configured
 
 
 class _TopologyRequest(Request):
@@ -35,7 +51,7 @@ class _TopologyTask(Task):
 
 
 def _publish(path: str, status: str, **fields: str | int | float | bool) -> None:
-    destination = Path(path)
+    destination = _evidence_file(path)
     temporary = destination.with_suffix(".tmp")
     temporary.write_text(json.dumps({"status": status, **fields}), encoding="utf-8")
     temporary.replace(destination)
@@ -60,7 +76,7 @@ def runtime_topology_probe(
             case "complete":
                 _publish(evidence_path, "completed", task_id=ctx.task_id)
             case "cooperative":
-                with urlopen(f"{provider_url}/provider", timeout=5) as response:
+                with urlopen(f"{_provider_url(provider_url)}/provider", timeout=5) as response:
                     response.read()
                 _publish(evidence_path, "provider_done", task_id=ctx.task_id)
                 while True:
