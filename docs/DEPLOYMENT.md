@@ -25,15 +25,25 @@ GitHub environments. Environment variables must provide real HTTPS values for:
 
 - `STAGING_API_URL`, `STAGING_STUDIO_URL`, `STAGING_DEPLOY_TARGET`
 - `PRODUCTION_API_URL`, `PRODUCTION_STUDIO_URL`, `PRODUCTION_DEPLOY_TARGET`
-- `STAGING_SMOKE_CREATE_URL`, `STAGING_SMOKE_DOWNLOAD_BASE_URL`
-- `PRODUCTION_SMOKE_CREATE_URL`, `PRODUCTION_SMOKE_DOWNLOAD_BASE_URL`
 - `SCHEMA_CONTRACT_VERSION`, `QUEUE_CONTRACT_VERSION`
+- `SCHEMA_COMPATIBLE_DB_REVISIONS` as a comma-separated allowlist for the
+  current schema contract
 
 Environment secrets supply `DATABASE_URL`, `DEPLOY_TOKEN`, and
 `SMOKE_API_KEY`. The deploy target must accept the manifest-bound API, worker,
-and Studio digest payload. Each service must expose its source SHA and running
-digest to the verification URLs used in `cd.yml`; smoke endpoints must perform
-an authenticated create and download using `X-API-Key`.
+and Studio digest payload and return `api_digest`, `worker_digest`, and
+`studio_digest` observed by the hosting platform. The workflow does not trust
+service environment variables as digest attestation. API, every active worker,
+and Studio expose their independently embedded source SHA; worker identities
+expire unless each instance refreshes its own record. The API image requires
+`API_IMAGE_DIGEST` for its diagnostic identity endpoint, but deployment
+certification uses the platform response. Authenticated smoke uses the real
+demo-short creation route and its owned media-content endpoint.
+
+The API image listens on `0.0.0.0:8000` inside its container so the platform
+proxy can reach it. The runtime must not publish that port on an unrestricted
+host interface: bind host publication to `127.0.0.1` or attach it only to a
+private container network behind the authenticated TLS proxy.
 
 ### Release procedure and stop points
 
