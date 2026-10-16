@@ -20,7 +20,11 @@ class InMemoryTaskTrackingStorage:
             if existing_id is not None:
                 existing = self._rows[existing_id]
                 current_status = existing.get("status")
-                if current_status in ("success", "running"):
+                if current_status in ("success", "running") or existing.get("error_code") in {
+                    "reconciler_pending_cleanup",
+                    "reconciler_stuck_cleanup",
+                    "reconciler_cleanup_claimed",
+                }:
                     return None
                 incoming_status = row.get("status", "queued")
                 existing["status"] = incoming_status
@@ -154,6 +158,12 @@ class InMemoryTaskTrackingStorage:
             return None
         if row.get("status") not in ("pending", "queued", "failed"):
             return None
+        if row.get("error_code") in {
+            "reconciler_pending_cleanup",
+            "reconciler_stuck_cleanup",
+            "reconciler_cleanup_claimed",
+        }:
+            return None
         row["status"] = "running"
         row["claim_token"] = kwargs.get("claim_token")
         if "started_at" in kwargs:
@@ -210,15 +220,25 @@ class InMemoryTaskTrackingStorage:
         )
         return stale
 
-    async def list_reconciliation_pending_tasks(self) -> list[dict[str, Any]]:
+    async def list_reconciliation_pending_tasks(
+        self, lease_seconds: int
+    ) -> list[dict[str, Any]]:
+        lease_cutoff = datetime.now(timezone.utc).timestamp() - lease_seconds
         rows = [
             dict(row)
             for row in self._rows.values()
             if row.get("status") == "failed"
-            and row.get("error_code") in {
-                "reconciler_pending_cleanup",
-                "reconciler_stuck_cleanup",
-            }
+            and (
+                row.get("error_code") in {
+                    "reconciler_pending_cleanup",
+                    "reconciler_stuck_cleanup",
+                }
+                or (
+                    row.get("error_code") == "reconciler_cleanup_claimed"
+                    and row.get("finished_at") is not None
+                    and row["finished_at"].timestamp() < lease_cutoff
+                )
+            )
         ]
         rows.sort(
             key=lambda row: (
@@ -227,6 +247,81 @@ class InMemoryTaskTrackingStorage:
             )
         )
         return rows
+
+    async def claim_reconciliation(
+        self, task_id: int, claim_token: str, lease_seconds: int
+    ) -> dict[str, Any] | None:
+        row = self._rows.get(task_id)
+        if row is None or row.get("status") != "failed":
+            return None
+        error_code = row.get("error_code")
+        lease_expired = (
+            error_code == "reconciler_cleanup_claimed"
+            and row.get("finished_at") is not None
+            and row["finished_at"].timestamp()
+            < datetime.now(timezone.utc).timestamp() - lease_seconds
+        )
+        if error_code not in {
+            "reconciler_pending_cleanup",
+            "reconciler_stuck_cleanup",
+        } and not lease_expired:
+            return None
+        if error_code != "reconciler_cleanup_claimed":
+            row["error_message"] = error_code
+        row["error_code"] = "reconciler_cleanup_claimed"
+        row["claim_token"] = claim_token
+        row["finished_at"] = datetime.now(timezone.utc)
+        return dict(row)
+
+    async def finish_reconciliation(
+        self, celery_task_id: str, claim_token: str, error_code: str, error_message: str
+    ) -> dict[str, Any] | None:
+        row_id = self._rows_by_celery_task_id.get(celery_task_id)
+        if row_id is None:
+            return None
+        row = self._rows[row_id]
+        if row.get("error_code") != "reconciler_cleanup_claimed" or row.get("claim_token") != claim_token:
+            return None
+        row.update(error_code=error_code, error_message=error_message, claim_token=None)
+        return dict(row)
+
+    async def release_reconciliation(
+        self, celery_task_id: str, claim_token: str
+    ) -> dict[str, Any] | None:
+        row_id = self._rows_by_celery_task_id.get(celery_task_id)
+        if row_id is None:
+            return None
+        row = self._rows[row_id]
+        if row.get("error_code") != "reconciler_cleanup_claimed" or row.get("claim_token") != claim_token:
+            return None
+        marker = row.get("error_message")
+        if marker not in {"reconciler_pending_cleanup", "reconciler_stuck_cleanup"}:
+            return None
+        row.update(error_code=marker, error_message="Cleanup retry required", claim_token=None)
+        return dict(row)
+
+    async def rollback_run_if_task_owner(
+        self, celery_task_id: str, run_storage: InMemoryRunStorage,
+        run_id: int, eligible_task_types: frozenset[str],
+        expected_stages: frozenset[str], rejected_statuses: frozenset[str],
+    ) -> tuple[bool, dict[str, Any] | None]:
+        row_id = self._rows_by_celery_task_id.get(celery_task_id)
+        owner = self._rows.get(row_id) if row_id is not None else None
+        if owner is None or owner.get("run_id") != run_id or owner.get("task_type") not in eligible_task_types:
+            return False, await run_storage.get_run(run_id)
+        has_newer_owner = any(
+            row.get("run_id") == run_id
+            and row.get("task_type") == owner.get("task_type")
+            and int(row.get("id", 0)) > int(owner.get("id", 0))
+            and row.get("status") in {"pending", "queued", "running", "success"}
+            for row in self._rows.values()
+        )
+        if has_newer_owner:
+            return False, await run_storage.get_run(run_id)
+        return await run_storage.conditional_update_run(
+            run_id, {"current_stage": "FAILED", "status": "failed"},
+            expected_stages=expected_stages, rejected_statuses=rejected_statuses,
+        )
 
     async def promote_pending_to_queued(self, celery_task_id: str) -> dict[str, Any] | None:
         """Atomically promote a task from 'pending' to 'queued'. Returns None if not pending."""

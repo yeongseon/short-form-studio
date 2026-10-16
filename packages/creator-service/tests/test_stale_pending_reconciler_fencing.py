@@ -152,13 +152,16 @@ async def test_terminal_cleanup_is_retried_after_final_mark_error() -> None:
     class FailingFinalMarkTracking(TaskTrackingService):
         failures = 1
 
-        async def mark_failed(
-            self, celery_task_id: str, error_code: str, error_message: str
+        async def finish_reconciliation(
+            self, celery_task_id: str, claim_token: str,
+            error_code: str, error_message: str,
         ):
             if self.failures:
                 self.failures -= 1
                 raise OSError("injected final mark failure")
-            return await super().mark_failed(celery_task_id, error_code, error_message)
+            return await super().finish_reconciliation(
+                celery_task_id, claim_token, error_code, error_message
+            )
 
     tracking = FailingFinalMarkTracking(storage)
     await tracking.record_task_pending(1, "generate_audio", "attempt-a")

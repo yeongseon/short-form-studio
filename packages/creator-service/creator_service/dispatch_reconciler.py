@@ -13,6 +13,7 @@ time limit of 660 s) are marked as failed via a CAS guard
 from __future__ import annotations
 
 import logging
+from uuid import uuid4
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -129,6 +130,15 @@ class DispatchReconciler:
                     if marked is None:
                         continue
 
+                    cleanup_marker = "reconciler_pending_cleanup"
+
+                cleanup_token = uuid4().hex
+                claimed = await self._tracking.claim_reconciliation(
+                    task.id, cleanup_token
+                )
+                if claimed is None:
+                    continue
+
                 cleanup_ok = True
                 if self._rollback_fn is not None:
                     try:
@@ -159,12 +169,13 @@ class DispatchReconciler:
                 if cleanup_ok:
                     final_code = (
                         "stuck_running_timeout"
-                        if task.error_code == "reconciler_stuck_cleanup"
+                        if cleanup_marker == "reconciler_stuck_cleanup"
                         else "reconciler_rollback"
                     )
                     try:
-                        finalized = await self._tracking.mark_failed(
+                        finalized = await self._tracking.finish_reconciliation(
                             celery_task_id,
+                            cleanup_token,
                             error_code=final_code,
                             error_message="Stale pending task could not be re-enqueued",
                         )
@@ -180,6 +191,11 @@ class DispatchReconciler:
                         cleanup_ok = False
                     else:
                         cleanup_ok = finalized is not None
+
+                if not cleanup_ok:
+                    await self._tracking.release_reconciliation(
+                        celery_task_id, cleanup_token
+                    )
 
                 if cleanup_ok:
                     result.rolled_back += 1
@@ -220,6 +236,12 @@ class DispatchReconciler:
 
             if marked is not None:
                 result.stuck_failed += 1
+                cleanup_token = uuid4().hex
+                claimed = await self._tracking.claim_reconciliation(
+                    task.id, cleanup_token
+                )
+                if claimed is None:
+                    continue
                 cleanup_ok = True
                 try:
                     from creator_service.usage_service import usage_service
@@ -249,8 +271,9 @@ class DispatchReconciler:
                         cleanup_ok = False
                 if cleanup_ok:
                     try:
-                        await self._tracking.mark_failed(
+                        await self._tracking.finish_reconciliation(
                             celery_task_id,
+                            cleanup_token,
                             error_code="stuck_running_timeout",
                             error_message=(
                                 f"Task stuck in running state for >{self._stuck_threshold_seconds}s"
@@ -265,6 +288,11 @@ class DispatchReconciler:
                         result.errors.append(
                             f"Task finalization failed for {celery_task_id}: {type(exc).__name__}"
                         )
+                        cleanup_ok = False
+                if not cleanup_ok:
+                    await self._tracking.release_reconciliation(
+                        celery_task_id, cleanup_token
+                    )
             else:
                 logger.info(
                     "Reconciler: stuck task %s (run %d) already transitioned, skipped",

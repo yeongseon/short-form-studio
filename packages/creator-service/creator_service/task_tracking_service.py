@@ -261,9 +261,41 @@ class TaskTrackingService:
         rows = await self.storage.list_stale_pending_tasks(threshold_seconds)
         return [RunTask.from_row(row) for row in rows]
 
-    async def find_reconciliation_pending_tasks(self) -> list[RunTask]:
-        rows = await self.storage.list_reconciliation_pending_tasks()
+    async def find_reconciliation_pending_tasks(
+        self, lease_seconds: int = 300
+    ) -> list[RunTask]:
+        rows = await self.storage.list_reconciliation_pending_tasks(lease_seconds)
         return [RunTask.from_row(row) for row in rows]
+
+    async def claim_reconciliation(
+        self, task_id: int, claim_token: str, lease_seconds: int = 300
+    ) -> RunTask | None:
+        row = await self.storage.claim_reconciliation(task_id, claim_token, lease_seconds)
+        return RunTask.from_row(row) if row is not None else None
+
+    async def finish_reconciliation(
+        self, celery_task_id: str, claim_token: str, error_code: str, error_message: str
+    ) -> RunTask | None:
+        row = await self.storage.finish_reconciliation(
+            celery_task_id, claim_token, error_code, error_message
+        )
+        return RunTask.from_row(row) if row is not None else None
+
+    async def release_reconciliation(
+        self, celery_task_id: str, claim_token: str
+    ) -> RunTask | None:
+        row = await self.storage.release_reconciliation(celery_task_id, claim_token)
+        return RunTask.from_row(row) if row is not None else None
+
+    async def rollback_run_if_task_owner(
+        self, celery_task_id: str, run_storage: RunStorageBackend,
+        run_id: int, eligible_task_types: frozenset[str],
+        expected_stages: frozenset[str], rejected_statuses: frozenset[str],
+    ) -> tuple[bool, dict[str, Any] | None]:
+        return await self.storage.rollback_run_if_task_owner(
+            celery_task_id, run_storage, run_id, eligible_task_types,
+            expected_stages, rejected_statuses,
+        )
 
     async def list_run_tasks(self, run_id: int) -> list[RunTask]:
         rows = await self.storage.list_by_run(run_id)

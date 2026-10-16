@@ -53,6 +53,7 @@ class PostgresTaskTrackingStorage:
                                    WHEN EXCLUDED.status = 'queued' THEN NULL
                                    ELSE creator_run_tasks.claim_token END
             WHERE creator_run_tasks.status NOT IN ('success', 'running')
+              AND creator_run_tasks.error_code IS DISTINCT FROM ALL($11::text[])
             RETURNING *
             """,
             row.get("run_id"),
@@ -65,6 +66,7 @@ class PostgresTaskTrackingStorage:
             row.get("error_code"),
             row.get("error_message"),
             row.get("claim_token"),
+            ["reconciler_pending_cleanup", "reconciler_stuck_cleanup", "reconciler_cleanup_claimed"],
         )
         return saved
 
@@ -144,11 +146,13 @@ class PostgresTaskTrackingStorage:
                 error_code = NULL,
                 error_message = NULL, claim_token = $3
             WHERE id = $1 AND status IN ('pending', 'queued', 'failed')
+              AND error_code IS DISTINCT FROM ALL($4::text[])
             RETURNING *
             """,
             task_id,
             kwargs.get("started_at"),
             kwargs.get("claim_token"),
+            ["reconciler_pending_cleanup", "reconciler_stuck_cleanup", "reconciler_cleanup_claimed"],
         )
         return claimed
 
@@ -233,14 +237,93 @@ class PostgresTaskTrackingStorage:
             threshold_seconds,
         )
 
-    async def list_reconciliation_pending_tasks(self) -> list[dict[str, Any]]:
+    async def list_reconciliation_pending_tasks(
+        self, lease_seconds: int
+    ) -> list[dict[str, Any]]:
         return await fetch_all(
             """SELECT * FROM creator_run_tasks
-               WHERE status='failed' AND error_code IN (
-                   'reconciler_pending_cleanup', 'reconciler_stuck_cleanup'
-               )
-               ORDER BY finished_at ASC NULLS LAST"""
+               WHERE status='failed' AND (
+                   error_code IN (
+                       'reconciler_pending_cleanup', 'reconciler_stuck_cleanup'
+                   ) OR (
+                       error_code='reconciler_cleanup_claimed'
+                       AND finished_at < NOW() - make_interval(secs => $1)
+                   )
+               ) ORDER BY finished_at ASC NULLS LAST""",
+            lease_seconds,
         )
+
+    async def claim_reconciliation(
+        self, task_id: int, claim_token: str, lease_seconds: int
+    ) -> dict[str, Any] | None:
+        return await fetch_one(
+            """UPDATE creator_run_tasks
+               SET error_message=CASE
+                       WHEN error_code='reconciler_cleanup_claimed' THEN error_message
+                       ELSE error_code
+                   END,
+                   error_code='reconciler_cleanup_claimed',
+                   claim_token=$2, finished_at=NOW()
+               WHERE id=$1 AND status='failed' AND (
+                   error_code IN ('reconciler_pending_cleanup', 'reconciler_stuck_cleanup')
+                   OR (error_code='reconciler_cleanup_claimed'
+                       AND finished_at < NOW() - make_interval(secs => $3))
+               ) RETURNING *""",
+            task_id, claim_token, lease_seconds,
+        )
+
+    async def finish_reconciliation(
+        self, celery_task_id: str, claim_token: str, error_code: str, error_message: str
+    ) -> dict[str, Any] | None:
+        return await fetch_one(
+            """UPDATE creator_run_tasks SET error_code=$3, error_message=$4, claim_token=NULL
+               WHERE celery_task_id=$1 AND claim_token=$2
+                 AND error_code='reconciler_cleanup_claimed' RETURNING *""",
+            celery_task_id, claim_token, error_code, error_message,
+        )
+
+    async def release_reconciliation(
+        self, celery_task_id: str, claim_token: str
+    ) -> dict[str, Any] | None:
+        return await fetch_one(
+            """UPDATE creator_run_tasks
+               SET error_code=error_message, error_message='Cleanup retry required', claim_token=NULL
+               WHERE celery_task_id=$1 AND claim_token=$2
+                 AND error_code='reconciler_cleanup_claimed'
+                 AND error_message IN ('reconciler_pending_cleanup', 'reconciler_stuck_cleanup')
+               RETURNING *""",
+            celery_task_id, claim_token,
+        )
+
+    async def rollback_run_if_task_owner(
+        self, celery_task_id: str, run_storage: PostgresRunStorage,
+        run_id: int, eligible_task_types: frozenset[str],
+        expected_stages: frozenset[str], rejected_statuses: frozenset[str],
+    ) -> tuple[bool, dict[str, Any] | None]:
+        pool = await db.get_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                updated = await connection.fetchrow(
+                    """UPDATE creator_runs AS runs
+                       SET current_stage='FAILED', status='failed', version=version+1
+                       FROM creator_run_tasks AS owner
+                       WHERE runs.id=$1 AND owner.celery_task_id=$2
+                         AND owner.run_id=runs.id AND owner.task_type=ANY($3::text[])
+                         AND runs.current_stage=ANY($4::text[])
+                         AND runs.status != ALL($5::text[])
+                         AND NOT EXISTS (
+                             SELECT 1 FROM creator_run_tasks AS newer
+                             WHERE newer.run_id=owner.run_id
+                               AND newer.task_type=owner.task_type AND newer.id>owner.id
+                               AND newer.status IN ('pending','queued','running','success')
+                         ) RETURNING runs.*""",
+                    run_id, celery_task_id, list(eligible_task_types),
+                    list(expected_stages), list(rejected_statuses),
+                )
+                if updated is not None:
+                    return True, dict(updated)
+                current = await connection.fetchrow("SELECT * FROM creator_runs WHERE id=$1", run_id)
+                return False, dict(current) if current is not None else None
 
     async def promote_pending_to_queued(self, celery_task_id: str) -> dict[str, Any] | None:
         """Atomically promote a task from 'pending' to 'queued'.
