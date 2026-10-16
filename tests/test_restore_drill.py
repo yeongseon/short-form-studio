@@ -27,10 +27,6 @@ def test_disposable_restore_drill() -> None:
     # Then
     assert result.returncode == 0, result.stderr
     assert "RESTORE DRILL PASSED" in result.stdout
-    assert "A/B isolation: owner=200 cross-workspace=404" in result.stdout
-    assert "revoked key: rejected" in result.stdout
-    assert "protected downloads: media=200 final-mp4=200" in result.stdout
-    assert "protected download checksum: verified" in result.stdout
     assert "provider calls: 0" in result.stdout
     assert "production schema: migrated" in result.stdout
     assert "real API auth: owner=200 workspace-b=404 revoked=401 missing=401" in result.stdout

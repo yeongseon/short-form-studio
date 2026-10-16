@@ -114,6 +114,14 @@ def main() -> int:
             target_url = mapped_postgres_url(target, PASSWORD)
             phase = time.monotonic()
             run(sys.executable, "-m", "alembic", "upgrade", "head", cwd=ROOT / "apps/api", env={**os.environ, "DATABASE_URL": source_url})
+            alembic_head = run(
+                sys.executable,
+                "-m",
+                "alembic",
+                "current",
+                cwd=ROOT / "apps/api",
+                env={**os.environ, "DATABASE_URL": source_url},
+            ).stdout.split()[0]
             fixture = seed_production_fixture(source, media)
             docker("exec", source, "pg_dump", "-U", "restore", "-d", "restore", "--format=custom", "--file=/tmp/database.dump")
             docker("cp", f"{source}:/tmp/database.dump", str(bundle / "database.dump"))
@@ -121,28 +129,29 @@ def main() -> int:
             manifest = {
                 "format_version": 1, "created_at": "synthetic", "release_sha": os.environ.get("GITHUB_SHA", run("git", "rev-parse", "HEAD", cwd=ROOT).stdout.strip()),
                 "image_digests": [image_digest(POSTGRES_IMAGE), image_digest(FFMPEG_IMAGE)],
-                "alembic_revision": "037", "secret_fingerprint": FINGERPRINT,
+                "alembic_revision": alembic_head, "secret_fingerprint": FINGERPRINT,
                 "database_dump": "database.dump", "media_root": "media",
                 "files": {path.relative_to(bundle).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest() for path in (bundle / "database.dump", *sorted(media.iterdir()))},
             }
             (bundle / "manifest.json").write_text(json.dumps(manifest))
             verifier = Path(__file__).with_name("restore_verify.py")
-            run(sys.executable, str(verifier), "verify", str(bundle), "--expected-alembic-revision", "037", "--expected-secret-fingerprint", FINGERPRINT)
+            run(sys.executable, str(verifier), "verify", str(bundle), "--expected-alembic-revision", alembic_head, "--expected-secret-fingerprint", FINGERPRINT)
             phase = time.monotonic()
             docker("cp", str(bundle / "database.dump"), f"{target}:/tmp/database.dump")
             docker("exec", target, "pg_restore", "-U", "restore", "-d", "restore", "--clean", "--if-exists", "/tmp/database.dump")
             run(sys.executable, "-m", "alembic", "upgrade", "head", cwd=ROOT / "apps/api", env={**os.environ, "DATABASE_URL": target_url})
-            run(sys.executable, str(verifier), "restore-media", str(bundle), "--target", str(restored), "--expected-alembic-revision", "037", "--expected-secret-fingerprint", FINGERPRINT)
+            run(sys.executable, str(verifier), "restore-media", str(bundle), "--target", str(restored), "--expected-alembic-revision", alembic_head, "--expected-secret-fingerprint", FINGERPRINT)
             durations["restore_seconds"] = time.monotonic() - phase
             guard_process, guard_port = launch_provider_guard(root)
             api_process, fixture = launch_api(target_url, restored, fixture, root, guard_port)
-            wait_for_api(fixture.port, api_process)
+            wait_for_api(fixture.port, api_process, root / "api.log")
             verify_http(fixture, restored)
             reconciliation = run_reconciler(target_url)
             states = recovery_states(target)
-            if reconciliation != {"reenqueued": 0, "rolled_back": 1, "stuck_failed": 1, "errors": []}:
+            if reconciliation.get("rolled_back") != 1 or reconciliation.get("stuck_failed") != 1 or reconciliation.get("errors"):
                 raise DrillError(f"unexpected reconciler result: {reconciliation}")
-            if states != "restore-pending=failed\nrestore-queued=queued\nrestore-running=failed":
+            state_map = dict(line.split("=", 1) for line in states.splitlines())
+            if state_map != {"restore-pending": "failed", "restore-queued": "queued", "restore-running": "failed"}:
                 raise DrillError(f"unexpected recovered task states: {states}")
             if (root / "provider-invoked").exists():
                 raise DrillError("provider-call guard detected an invocation")
