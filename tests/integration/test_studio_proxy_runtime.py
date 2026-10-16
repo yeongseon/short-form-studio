@@ -1,196 +1,184 @@
-"""Exercise the shipped nginx template without exposing a key to browser code."""
+from __future__ import annotations
 
-from pathlib import Path
 from dataclasses import dataclass
+from pathlib import Path
 import shutil
 import socket
 import subprocess
-from threading import Thread
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import time
 
 import httpx
 import pytest
 
-
-ROOT = Path(__file__).resolve().parents[2]
+from studio_proxy_runtime_support import StudioProxyRuntime, studio_proxy_runtime
 
 
 @dataclass(frozen=True, slots=True)
 class UploadBoundary:
-    route: str
+    kind: str
+    route_suffix: str
     api_limit: int
     nginx_limit: int
+    filename: str
+    content_type: str
 
 
 UPLOAD_BOUNDARIES = (
-    UploadBoundary("/api/creator/workspaces/1/assets", 25 * 1024 * 1024, 26 * 1024 * 1024),
-    UploadBoundary("/api/creator/workspaces/1/assets/audio", 100 * 1024 * 1024, 101 * 1024 * 1024),
-    UploadBoundary("/api/creator/workspaces/1/assets/videos", 500 * 1024 * 1024, 501 * 1024 * 1024),
+    UploadBoundary("image", "assets", 25 * 1024 * 1024, 26 * 1024 * 1024, "image.png", "image/png"),
+    UploadBoundary("audio", "assets/audio", 100 * 1024 * 1024, 101 * 1024 * 1024, "audio.mp3", "audio/mpeg"),
+    UploadBoundary("video", "assets/videos", 500 * 1024 * 1024, 501 * 1024 * 1024, "video.mp4", "video/mp4"),
 )
 
 
-def test_nginx_injects_runtime_key_and_blocks_cross_origin_mutation(tmp_path: Path) -> None:
-    nginx = shutil.which("nginx")
-    if nginx is None:
-        pytest.skip("nginx executable is required for the actual proxy check")
-    expected_key = "synthetic-proxy-test-only"
+def _seed_media(path: Path, boundary: UploadBoundary) -> None:
+    match boundary.kind:
+        case "image":
+            from PIL import Image
 
-    class AuthenticatedUpstream(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:
-            authenticated = self.headers.get("X-API-Key") == expected_key
-            self.send_response(200 if authenticated else 401)
-            self.end_headers()
-            self.wfile.write(b"authenticated" if authenticated else b"missing key")
-
-        def do_POST(self) -> None:
-            self.do_GET()
-
-        def log_message(self, format: str, *args: str) -> None:
-            return
-
-    upstream = ThreadingHTTPServer(("127.0.0.1", 0), AuthenticatedUpstream)
-    thread = Thread(target=upstream.serve_forever, daemon=True)
-    thread.start()
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = int(sock.getsockname()[1])
-    template = (ROOT / "apps/studio-web/nginx.conf.template").read_text()
-    configured = template.replace("${API_KEY}", expected_key)
-    configured = configured.replace("listen 8080;", f"listen 127.0.0.1:{port};")
-    configured = configured.replace("http://api:8000", f"http://127.0.0.1:{upstream.server_port}")
-    configured = configured.replace("/usr/share/nginx/html", str(tmp_path))
-    config = tmp_path / "nginx.conf"
-    config.write_text(
-        f"pid {tmp_path}/nginx.pid; error_log {tmp_path}/error.log;\n"
-        f"events {{}}\nhttp {{ access_log off; client_body_temp_path {tmp_path}/body; "
-        f"proxy_temp_path {tmp_path}/proxy;\n{configured}\n}}\n",
-    )
-    (tmp_path / "index.html").write_text("<html>Studio test</html>")
-    process = subprocess.Popen([nginx, "-p", str(tmp_path), "-c", str(config), "-g", "daemon off;"])
-    try:
-        with httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=5) as client:
-            for _ in range(50):
-                assert process.poll() is None, (tmp_path / "error.log").read_text()
-                try:
-                    response = client.get("/api/creator/workspaces")
-                    break
-                except httpx.ConnectError:
-                    time.sleep(0.1)
-            else:
-                pytest.fail("nginx did not start")
-            assert response.status_code == 200
-            assert response.text == "authenticated"
-            assert expected_key not in client.get("/").text
-            assert client.post("/api/creator/demo").status_code == 403
-            assert client.post("/api/creator/demo", headers={"Origin": "https://foreign.invalid"}).status_code == 403
-            allowed = client.post("/api/creator/demo", headers={"Origin": f"http://127.0.0.1:{port}"})
-            assert allowed.status_code == 200
-    finally:
-        process.terminate()
-        process.wait(timeout=10)
-        upstream.shutdown()
-        upstream.server_close()
-        thread.join(timeout=5)
+            Image.new("RGB", (16, 16), (10, 20, 30)).save(path, format="PNG")
+        case "audio":
+            subprocess.run(
+                ["ffmpeg", "-y", "-nostdin", "-f", "lavfi", "-i", "sine=duration=0.1", str(path)],
+                check=True, capture_output=True, timeout=30,
+            )
+        case "video":
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-nostdin", "-f", "lavfi", "-i", "color=size=16x16:duration=0.1",
+                    "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(path),
+                ],
+                check=True, capture_output=True, timeout=30,
+            )
+        case unreachable:
+            raise AssertionError(f"unsupported test media kind: {unreachable}")
 
 
-@pytest.mark.parametrize("boundary", UPLOAD_BOUNDARIES)
-def test_nginx_enforces_upload_specific_multipart_boundary(
+def _sized_media(tmp_path: Path, boundary: UploadBoundary, size: int) -> Path:
+    upload = tmp_path / f"{size}-{boundary.filename}"
+    _seed_media(upload, boundary)
+    with upload.open("r+b") as stream:
+        stream.truncate(size)
+    return upload
+
+
+def _upload(runtime: StudioProxyRuntime, boundary: UploadBoundary, upload: Path) -> httpx.Response:
+    route = f"/api/creator/workspaces/{runtime.workspace_id}/{boundary.route_suffix}"
+    with upload.open("rb") as body, httpx.Client(base_url=runtime.origin, timeout=180) as client:
+        return client.post(
+            route,
+            headers={"Origin": runtime.origin},
+            files={"file": (boundary.filename, body, boundary.content_type)},
+        )
+
+
+@pytest.mark.parametrize("boundary", UPLOAD_BOUNDARIES, ids=lambda boundary: boundary.kind)
+def test_real_api_accepts_valid_media_below_and_near_each_cap(
     tmp_path: Path,
+    studio_proxy_runtime: StudioProxyRuntime,
     boundary: UploadBoundary,
 ) -> None:
-    nginx = shutil.which("nginx")
-    if nginx is None:
-        pytest.skip("nginx executable is required for the upload boundary check")
-    expected_key = "synthetic-upload-test-only"
+    tiny = _sized_media(tmp_path, boundary, 1024)
+    small = _sized_media(tmp_path, boundary, 2 * 1024 * 1024)
+    near_cap = _sized_media(tmp_path, boundary, boundary.api_limit - 4096)
 
-    class UploadUpstream(BaseHTTPRequestHandler):
-        def do_POST(self) -> None:
-            authenticated = self.headers.get("X-API-Key") == expected_key
-            content_length = int(self.headers.get("Content-Length", "0"))
-            file_size = int(self.headers.get("X-Test-File-Size", "0"))
-            remaining = content_length
-            while remaining > 0:
-                chunk = self.rfile.read(min(remaining, 1024 * 1024))
-                if not chunk:
-                    break
-                remaining -= len(chunk)
-            within_api_limit = file_size <= boundary.api_limit
-            self.send_response(201 if authenticated and within_api_limit else 400)
-            self.end_headers()
+    tiny_response = _upload(studio_proxy_runtime, boundary, tiny)
+    small_response = _upload(studio_proxy_runtime, boundary, small)
+    near_cap_response = _upload(studio_proxy_runtime, boundary, near_cap)
 
-        def log_message(self, format: str, *args: str) -> None:
-            return
+    assert tiny_response.status_code == 201, tiny_response.text
+    assert small_response.status_code == 201, small_response.text
+    assert near_cap_response.status_code == 201, near_cap_response.text
 
-    upstream = ThreadingHTTPServer(("127.0.0.1", 0), UploadUpstream)
-    thread = Thread(target=upstream.serve_forever, daemon=True)
-    thread.start()
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = int(sock.getsockname()[1])
-    template = (ROOT / "apps/studio-web/nginx.conf.template").read_text()
-    configured = template.replace("${API_KEY}", expected_key)
-    configured = configured.replace("listen 8080;", f"listen 127.0.0.1:{port};")
-    configured = configured.replace("http://api:8000", f"http://127.0.0.1:{upstream.server_port}")
-    configured = configured.replace("/usr/share/nginx/html", str(tmp_path))
-    config = tmp_path / "nginx.conf"
-    config.write_text(
-        f"pid {tmp_path}/nginx.pid; error_log {tmp_path}/error.log;\n"
-        f"events {{}}\nhttp {{ access_log off; client_body_temp_path {tmp_path}/body; "
-        f"proxy_temp_path {tmp_path}/proxy;\n{configured}\n}}\n",
-    )
-    (tmp_path / "index.html").write_text("<html>Studio test</html>")
-    process = subprocess.Popen([nginx, "-p", str(tmp_path), "-c", str(config), "-g", "daemon off;"])
-    try:
-        origin = f"http://127.0.0.1:{port}"
-        with httpx.Client(base_url=origin, timeout=120) as client:
-            for _ in range(50):
-                assert process.poll() is None, (tmp_path / "error.log").read_text()
-                try:
-                    client.get("/healthz")
-                    break
-                except httpx.ConnectError:
-                    time.sleep(0.1)
-            else:
-                pytest.fail("nginx did not start")
 
-            for size in (1024, 2 * 1024 * 1024, boundary.api_limit - 4096):
-                upload = tmp_path / f"under-{size}.bin"
-                upload.touch()
-                upload.truncate(size)
-                with upload.open("rb") as body:
-                    response = client.post(
-                        boundary.route,
-                        headers={"Origin": origin, "X-Test-File-Size": str(size)},
-                        files={"file": (upload.name, body, "application/octet-stream")},
-                    )
-                assert response.status_code == 201
+@pytest.mark.parametrize("boundary", UPLOAD_BOUNDARIES, ids=lambda boundary: boundary.kind)
+def test_real_api_rejects_file_over_each_api_cap(
+    tmp_path: Path,
+    studio_proxy_runtime: StudioProxyRuntime,
+    boundary: UploadBoundary,
+) -> None:
+    upload = _sized_media(tmp_path, boundary, boundary.api_limit + 1)
 
-            api_oversized = tmp_path / "api-over.bin"
-            api_oversized.touch()
-            api_oversized.truncate(boundary.api_limit + 1)
-            with api_oversized.open("rb") as body:
-                response = client.post(
-                    boundary.route,
-                    headers={"Origin": origin, "X-Test-File-Size": str(boundary.api_limit + 1)},
-                    files={"file": (api_oversized.name, body, "application/octet-stream")},
-                )
-            assert response.status_code == 400
+    response = _upload(studio_proxy_runtime, boundary, upload)
 
-            multipart_oversized = tmp_path / "multipart-over.bin"
-            multipart_oversized.touch()
-            multipart_oversized.truncate(boundary.nginx_limit + 1)
-            with multipart_oversized.open("rb") as body:
-                response = client.post(
-                    boundary.route,
-                    headers={"Origin": origin, "X-Test-File-Size": str(boundary.nginx_limit + 1)},
-                    files={"file": (multipart_oversized.name, body, "application/octet-stream")},
-                )
-            assert response.status_code == 413
-            assert response.headers["content-type"].startswith("text/html")
-    finally:
-        process.terminate()
-        process.wait(timeout=10)
-        upstream.shutdown()
-        upstream.server_close()
-        thread.join(timeout=5)
+    assert response.status_code == 400
+    assert response.json()["error"]["category"] == "VALIDATION"
+
+
+@pytest.mark.parametrize("boundary", UPLOAD_BOUNDARIES, ids=lambda boundary: boundary.kind)
+def test_nginx_rejects_multipart_body_over_each_route_cap(
+    tmp_path: Path,
+    studio_proxy_runtime: StudioProxyRuntime,
+    boundary: UploadBoundary,
+) -> None:
+    upload = _sized_media(tmp_path, boundary, boundary.nginx_limit + 1)
+
+    response = _upload(studio_proxy_runtime, boundary, upload)
+
+    assert response.status_code == 413
+    assert response.headers["content-type"].startswith("text/html")
+
+
+def test_proxy_preserves_auth_workspace_and_origin_boundaries(
+    tmp_path: Path,
+    studio_proxy_runtime: StudioProxyRuntime,
+) -> None:
+    boundary = UPLOAD_BOUNDARIES[0]
+    upload = _sized_media(tmp_path, boundary, 1024 * 1024)
+    foreign_route = f"/api/creator/workspaces/{studio_proxy_runtime.foreign_workspace_id}/assets"
+    with upload.open("rb") as body, httpx.Client(timeout=30) as client:
+        unauthenticated = client.post(
+            f"{studio_proxy_runtime.api_origin}/api/creator/workspaces/{studio_proxy_runtime.workspace_id}/assets",
+            files={"file": (boundary.filename, body, boundary.content_type)},
+        )
+    with upload.open("rb") as body, httpx.Client(base_url=studio_proxy_runtime.origin, timeout=30) as client:
+        foreign_workspace = client.post(
+            foreign_route,
+            headers={"Origin": studio_proxy_runtime.origin},
+            files={"file": (boundary.filename, body, boundary.content_type)},
+        )
+    with upload.open("rb") as body, httpx.Client(base_url=studio_proxy_runtime.origin, timeout=30) as client:
+        foreign_origin = client.post(
+            f"/api/creator/workspaces/{studio_proxy_runtime.workspace_id}/assets",
+            headers={"Origin": "https://foreign.invalid"},
+            files={"file": (boundary.filename, body, boundary.content_type)},
+        )
+
+    assert unauthenticated.status_code == 401
+    assert foreign_workspace.status_code == 404
+    assert foreign_origin.status_code == 403
+
+
+def test_general_json_over_one_mib_remains_rejected(studio_proxy_runtime: StudioProxyRuntime) -> None:
+    with httpx.Client(base_url=studio_proxy_runtime.origin, timeout=30) as client:
+        response = client.post(
+            "/api/creator/projects",
+            headers={"Origin": studio_proxy_runtime.origin, "Content-Type": "application/json"},
+            content=b'"' + (b"x" * (1024 * 1024)) + b'"',
+        )
+
+    assert response.status_code == 413
+
+
+def test_interrupted_upload_removes_nginx_and_api_staging_files(
+    studio_proxy_runtime: StudioProxyRuntime,
+) -> None:
+    for target, headers in (
+        (studio_proxy_runtime.origin, f"Origin: {studio_proxy_runtime.origin}\r\n"),
+        (studio_proxy_runtime.api_origin, f"X-API-Key: {studio_proxy_runtime.token}\r\n"),
+    ):
+        host, port_text = target.removeprefix("http://").split(":")
+        request = (
+            f"POST /api/creator/workspaces/{studio_proxy_runtime.workspace_id}/assets/videos HTTP/1.1\r\n"
+            f"Host: {host}:{port_text}\r\n{headers}"
+            "Content-Type: multipart/form-data; boundary=interrupt\r\nContent-Length: 10485760\r\n\r\n"
+            "--interrupt\r\nContent-Disposition: form-data; name=\"file\"; filename=\"cut.mp4\"\r\n\r\n"
+        ).encode()
+        with socket.create_connection((host, int(port_text)), timeout=5) as connection:
+            connection.sendall(request + (b"x" * 1024 * 1024))
+
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and any(studio_proxy_runtime.body_temp.iterdir()):
+        time.sleep(0.1)
+
+    assert not any(studio_proxy_runtime.body_temp.iterdir())
+    assert not list(studio_proxy_runtime.staging_parent.glob("media-upload-*"))
