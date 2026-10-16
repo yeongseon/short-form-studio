@@ -78,6 +78,32 @@ def test_scan_gates_release_promotion_and_latest() -> None:
     assert "aquasecurity/trivy-action@master" not in str(jobs["trivy-scan"])
 
 
+def test_manual_dispatch_selects_a_successful_prior_run_artifact() -> None:
+    raw = yaml.safe_load((ROOT / ".github/workflows/cd.yml").read_text())
+
+    inputs = raw[True]["workflow_dispatch"]["inputs"]
+    assert "release_run_id" in inputs
+    assert "release_manifest" not in inputs
+    preflight = raw["jobs"]["release-preflight"]
+    commands = "\n".join(step.get("run", "") for step in preflight["steps"])
+    downloads = [step for step in preflight["steps"] if step.get("uses") == "actions/download-artifact@v4"]
+    assert "actions/runs/$RELEASE_RUN_ID" in commands
+    assert "conclusion" in commands and "success" in commands
+    assert "workflow_id" in commands and "cd.yml" in commands
+    assert any(step.get("with", {}).get("run-id") == "${{ github.event.inputs.release_run_id }}" for step in downloads)
+
+
+def test_registry_jobs_authenticate_and_install_pinned_validator_dependencies() -> None:
+    raw = yaml.safe_load((ROOT / ".github/workflows/cd.yml").read_text())
+
+    for name in ("trivy-scan", "create-manifest", "promote-release", "release-preflight"):
+        steps = raw["jobs"][name]["steps"]
+        assert any(step.get("uses") == "docker/login-action@v3" for step in steps), name
+    for name in ("create-manifest", "release-preflight"):
+        commands = "\n".join(step.get("run", "") for step in raw["jobs"][name]["steps"])
+        assert "pydantic==" in commands, name
+
+
 def test_rollback_migration_uses_selected_release_image_and_requires_downgrade_approval() -> None:
     # Given manual rollback and database downgrade jobs.
     raw = yaml.safe_load((ROOT / ".github/workflows/cd.yml").read_text())
@@ -90,25 +116,53 @@ def test_rollback_migration_uses_selected_release_image_and_requires_downgrade_a
     assert "github.event.inputs.approve_db_downgrade == 'DOWNGRADE'" in downgrade["if"]
     commands = "\n".join(step.get("run", "") for step in downgrade["steps"])
     assert "docker run" in commands
-    assert "$API_IMAGE@$API_DIGEST" in commands
-    assert "actions/checkout" not in str(downgrade)
+    assert "$API_IMAGE@$CURRENT_API_DIGEST" in commands
+    assert "alembic downgrade" not in "\n".join(
+        step.get("run", "") for step in downgrade["steps"] if step.get("uses") == "actions/checkout@v4"
+    )
     assert "downgrade_revision:" not in (ROOT / ".github/workflows/cd.yml").read_text()
-    assert "needs.release-preflight.outputs.db_revision" in commands
+    assert any(
+        step.get("env", {}).get("TARGET_REVISION") == "${{ needs.release-preflight.outputs.db_revision }}"
+        for step in downgrade["steps"]
+    )
+    assert "alembic current" in commands
+    assert "verify-db" in commands
 
     for name in ("migrate-staging", "migrate-production"):
         assert "github.event.inputs.release_action == 'deploy'" in jobs[name]["if"]
 
 
-def test_post_deploy_verifies_release_identity_database_and_authenticated_smoke() -> None:
-    # Given both post-deploy verification jobs, when reading executable steps.
+def test_post_deploy_smoke_downloads_the_created_nonempty_resource() -> None:
     raw = yaml.safe_load((ROOT / ".github/workflows/cd.yml").read_text())
     jobs = raw["jobs"]
 
-    # Then each checks all service identities, DB revision, and authenticated create/download.
     for name in ("verify-staging", "verify-production"):
         commands = "\n".join(step.get("run", "") for step in jobs[name]["steps"])
-        for token in ("api", "worker", "studio", "verify-db", "X-API-Key", "download"):
-            assert token in commands, f"{name}: {token}"
+        assert "jq -er" in commands, name
+        assert "SMOKE_DOWNLOAD_BASE_URL" in commands, name
+        assert "${resource_id}" in commands, name
+        assert "test -s download.bin" in commands, name
+
+
+def test_deploy_production_condition_references_only_direct_needs() -> None:
+    workflow = Workflow.model_validate(yaml.safe_load((ROOT / ".github/workflows/cd.yml").read_text()))
+
+    job = workflow.jobs["deploy-production"]
+    dependencies = {job.needs} if isinstance(job.needs, str) else set(job.needs)
+    referenced = {
+        token.split(".")[1]
+        for token in job.condition.replace("${{", "").replace("}}", "").split()
+        if token.startswith("needs.") and token.count(".") >= 2
+    }
+    assert referenced <= dependencies
+
+
+def test_promotion_finishes_all_immutable_tags_before_latest() -> None:
+    raw = yaml.safe_load((ROOT / ".github/workflows/cd.yml").read_text())
+    commands = "\n".join(step.get("run", "") for step in raw["jobs"]["promote-release"]["steps"])
+
+    assert commands.count("for target in") >= 2
+    assert commands.find('crane tag "$target" "$RELEASE_TAG"') < commands.rfind('crane tag "$target" latest')
 
 
 def test_workflow_has_no_reachable_placeholder_targets() -> None:
