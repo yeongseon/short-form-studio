@@ -172,6 +172,8 @@ def test_shipped_image_runs_production_claims_redelivery_and_fairness() -> None:
         media_assetrows=mediarows["count"],
         storage_entries=[str(path) for path in storage_entries],
     )
+    capture_worker("topology-solo-cancel")
+    docker("rm", "-f", "topology-solo-cancel")
 
 
 def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
