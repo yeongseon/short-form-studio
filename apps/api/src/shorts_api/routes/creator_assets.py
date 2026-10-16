@@ -122,6 +122,23 @@ async def list_workspace_assets(
     }
 
 
+@router.get("/{workspace_id}/assets/storage-usage")
+async def get_workspace_storage_usage(
+    workspace_id: int,
+    user: CurrentUser = Depends(require_workspace_access),
+) -> dict[str, int]:
+    usage = await media_asset_service.get_storage_usage(workspace_id)
+    return {
+        "stored_bytes": usage.stored_bytes,
+        "stored_asset_count": usage.stored_asset_count,
+        "reserved_bytes": usage.reserved_bytes,
+        "reserved_asset_count": usage.reserved_asset_count,
+        "max_stored_bytes": usage.max_stored_bytes,
+        "max_asset_count": usage.max_asset_count,
+        "max_reserved_bytes": usage.max_reserved_bytes,
+    }
+
+
 @router.get("/{workspace_id}/assets/{asset_id}")
 async def get_workspace_asset(
     workspace_id: int,
