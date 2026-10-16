@@ -11,6 +11,7 @@ from creator_service.media_upload_reconciliation import (
     UploadIntent,
     UploadIntentState,
 )
+from creator_service.object_storage import StorageDeletionError
 
 
 class _Objects:
@@ -20,7 +21,7 @@ class _Objects:
 
     def delete(self, key: str) -> bool:
         if self.fail_delete:
-            raise OSError("delete unavailable")
+            raise StorageDeletionError(key=key)
         return self.objects.pop(key, None) is not None
 
     def upload(self, key: str, data: bytes, content_type: str = "application/octet-stream"):
@@ -55,7 +56,7 @@ async def test_sweeper_reclaims_only_expired_unregistered_owned_key() -> None:
     storage = InMemoryMediaAssetStorage()
     crashed = await _intent(storage, workspace_id=7, key="workspaces/7/assets/crashed.png", now=now)
     completed = await _intent(storage, workspace_id=9, key="workspaces/9/assets/good.png", now=now)
-    await storage.complete_upload_intent(completed.id)
+    await storage.complete_upload_intent(completed.id, owner_id=completed.owner_id)
     objects.objects = {crashed.storage_key: b"orphan", completed.storage_key: b"live"}
 
     # When a reconciliation pass leases expired work.
