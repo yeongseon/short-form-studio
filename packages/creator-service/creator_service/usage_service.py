@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
@@ -37,6 +38,25 @@ def _money(value: Decimal | float | str, *, name: str) -> Decimal:
     if not parsed.is_finite() or parsed < 0:
         raise ValueError(f"{name} must be a finite non-negative monetary value")
     return parsed.quantize(MONEY_SCALE)
+
+
+@dataclass(frozen=True, slots=True)
+class ReservationQuote:
+    maximum_cost_usd: Decimal
+
+    @classmethod
+    def bounded(
+        cls, *, unit_cost_usd: Decimal, units: int | None,
+        internal_attempts: int, deliveries: int,
+    ) -> ReservationQuote:
+        if units is None or units <= 0:
+            raise ValueError("units must have a positive finite bound")
+        if internal_attempts <= 0 or deliveries <= 0:
+            raise ValueError("attempt and delivery bounds must be positive")
+        return cls(_money(
+            unit_cost_usd * units * internal_attempts * deliveries,
+            name="maximum_cost_usd",
+        ))
 
 
 class UsageStorageBackend(Protocol):
@@ -84,6 +104,10 @@ class UsageStorageBackend(Protocol):
 
     async def record_owned_event(self, row: dict[str, Any], owner_id: str) -> dict[str, Any]: ...
 
+    async def authorize_owned_attempt(
+        self, owner_id: str, attempt_id: str, estimated_cost_usd: Decimal,
+    ) -> bool: ...
+
 
 class InMemoryUsageStorage:
     def __init__(self) -> None:
@@ -92,6 +116,7 @@ class InMemoryUsageStorage:
         self._quotas: dict[int, dict[str, Any]] = {}
         self._reservations: dict[tuple[int, datetime], dict[str, int]] = {}
         self._owned: dict[str, tuple[int, datetime, str, str, Decimal, Decimal]] = {}
+        self._owned_attempts: dict[tuple[str, str], Decimal] = {}
         self._locks: dict[int, asyncio.Lock] = {}
         self._spend_lock = asyncio.Lock()
         self._next_event_id = 1
@@ -406,6 +431,26 @@ class InMemoryUsageStorage:
             )
             return saved
 
+    async def authorize_owned_attempt(
+        self, owner_id: str, attempt_id: str, estimated_cost_usd: Decimal,
+    ) -> bool:
+        async with self._spend_lock:
+            owned = self._owned.get(owner_id)
+            if owned is None or owned[3] not in {"reserved", "consumed"}:
+                return False
+            key = (owner_id, attempt_id)
+            existing = self._owned_attempts.get(key)
+            if existing is not None:
+                return existing == estimated_cost_usd
+            authorized = sum(
+                cost for (candidate_owner, _), cost in self._owned_attempts.items()
+                if candidate_owner == owner_id
+            )
+            if authorized + estimated_cost_usd > owned[4]:
+                return False
+            self._owned_attempts[key] = estimated_cost_usd
+            return True
+
     async def release_reservation(
         self, workspace_id: int, operation_type: str, units: int = 1
     ) -> None:
@@ -503,6 +548,17 @@ class UsageService:
 
     async def reservation_owner_id(self, task_id: str) -> str | None:
         return await self.storage.reservation_owner_id(task_id)
+
+    async def authorize_owned_attempt(
+        self, owner_id: str, attempt_id: str, estimated_cost_usd: Decimal | float | str,
+    ) -> bool:
+        try:
+            estimate = _money(estimated_cost_usd, name="estimated_cost_usd")
+        except ValueError:
+            return False
+        if estimate <= 0:
+            return False
+        return await self.storage.authorize_owned_attempt(owner_id, attempt_id, estimate)
 
     async def readmit_owned(self, owner_id: str) -> bool:
         global_budget_raw = os.getenv("GLOBAL_MONTHLY_ESTIMATED_BUDGET_USD")
@@ -802,10 +858,23 @@ async def cancel_workspace_quota_reservation(
 
 async def reserve_owned_quota(
     workspace_id: int, operation_type: str, owner_id: str,
+    estimated_cost_usd: Decimal | float | None = None,
 ) -> tuple[bool, str]:
-    allowed = await usage_service.reserve_owned(workspace_id, operation_type, owner_id)
+    allowed = await usage_service.reserve_owned(
+        workspace_id, operation_type, owner_id, estimated_cost_usd,
+    )
     return allowed, "ok" if allowed else "Quota exceeded"
 
 
 async def cancel_owned_quota_reservation(owner_id: str) -> bool:
     return await usage_service.cancel_owned(owner_id)
+
+
+async def authorize_owned_provider_attempt(
+    owner_id: str | None, attempt_id: str, estimated_cost_usd: Decimal | float | str,
+) -> bool:
+    if owner_id is None:
+        return True
+    return await usage_service.authorize_owned_attempt(
+        owner_id, attempt_id, estimated_cost_usd,
+    )
