@@ -38,7 +38,7 @@ class MediaAssetStorageBackend(Protocol):
     async def complete_upload_intent(
         self, intent_id: int, *, owner_id: str | None = None, claim_token: str | None = None,
     ) -> None: ...
-    async def defer_upload_cleanup(self, intent_id: int) -> None: ...
+    async def compensate_upload(self, intent: UploadIntent, deletion_failed: bool) -> None: ...
     async def asset_exists_for_key(self, workspace_id: int, storage_key: str) -> bool: ...
     async def claim_expired_upload_intents(
         self, *, now: datetime, lease_expires_at: datetime, limit: int,
@@ -145,9 +145,13 @@ class InMemoryMediaAssetStorage:
                 raise MediaAssetPersistenceFailed()
             self._set_intent(intent_id, UploadIntentState.COMPLETED)
 
-    async def defer_upload_cleanup(self, intent_id: int) -> None:
+    async def compensate_upload(self, intent: UploadIntent, deletion_failed: bool) -> None:
         async with self._lock:
-            self._set_intent(intent_id, UploadIntentState.CLEANUP_PENDING)
+            current = self._intents[intent.id]
+            if current.owner_id != intent.owner_id:
+                raise MediaAssetPersistenceFailed()
+            state = UploadIntentState.CLEANUP_PENDING if deletion_failed else UploadIntentState.RECLAIMED
+            self._set_intent(intent.id, state)
 
     async def asset_exists_for_key(self, workspace_id: int, storage_key: str) -> bool:
         return any(
