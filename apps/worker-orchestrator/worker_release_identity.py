@@ -7,6 +7,10 @@ from celery.signals import worker_ready
 
 @worker_ready.connect
 def publish_release_identity(**_kwargs: object) -> None:
+    source_sha = os.getenv("SOURCE_SHA")
+    image_digest = os.getenv("WORKER_IMAGE_DIGEST")
+    if source_sha is None and image_digest is None:
+        return
     try:
         client = redis.Redis.from_url(
             os.getenv("REDIS_URL", "redis://redis:6379/0"),
