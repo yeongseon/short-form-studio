@@ -41,6 +41,14 @@ _NON_TERMINAL_GENERATING_STAGES = frozenset({
     "VISUAL_ASSET_REVIEW",
 })
 
+_RUN_LEVEL_TASK_TYPES = frozenset({
+    "generate_script",
+    "generate_visual_plan",
+    "generate_audio",
+    "generate_subtitles",
+    "render_video",
+})
+
 
 async def _rollback_run(run_id: int, celery_task_id: str) -> None:
     """Roll back a run to FAILED state when its stale pending task cannot be recovered.
@@ -52,6 +60,18 @@ async def _rollback_run(run_id: int, celery_task_id: str) -> None:
     from importlib import import_module
 
     run_service = import_module("creator_service.run_service").run_service
+    tracking = import_module("creator_service.task_tracking_service").task_tracking_service
+    tasks = await tracking.list_run_tasks(run_id)
+    owner = next((task for task in tasks if task.celery_task_id == celery_task_id), None)
+    if owner is None or owner.task_type not in _RUN_LEVEL_TASK_TYPES:
+        return
+    if any(
+        task.id > owner.id
+        and task.task_type == owner.task_type
+        and task.status in {"pending", "queued", "running", "success"}
+        for task in tasks
+    ):
+        return
     ok, row = await run_service.storage.conditional_update_run(
         run_id,
         {"current_stage": "FAILED", "status": "failed"},
