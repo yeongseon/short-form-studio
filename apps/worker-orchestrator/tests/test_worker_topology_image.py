@@ -191,7 +191,8 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
     send(103, "active-redelivery", "redelivery", redelivery_state, queue="image")
     claimed = wait_state(redelivery_state, "claimed")
     first_claim = wait_task("active-redelivery", "running")
-    os.kill(int(claimed["worker_host_pid"]), 9)
+    assert int(claimed["worker_pid"]) > 0
+    redelivery_state.with_suffix(".kill").touch()
     wait_task("active-redelivery", "failed")
     docker("rm", "-f", "topology-scaled-redelivery")
     worker("topology-scaled-redelivered", command)

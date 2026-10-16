@@ -57,14 +57,6 @@ def _publish(path: str, status: str, **fields: str | int | float | bool) -> None
     temporary.replace(destination)
 
 
-def _host_pid() -> int:
-    status = Path("/proc/self/status").read_text(encoding="utf-8")
-    namespace_pids = next(
-        line for line in status.splitlines() if line.startswith("NSpid:")
-    ).split()[1:]
-    return int(namespace_pids[0])
-
-
 @celery_app.task(bind=True, base=_TopologyTask, name="runtime_topology.probe", acks_late=True)
 def runtime_topology_probe(
     self: Task,
@@ -130,7 +122,6 @@ def runtime_topology_probe(
                         "redelivered",
                         task_id=ctx.task_id,
                         worker_pid=os.getpid(),
-                        worker_host_pid=_host_pid(),
                     )
                     while True:
                         current = await run_service.storage.get_run(run_id)
@@ -143,10 +134,11 @@ def runtime_topology_probe(
                     "claimed",
                     task_id=ctx.task_id,
                     worker_pid=os.getpid(),
-                    worker_host_pid=_host_pid(),
                 )
-                while True:
-                    time.sleep(0.1)
+                kill_marker = state.with_suffix(".kill")
+                while not kill_marker.exists():
+                    time.sleep(0.05)
+                os.kill(os.getpid(), signal.SIGKILL)
             case unreachable:
                 assert_never(unreachable)
         return TaskResult()
