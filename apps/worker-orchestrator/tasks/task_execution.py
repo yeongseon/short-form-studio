@@ -172,7 +172,8 @@ def run_task(
     except Exception as exc:
         if (
             isinstance(exc, (ProviderTimeoutError, RateLimitError))
-            and celery_self.request.retries < celery_self.max_retries
+            and getattr(celery_self.request, "retries", 0)
+            < getattr(celery_self, "max_retries", 0)
         ):
             # Failed tracking remains reclaimable by Celery's retried delivery.
             try:
@@ -188,10 +189,7 @@ def run_task(
             except Exception:
                 runner.logger.warning("Failed to mark task as failed before retry", exc_info=True)
             raise
-        if (
-            billing_outcome is runner.BillingOutcome.NOT_STARTED
-            or isinstance(exc, config.no_fail_transition_exceptions)
-        ):
+        if isinstance(exc, config.no_fail_transition_exceptions):
             outcome: bool | None = True
             try:
                 code, message = runner._safe_failure_record(exc)
@@ -222,7 +220,13 @@ def run_task(
                 )
             )
             if claimed and finalized:
-                settle_owned(billable_unknown=True)
+                match billing_outcome:
+                    case runner.BillingOutcome.NOT_STARTED:
+                        cancel_owned()
+                    case runner.BillingOutcome.ACCOUNTED:
+                        settle_owned()
+                    case runner.BillingOutcome.UNKNOWN:
+                        settle_owned(billable_unknown=True)
         except Exception:
             runner.logger.exception("Failed error cleanup for run %d", validated_run_id)
         raise
