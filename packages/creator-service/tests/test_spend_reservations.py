@@ -138,6 +138,23 @@ async def test_operator_kill_switch_blocks_new_billable_work(monkeypatch: pytest
 
 
 @pytest.mark.asyncio
+async def test_operator_kill_switch_blocks_queued_owner_before_provider_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given work was reserved while provider calls were enabled.
+    service = UsageService(InMemoryUsageStorage())
+    await service.set_quota(1, monthly_cost_usd=1.0)
+    assert await service.reserve_owned(1, "llm", "queued", estimated_cost_usd=1.0)
+
+    # When the operator disables billable calls before the queued work starts.
+    monkeypatch.setenv("BILLABLE_PROVIDER_CALLS_ENABLED", "false")
+
+    # Then neither delivery admission nor provider-attempt authorization may proceed.
+    assert not await service.readmit_owned("queued")
+    assert not await service.authorize_owned_attempt("queued", "attempt-1", Decimal("0.1"))
+
+
+@pytest.mark.asyncio
 async def test_unset_cost_model_is_rejected_conservatively() -> None:
     # Given an operation without a configured bounded estimate.
     service = UsageService(InMemoryUsageStorage())

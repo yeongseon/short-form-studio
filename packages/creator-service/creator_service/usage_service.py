@@ -30,6 +30,10 @@ MAX_ESTIMATED_COST_USD: dict[str, Decimal] = {
 }
 
 
+def _billable_provider_calls_enabled() -> bool:
+    return os.getenv("BILLABLE_PROVIDER_CALLS_ENABLED", "true").lower() in {"1", "true", "yes"}
+
+
 def _money(value: Decimal | float | str, *, name: str) -> Decimal:
     try:
         parsed = Decimal(str(value))
@@ -512,7 +516,7 @@ class UsageService:
         self, workspace_id: int, operation_type: str, owner_id: str,
         estimated_cost_usd: Decimal | float | None = None,
     ) -> bool:
-        if os.getenv("BILLABLE_PROVIDER_CALLS_ENABLED", "true").lower() not in {"1", "true", "yes"}:
+        if not _billable_provider_calls_enabled():
             return False
         raw_estimate = estimated_cost_usd
         if raw_estimate is None:
@@ -552,6 +556,8 @@ class UsageService:
     async def authorize_owned_attempt(
         self, owner_id: str, attempt_id: str, estimated_cost_usd: Decimal | float | str,
     ) -> bool:
+        if not _billable_provider_calls_enabled():
+            return False
         try:
             estimate = _money(estimated_cost_usd, name="estimated_cost_usd")
         except ValueError:
@@ -561,6 +567,8 @@ class UsageService:
         return await self.storage.authorize_owned_attempt(owner_id, attempt_id, estimate)
 
     async def readmit_owned(self, owner_id: str) -> bool:
+        if not _billable_provider_calls_enabled():
+            return False
         global_budget_raw = os.getenv("GLOBAL_MONTHLY_ESTIMATED_BUDGET_USD")
         global_budget = (
             _money(global_budget_raw, name="GLOBAL_MONTHLY_ESTIMATED_BUDGET_USD")
