@@ -27,6 +27,7 @@ from .media_upload_reconciliation import (
     UploadIntent,
     UploadIntentState,
 )
+from .object_storage import StorageDeletionError
 from .media_probe import (
     ProbeResult as ProbeResult,
     _ProbedMetadata,
@@ -181,7 +182,11 @@ class MediaAssetService:
                 return self._backend().upload(storage_key, data, content_type=canonical_mime)
 
             result = await self._io.run(upload_data)
-            await self._asset_storage.mark_upload_intent_uploaded(intent.id)
+            try:
+                await self._asset_storage.mark_upload_intent_uploaded(intent.id)
+            except MediaAssetPersistenceFailed:
+                await self._io.run(partial(self._backend().delete, result.key))
+                raise
             row: dict[str, object] = {
                 "workspace_id": workspace_id, "project_id": project_id, "run_id": run_id,
                 "media_type": media_type.value, "origin": origin.value,
@@ -195,20 +200,17 @@ class MediaAssetService:
                 "created_at": now,
             }
             try:
-                saved = await self._asset_storage.save_asset(row)
+                saved = await self._asset_storage.save_uploaded_asset(row, intent)
             except MediaAssetPersistenceIndeterminate:
-                if await self._asset_storage.asset_exists_for_key(workspace_id, result.key):
-                    await self._asset_storage.complete_upload_intent(intent.id)
                 raise
             except MediaAssetPersistenceFailed:
                 try:
                     await self._io.run(partial(self._backend().delete, result.key))
-                except OSError:
+                except StorageDeletionError:
                     await self._asset_storage.defer_upload_cleanup(intent.id)
                 else:
                     await self._asset_storage.record_upload_reclaimed(intent.id)
                 raise
-            await self._asset_storage.complete_upload_intent(intent.id)
         return MediaAsset.model_validate(saved)
 
     async def get_asset(self, asset_id: int, workspace_id: int) -> MediaAsset | None:

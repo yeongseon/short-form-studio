@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import io
+import threading
+from datetime import datetime, timezone
+
+import anyio
 import pytest
 from PIL import Image
 
@@ -9,8 +13,11 @@ from creator_service.media_asset_storage import InMemoryMediaAssetStorage
 from creator_service.media_upload_reconciliation import (
     MediaAssetPersistenceFailed,
     MediaAssetPersistenceIndeterminate,
+    MediaUploadReconciler,
+    UploadIntent,
     UploadIntentState,
 )
+from creator_service.object_storage import StorageDeletionError
 
 
 def _png() -> bytes:
@@ -41,8 +48,20 @@ class _Objects:
 
     def delete(self, key: str) -> bool:
         if self.fail_delete:
-            raise OSError("delete unavailable")
+            raise StorageDeletionError(key=key)
         return self.objects.pop(key, None) is not None
+
+
+class _PausedObjects(_Objects):
+    def __init__(self) -> None:
+        super().__init__()
+        self.upload_started = threading.Event()
+        self.upload_allowed = threading.Event()
+
+    def upload(self, key: str, data: bytes, content_type: str = "application/octet-stream"):
+        self.upload_started.set()
+        assert self.upload_allowed.wait(timeout=5)
+        return super().upload(key, data, content_type)
 
 
 class _FailingAssets(InMemoryMediaAssetStorage):
@@ -50,9 +69,11 @@ class _FailingAssets(InMemoryMediaAssetStorage):
         super().__init__()
         self.after_commit = after_commit
 
-    async def save_asset(self, row: dict[str, object]) -> dict[str, object]:
+    async def save_uploaded_asset(
+        self, row: dict[str, object], intent: UploadIntent,
+    ) -> dict[str, object]:
         if self.after_commit:
-            await super().save_asset(row)
+            await super().save_uploaded_asset(row, intent)
             raise MediaAssetPersistenceIndeterminate()
         raise MediaAssetPersistenceFailed()
 
@@ -110,3 +131,36 @@ async def test_cleanup_failure_remains_retryable() -> None:
     # Then ownership is retained in a durable retry state.
     assert len(objects.objects) == 1
     assert (await assets.list_upload_intents())[0].state is UploadIntentState.CLEANUP_PENDING
+
+
+@pytest.mark.asyncio
+async def test_upload_losing_expired_lease_compensates_without_saving_metadata() -> None:
+    # Given an upload that remains in object I/O beyond its durable lease.
+    now = datetime.now(timezone.utc)
+    objects = _PausedObjects()
+    assets = InMemoryMediaAssetStorage()
+    service = MediaAssetService(objects, assets)
+    failures: list[BaseException] = []
+
+    async def upload() -> None:
+        try:
+            await service.create_image_asset(
+                workspace_id=7, filename="asset.png", data=_png(), content_type="image/png",
+            )
+        except MediaAssetPersistenceFailed as error:
+            failures.append(error)
+
+    # When reconciliation claims the expired intent before object I/O returns.
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(upload)
+        await anyio.to_thread.run_sync(objects.upload_started.wait, 5)
+        intent = (await assets.list_upload_intents())[0]
+        await assets.expire_upload_intent(intent.id, now)
+        swept = await MediaUploadReconciler(objects, assets).sweep(now=now)
+        objects.upload_allowed.set()
+
+    # Then the fenced uploader compensates and never commits live metadata.
+    assert swept.reclaimed == 1
+    assert len(failures) == 1
+    assert objects.objects == {}
+    assert (await assets.list_assets(7, limit=50, offset=0))[1] == 0
