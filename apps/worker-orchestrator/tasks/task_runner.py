@@ -279,6 +279,10 @@ async def _run_task_inner(
     from creator_service.usage_service import usage_service
 
     reservation_owner_id = await usage_service.reservation_owner_id(task_id)
+    if reservation_owner_id is not None and not await usage_service.readmit_owned(
+        reservation_owner_id
+    ):
+        raise StageGuardError(f"Reservation owner {reservation_owner_id} cannot be re-admitted")
     ctx = TaskContext(
         run_id=run_id,
         task_id=task_id,
