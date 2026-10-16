@@ -13,6 +13,7 @@ from scripts.release_manifest import (
     assert_contract_compatible,
     assert_database_revision,
     assert_deploy_target,
+    assert_project_repositories,
     assert_selected_tag,
 )
 
@@ -70,6 +71,13 @@ def test_manifest_rejects_missing_or_malformed_digest(digest: str) -> None:
         ReleaseManifest.model_validate(data)
 
 
+def test_manifest_rejects_repository_from_another_project() -> None:
+    manifest = ReleaseManifest.model_validate(manifest_data())
+
+    with pytest.raises(ValueError, match="repository"):
+        assert_project_repositories(manifest, "acme/other")
+
+
 @pytest.mark.parametrize("selected", ["latest", "main-deadbee", "does-not-exist"])
 def test_selected_tag_rejects_arbitrary_or_unapproved_value(selected: str) -> None:
     # Given one approved immutable release tag, when another tag is selected, then it stops.
@@ -107,4 +115,3 @@ def test_revision_cli_returns_nonzero_on_mismatch(tmp_path: Path) -> None:
 
     # Then the command is automation-safe and returns failure.
     assert result.returncode != 0
-

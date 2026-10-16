@@ -35,6 +35,11 @@ DigestText = Annotated[str, StringConstraints(pattern=r"^sha256:[0-9a-f]{64}$")]
 Revision = Annotated[str, StringConstraints(pattern=r"^[0-9A-Za-z][0-9A-Za-z_-]*$")]
 Tag = Annotated[str, StringConstraints(pattern=r"^[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[1-9][0-9]*$")]
 PLACEHOLDER_HOSTS: Final = frozenset({"example.com", "localhost", "127.0.0.1"})
+SERVICE_REPOSITORIES: Final = {
+    "api": "api",
+    "worker": "worker",
+    "studio": "studio-web",
+}
 
 
 class Command(StrEnum):
@@ -116,6 +121,20 @@ def assert_selected_tag(selected: str, approved: str) -> None:
         raise ManifestError(detail=f"{selected!r} is not the approved release tag {approved!r}")
 
 
+def assert_project_repositories(manifest: ReleaseManifest, project: str) -> None:
+    expected = {
+        service: f"ghcr.io/{project}/{repository}"
+        for service, repository in SERVICE_REPOSITORIES.items()
+    }
+    actual = {
+        "api": manifest.images.api.repository,
+        "worker": manifest.images.worker.repository,
+        "studio": manifest.images.studio.repository,
+    }
+    if actual != expected:
+        raise ManifestError(detail=f"release image repository mismatch: expected {expected!r}, found {actual!r}")
+
+
 def assert_contract_compatible(
     manifest: ReleaseManifest,
     running_schema: str,
@@ -177,10 +196,11 @@ def run(arguments: list[str]) -> None:
     manifest = load_manifest(Path(manifest_path))
     match command:
         case Command.VALIDATE:
-            if len(values) < 3:
+            if len(values) < 4:
                 raise _usage()
-            tag, schema, queue, *targets = values
+            tag, schema, queue, project, *targets = values
             assert_selected_tag(tag, manifest.release_tag)
+            assert_project_repositories(manifest, project)
             assert_contract_compatible(manifest, schema, queue)
             for target in targets:
                 assert_deploy_target(target)
