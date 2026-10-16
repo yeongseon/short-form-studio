@@ -12,6 +12,9 @@ RUN pip install --no-cache-dir --prefix=/install -c constraints.txt -r requireme
 
 # --- runtime stage ---
 FROM python:3.12-slim AS runtime
+ARG SOURCE_SHA
+LABEL org.opencontainers.image.revision="${SOURCE_SHA}"
+ENV SOURCE_SHA="${SOURCE_SHA}"
 RUN groupadd --gid 1000 appuser && useradd --uid 1000 --gid appuser --create-home appuser
 WORKDIR /app
 COPY --from=builder /install /usr/local
@@ -19,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libcairo
 COPY --chown=appuser:appuser apps/worker-orchestrator/tasks ./tasks
 COPY --chown=appuser:appuser apps/worker-orchestrator/celery_app.py ./celery_app.py
 COPY --chown=appuser:appuser apps/worker-orchestrator/worker_loop.py ./worker_loop.py
+COPY --chown=appuser:appuser apps/worker-orchestrator/worker_release_identity.py ./worker_release_identity.py
 USER appuser
 CMD ["celery", "-A", "celery_app.celery_app", "worker", "--loglevel=info", "--pool=solo", "--concurrency=1"]
 
