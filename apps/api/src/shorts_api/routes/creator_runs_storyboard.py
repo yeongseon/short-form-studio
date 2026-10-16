@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal
 
 from creator_service.audio_service import audio_service
 from creator_service.script_service import script_service
 from creator_service.subtitle_service import subtitle_service
-from creator_service.usage_service import check_workspace_quota
+from creator_service.usage_service import ReservationQuote, check_workspace_quota
 from creator_service.visual_asset_service import visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service
 from fastapi import APIRouter, Depends, HTTPException
@@ -233,6 +234,10 @@ async def generate_paragraph_audio_endpoint(
         raise HTTPException(status_code=404, detail=f"Section '{section_id}' not found")
 
     validate_model_key(effective.tts_model, expected_category="tts")
+    quote = ReservationQuote.bounded(
+        unit_cost_usd=Decimal("0.0003"), units=3600,
+        internal_attempts=1, deliveries=4,
+    )
     task_id = await dispatch_storyboard_task_with_tracking(
         run_id=run_id,
         workspace_id=user.workspace_id,
@@ -246,6 +251,7 @@ async def generate_paragraph_audio_endpoint(
             task_id=task_id,
         ),
         error_detail="Failed to enqueue paragraph audio task",
+        reservation_estimate_usd=quote.maximum_cost_usd,
     )
 
     return {
@@ -341,6 +347,10 @@ async def generate_all_paragraph_audio(
         raise HTTPException(status_code=400, detail="No script available")
 
     validate_model_key(effective.tts_model, expected_category="tts")
+    quote = ReservationQuote.bounded(
+        unit_cost_usd=Decimal("0.0003"), units=3600,
+        internal_attempts=1, deliveries=4,
+    )
 
     # Skip sections that already have audio artifacts.
     existing_audio = await audio_service.list_paragraph_audio(run_id)
@@ -367,6 +377,7 @@ async def generate_all_paragraph_audio(
                     voice=effective.voice,
                     task_id=task_id,
                 ),
+                reservation_estimate_usd=quote.maximum_cost_usd,
             )
         )
     failed_count = sum(1 for t in task_ids if "error" in t)

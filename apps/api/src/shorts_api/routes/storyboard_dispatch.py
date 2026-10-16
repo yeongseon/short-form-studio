@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 from functools import partial
 from typing import Callable
 from uuid import uuid4
@@ -71,6 +72,7 @@ async def dispatch_storyboard_task_with_tracking(
     task_type: str,
     dispatch: Callable[[str], str],
     error_detail: str = "Failed to enqueue task",
+    reservation_estimate_usd: Decimal | None = None,
 ) -> str:
     """Dispatch a storyboard task with full quota/tracking/cancel safety.
 
@@ -85,7 +87,9 @@ async def dispatch_storyboard_task_with_tracking(
     Returns the Celery task_id on success.
     """
     task_id = str(uuid4())
-    allowed, reason = await reserve_owned_quota(workspace_id, operation_type, task_id)
+    allowed, reason = await reserve_owned_quota(
+        workspace_id, operation_type, task_id, reservation_estimate_usd,
+    )
     if not allowed:
         raise HTTPException(status_code=429, detail=reason)
     # Pre-dispatch cancel check
@@ -119,6 +123,7 @@ async def dispatch_storyboard_task_bulk(
     task_type: str,
     section_id: str,
     dispatch: Callable[[str], str],
+    reservation_estimate_usd: Decimal | None = None,
 ) -> dict[str, str]:
     """Dispatch a single task within a bulk loop. Returns result dict.
 
@@ -127,7 +132,9 @@ async def dispatch_storyboard_task_bulk(
     Raises HTTPException only on post-dispatch cancellation (hard stop).
     """
     task_id = str(uuid4())
-    allowed, reason = await reserve_owned_quota(workspace_id, operation_type, task_id)
+    allowed, reason = await reserve_owned_quota(
+        workspace_id, operation_type, task_id, reservation_estimate_usd,
+    )
     if not allowed:
         raise HTTPException(status_code=429, detail=reason)
 

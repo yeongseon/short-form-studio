@@ -172,7 +172,10 @@ def _patch_quota_functions(
             return results.pop(0)
         return True, "ok"
 
-    async def reserve_owned(workspace_id: int, operation_type: str, owner_id: str) -> tuple[bool, str]:
+    async def reserve_owned(
+        workspace_id: int, operation_type: str, owner_id: str,
+        _estimated_cost_usd: object = None,
+    ) -> tuple[bool, str]:
         allowed, reason = await _check_workspace_quota(workspace_id, operation_type)
         if allowed:
             owners[owner_id] = (workspace_id, operation_type)
