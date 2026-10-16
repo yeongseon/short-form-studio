@@ -30,6 +30,7 @@ POSTGRES_IMAGE = "postgres:16.6-alpine"
 FFMPEG_IMAGE = "jrottenberg/ffmpeg:7.1-alpine"
 NGINX_IMAGE = "nginx:1.27-alpine"
 PASSWORD = "synthetic-local-only"
+SECRET_FINGERPRINT = "sha256:" + "a" * 64
 COMMAND_TIMEOUT_SECONDS = 120
 
 
@@ -224,7 +225,7 @@ def main() -> int:
                 "release_sha": "ci-restore-drill",
                 "image_digests": [POSTGRES_IMAGE, FFMPEG_IMAGE],
                 "alembic_revision": "synthetic_revision",
-                "secret_fingerprint": "sha256:synthetic-ci",
+                "secret_fingerprint": SECRET_FINGERPRINT,
                 "database_dump": "database.dump",
                 "media_root": "media",
                 "files": {
@@ -234,10 +235,10 @@ def main() -> int:
             }
             (bundle / "manifest.json").write_text(json.dumps(manifest))
             verifier = Path(__file__).with_name("restore_verify.py")
-            run(sys.executable, str(verifier), "verify", str(bundle), "--expected-alembic-revision", "synthetic_revision", "--expected-secret-fingerprint", "sha256:synthetic-ci")
+            run(sys.executable, str(verifier), "verify", str(bundle), "--expected-alembic-revision", "synthetic_revision", "--expected-secret-fingerprint", SECRET_FINGERPRINT)
             docker("cp", str(bundle / "database.dump"), f"{target}:/tmp/database.dump")
             docker("exec", target, "pg_restore", "-U", "restore", "-d", "restore", "--clean", "--if-exists", "/tmp/database.dump")
-            run(sys.executable, str(verifier), "restore-media", str(bundle), "--target", str(restored), "--expected-alembic-revision", "synthetic_revision", "--expected-secret-fingerprint", "sha256:synthetic-ci")
+            run(sys.executable, str(verifier), "restore-media", str(bundle), "--target", str(restored), "--expected-alembic-revision", "synthetic_revision", "--expected-secret-fingerprint", SECRET_FINGERPRINT)
             verify_restored(target, restored)
             verify_access_boundaries(target, restored)
             mount = f"{restored.resolve()}:/media"
