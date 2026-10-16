@@ -16,12 +16,30 @@
 import { useRef, useState } from "react";
 
 import { uploadAsset, uploadKindForFile } from "../../api/assets";
+import type { UploadKind } from "../../api/assets";
+import { ApiError } from "../../api/client";
 
 export type AssetPlacementCommand =
   | { type: "placeAsset"; sceneId: string; assetId: number }
   | { type: "replaceAsset"; sceneId: string; segmentId: string; assetId: number };
 
 type ZoneStatus = "idle" | "uploading" | "ready" | "error";
+
+const UPLOAD_LIMIT_MIB: Record<UploadKind, number> = {
+  image: 25,
+  audio: 100,
+  video: 500,
+};
+
+function uploadErrorMessage(error: unknown, kind: UploadKind): string {
+  const isSizeError = error instanceof ApiError
+    && (error.status === 413 || /(?:maximum allowed size|too large)/i.test(error.detail));
+  if (isSizeError) {
+    const label = kind === "image" ? "Images" : `${kind[0]?.toUpperCase()}${kind.slice(1)} files`;
+    return `${label} can be up to ${UPLOAD_LIMIT_MIB[kind]} MiB. Choose a smaller file and try again.`;
+  }
+  return error instanceof Error ? error.message : "Upload failed";
+}
 
 export interface AssetDropZoneProps {
   workspaceId: number;
@@ -74,7 +92,7 @@ export default function AssetDropZone({
           return;
         }
         setStatus("error");
-        setMessage(err instanceof Error ? err.message : "Upload failed");
+        setMessage(uploadErrorMessage(err, kind));
       });
   };
 
