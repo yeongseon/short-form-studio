@@ -146,7 +146,7 @@ def test_usage_storage_dedup_by_idempotency_key() -> None:
 
 # --- Postgres backend idempotency tests (unit tests via mocking fetch_one) ---
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 
 def test_postgres_audio_storage_uses_idempotency_key() -> None:
@@ -209,12 +209,25 @@ def test_postgres_usage_storage_uses_idempotency_key() -> None:
     storage = PostgresUsageStorage()
 
     async def _test() -> None:
-        mock_fetch = AsyncMock(return_value={"id": 1, "run_id": 1, "idempotency_key": "k1"})
-        with patch("creator_service.postgres_usage_storage.fetch_one", mock_fetch):
+        connection = AsyncMock()
+        connection.fetchrow.return_value = {"id": 1, "run_id": 1, "idempotency_key": "k1"}
+        transaction = MagicMock()
+        transaction.__aenter__.return_value = None
+        transaction.__aexit__.return_value = None
+        connection.transaction = MagicMock(return_value=transaction)
+        acquire = MagicMock()
+        acquire.__aenter__.return_value = connection
+        acquire.__aexit__.return_value = None
+        pool = MagicMock()
+        pool.acquire.return_value = acquire
+        with patch(
+            "creator_service.postgres_usage_storage.get_pool",
+            AsyncMock(return_value=pool),
+        ):
             await storage.record_event(
                 {"run_id": 1, "provider": "test", "idempotency_key": "k1"}
             )
-        sql = mock_fetch.call_args[0][0]
+        sql = connection.fetchrow.call_args[0][0]
         assert "idempotency_key" in sql
 
     run(_test())
