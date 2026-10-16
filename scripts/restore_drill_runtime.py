@@ -61,6 +61,7 @@ def mapped_postgres_url(container: str, password: str) -> str:
 
 
 def image_digest(image: str) -> str:
+    docker("pull", image)
     inspected = docker("image", "inspect", image, "--format={{.Id}}").stdout.strip()
     if not inspected.startswith("sha256:"):
         raise DrillError(f"image lacks immutable digest: {image}")
@@ -172,10 +173,12 @@ def launch_api(database_url: str, artifact_root: Path, fixture: RuntimeFixture, 
     return process, replace(fixture, port=port)
 
 
-def wait_for_api(port: int, process: subprocess.Popen[bytes]) -> None:
+def wait_for_api(port: int, process: subprocess.Popen[bytes], log_path: Path) -> None:
     for _ in range(100):
         if process.poll() is not None:
-            raise DrillError("real API exited during startup")
+            raise DrillError(
+                "real API exited during startup\n" + log_path.read_text(errors="replace")
+            )
         if api_request(port, "/healthz", {})[0] == 200:
             return
         time.sleep(0.1)
