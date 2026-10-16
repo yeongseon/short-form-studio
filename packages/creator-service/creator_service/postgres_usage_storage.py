@@ -461,6 +461,53 @@ class PostgresUsageStorage:
                     > global_monthly_cost_usd
                 ):
                     return False
+                if owned["status"] == "reserved":
+                    operation_type = str(owned["operation_type"])
+                    usage_column = {
+                        "llm": "llm_count",
+                        "image_gen": "image_count",
+                        "tts": "tts_request_count",
+                        "stt": "tts_request_count",
+                        "render": "tts_request_count",
+                    }[operation_type]
+                    quota_column = {
+                        "llm": "monthly_llm_calls",
+                        "image_gen": "monthly_image_generations",
+                        "tts": "monthly_tts_requests",
+                        "stt": "monthly_tts_requests",
+                        "render": "monthly_tts_requests",
+                    }[operation_type]
+                    admitted = await connection.fetchval(
+                        f"""WITH current_usage AS (
+                               SELECT COUNT(*) FILTER (WHERE operation_type = $3) AS used
+                               FROM usage_events WHERE workspace_id = $1 AND created_at >= $2
+                             )
+                             SELECT COALESCE(current_usage.used, 0)
+                                    + COALESCE(reservations.{usage_column}, 0) + 1
+                                    <= quota.{quota_column}
+                             FROM workspace_quotas quota
+                             CROSS JOIN current_usage
+                             LEFT JOIN workspace_quota_reservations reservations
+                               ON reservations.workspace_id = $1 AND reservations.period_start = $2
+                             WHERE quota.workspace_id = $1""",
+                        workspace_id, month_start, operation_type,
+                    )
+                    if not admitted:
+                        return False
+                    await connection.execute(
+                        f"""UPDATE workspace_quota_reservations
+                           SET {usage_column} = GREATEST({usage_column} - 1, 0), updated_at = NOW()
+                           WHERE workspace_id = $1 AND period_start = $2""",
+                        workspace_id, owned["period_start"],
+                    )
+                    await connection.execute(
+                        f"""INSERT INTO workspace_quota_reservations
+                           (workspace_id, period_start, {usage_column}) VALUES ($1, $2, 1)
+                           ON CONFLICT (workspace_id, period_start) DO UPDATE
+                           SET {usage_column} = workspace_quota_reservations.{usage_column} + 1,
+                               updated_at = NOW()""",
+                        workspace_id, month_start,
+                    )
                 await connection.execute(
                     """UPDATE workspace_quota_reservation_owners SET period_start = $2
                        WHERE owner_id = $1""",

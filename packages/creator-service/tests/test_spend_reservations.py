@@ -248,6 +248,27 @@ async def test_stale_owner_is_readmitted_before_provider_execution() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stale_owner_count_is_moved_to_current_month() -> None:
+    # Given a stale image reservation and one available image in the current month.
+    storage = InMemoryUsageStorage()
+    service = UsageService(storage)
+    await service.set_quota(1, monthly_image_generations=1, monthly_cost_usd=10.0)
+    assert await service.reserve_owned(1, "image_gen", "stale", estimated_cost_usd=Decimal("1"))
+    owner = storage._owned["stale"]
+    old_period = datetime(2000, 1, 1, tzinfo=timezone.utc)
+    storage._reservations[(1, old_period)] = storage._reservations.pop((owner[0], owner[1]))
+    storage._owned["stale"] = (owner[0], old_period, *owner[2:])
+
+    # When the stale owner is re-admitted into the current month.
+    assert await service.readmit_owned("stale")
+
+    # Then its count consumes current-month capacity and no replacement is admitted.
+    assert not await service.reserve_owned(
+        1, "image_gen", "replacement", estimated_cost_usd=Decimal("1")
+    )
+
+
+@pytest.mark.asyncio
 async def test_provider_attempts_atomically_consume_only_approved_capacity() -> None:
     # Given a quote approving two ten-cent provider attempts.
     service = UsageService(InMemoryUsageStorage())
