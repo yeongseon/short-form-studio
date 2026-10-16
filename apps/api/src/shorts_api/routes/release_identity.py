@@ -27,23 +27,30 @@ class ApiIdentity(ServiceIdentity):
     alembic_revision: str
 
 
-async def load_worker_identity() -> ServiceIdentity:
-    def read_identity() -> dict[str, str]:
+async def load_worker_identity() -> list[ServiceIdentity]:
+    def read_identities() -> list[str]:
         client: Redis = Redis.from_url(REDIS_URL, decode_responses=True)
-        return client.hgetall("release:worker-identity")
+        keys = list(client.scan_iter("release:worker-identity:*"))
+        return [value for value in client.mget(keys) if value is not None]
 
-    values = await anyio.to_thread.run_sync(read_identity)
-    return ServiceIdentity(source_sha=values["source_sha"], digest=values["digest"])
+    values = await anyio.to_thread.run_sync(read_identities)
+    return [ServiceIdentity.model_validate_json(value) for value in values]
 
 
-async def resolve_worker_identity() -> ServiceIdentity:
+async def resolve_worker_identity() -> list[ServiceIdentity]:
     try:
-        return await load_worker_identity()
-    except (KeyError, RedisError, ValidationError) as error:
+        identities = await load_worker_identity()
+    except (RedisError, ValidationError) as error:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Worker identity unavailable",
         ) from error
+    if not identities:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Worker identity unavailable",
+        )
+    return identities
 
 
 @router.get("/identity", response_model=ApiIdentity)
@@ -68,9 +75,9 @@ async def api_identity(_user: CurrentUser = Depends(get_current_user)) -> ApiIde
         ) from error
 
 
-@router.get("/worker-identity", response_model=ServiceIdentity)
+@router.get("/worker-identity", response_model=list[ServiceIdentity])
 async def worker_identity(
-    identity: ServiceIdentity = Depends(resolve_worker_identity),
+    identity: list[ServiceIdentity] = Depends(resolve_worker_identity),
     _user: CurrentUser = Depends(get_current_user),
-) -> ServiceIdentity:
+) -> list[ServiceIdentity]:
     return identity

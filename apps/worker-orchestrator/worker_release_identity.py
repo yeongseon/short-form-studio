@@ -1,5 +1,6 @@
 import os
 import logging
+import json
 
 import redis
 from celery.signals import worker_ready
@@ -17,12 +18,16 @@ def publish_release_identity(**_kwargs: object) -> None:
             socket_connect_timeout=5,
             socket_timeout=5,
         )
-        client.hset(
-            "release:worker-identity",
-            mapping={
-                "source_sha": os.environ["SOURCE_SHA"],
-                "digest": os.environ["WORKER_IMAGE_DIGEST"],
-            },
+        client.set(
+            f"release:worker-identity:{os.environ['HOSTNAME']}",
+            json.dumps(
+                {
+                    "source_sha": os.environ["SOURCE_SHA"],
+                    "digest": os.environ["WORKER_IMAGE_DIGEST"],
+                },
+                separators=(",", ":"),
+            ),
+            ex=120,
         )
     except (KeyError, redis.RedisError, OSError):
         logging.getLogger(__name__).exception("Worker release identity publication failed")

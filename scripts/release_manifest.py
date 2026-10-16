@@ -78,7 +78,9 @@ class ReleaseManifest(BaseModel):
 class RuntimeIdentity(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    source_sha: Sha
+    api_source_sha: Sha
+    worker_source_shas: list[Sha]
+    studio_source_sha: Sha
     api_digest: DigestText
     worker_digest: DigestText
     studio_digest: DigestText
@@ -187,7 +189,9 @@ def assert_database_revision_compatible(
 
 def assert_runtime_identity(manifest: ReleaseManifest, runtime: RuntimeIdentity) -> None:
     expected = RuntimeIdentity(
-        source_sha=manifest.source_sha,
+        api_source_sha=manifest.source_sha,
+        worker_source_shas=[manifest.source_sha] * len(runtime.worker_source_shas),
+        studio_source_sha=manifest.source_sha,
         api_digest=manifest.images.api.digest,
         worker_digest=manifest.images.worker.digest,
         studio_digest=manifest.images.studio.digest,

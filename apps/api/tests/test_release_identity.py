@@ -41,8 +41,8 @@ def test_api_release_identity_reports_build_and_database_identity(monkeypatch) -
 def test_worker_release_identity_reports_worker_build(monkeypatch) -> None:
     app = create_app()
 
-    async def stored_worker_identity() -> ServiceIdentity:
-        return ServiceIdentity(source_sha=SOURCE_SHA, digest=WORKER_DIGEST)
+    async def stored_worker_identity() -> list[ServiceIdentity]:
+        return [ServiceIdentity(source_sha=SOURCE_SHA, digest=WORKER_DIGEST)]
 
     async def current_user() -> CurrentUser:
         return CurrentUser(user_id=1, workspace_id=1)
@@ -53,7 +53,7 @@ def test_worker_release_identity_reports_worker_build(monkeypatch) -> None:
     response = TestClient(app).get("/release/worker-identity")
 
     assert response.status_code == 200
-    assert response.json() == {"source_sha": SOURCE_SHA, "digest": WORKER_DIGEST}
+    assert response.json() == [{"source_sha": SOURCE_SHA, "digest": WORKER_DIGEST}]
 
 
 def test_api_release_identity_returns_service_unavailable_without_revision(monkeypatch) -> None:
@@ -75,7 +75,7 @@ def test_api_release_identity_returns_service_unavailable_without_revision(monke
 def test_worker_release_identity_returns_service_unavailable_when_store_fails() -> None:
     app = create_app()
 
-    async def failed_worker_identity() -> ServiceIdentity:
+    async def failed_worker_identity() -> list[ServiceIdentity]:
         from fastapi import HTTPException
 
         raise HTTPException(status_code=503, detail="Worker identity unavailable")

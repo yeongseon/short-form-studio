@@ -10,12 +10,14 @@ from pydantic import ValidationError
 
 from scripts.release_manifest import (
     ReleaseManifest,
+    RuntimeIdentity,
     assert_contract_compatible,
     assert_database_revision_compatible,
     assert_database_revision,
     assert_deploy_target,
     assert_project_repositories,
     assert_selected_tag,
+    assert_runtime_identity,
 )
 
 
@@ -124,6 +126,21 @@ def test_app_rollback_rejects_live_revision_outside_current_schema_policy() -> N
             current="037_incompatible_schema",
             compatible_revisions="035_add_api_keys,036_compatible_schema",
         )
+
+
+def test_runtime_identity_rejects_one_stale_worker_instance() -> None:
+    manifest = ReleaseManifest.model_validate(manifest_data())
+    runtime = RuntimeIdentity(
+        api_source_sha=SOURCE_SHA,
+        worker_source_shas=[SOURCE_SHA, "c" * 40],
+        studio_source_sha=SOURCE_SHA,
+        api_digest=DIGEST,
+        worker_digest=DIGEST,
+        studio_digest=DIGEST,
+    )
+
+    with pytest.raises(ValueError, match="approved release"):
+        assert_runtime_identity(manifest, runtime)
 
 
 def test_revision_cli_returns_nonzero_on_mismatch(tmp_path: Path) -> None:

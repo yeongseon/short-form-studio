@@ -1,4 +1,4 @@
-from unittest.mock import Mock
+from unittest.mock import ANY, Mock
 
 import worker_release_identity
 
@@ -7,15 +7,18 @@ def test_ready_worker_publishes_its_runtime_identity(monkeypatch) -> None:
     client = Mock()
     monkeypatch.setenv("SOURCE_SHA", "b" * 40)
     monkeypatch.setenv("WORKER_IMAGE_DIGEST", "sha256:" + "c" * 64)
+    monkeypatch.setenv("HOSTNAME", "worker-1")
     from_url = Mock(return_value=client)
     monkeypatch.setattr(worker_release_identity.redis.Redis, "from_url", from_url)
 
     worker_release_identity.publish_release_identity()
 
-    client.hset.assert_called_once_with(
-        "release:worker-identity",
-        mapping={"source_sha": "b" * 40, "digest": "sha256:" + "c" * 64},
+    client.set.assert_called_once_with(
+        ANY,
+        '{"source_sha":"' + "b" * 40 + '","digest":"sha256:' + "c" * 64 + '"}',
+        ex=120,
     )
+    assert client.set.call_args.args[0].startswith("release:worker-identity:")
     from_url.assert_called_once_with(
         "redis://redis:6379/0",
         socket_connect_timeout=5,
