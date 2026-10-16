@@ -19,7 +19,6 @@ import resource
 from typing import Any
 
 from celery import Celery
-from beat_schedule import BEAT_SCHEDULE
 from celery.signals import after_setup_logger, task_failure, worker_process_init
 from importlib import import_module
 # Only import worker_loop (signal handlers) when running as a worker process,
@@ -102,6 +101,14 @@ def _apply_resource_limits() -> None:
 redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
 dlq_max_size = max(1, int(os.getenv("DLQ_MAX_SIZE", "10000")))
 dlq_fallback_path = os.getenv("DLQ_FALLBACK_PATH", "/tmp/dlq_fallback.jsonl")
+BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
+    "reconcile-stale-dispatches": {"task": "reconcile_stale_dispatches", "schedule": 60.0},
+    "retry-failed-artifact-deletions": {
+        "task": "retry_failed_artifact_deletions", "schedule": 300.0,
+    },
+    "sweep-expired-artifacts": {"task": "sweep_expired_artifacts", "schedule": 600.0},
+    "reconcile-media-uploads": {"task": "reconcile_media_uploads", "schedule": 600.0},
+}
 
 celery_app = Celery(
     "worker-orchestrator",
