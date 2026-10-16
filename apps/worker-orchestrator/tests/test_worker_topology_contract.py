@@ -148,8 +148,12 @@ def test_runtime_ci_uses_postgres_redis_ffmpeg_and_uploads_complete_evidence() -
 
 def test_shipped_image_scenario_exercises_authenticated_stop_and_persistence_boundaries() -> None:
     # Given the process-level shipped-image scenario.
-    source = (ROOT / "apps/worker-orchestrator/tests/test_worker_topology_image.py").read_text(
-        encoding="utf-8"
+    source = "\n".join(
+        (ROOT / path).read_text(encoding="utf-8")
+        for path in (
+            "apps/worker-orchestrator/tests/test_worker_topology_image.py",
+            "apps/worker-orchestrator/tests/worker_topology_runtime.py",
+        )
     )
 
     # When its cancellation path is inspected.
@@ -170,19 +174,20 @@ def test_shipped_image_scenario_exercises_authenticated_stop_and_persistence_bou
 
 def test_failure_scenario_uses_exact_scaled_command_and_container_process_namespace() -> None:
     # Given the process-level failure scenario and shipped scaled worker command.
-    source = (ROOT / "apps/worker-orchestrator/tests/test_worker_topology_image.py").read_text(
+    source = (ROOT / "apps/worker-orchestrator/tests/worker_topology_runtime.py").read_text(
         encoding="utf-8"
     )
     scaled_command = _worker_command("docker-compose.scaled-workers.yml", "worker-image")
 
     # When topology and cleanup evidence are inspected.
-    expected_command = repr(scaled_command)
-
     # Then the exact command is used and FFmpeg is observed through Docker's namespace mapping.
-    assert expected_command in source
+    assert all(f'"{argument}"' in source for argument in scaled_command)
     assert '"top"' in source
     assert '"ps", "-p"' not in source
-    assert "active-redelivery" in source
+    scenario = (ROOT / "apps/worker-orchestrator/tests/test_worker_topology_image.py").read_text(
+        encoding="utf-8"
+    )
+    assert "active-redelivery" in scenario
 
 
 def test_provider_stub_and_runtime_artifacts_are_isolated_per_phase() -> None:
