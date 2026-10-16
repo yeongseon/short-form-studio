@@ -19,8 +19,11 @@ services:
 
   redis:
     image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
     ports:
       - "127.0.0.1:6379:6379"
+    volumes:
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -63,8 +66,12 @@ services:
     command: ["celery", "-A", "celery_app.celery_app", "worker", "--loglevel=info", "--pool=solo", "--concurrency=1"]
     volumes:
       - ./data/artifacts:/app/data/artifacts
+      - dlq_data:/var/lib/short-form-studio/dlq
     env_file:
       - .env
+    environment:
+      DLQ_FALLBACK_PATH: /var/lib/short-form-studio/dlq/failures.jsonl
+      BROKER_EPOCH_STATE_PATH: /var/lib/short-form-studio/dlq/observed-broker-epoch
     depends_on:
       postgres:
         condition: service_healthy
@@ -88,6 +95,10 @@ services:
     command: ["celery", "-A", "celery_app.celery_app", "beat", "--loglevel=info", "--schedule=/tmp/celerybeat-schedule"]
     env_file:
       - .env
+    volumes:
+      - dlq_data:/var/lib/short-form-studio/dlq
+    environment:
+      BROKER_EPOCH_STATE_PATH: /var/lib/short-form-studio/dlq/observed-broker-epoch
     depends_on:
       redis:
         condition: service_healthy
@@ -246,4 +257,6 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:
+  dlq_data:
   ollama_data:
