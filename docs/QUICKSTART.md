@@ -44,14 +44,13 @@ Edit `.env`:
 > to `0.0.0.0`. Keep `ENVIRONMENT=development` for local use; production mode
 > rejects the default password and enforces `CORS_ORIGINS`.
 
-## 3. Start the CPU core
+## 3. Start infrastructure
 
 ```bash
-docker compose up -d
+docker compose up -d postgres redis
 ```
 
-This starts only the CPU core — Postgres, Redis, the API, the worker, the beat
-scheduler, and the studio web UI. The GPU model services (Ollama, Stable
+Wait for both services to become healthy. The GPU model services (Ollama, Stable
 Diffusion, local TTS/STT) stay stopped because they are behind the `gpu` profile.
 
 ## 4. Run database migrations
@@ -90,7 +89,19 @@ docker compose up -d --force-recreate --no-deps studio-web
 Without this step the UI's calls to `/api/creator/*` return **401 Unauthorized**,
 because the browser sends no key until the proxy is configured with `API_KEY`.
 
-## 6. Open the studio and make your first Short
+## 6. Start the CPU application
+
+Start one dedicated Beat scheduler with the API, worker, and Studio. Do not add
+`-B` to workers, including scaled workers.
+
+```bash
+docker compose up -d api worker beat studio-web
+```
+
+The migration → key bootstrap/configuration → Studio proxy → authenticated smoke
+order is also the canonical deployment sequence in [CUTOVER.md](CUTOVER.md).
+
+## 7. Open the studio and make your first Short
 
 Navigate to <http://127.0.0.1:5174>. From there:
 

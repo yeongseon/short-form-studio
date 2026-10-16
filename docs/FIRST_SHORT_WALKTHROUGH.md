@@ -26,17 +26,20 @@ the first generate step. That limitation is by design, not a bug.
 
 ## 1. Install and set up
 
-Follow the canonical steps in [QUICKSTART.md](QUICKSTART.md). In short:
+Follow the canonical steps in [QUICKSTART.md](QUICKSTART.md). Do not use an
+abbreviated command list as a second bootstrap procedure: Quick Start preserves
+the required migration → creator key → Studio proxy → authenticated smoke order
+and starts one dedicated Beat scheduler.
+
+The setup uses these entrypoints; follow Quick Start for the required values and
+the complete order:
 
 ```bash
-git clone https://github.com/yeongseon/short-form-studio.git
-cd short-form-studio
 cp .env.example .env
-# Edit .env: set OPENAI_API_KEY and GROQ_API_KEY for the CPU path
-docker compose up -d
+docker compose up -d postgres redis
 docker compose run --rm api alembic upgrade head
-docker compose run --rm api python scripts/create_api_key.py \
-  --email local@example.com --workspace local --name local-dev
+docker compose run --rm api python scripts/create_api_key.py
+docker compose up -d api worker beat studio-web
 ```
 
 Then open the Studio at `http://127.0.0.1:5174`.
