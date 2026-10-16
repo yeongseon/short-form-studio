@@ -613,10 +613,11 @@ class PostgresUsageStorage:
                 await connection.execute(
                     """UPDATE workspace_quota_reservation_owners
                        SET settled_estimated_cost_usd = LEAST(
-                         estimated_cost_usd,
-                         settled_estimated_cost_usd + COALESCE($2, 0))
+                          estimated_cost_usd,
+                          settled_estimated_cost_usd
+                          + COALESCE($2::numeric, 0::numeric))
                        WHERE owner_id = $1""",
-                    owner_id, row.get("estimated_cost_usd"),
+                    owner_id, saved["estimated_cost_usd"],
                 )
                 return dict(saved)
 
