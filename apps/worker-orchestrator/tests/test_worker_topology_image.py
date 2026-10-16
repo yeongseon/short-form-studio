@@ -187,13 +187,15 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
     send(103, "active-redelivery", "redelivery", redelivery_state, queue="image")
     wait_state(redelivery_state, "claimed")
     first_claim = wait_task("active-redelivery", "running")
-    docker("kill", "--signal=KILL", "topology-scaled-redelivery")
-    anyio.run(
-        sql,
-        "UPDATE creator_run_tasks SET status='failed', finished_at=NOW() "
-        "WHERE celery_task_id='active-redelivery' AND claim_token=$1 AND status='running'",
-        (first_claim["claim_token"],),
-    )
+    docker("stop", "topology-redis")
+    time.sleep(2)
+    docker("start", "topology-redis")
+    deadline = time.monotonic() + 10
+    while not redis_available() and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert redis_available()
+    wait_task("active-redelivery", "failed")
+    docker("rm", "-f", "topology-scaled-redelivery")
     worker("topology-scaled-redelivered", command)
     wait_state(redelivery_state, "redelivered")
     redelivered = wait_task("active-redelivery", "running")
