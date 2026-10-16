@@ -1,4 +1,5 @@
 import asyncio
+from decimal import Decimal
 
 import pytest
 from creator_service.usage_service import (
@@ -34,7 +35,7 @@ def test_record_usage_creates_event_with_correct_fields() -> None:
     assert event.operation_type == "llm"
     assert event.input_tokens == 100
     assert event.output_tokens == 50
-    assert event.estimated_cost_usd == 0.1
+    assert event.estimated_cost_usd == Decimal("0.1")
     assert event.project_id == 3
 
 
@@ -79,8 +80,8 @@ def test_get_monthly_summary_aggregates_correctly() -> None:
     assert summary.total_llm_calls == 1
     assert summary.total_image_generations == 2
     assert summary.total_tts_seconds == 12.5
-    assert summary.total_estimated_cost_usd == pytest.approx(0.29)
-    assert summary.by_provider["openai"] == pytest.approx(0.28)
+    assert summary.total_estimated_cost_usd == Decimal("0.290000")
+    assert summary.by_provider["openai"] == Decimal("0.280000")
     assert summary.by_operation["llm"] == 1
     assert summary.by_operation["image_gen"] == 1
     assert summary.by_operation["tts"] == 1
@@ -156,7 +157,7 @@ def test_record_provider_call_wrapper_records_llm_usage() -> None:
     assert event.operation_type == "llm"
     assert event.input_tokens == 120
     assert event.output_tokens == 80
-    assert event.estimated_cost_usd == pytest.approx(0.001)
+    assert event.estimated_cost_usd == Decimal("0.001")
 
 
 def test_check_workspace_quota_wrapper_uses_llm_default() -> None:
