@@ -263,3 +263,31 @@ async def test_postgres_claim_is_skip_locked_and_fences_uploader_cas(media_datab
     assert sorted(len(claimed) for claimed in claims) == [0, 1]
     with pytest.raises(MediaAssetPersistenceFailed):
         await storage.mark_upload_intent_uploaded(intent.id)
+
+
+@pytest.mark.asyncio
+async def test_postgres_expired_claim_replacement_fences_stale_updates(media_database: None) -> None:
+    # Given a PostgreSQL reconciliation claim that expires before completion.
+    storage = MediaAssetService()._asset_storage
+    now = datetime.now(timezone.utc)
+    intent = await storage.create_upload_intent(UploadIntent(
+        id=0, owner_id=uuid.uuid4().hex, workspace_id=9101,
+        storage_key="workspaces/9101/assets/stranded.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now,
+    ))
+    first = (await storage.claim_expired_upload_intents(
+        now=now, lease_expires_at=now, limit=1,
+    ))[0]
+
+    # When a successor atomically replaces the expired claim token.
+    successor = (await storage.claim_expired_upload_intents(
+        now=now, lease_expires_at=now + timedelta(minutes=5), limit=1,
+    ))[0]
+
+    # Then stale terminal/failure writes cannot overwrite successor ownership.
+    assert successor.claim_token != first.claim_token
+    with pytest.raises(MediaAssetPersistenceFailed):
+        await storage.record_upload_reclaimed(intent.id, first.claim_token)
+    with pytest.raises(MediaAssetPersistenceFailed):
+        await storage.record_upload_cleanup_failure(intent.id, 5, first.claim_token)
+    await storage.record_upload_reclaimed(intent.id, successor.claim_token)

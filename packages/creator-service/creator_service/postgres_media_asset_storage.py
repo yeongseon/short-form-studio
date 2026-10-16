@@ -199,7 +199,7 @@ class PostgresMediaAssetStorage:
         async with pool.acquire() as connection, connection.transaction():
             rows = await connection.fetch(
                 """SELECT * FROM creator_media_upload_intents
-                    WHERE state IN ('pending', 'uploaded', 'cleanup_pending')
+                    WHERE state IN ('pending', 'uploaded', 'cleanup_pending', 'reclaiming')
                       AND lease_expires_at <= $1
                     ORDER BY id FOR UPDATE SKIP LOCKED LIMIT $2""",
                 now, limit,
@@ -228,11 +228,13 @@ class PostgresMediaAssetStorage:
                 intent_id,
             )
             return
-        await db.execute(
+        result = await db.execute(
             """UPDATE creator_media_upload_intents SET state = 'reclaimed', updated_at = NOW()
                 WHERE id = $1 AND state = 'reclaiming' AND claim_token = $2""",
             intent_id, claim_token,
         )
+        if result != "UPDATE 1":
+            raise MediaAssetPersistenceFailed()
 
     async def record_upload_cleanup_failure(
         self, intent_id: int, max_retries: int, claim_token: str | None = None,
@@ -246,6 +248,8 @@ class PostgresMediaAssetStorage:
                     (state = 'reclaiming' AND claim_token = $3)) RETURNING state""",
             intent_id, max_retries, claim_token,
         )
+        if row is None and claim_token is not None:
+            raise MediaAssetPersistenceFailed()
         return row is not None and row["state"] == UploadIntentState.EXHAUSTED.value
 
 
