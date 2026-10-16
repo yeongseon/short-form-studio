@@ -45,6 +45,7 @@ SERVICE_REPOSITORIES: Final = {
 class Command(StrEnum):
     VALIDATE = "validate"
     VERIFY_DB = "verify-db"
+    VERIFY_DB_COMPATIBLE = "verify-db-compatible"
     VERIFY_RUNTIME = "verify-runtime"
 
 
@@ -168,6 +169,22 @@ def assert_database_revision(current: str, expected: str, heads: str | None = No
         raise ManifestError(detail="selected release image Alembic head does not match its manifest")
 
 
+def assert_database_revision_compatible(
+    manifest: ReleaseManifest,
+    current: str,
+    compatible_revisions: str,
+) -> None:
+    current_revision = _revision(current)
+    allowed_revisions = frozenset(revision.strip() for revision in compatible_revisions.split(",") if revision.strip())
+    if manifest.db_revision not in allowed_revisions or current_revision not in allowed_revisions:
+        raise ManifestError(
+            detail=(
+                f"database revisions {manifest.db_revision!r} and {current_revision!r} "
+                "are not both allowed by the current schema policy"
+            ),
+        )
+
+
 def assert_runtime_identity(manifest: ReleaseManifest, runtime: RuntimeIdentity) -> None:
     expected = RuntimeIdentity(
         source_sha=manifest.source_sha,
@@ -183,7 +200,9 @@ def _usage() -> ManifestError:
     return ManifestError(
         detail=(
             "usage: release_manifest.py validate MANIFEST [TAG SCHEMA QUEUE TARGET ...] | "
-            "verify-db MANIFEST CURRENT [HEADS] | verify-runtime MANIFEST RUNTIME_JSON"
+            "verify-db MANIFEST CURRENT [HEADS] | "
+            "verify-db-compatible MANIFEST CURRENT COMPATIBLE_REVISIONS | "
+            "verify-runtime MANIFEST RUNTIME_JSON"
         ),
     )
 
@@ -209,6 +228,10 @@ def run(arguments: list[str]) -> None:
                 raise _usage()
             heads = values[1] if len(values) == 2 else None
             assert_database_revision(values[0], manifest.db_revision, heads)
+        case Command.VERIFY_DB_COMPATIBLE:
+            if len(values) != 2:
+                raise _usage()
+            assert_database_revision_compatible(manifest, values[0], values[1])
         case Command.VERIFY_RUNTIME:
             if len(values) != 1:
                 raise _usage()
