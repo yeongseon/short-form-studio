@@ -301,6 +301,26 @@ def handle_task_failure(
     if not _should_record_to_dlq(sender, exception):
         return
 
+    if isinstance(task_id, str):
+        from creator_service.task_tracking_service import task_tracking_service
+        from creator_service.usage_service import usage_service
+        from worker_loop import run_in_worker_loop
+
+        failure = build_run_failure_summary(exception)
+        try:
+            run_in_worker_loop(
+                task_tracking_service.mark_failed_if_running(
+                    task_id, str(failure["code"]), str(failure["message"])
+                )
+            )
+            run_in_worker_loop(usage_service.cancel_owned(task_id))
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Failed to finalize terminal task failure",
+                extra={"task_id": task_id},
+                exc_info=True,
+            )
+
     task_name = getattr(sender, "name", "unknown_task")
     _record_failed_task_to_dlq(
         task_id=task_id,
