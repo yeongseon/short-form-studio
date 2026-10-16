@@ -108,6 +108,7 @@ def test_runtime_ci_uses_postgres_redis_ffmpeg_and_uploads_complete_evidence() -
         "worker.log",
         "image-digest.txt",
         "resolved-command.txt",
+        'test -s "/tmp/worker-topology-runtime/${container}.worker.log"',
     )
 
     # Then the real dependencies and diagnostic evidence are mandatory.
