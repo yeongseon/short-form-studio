@@ -118,7 +118,7 @@ jobs:
           FIRST_SHORT_TEST_DATABASE_URL: postgresql://review:review-local-only@127.0.0.1:55439/first_short
           FIRST_SHORT_TEST_REDIS_URL: redis://127.0.0.1:56389/0
         run: |
-          python3 -m pytest packages/creator-service/tests/test_postgres_media_asset_storage.py tests/integration/test_first_short_runtime.py tests/integration/test_studio_proxy_runtime.py -v --basetemp=/tmp/first-short-runtime
+          PYTHONPATH=tests/integration python3 -m pytest packages/creator-service/tests/test_postgres_media_asset_storage.py tests/integration/test_first_short_runtime.py tests/integration/test_studio_proxy_runtime.py -v --basetemp=/tmp/first-short-runtime
           PYTHONPATH=apps/worker-orchestrator python3 -m pytest apps/worker-orchestrator/tests/test_terminal_validation_guards.py apps/worker-orchestrator/tests/test_terminal_validation_failure.py apps/worker-orchestrator/tests/test_visual_plan_terminal_validation.py -v --basetemp=/tmp/terminal-validation-runtime
           PYTHONPATH=apps/worker-orchestrator python3 -m pytest apps/worker-orchestrator/tests/test_late_worker_outcomes.py apps/worker-orchestrator/tests/test_worker_outcome_claims.py packages/creator-service/tests/test_revocation_dispatch_race.py -v --basetemp=/tmp/late-worker-outcomes-runtime
           python3 -m pytest packages/creator-service/tests/test_quota_stage_compensation.py packages/creator-service/tests/test_postgres_quota_compensation.py -v --basetemp=/tmp/quota-compensation-runtime
