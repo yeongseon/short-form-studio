@@ -48,6 +48,7 @@ class UploadIntent:
     retry_count: int = 0
     claim_token: str | None = None
     created_at: datetime | None = None
+    reserved_bytes: int = 0
 
 
 @dataclass(frozen=True, slots=True)
