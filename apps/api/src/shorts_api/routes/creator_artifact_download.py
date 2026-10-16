@@ -108,7 +108,7 @@ async def download_artifact(
 
     normalized = rel_path.replace("\\", "/")
     path_components = [c for c in normalized.split("/") if c not in {"", "."}]
-    if any(component in {".."} for component in path_components):
+    if not path_components or any(component in {".."} for component in path_components):
         raise HTTPException(status_code=404, detail="Artifact not found")
 
     try:

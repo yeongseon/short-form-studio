@@ -323,6 +323,30 @@ async def test_download_artifact_streams_open_descriptor_when_path_is_replaced(
     assert response.status_code == 200
     assert response.content == b"approved-content"
 
+
+@pytest.mark.asyncio
+async def test_download_artifact_rejects_artifact_root_path(
+    client, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Given
+    stub = StubArtifactDownloadService(
+        {
+            "id": 923,
+            "run_id": 100,
+            "file_path": str(tmp_path),
+            "storage_provider": "local",
+        }
+    )
+    _patch_route_services(monkeypatch, stub)
+    monkeypatch.setenv("ARTIFACT_ROOT", str(tmp_path))
+
+    # When
+    response = await client.get("/api/creator/runs/100/artifacts/923/download")
+
+    # Then
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Artifact not found"}
+
 @pytest.mark.asyncio
 async def test_old_artifact_endpoint_returns_404_for_missing_file(client):
     response = await client.get("/artifacts/1/100/audio.wav")
