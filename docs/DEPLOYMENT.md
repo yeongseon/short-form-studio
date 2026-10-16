@@ -1,5 +1,99 @@
 # Production Deployment Guide
 
+> **Default hold:** this workflow remains inert unless the repository variable
+> `DEPLOYMENT_ENABLED` is exactly `true`. This guide does not authorize changing
+> that variable, publishing images, migrating a database, or deploying services.
+
+## Validated release manifest
+
+Every release and rollback uses one immutable JSON manifest. It binds the
+reviewed source SHA, approved API/worker/Studio image digests, Alembic head,
+schema contract, and queue contract. A date tag or `latest` is only an operator
+label; deployment and migration consume manifest digests.
+
+Push delivery publishes only `candidate-<full SHA>` images first. Trivy scans
+those exact digests. Only after all scans succeed does `promote-release` attach
+the approved date tag and `latest`. The `release-preflight` job validates real
+HTTPS deploy/smoke targets, contracts, digest syntax, and registry existence
+before either migration job can start. Missing variables, placeholder hosts,
+arbitrary tags, missing images, or incompatible contracts stop the run there.
+
+### Required environment configuration
+
+Configure protected `staging`, `production`, and `production-db-downgrade`
+GitHub environments. Environment variables must provide real HTTPS values for:
+
+- `STAGING_API_URL`, `STAGING_STUDIO_URL`, `STAGING_DEPLOY_TARGET`
+- `PRODUCTION_API_URL`, `PRODUCTION_STUDIO_URL`, `PRODUCTION_DEPLOY_TARGET`
+- `STAGING_SMOKE_CREATE_URL`, `STAGING_SMOKE_DOWNLOAD_URL`
+- `PRODUCTION_SMOKE_CREATE_URL`, `PRODUCTION_SMOKE_DOWNLOAD_URL`
+- `SCHEMA_CONTRACT_VERSION`, `QUEUE_CONTRACT_VERSION`
+
+Environment secrets supply `DATABASE_URL`, `DEPLOY_TOKEN`, and
+`SMOKE_API_KEY`. The deploy target must accept the manifest-bound API, worker,
+and Studio digest payload. Each service must expose its source SHA and running
+digest to the verification URLs used in `cd.yml`; smoke endpoints must perform
+an authenticated create and download using `X-API-Key`.
+
+### Release procedure and stop points
+
+1. Keep `DEPLOYMENT_ENABLED` absent/false while configuring and reviewing all
+   targets. No build, promotion, migration, or deploy job may run in this state.
+2. For an authorized release window only, enable the hold and merge the reviewed
+   SHA. `wait-for-ci` certifies that exact SHA. A CI failure stops before build.
+3. `build-candidate` publishes unapproved candidate tags. A scan failure stops
+   before release tags or `latest` are promoted; investigate or rebuild rather
+   than retagging the candidate manually.
+4. `create-manifest` obtains Alembic head from the candidate API image and emits
+   `release-manifest-<tag>`. Preflight failure stops before any DB change.
+5. Migrations execute `alembic` inside the selected API image by digest. The
+   current revision, image heads, and manifest revision must all match or the
+   command exits non-zero and deployment stops.
+6. Staging verification must match all three running digests/source SHA, the DB
+   revision, and authenticated create/download. Production cannot proceed on a
+   failure. Production repeats the same checks after deployment.
+7. Disable `DEPLOYMENT_ENABLED` after the approved window. Preserve artifacts
+   and logs before rerunning a failed stage; start a new run rather than editing
+   the manifest.
+
+### Application rollback and database downgrade
+
+Use `workflow_dispatch`, choose `release_action=rollback`, and paste the exact
+JSON from a prior `release-manifest-*` artifact. Preflight proves the images
+still exist and the selected release is compatible with the current
+schema/queue contract. The app-only rollback skips both migration jobs, deploys
+all three recorded digests together, then runs full staging and production
+verification. It never runs migrations from the current main checkout.
+
+Keep the additive database schema by default. A database downgrade is a
+separate emergency operation: choose `release_action=db_downgrade` and type
+`DOWNGRADE` in `approve_db_downgrade`. The target revision is taken from the
+validated selected release manifest rather than freeform operator input.
+Approval occurs in the separately protected `production-db-downgrade`
+environment. Alembic runs from the selected release API image by digest; this
+operation does not deploy applications. Require a tested backup/restore plan
+and drained traffic before approving it.
+
+### Evidence and recovery
+
+GitHub Actions retains `release-manifest-*`, `selected-release-*`,
+`staging-release-evidence-*`, and `production-release-evidence-*` artifacts for
+90 days. Job logs contain CI checks, scan results, immutable image references,
+Alembic comparisons, deploy-target responses, and authenticated smoke commands.
+Registry package versions provide candidate and promoted-tag provenance.
+
+Recovery is roll-forward first. Before migration, correct configuration or
+candidate findings and rerun. After a successful migration but failed app
+deploy, retain the compatible schema and dispatch the previous manifest as an
+app-only rollback. After verification failure, freeze promotion, preserve the
+evidence artifact, compare each running digest, and redeploy the same manifest.
+Use database downgrade only through its separate approval path.
+
+The real deploy, rollback, and disposable-environment install → upgrade → app
+rollback preservation tests were **not executed** as part of issue #858. They
+require Docker, a registry, protected environments, real deployment targets,
+PostgreSQL, and authenticated application infrastructure.
+
 This document outlines the production deployment workflow for Short Form Studio, with a focus on database migration safety and rollback strategies.
 
 ## Overview
@@ -189,7 +283,9 @@ If you rolled back a migration:
 
 ## Deployment Commands
 
-The CD workflow includes placeholder deployment steps. Configure based on your infrastructure:
+The CD workflow calls configured HTTPS deployment adapters with immutable
+digests. Infrastructure-specific adapters remain operator-owned; the workflow
+does not add or require Kubernetes.
 
 ### Kubernetes
 

@@ -29,11 +29,11 @@ it and bring forward its focused PR7 fix through review instead of bypassing CI.
    generator is a reliable rollback identity. Drain/isolate queued work before
    changing the API/worker approval contract; enable the new UI only with its
    matching API/worker. Preserve the explicitly supported legacy generation flow.
-4. Implement and review real deployment commands and smoke targets first.
-   Current deploy commands only echo placeholders; staging smoke targets
-   `staging.example.com`. Migrations, in contrast, are real. Do not enable this
-   workflow merely to try the placeholders. Environment names alone do not
-   establish approval protection. Review publication-before-scan behavior too.
+4. Configure and review the real HTTPS deployment adapters, identity endpoints,
+   and authenticated create/download smoke targets first. Preflight rejects
+   absent and placeholder values before migration. Candidate images are scanned
+   by digest before approved tags or `latest` are promoted. Environment names
+   alone do not establish approval protection.
 5. Only an explicitly authorized operator may set `DEPLOYMENT_ENABLED=true`
    for an approved release and deliberately trigger the reviewed release path.
    Reconfirm the exact source/check/image correspondence immediately beforehand.
@@ -49,7 +49,9 @@ rollback. Migration **034 downgrade drops `creator_media_assets` and its data**;
 do not run automatic downgrades to roll back application code. Restore database
 and media together only under a separately approved restore plan.
 
-The existing manual `image_tag` input is not a validated rollback mechanism:
-it skips build/scans, runs migrations from the dispatched checkout rather than
-the image's source, and reaches placeholder deployment steps. Keep the hold
-closed for this path as well; do not claim it restores running applications.
+Manual rollback now requires a previously validated release manifest. App-only
+rollback skips migrations and redeploys the manifest's three digests together.
+A DB downgrade requires the separate `db_downgrade` action, the revision bound
+to the validated manifest, typed `DOWNGRADE` approval, and the protected `production-db-downgrade`
+environment; Alembic runs from the selected API image. Keep the hold closed
+until every adapter and verification endpoint is configured and tested.
