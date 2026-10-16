@@ -5,77 +5,44 @@
 # ///
 
 # ─── How to run ───
-# 1. Install uv (if not installed):
-#      curl -LsSf https://astral.sh/uv/install.sh | sh
-# 2. Run directly (no venv, no pip install needed):
-#      uv run scripts/restore_drill.py
-# 3. Or make executable and run:
-#      chmod +x scripts/restore_drill.py && ./scripts/restore_drill.py
+# 1. Install the API requirements and PostgreSQL client tools.
+# 2. Run: python scripts/restore_drill.py
+# 3. The drill creates and removes only disposable Docker containers.
 # ──────────────────
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
+from restore_drill_runtime import (
+    DrillError,
+    RuntimeFixture,
+    api_request,
+    docker,
+    image_digest,
+    launch_api,
+    launch_provider_guard,
+    mapped_postgres_url,
+    run,
+    seed_production_fixture,
+    wait_for_api,
+    wait_for_postgres,
+)
 
+
+ROOT = Path(__file__).parents[1]
 POSTGRES_IMAGE = "postgres:16.6-alpine"
 FFMPEG_IMAGE = "jrottenberg/ffmpeg:7.1-alpine"
-NGINX_IMAGE = "nginx:1.27-alpine"
 PASSWORD = "synthetic-local-only"
-SECRET_FINGERPRINT = "sha256:" + "a" * 64
-COMMAND_TIMEOUT_SECONDS = 120
-
-
-@dataclass(frozen=True, slots=True)
-class DrillError(RuntimeError):
-    message: str
-
-    def __str__(self) -> str:
-        return self.message
-
-
-def run(*command: str, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
-        command,
-        input=input_text,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=COMMAND_TIMEOUT_SECONDS,
-    )
-    if result.returncode != 0:
-        raise DrillError(f"command failed: {' '.join(command)}\n{result.stderr}")
-    return result
-
-
-def docker(*arguments: str, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
-    return run("docker", *arguments, input_text=input_text)
-
-
-def wait_for_postgres(container: str) -> None:
-    for _ in range(60):
-        try:
-            result = subprocess.run(
-                ["docker", "exec", container, "pg_isready", "-U", "restore"],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=COMMAND_TIMEOUT_SECONDS,
-            )
-        except subprocess.TimeoutExpired as error:
-            raise DrillError(f"postgres readiness timed out: {container}") from error
-        if result.returncode == 0:
-            return
-        time.sleep(1)
-    raise DrillError(f"postgres did not become ready: {container}")
+FINGERPRINT = "sha256:" + "a" * 64
 
 
 def create_media(media: Path) -> None:
@@ -83,118 +50,43 @@ def create_media(media: Path) -> None:
     mount = f"{media.resolve()}:/media"
     docker("run", "--rm", "-v", mount, FFMPEG_IMAGE, "-f", "lavfi", "-i", "color=c=blue:s=320x240", "-frames:v", "1", "/media/image.png")
     docker("run", "--rm", "-v", mount, FFMPEG_IMAGE, "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "/media/audio.wav")
-    docker("run", "--rm", "-v", mount, FFMPEG_IMAGE, "-loop", "1", "-i", "/media/image.png", "-i", "/media/audio.wav", "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "/media/source.mp4")
+    docker("run", "--rm", "-v", mount, FFMPEG_IMAGE, "-loop", "1", "-i", "/media/image.png", "-i", "/media/audio.wav", "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "/media/final.mp4")
 
 
-def seed(container: str) -> None:
-    sql = """
-CREATE TABLE alembic_version(version_num text PRIMARY KEY);
-INSERT INTO alembic_version VALUES ('synthetic_revision');
-CREATE TABLE workspaces(id integer PRIMARY KEY, slug text UNIQUE);
-CREATE TABLE api_keys(id integer PRIMARY KEY, workspace_id integer, key_hash text, revoked_at timestamptz);
-CREATE TABLE projects(id integer PRIMARY KEY, workspace_id integer, title text);
-CREATE TABLE timelines(project_id integer PRIMARY KEY, approved boolean, payload jsonb);
-CREATE TABLE media(id integer PRIMARY KEY, project_id integer, kind text, path text, sha256 text);
-INSERT INTO workspaces VALUES (1, 'workspace-a'), (2, 'workspace-b');
-INSERT INTO api_keys VALUES (1, 1, 'active-a', NULL), (2, 2, 'revoked-b', now());
-INSERT INTO projects VALUES (10, 1, 'restore fixture');
-INSERT INTO timelines VALUES (10, true, '{"segments":[{"image":"image.png","audio":"audio.wav","video":"source.mp4"}]}');
-"""
-    docker("exec", "-i", container, "psql", "-U", "restore", "-d", "restore", input_text=sql)
-
-
-def insert_media_checksums(container: str, media: Path) -> None:
-    values = []
-    for media_id, (kind, name) in enumerate(
-        (("image", "image.png"), ("audio", "audio.wav"), ("video", "source.mp4")), 1
-    ):
-        digest = hashlib.sha256((media / name).read_bytes()).hexdigest()
-        values.append(f"({media_id},10,'{kind}','{name}','{digest}')")
-    sql = "INSERT INTO media VALUES " + ",".join(values) + ";"
-    docker("exec", "-i", container, "psql", "-U", "restore", "-d", "restore", input_text=sql)
-
-
-def verify_restored(container: str, media: Path) -> None:
-    sql = """
-DO $$ BEGIN
- IF (SELECT count(*) FROM projects WHERE workspace_id=1) <> 1 THEN RAISE EXCEPTION 'owner project missing'; END IF;
- IF EXISTS (SELECT 1 FROM projects WHERE id=10 AND workspace_id=2) THEN RAISE EXCEPTION 'workspace isolation failed'; END IF;
- IF EXISTS (SELECT 1 FROM api_keys WHERE key_hash='revoked-b' AND revoked_at IS NULL) THEN RAISE EXCEPTION 'revoked key reactivated'; END IF;
- IF NOT (SELECT approved FROM timelines WHERE project_id=10) THEN RAISE EXCEPTION 'timeline approval missing'; END IF;
-END $$;
-"""
-    docker("exec", "-i", container, "psql", "-U", "restore", "-d", "restore", input_text=sql)
-    rows = docker("exec", container, "psql", "-U", "restore", "-d", "restore", "-At", "-F", "|", "-c", "SELECT path, sha256 FROM media ORDER BY id").stdout.splitlines()
-    for row in rows:
-        name, expected = row.split("|", 1)
-        actual = hashlib.sha256((media / name).read_bytes()).hexdigest()
-        if actual != expected:
-            raise DrillError(f"restored media checksum mismatch: {name}")
-
-
-def verify_access_boundaries(container: str, media: Path) -> None:
-    owner_status = docker(
-        "exec", container, "psql", "-U", "restore", "-d", "restore", "-At", "-c",
-        "SELECT CASE WHEN EXISTS (SELECT 1 FROM projects WHERE id=10 AND workspace_id=1) THEN 200 ELSE 404 END",
-    ).stdout.strip()
-    cross_workspace_status = docker(
-        "exec", container, "psql", "-U", "restore", "-d", "restore", "-At", "-c",
-        "SELECT CASE WHEN EXISTS (SELECT 1 FROM projects WHERE id=10 AND workspace_id=2) THEN 200 ELSE 404 END",
-    ).stdout.strip()
-    revoked_status = docker(
-        "exec", container, "psql", "-U", "restore", "-d", "restore", "-At", "-c",
-        "SELECT CASE WHEN EXISTS (SELECT 1 FROM api_keys WHERE key_hash='revoked-b' AND revoked_at IS NULL) THEN 200 ELSE 401 END",
-    ).stdout.strip()
-    if (owner_status, cross_workspace_status, revoked_status) != ("200", "404", "401"):
-        raise DrillError("restored access boundaries are invalid")
-    if not all((media / name).is_file() for name in ("image.png", "audio.wav", "source.mp4")):
-        raise DrillError("protected media download is missing")
-    print("A/B isolation: owner=200 cross-workspace=404")
-    print("revoked key: rejected")
-
-
-def verify_protected_downloads(container: str, media: Path, root: Path) -> None:
-    configuration = root / "default.conf"
-    configuration.write_text(
-        "server { listen 8080; location /files/ {"
-        " if ($http_x_workspace != '1') { return 404; }"
-        " if ($http_authorization != 'Bearer active-a') { return 401; }"
-        " alias /media/; } }\n"
+def verify_http(runtime: RuntimeFixture, media: Path) -> None:
+    owner = {"X-API-Key": runtime.owner_key}
+    foreign = {"X-API-Key": runtime.foreign_key}
+    revoked = {"X-API-Key": runtime.revoked_key}
+    project_path = f"/api/creator/projects/{runtime.project_id}"
+    if api_request(runtime.port, project_path, owner)[0] != 200:
+        raise DrillError("owner project request failed")
+    if api_request(runtime.port, project_path, foreign)[0] != 404:
+        raise DrillError("cross-workspace project request was not hidden")
+    if api_request(runtime.port, project_path, revoked)[0] != 401:
+        raise DrillError("revoked key was accepted")
+    if api_request(runtime.port, project_path, {})[0] != 401:
+        raise DrillError("missing key was accepted")
+    media_status, media_body = api_request(
+        runtime.port,
+        f"/api/creator/workspaces/{runtime.workspace_id}/assets/{runtime.media_id}/content",
+        owner,
     )
-    docker(
-        "run", "-d", "--name", container,
-        "-v", f"{media.resolve()}:/media:ro",
-        "-v", f"{configuration.resolve()}:/etc/nginx/conf.d/default.conf:ro",
-        NGINX_IMAGE,
+    video_status, video_body = api_request(
+        runtime.port,
+        f"/api/creator/runs/{runtime.run_id}/artifacts/{runtime.artifact_id}/download",
+        owner,
     )
-    docker(
-        "exec", container, "wget", "-O", "/tmp/image.png",
-        "--header", "X-Workspace: 1",
-        "--header", "Authorization: Bearer active-a",
-        "http://127.0.0.1:8080/files/image.png",
-    )
-    downloaded = root / "downloaded-image.png"
-    docker("cp", f"{container}:/tmp/image.png", str(downloaded))
-    if hashlib.sha256(downloaded.read_bytes()).digest() != hashlib.sha256((media / "image.png").read_bytes()).digest():
-        raise DrillError("protected download checksum mismatch")
-    for expected_status, headers in (
-        ("404 Not Found", ("X-Workspace: 2", "Authorization: Bearer active-a")),
-        ("401 Unauthorized", ("X-Workspace: 1", "Authorization: Bearer revoked-b")),
-    ):
-        result = subprocess.run(
-            ["docker", "exec", container, "wget", "--server-response", "-O", "/dev/null", "--header", headers[0], "--header", headers[1], "http://127.0.0.1:8080/files/image.png"],
-            capture_output=True, text=True, check=False, timeout=COMMAND_TIMEOUT_SECONDS,
-        )
-        if result.returncode == 0 or expected_status not in result.stderr:
-            raise DrillError(f"protected download did not return {expected_status}")
-    docker(
-        "exec", container, "wget", "-O", "/tmp/final.mp4",
-        "--header", "X-Workspace: 1",
-        "--header", "Authorization: Bearer active-a",
-        "http://127.0.0.1:8080/files/restored-final.mp4",
-    )
-    print("protected downloads: media=200 final-mp4=200")
-    print("protected download checksum: verified")
+    if media_status != 200 or video_status != 200:
+        raise DrillError("real API protected download failed")
+    if hashlib.sha256(media_body).digest() != hashlib.sha256((media / "image.png").read_bytes()).digest():
+        raise DrillError("downloaded media checksum mismatch")
+    if hashlib.sha256(video_body).digest() != hashlib.sha256((media / "final.mp4").read_bytes()).digest():
+        raise DrillError("downloaded final MP4 checksum mismatch")
+    downloaded = media / "downloaded-final.mp4"
+    downloaded.write_bytes(video_body)
+    docker("run", "--rm", "-v", f"{media.resolve()}:/media:ro", FFMPEG_IMAGE, "-v", "error", "-i", "/media/downloaded-final.mp4", "-f", "null", "-")
+    print("real API auth: owner=200 workspace-b=404 revoked=401 missing=401")
+    print("real API downloads: media=200 final-mp4=200 checksum=verified ffprobe=verified")
 
 
 def main() -> int:
@@ -202,60 +94,65 @@ def main() -> int:
         print("SKIP: docker is required", file=sys.stderr)
         return 77
     suffix = hashlib.sha256(str(time.time_ns()).encode()).hexdigest()[:10]
-    source = f"restore-source-{suffix}"
-    target = f"restore-target-{suffix}"
-    downloads = f"restore-downloads-{suffix}"
+    source, target = f"restore-source-{suffix}", f"restore-target-{suffix}"
+    durations: dict[str, float] = {}
+    started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="restore-drill-") as temporary:
         root = Path(temporary)
-        bundle = root / "bundle"
+        bundle, restored = root / "bundle", root / "restored"
         media = bundle / "media"
-        restored = root / "restored"
+        api_process: subprocess.Popen[bytes] | None = None
+        guard_process: subprocess.Popen[bytes] | None = None
         try:
             create_media(media)
             for container in (source, target):
-                docker("run", "-d", "--name", container, "-e", "POSTGRES_USER=restore", "-e", f"POSTGRES_PASSWORD={PASSWORD}", "-e", "POSTGRES_DB=restore", POSTGRES_IMAGE)
+                docker("run", "-d", "--name", container, "-p", "127.0.0.1::5432", "-e", "POSTGRES_USER=restore", "-e", f"POSTGRES_PASSWORD={PASSWORD}", "-e", "POSTGRES_DB=restore", POSTGRES_IMAGE)
                 wait_for_postgres(container)
-            seed(source)
-            insert_media_checksums(source, media)
+            source_url = mapped_postgres_url(source, PASSWORD)
+            target_url = mapped_postgres_url(target, PASSWORD)
+            phase = time.monotonic()
+            run(sys.executable, "-m", "alembic", "upgrade", "head", cwd=ROOT / "apps/api", env={**os.environ, "DATABASE_URL": source_url})
+            fixture = seed_production_fixture(source, media)
             docker("exec", source, "pg_dump", "-U", "restore", "-d", "restore", "--format=custom", "--file=/tmp/database.dump")
             docker("cp", f"{source}:/tmp/database.dump", str(bundle / "database.dump"))
+            durations["backup_seconds"] = time.monotonic() - phase
             manifest = {
-                "format_version": 1,
-                "created_at": "synthetic",
-                "release_sha": "ci-restore-drill",
-                "image_digests": [POSTGRES_IMAGE, FFMPEG_IMAGE],
-                "alembic_revision": "synthetic_revision",
-                "secret_fingerprint": SECRET_FINGERPRINT,
-                "database_dump": "database.dump",
-                "media_root": "media",
-                "files": {
-                    path.relative_to(bundle).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
-                    for path in (bundle / "database.dump", *sorted(media.iterdir()))
-                },
+                "format_version": 1, "created_at": "synthetic", "release_sha": os.environ.get("GITHUB_SHA", run("git", "rev-parse", "HEAD", cwd=ROOT).stdout.strip()),
+                "image_digests": [image_digest(POSTGRES_IMAGE), image_digest(FFMPEG_IMAGE)],
+                "alembic_revision": "037", "secret_fingerprint": FINGERPRINT,
+                "database_dump": "database.dump", "media_root": "media",
+                "files": {path.relative_to(bundle).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest() for path in (bundle / "database.dump", *sorted(media.iterdir()))},
             }
             (bundle / "manifest.json").write_text(json.dumps(manifest))
             verifier = Path(__file__).with_name("restore_verify.py")
-            run(sys.executable, str(verifier), "verify", str(bundle), "--expected-alembic-revision", "synthetic_revision", "--expected-secret-fingerprint", SECRET_FINGERPRINT)
+            run(sys.executable, str(verifier), "verify", str(bundle), "--expected-alembic-revision", "037", "--expected-secret-fingerprint", FINGERPRINT)
+            phase = time.monotonic()
             docker("cp", str(bundle / "database.dump"), f"{target}:/tmp/database.dump")
             docker("exec", target, "pg_restore", "-U", "restore", "-d", "restore", "--clean", "--if-exists", "/tmp/database.dump")
-            run(sys.executable, str(verifier), "restore-media", str(bundle), "--target", str(restored), "--expected-alembic-revision", "synthetic_revision", "--expected-secret-fingerprint", SECRET_FINGERPRINT)
-            verify_restored(target, restored)
-            verify_access_boundaries(target, restored)
-            mount = f"{restored.resolve()}:/media"
-            docker("run", "--rm", "-v", mount, FFMPEG_IMAGE, "-loop", "1", "-i", "/media/image.png", "-i", "/media/audio.wav", "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "/media/restored-final.mp4")
-            if not (restored / "restored-final.mp4").is_file():
-                raise DrillError("FFmpeg re-render did not produce final MP4")
-            verify_protected_downloads(downloads, restored, root)
+            run(sys.executable, "-m", "alembic", "upgrade", "head", cwd=ROOT / "apps/api", env={**os.environ, "DATABASE_URL": target_url})
+            run(sys.executable, str(verifier), "restore-media", str(bundle), "--target", str(restored), "--expected-alembic-revision", "037", "--expected-secret-fingerprint", FINGERPRINT)
+            durations["restore_seconds"] = time.monotonic() - phase
+            guard_process, guard_port = launch_provider_guard(root)
+            api_process, fixture = launch_api(target_url, restored, fixture, root, guard_port)
+            wait_for_api(fixture.port, api_process)
+            verify_http(fixture, restored)
+            if (root / "provider-invoked").exists():
+                raise DrillError("provider-call guard detected an invocation")
+            print("production schema: migrated")
+            print("provider guard: armed and untouched")
             print("provider calls: 0")
+            evidence = {"github_sha": manifest["release_sha"], "image_digests": manifest["image_digests"], "phase_durations_seconds": {**durations, "total": time.monotonic() - started}, "credential_free": True}
+            print("RESTORE_EVIDENCE=" + json.dumps(evidence, sort_keys=True))
             print("RESTORE DRILL PASSED")
             return 0
         finally:
-            subprocess.run(
-                ["docker", "rm", "-f", source, target, downloads],
-                capture_output=True,
-                check=False,
-                timeout=COMMAND_TIMEOUT_SECONDS,
-            )
+            if api_process is not None:
+                api_process.terminate()
+                api_process.wait(timeout=15)
+            if guard_process is not None:
+                guard_process.terminate()
+                guard_process.wait(timeout=15)
+            subprocess.run(["docker", "rm", "-f", source, target], capture_output=True, check=False)
 
 
 if __name__ == "__main__":
