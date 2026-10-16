@@ -336,8 +336,14 @@ async def _run_task_inner(
     # 6. Mark success/failure based on result status
     end_time = datetime.now(timezone.utc)
     try:
-        if result.status == "success":
+        if result.status == "success" and claim_token is not None:
+            await _task_tracking_service.mark_success_if_claimed(task_id, claim_token)
+        elif result.status == "success":
             await _task_tracking_service.mark_success_if_running(task_id)
+        elif claim_token is not None:
+            await _task_tracking_service.mark_failed_if_claimed(
+                task_id, claim_token, "task_result", f"status={result.status}"
+            )
         else:
             await _task_tracking_service.mark_failed_if_running(
                 task_id, "task_result", f"status={result.status}"
