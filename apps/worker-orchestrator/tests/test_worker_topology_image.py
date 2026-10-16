@@ -169,6 +169,11 @@ def runtime() -> Iterator[None]:
         server.shutdown()
         thread.join(timeout=2)
         for name in ("topology-worker", "topology-prefork", "topology-prefork-replacement"):
+            logs = _docker("logs", name, check=False)
+            (EVIDENCE / f"{name}.worker.log").write_text(
+                logs.stdout + logs.stderr,
+                encoding="utf-8",
+            )
             _docker("rm", "-f", name, check=False)
 
 
@@ -223,9 +228,10 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_with_worker() -> None:
     timeout_state = EVIDENCE / "timeout.json"
     ffmpeg_state = EVIDENCE / "ffmpeg.json"
 
-    # When a delivery exceeds its hard deadline, the broker is lost, and a recreated worker starts FFmpeg.
+    # When a delivery exceeds its hard deadline, then the broker is lost and restored.
     _send(103, "timeout-delivery", "wait", timeout_state, queue="image", time_limit=2)
     _wait_state(timeout_state, "running")
+    _wait_task("timeout-delivery", "failed")
     _docker("stop", "topology-redis")
     time.sleep(1)
     assert not _redis_available()
@@ -234,7 +240,6 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_with_worker() -> None:
     while not _redis_available() and time.monotonic() < deadline:
         time.sleep(0.1)
     assert _redis_available()
-    _wait_task("timeout-delivery", "failed")
     _docker("rm", "-f", "topology-prefork")
     _worker("topology-prefork", command)
     _send(104, "ffmpeg-delivery", "ffmpeg_hang", ffmpeg_state, queue="image")
