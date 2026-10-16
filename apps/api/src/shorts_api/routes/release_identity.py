@@ -77,7 +77,7 @@ async def api_identity(_user: CurrentUser = Depends(get_current_user)) -> ApiIde
 
 @router.get("/worker-identity", response_model=list[ServiceIdentity])
 async def worker_identity(
-    identity: list[ServiceIdentity] = Depends(resolve_worker_identity),
     _user: CurrentUser = Depends(get_current_user),
+    identity: list[ServiceIdentity] = Depends(resolve_worker_identity),
 ) -> list[ServiceIdentity]:
     return identity

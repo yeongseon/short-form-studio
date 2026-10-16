@@ -89,3 +89,20 @@ def test_worker_release_identity_returns_service_unavailable_when_store_fails() 
     response = TestClient(app, raise_server_exceptions=False).get("/release/worker-identity")
 
     assert response.status_code == 503
+
+
+def test_worker_release_identity_authenticates_before_reading_store() -> None:
+    app = create_app()
+    store_calls = 0
+
+    async def stored_worker_identity() -> list[ServiceIdentity]:
+        nonlocal store_calls
+        store_calls += 1
+        return [ServiceIdentity(source_sha=SOURCE_SHA, digest=WORKER_DIGEST)]
+
+    app.dependency_overrides[resolve_worker_identity] = stored_worker_identity
+
+    response = TestClient(app).get("/release/worker-identity")
+
+    assert response.status_code == 401
+    assert store_calls == 0
