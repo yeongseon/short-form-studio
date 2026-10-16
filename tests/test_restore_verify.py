@@ -146,7 +146,7 @@ def test_restore_refuses_non_empty_target(tmp_path: Path) -> None:
 
     # Then
     assert result.returncode != 0
-    assert "target must be empty" in result.stderr.lower()
+    assert "target must be absent" in result.stderr.lower()
     assert marker.read_text() == "preserve"
 
 
@@ -267,7 +267,7 @@ def test_restore_refuses_symlink_target(tmp_path: Path) -> None:
 
     # Then
     assert result.returncode != 0
-    assert "target must not be a symlink" in result.stderr
+    assert "target ancestor must not be a symlink" in result.stderr
     assert list(original.iterdir()) == []
 
 

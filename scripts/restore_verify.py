@@ -237,12 +237,21 @@ def restore_media(args: argparse.Namespace) -> None:
         bundle, args.expected_alembic_revision, args.expected_secret_fingerprint
     )
     target = Path(args.target)
-    if target.is_symlink():
-        raise RestoreError("target must not be a symlink")
-    if target.exists() and any(target.iterdir()):
-        raise RestoreError("target must be empty")
-    target.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(bundle / manifest.media_root, target, dirs_exist_ok=True)
+    current = target
+    existing_ancestors: list[Path] = []
+    while not current.exists() and not current.is_symlink():
+        current = current.parent
+    while True:
+        existing_ancestors.append(current)
+        if current == current.parent:
+            break
+        current = current.parent
+    if any(path.is_symlink() for path in existing_ancestors):
+        raise RestoreError("target ancestor must not be a symlink")
+    if target.exists() or target.is_symlink():
+        raise RestoreError("target must be absent")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(bundle / manifest.media_root, target)
 
 
 def parser() -> argparse.ArgumentParser:
