@@ -54,6 +54,7 @@ def cooperative(state_path: str, provider_url: str, work_dir: str) -> None:
     quota.write_text("reserved", encoding="utf-8")
     child = subprocess.Popen(["sleep", "300"])
     _write_state(state_path, status="running", child_pid=child.pid)
+    terminal_status = "cancelled"
     try:
         with urlopen(f"{provider_url}/call", timeout=5) as response:
             response.read()
@@ -61,13 +62,13 @@ def cooperative(state_path: str, provider_url: str, work_dir: str) -> None:
         while True:
             current = json.loads(state.read_text(encoding="utf-8"))
             if current.get("cancel_requested") is True or is_shutting_down():
-                _write_state(state_path, status="cancelled", child_pid=child.pid)
                 return
             time.sleep(0.05)
     finally:
         _stop_child(child)
         partial.unlink(missing_ok=True)
         quota.unlink(missing_ok=True)
+        _write_state(state_path, status=terminal_status, child_pid=child.pid)
 
 
 @celery_app.task(name="worker_topology.deadline")
@@ -80,16 +81,19 @@ def deadline(state_path: str, work_dir: str) -> None:
     quota.write_text("reserved", encoding="utf-8")
     child = subprocess.Popen(["sleep", "300"])
     _write_state(state_path, status="running", child_pid=child.pid)
+    timed_out = False
     try:
         while True:
             time.sleep(0.1)
     except SoftTimeLimitExceeded:
-        _write_state(state_path, status="failed_timeout", child_pid=child.pid)
+        timed_out = True
         raise
     finally:
         _stop_child(child)
         partial.unlink(missing_ok=True)
         quota.unlink(missing_ok=True)
+        if timed_out:
+            _write_state(state_path, status="failed_timeout", child_pid=child.pid)
 
 
 @celery_app.task(name="worker_topology.attempt")

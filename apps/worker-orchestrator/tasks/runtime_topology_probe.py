@@ -1,0 +1,81 @@
+from __future__ import annotations
+
+import json
+import os
+import signal
+import subprocess
+import time
+from pathlib import Path
+from typing import Literal, assert_never
+from urllib.request import urlopen
+
+from celery import Task
+from celery_app import celery_app
+from creator_domain.models.stage import RunStage
+from creator_service.run_service import run_service
+from tasks.task_runner import TaskContext, TaskResult, TaskRunnerConfig, run_task
+
+type ProbeMode = Literal["complete", "cooperative", "ffmpeg_hang", "wait"]
+
+
+def _publish(path: str, status: str, **fields: str | int | float | bool) -> None:
+    destination = Path(path)
+    temporary = destination.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"status": status, **fields}), encoding="utf-8")
+    temporary.replace(destination)
+
+
+@celery_app.task(bind=True, name="runtime_topology.probe", acks_late=True)
+def runtime_topology_probe(
+    self: Task,
+    run_id: int,
+    mode: ProbeMode,
+    evidence_path: str,
+    provider_url: str = "",
+) -> dict[str, object]:
+    config = TaskRunnerConfig(
+        task_name="runtime_topology_probe",
+        allowed_stages=frozenset({RunStage.RENDER_GENERATING}),
+        safe_stages=frozenset({RunStage.RENDER_GENERATING.value}),
+    )
+
+    async def execute(ctx: TaskContext) -> TaskResult:
+        match mode:
+            case "complete":
+                _publish(evidence_path, "completed", task_id=ctx.task_id)
+            case "cooperative":
+                with urlopen(f"{provider_url}/provider", timeout=5) as response:
+                    response.read()
+                _publish(evidence_path, "provider_done", task_id=ctx.task_id)
+                while True:
+                    current = await run_service.storage.get_run(run_id)
+                    if current is not None and current.get("status") == "cancelled":
+                        _publish(evidence_path, "cancelled", task_id=ctx.task_id)
+                        return TaskResult(status="cancelled")
+                    time.sleep(0.05)
+            case "ffmpeg_hang":
+                child = subprocess.Popen(
+                    [
+                        "ffmpeg", "-nostdin", "-f", "lavfi", "-i",
+                        "testsrc=size=64x64:rate=30", "-f", "null", "-",
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                _publish(evidence_path, "ffmpeg_running", task_id=ctx.task_id, child_pid=child.pid)
+                try:
+                    child.wait()
+                finally:
+                    if child.poll() is None:
+                        os.killpg(child.pid, signal.SIGKILL)
+                        child.wait(timeout=5)
+            case "wait":
+                _publish(evidence_path, "running", task_id=ctx.task_id)
+                while True:
+                    time.sleep(0.1)
+            case unreachable:
+                assert_never(unreachable)
+        return TaskResult()
+
+    return run_task(self, run_id, config, execute)

@@ -9,6 +9,8 @@ from celery.concurrency.solo import TaskPool
 
 
 ROOT = Path(__file__).parents[3]
+CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+WORKER_DOCKERFILE = ROOT / "apps" / "worker-orchestrator" / "Dockerfile"
 
 
 def _worker_command(compose: str, service: str) -> list[str]:
@@ -66,14 +68,48 @@ def test_pinned_celery_solo_pool_declares_no_timeout_support() -> None:
     assert "self.on_apply = apply_target" in inspect.getsource(TaskPool.__init__)
 
 
-def test_topology_process_support_is_registered_for_real_worker_subprocesses() -> None:
-    # Given the production Celery app imported exactly as Compose imports it.
+def test_runtime_probe_is_shipped_and_registered_with_the_production_app() -> None:
+    # Given the production Celery app imported exactly as the image imports it.
     from celery_app import celery_app
 
-    # When the opt-in process-test task module is requested.
-    celery_app.loader.import_task_module("tests.worker_topology_tasks")
+    # When its normal include list is loaded, without a test-only --include override.
+    celery_app.loader.import_task_module("tasks.runtime_topology_probe")
 
-    # Then synthetic lifecycle tasks can be delivered through the real app.
-    assert "worker_topology.cooperative" in celery_app.tasks
-    assert "worker_topology.deadline" in celery_app.tasks
-    assert "worker_topology.attempt" in celery_app.tasks
+    # Then the shipped probe traverses the production task runner.
+    assert "runtime_topology.probe" in celery_app.tasks
+    assert "tasks.runtime_topology_probe" in celery_app.conf.include
+    assert "tasks.revoked_quota" in celery_app.conf.include
+
+
+def test_runtime_ci_builds_and_runs_the_shipped_worker_image() -> None:
+    # Given the worker topology CI job.
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+
+    # When its runtime setup is inspected.
+    dockerfile = str(WORKER_DOCKERFILE.relative_to(ROOT))
+
+    # Then it builds the shipped Dockerfile and runs the image's own entrypoint/CMD.
+    assert f"docker build --target runtime -f {dockerfile}" in workflow
+    assert "docker run" in workflow
+    assert "--entrypoint" not in workflow
+    assert "docker image inspect worker-topology-image" in workflow
+
+
+def test_runtime_ci_uses_postgres_redis_ffmpeg_and_uploads_complete_evidence() -> None:
+    # Given the worker topology CI job definition.
+    workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+
+    # When service and artifact wiring are inspected.
+    required = (
+        "postgres:16.6-alpine",
+        "redis:7.4-alpine",
+        "ffmpeg -version",
+        "manifest.json",
+        "worker.log",
+        "image-digest.txt",
+        "resolved-command.txt",
+    )
+
+    # Then the real dependencies and diagnostic evidence are mandatory.
+    for marker in required:
+        assert marker in workflow
