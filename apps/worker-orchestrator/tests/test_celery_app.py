@@ -38,6 +38,12 @@ def test_task_routing_configured(app):
     assert app.conf.task_default_queue == "creator"
 
 
+def test_media_upload_reconciliation_is_scheduled(app) -> None:
+    schedule = app.conf.beat_schedule["reconcile-media-uploads"]
+    assert schedule["task"] == "reconcile_media_uploads"
+    assert schedule["schedule"] == 600.0
+
+
 def test_sigterm_handler_sets_shutdown_flag() -> None:
     celery_module._SHUTDOWN_REQUESTED = False
     celery_module._handle_sigterm(signal.SIGTERM, None)
