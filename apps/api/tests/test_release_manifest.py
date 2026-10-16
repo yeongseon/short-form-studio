@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from scripts.release_manifest import (
     ReleaseManifest,
     assert_contract_compatible,
+    assert_database_revision_compatible,
     assert_database_revision,
     assert_deploy_target,
     assert_project_repositories,
@@ -98,6 +99,31 @@ def test_database_revision_mismatch_is_failure() -> None:
     # Given different live and manifest revisions, when compared, then verification fails.
     with pytest.raises(ValueError, match="database revision"):
         assert_database_revision(current="034", expected="035")
+
+
+def test_app_rollback_accepts_live_revision_allowed_by_current_schema_policy() -> None:
+    # Given an old app manifest and a newer live revision allowed by the current schema policy.
+    manifest = ReleaseManifest.model_validate(manifest_data())
+
+    # When compatibility is checked, then preserving the newer database is accepted.
+    assert_database_revision_compatible(
+        manifest,
+        current="036_compatible_schema (head)",
+        compatible_revisions="035_add_api_keys,036_compatible_schema",
+    )
+
+
+def test_app_rollback_rejects_live_revision_outside_current_schema_policy() -> None:
+    # Given a live revision absent from the current schema compatibility policy.
+    manifest = ReleaseManifest.model_validate(manifest_data())
+
+    # When compatibility is checked, then rollback verification fails closed.
+    with pytest.raises(ValueError, match="current schema policy"):
+        assert_database_revision_compatible(
+            manifest,
+            current="037_incompatible_schema",
+            compatible_revisions="035_add_api_keys,036_compatible_schema",
+        )
 
 
 def test_revision_cli_returns_nonzero_on_mismatch(tmp_path: Path) -> None:
