@@ -221,6 +221,14 @@ jobs:
           git archive "$lifecycle_n" | tar -x -C "$lifecycle_context"
           docker build --target runtime -f "$lifecycle_context/apps/api/Dockerfile" -t release-lifecycle-n "$lifecycle_context"
           docker build --target runtime -f apps/api/Dockerfile -t release-lifecycle-n-plus-one .
-          scripts/release_lifecycle_acceptance.sh
+          RELEASE_LIFECYCLE_EVIDENCE_DIR=/tmp/release-lifecycle-evidence scripts/release_lifecycle_acceptance.sh | tee /tmp/release-lifecycle-evidence.log
+      - name: Upload release lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-lifecycle-evidence
+          path: |
+            /tmp/release-lifecycle-evidence.log
+            /tmp/release-lifecycle-evidence
       - name: Runtime cutover acceptance
         run: scripts/cutover_runtime_acceptance.sh
