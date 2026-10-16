@@ -50,3 +50,36 @@ Sweepers claim expired rows with `FOR UPDATE SKIP LOCKED`, verify a same-workspa
 `creator_media_assets.storage_key` reference before deleting, and update terminal
 state idempotently. Ambiguous outcomes favor preservation: no object is deleted
 until the lease expires and registration has been checked by exact key.
+
+## Workspace media capacity
+
+Media uploads reserve their validated byte size and one asset slot on the durable
+upload intent before object I/O. Admission checks `stored + reserved + incoming`
+under a workspace lock. Success converts the reservation to stored metadata;
+failed or cancelled attempts retain capacity until their object is actually
+removed, after which the terminal intent releases it idempotently.
+
+`MEDIA_MAX_STORED_BYTES`, `MEDIA_MAX_ASSET_COUNT`, and
+`MEDIA_MAX_RESERVED_BYTES` default to `0` (unlimited). The authenticated
+`GET /api/creator/workspaces/{workspace_id}/assets/storage-usage` response shows
+stored and in-flight usage plus configured limits. Budget rejection is HTTP 413
+with error code `STORAGE_BUDGET`. `MEDIA_TEMP_DISK_LOW_WATERMARK_BYTES` defaults
+to `0`; when positive it blocks new upload staging and generation writes without
+blocking reads, downloads, or cleanup.
+
+## Media retention safety
+
+MediaAsset retention is separate from artifact expiration. It defaults to
+disabled (`MEDIA_RETENTION_ENABLED=false`) and dry-run
+(`MEDIA_RETENTION_DRY_RUN=true`); all original, generated-intermediate, and final
+video windows default to `0`, so no arbitrary age policy is activated. Positive
+windows are configured independently with `MEDIA_RETENTION_ORIGINAL_DAYS`,
+`MEDIA_RETENTION_INTERMEDIATE_DAYS`, and `MEDIA_RETENTION_FINAL_VIDEO_DAYS`.
+
+Candidates must also pass `MEDIA_RETENTION_GRACE_DAYS` (default 7), exact
+workspace-key ownership, current Timeline references, and approved-review
+references. Dry-run reports candidates without deleting. In destructive mode,
+object deletion happens before metadata deletion; a storage deletion failure
+therefore leaves both metadata and accounted capacity intact. Deletion is
+irreversible once the object backend confirms removal, so operators should review
+dry-run output and backups before setting `MEDIA_RETENTION_DRY_RUN=false`.
