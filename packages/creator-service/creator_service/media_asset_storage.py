@@ -165,7 +165,12 @@ class InMemoryMediaAssetStorage:
         async with self._lock:
             eligible = [
                 intent for intent in self._intents.values()
-                if intent.state in {UploadIntentState.PENDING, UploadIntentState.UPLOADED, UploadIntentState.CLEANUP_PENDING}
+                if intent.state in {
+                    UploadIntentState.PENDING,
+                    UploadIntentState.UPLOADED,
+                    UploadIntentState.CLEANUP_PENDING,
+                    UploadIntentState.RECLAIMING,
+                }
                 and intent.lease_expires_at <= now
             ][:limit]
             for intent in eligible:
@@ -178,7 +183,9 @@ class InMemoryMediaAssetStorage:
     async def record_upload_reclaimed(self, intent_id: int, claim_token: str | None = None) -> None:
         async with self._lock:
             intent = self._intents[intent_id]
-            if claim_token is not None and intent.claim_token != claim_token:
+            if claim_token is not None and (
+                intent.state is not UploadIntentState.RECLAIMING or intent.claim_token != claim_token
+            ):
                 raise MediaAssetPersistenceFailed()
             self._set_intent(intent_id, UploadIntentState.RECLAIMED)
 
@@ -187,7 +194,9 @@ class InMemoryMediaAssetStorage:
     ) -> bool:
         async with self._lock:
             intent = self._intents[intent_id]
-            if claim_token is not None and intent.claim_token != claim_token:
+            if claim_token is not None and (
+                intent.state is not UploadIntentState.RECLAIMING or intent.claim_token != claim_token
+            ):
                 raise MediaAssetPersistenceFailed()
             retries = intent.retry_count + 1
             exhausted = retries >= max_retries

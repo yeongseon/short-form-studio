@@ -204,3 +204,31 @@ async def test_late_upload_failed_compensation_restores_cleanup_retry() -> None:
     assert len(failures) == 1
     assert len(objects.objects) == 1
     assert (await assets.list_upload_intents())[0].state is UploadIntentState.CLEANUP_PENDING
+
+
+@pytest.mark.asyncio
+async def test_expired_reclaiming_claim_is_replaced_and_stale_updates_are_fenced() -> None:
+    # Given a worker claim whose reconciliation lease expires before completion.
+    now = datetime.now(timezone.utc)
+    assets = InMemoryMediaAssetStorage()
+    intent = await assets.create_upload_intent(UploadIntent(
+        id=0, owner_id="uploader", workspace_id=7,
+        storage_key="workspaces/7/assets/stranded.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now,
+    ))
+    first = (await assets.claim_expired_upload_intents(
+        now=now, lease_expires_at=now, limit=1,
+    ))[0]
+
+    # When a successor reclaims it after expiry.
+    successor = (await assets.claim_expired_upload_intents(
+        now=now, lease_expires_at=now, limit=1,
+    ))[0]
+
+    # Then its token is replaced and both stale terminal/failure updates are fenced.
+    assert successor.claim_token != first.claim_token
+    with pytest.raises(MediaAssetPersistenceFailed):
+        await assets.record_upload_reclaimed(intent.id, first.claim_token)
+    with pytest.raises(MediaAssetPersistenceFailed):
+        await assets.record_upload_cleanup_failure(intent.id, 5, first.claim_token)
+    await assets.record_upload_reclaimed(intent.id, successor.claim_token)
