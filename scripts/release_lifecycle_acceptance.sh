@@ -6,6 +6,7 @@ NETWORK="release-lifecycle-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
 POSTGRES="${NETWORK}-postgres"
 API="${NETWORK}-api"
 STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/release-lifecycle.XXXXXX")"
+EVIDENCE_DIR="${RELEASE_LIFECYCLE_EVIDENCE_DIR:-$STATE_DIR/evidence}"
 DATABASE_URL="postgresql://review:review-local-only@${POSTGRES}:5432/release_lifecycle"
 
 cleanup() {
@@ -17,6 +18,7 @@ cleanup() {
 trap cleanup EXIT
 
 docker network create "$NETWORK" >/dev/null
+mkdir -p "$EVIDENCE_DIR"
 docker run -d --name "$POSTGRES" --network "$NETWORK" \
   -e POSTGRES_USER=review -e POSTGRES_PASSWORD=review-local-only \
   -e POSTGRES_DB=release_lifecycle postgres:16-alpine >/dev/null
@@ -41,6 +43,7 @@ start_api() {
 mkdir -p "$STATE_DIR/artifacts"
 chmod 777 "$STATE_DIR/artifacts"
 start_api release-lifecycle-n
+printf '%s\n' 'release_n_started=true' > "$EVIDENCE_DIR/result.txt"
 SEED="$(curl -fsS -X POST -H "X-API-Key: $API_KEY" \
   "http://127.0.0.1:58080/api/creator/workspaces/${WORKSPACE_ID}/demo-short/runs")"
 PROJECT_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["seeded_project_id"])' <<<"$SEED")"
@@ -53,9 +56,11 @@ docker run --rm --network "$NETWORK" -e DATABASE_URL="$DATABASE_URL" release-lif
 start_api release-lifecycle-n-plus-one
 curl -fsS -H "X-API-Key: $API_KEY" "http://127.0.0.1:58080/api/creator/projects/${PROJECT_ID}" >/dev/null
 curl -fsS -H "X-API-Key: $API_KEY" "http://127.0.0.1:58080${MEDIA_URL}" -o /dev/null
+printf '%s\n' 'release_n_plus_one_project_media=true' >> "$EVIDENCE_DIR/result.txt"
 
 start_api release-lifecycle-n
 curl -fsS -H "X-API-Key: $API_KEY" "http://127.0.0.1:58080/api/creator/projects/${PROJECT_ID}" >/dev/null
 curl -fsS -H "X-API-Key: $API_KEY" "http://127.0.0.1:58080${MEDIA_URL}" -o /dev/null
+printf '%s\n' 'release_n_rollback_project_media=true' >> "$EVIDENCE_DIR/result.txt"
 
 printf 'Release lifecycle acceptance passed: N seed, N+1 upgrade, N app rollback preserved project and media.\n'

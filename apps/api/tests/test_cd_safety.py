@@ -219,3 +219,5 @@ def test_ci_executes_two_release_postgres_rollback_lifecycle() -> None:
     assert "release-lifecycle-n" in commands
     assert "release-lifecycle-n-plus-one" in commands
     assert "scripts/release_lifecycle_acceptance.sh" in commands
+    uploads = [step for step in raw["jobs"]["docker"]["steps"] if step.get("uses") == "actions/upload-artifact@v4"]
+    assert any(step.get("with", {}).get("name") == "release-lifecycle-evidence" for step in uploads)
