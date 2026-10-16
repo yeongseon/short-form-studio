@@ -151,7 +151,8 @@ def studio_proxy_runtime(tmp_path_factory: pytest.TempPathFactory) -> Iterator[S
         config = root / "nginx.conf"
         config.write_text(
             f"pid {root}/nginx.pid; error_log {root}/nginx-error.log;\n"
-            f"events {{}}\nhttp {{ access_log off; client_body_temp_path {body_temp}; "
+            f"events {{}}\nhttp {{ include /etc/nginx/mime.types; access_log off; "
+            f"client_body_temp_path {body_temp}; "
             f"proxy_temp_path {root}/proxy;\n{configured}\n}}\n",
         )
         nginx_process = subprocess.Popen(
