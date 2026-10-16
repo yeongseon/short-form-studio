@@ -19,6 +19,7 @@ cleanup() {
 trap cleanup EXIT
 
 cp .env.example .env
+printf '\nARTIFACT_ROOT=/tmp/cutover-artifacts\n' >> .env
 docker compose up -d postgres redis
 docker compose run --rm api alembic upgrade head
 
@@ -95,6 +96,9 @@ WORKSPACE_ID="$(grep -oE 'Workspace: id=[0-9]+' "$STATE_DIR/cutover-key.txt" | c
 UPLOAD_CODE="$(code -H "$ORIGIN" -H 'Accept: application/json' \
   -F "file=@${PNG};type=image/png" \
   "http://localhost:5174/api/creator/workspaces/${WORKSPACE_ID}/assets")"
-[ "$UPLOAD_CODE" = 201 ] || fail "same-origin nginx upload returned $UPLOAD_CODE"
+if [ "$UPLOAD_CODE" != 201 ]; then
+  docker compose logs api
+  fail "same-origin nginx upload returned $UPLOAD_CODE"
+fi
 
 printf 'Cutover runtime acceptance passed: auth 401/200, workspace 404, mutation/upload, Beat DB transition.\n'

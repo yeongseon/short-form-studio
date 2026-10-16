@@ -76,6 +76,8 @@ def test_runtime_acceptance_is_executable_and_wired_to_ci() -> None:
     assert "= failed" in script
     assert "401" in script and "200" in script and "404" in script
     assert "/assets" in script and '-F "file=@' in script
+    assert "ARTIFACT_ROOT=/tmp/cutover-artifacts" in script
+    assert "docker compose logs api" in script
     assert any(
         "scripts/cutover_runtime_acceptance.sh" in step.get("run", "")
         for job in ci["jobs"].values()
