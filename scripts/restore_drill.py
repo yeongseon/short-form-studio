@@ -178,7 +178,7 @@ def verify_protected_downloads(container: str, media: Path, root: Path) -> None:
         raise DrillError("protected download checksum mismatch")
     for expected_status, headers in (
         ("404 Not Found", ("X-Workspace: 2", "Authorization: Bearer active-a")),
-        ("401 Unauthorized", ("X-Workspace: 2", "Authorization: Bearer revoked-b")),
+        ("401 Unauthorized", ("X-Workspace: 1", "Authorization: Bearer revoked-b")),
     ):
         result = subprocess.run(
             ["docker", "exec", container, "wget", "--server-response", "-O", "/dev/null", "--header", headers[0], "--header", headers[1], "http://127.0.0.1:8080/files/image.png"],
