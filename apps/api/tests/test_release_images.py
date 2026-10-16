@@ -40,3 +40,17 @@ def test_studio_entrypoint_writes_runtime_digest(tmp_path: Path) -> None:
         "source_sha": SOURCE_SHA,
         "digest": STUDIO_DIGEST,
     }
+
+
+def test_studio_entrypoint_allows_local_start_without_release_digest(tmp_path: Path) -> None:
+    # Given a locally built Studio image without registry digest metadata.
+    (tmp_path / "source-sha").write_text("")
+    script = ROOT / "apps/studio-web/docker-entrypoint.d/40-release-identity.sh"
+    environment = (os.environ | {"STUDIO_WEB_ROOT": str(tmp_path)})
+    environment.pop("STUDIO_IMAGE_DIGEST", None)
+
+    # When the container entrypoint initializes its static files.
+    subprocess.run(["sh", str(script)], env=environment, check=True)
+
+    # Then nginx startup is not blocked and no false release identity is exposed.
+    assert not (tmp_path / "release-identity.json").exists()
