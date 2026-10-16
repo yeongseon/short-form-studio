@@ -84,18 +84,33 @@ def run_task(
         except Exception:
             runner.logger.warning("Failed to cancel owned quota reservation", exc_info=True)
 
+    def settle_owned(*, billable_unknown: bool = False) -> None:
+        from creator_service.usage_service import usage_service
+
+        try:
+            settlement = (
+                usage_service.settle_owned_unknown(task_id)
+                if billable_unknown
+                else usage_service.settle_owned(task_id)
+            )
+            runner.run_in_worker_loop(settlement)
+        except Exception:
+            runner.logger.warning("Failed to settle owned quota reservation", exc_info=True)
+
     async def execute_owned(ctx: TaskContext) -> TaskResult:
         nonlocal execution_started
         execution_started = True
         return await execute(ctx)
 
     try:
-        return runner.run_in_worker_loop(
+        result = runner.run_in_worker_loop(
             runner._run_task_inner(
                 validated_run_id, task_id, config, execute_owned,
                 claim_token=claim_token, on_claim=mark_claimed,
             )
         )
+        settle_owned()
+        return result
     except runner.StageGuardError:
         try:
             if claim_token is not None:
@@ -124,7 +139,7 @@ def run_task(
                 raise
         elif not claimed:
             raise
-        cancel_owned()
+        settle_owned(billable_unknown=execution_started)
         try:
             runner.run_in_worker_loop(
                 runner._run_service.storage.conditional_update_run(
@@ -153,11 +168,13 @@ def run_task(
                     )
             except Exception:
                 runner.logger.warning("Failed to record task failure", exc_info=True)
+            if not execution_started:
+                cancel_owned()
             raise
         if (
             isinstance(exc, (ProviderTimeoutError, RateLimitError))
             and celery_self.request.retries < celery_self.max_retries
-        ):
+            ):
             # Failed tracking remains reclaimable by Celery's retried delivery.
             try:
                 code, message = runner._safe_failure_record(exc)
@@ -179,7 +196,7 @@ def run_task(
                 )
             )
             if claimed and finalized:
-                cancel_owned()
+                settle_owned(billable_unknown=True)
         except Exception:
             runner.logger.exception("Failed error cleanup for run %d", validated_run_id)
         raise
