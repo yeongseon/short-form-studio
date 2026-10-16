@@ -127,6 +127,28 @@ async def test_duplicate_event_does_not_settle_owner_twice() -> None:
 
 
 @pytest.mark.asyncio
+async def test_success_retains_authorized_attempt_without_usage_event() -> None:
+    # Given two provider attempts consumed all approved capacity.
+    service = UsageService(InMemoryUsageStorage())
+    await service.set_quota(1, monthly_cost_usd=2.0)
+    assert await service.reserve_owned(1, "image_gen", "retry", estimated_cost_usd=2.0)
+    assert await service.authorize_owned_attempt("retry", "attempt-1", Decimal("1.0"))
+    assert await service.authorize_owned_attempt("retry", "attempt-2", Decimal("1.0"))
+
+    # When only the successful retry has a durable usage event before terminal settlement.
+    await service.record_usage(
+        workspace_id=1, run_id=1, provider="fixture", model_key="fixture",
+        operation_type="image_gen", image_count=1, estimated_cost_usd=1.0,
+        idempotency_key="retry:event", reservation_owner_id="retry",
+        reservation_attempt_id="attempt-2",
+    )
+    assert await service.settle_owned("retry")
+
+    # Then the first authorized attempt remains billable-unknown and blocks replacement.
+    assert not await service.reserve_owned(1, "image_gen", "replacement", estimated_cost_usd=1.0)
+
+
+@pytest.mark.asyncio
 async def test_operator_kill_switch_blocks_new_billable_work(monkeypatch: pytest.MonkeyPatch) -> None:
     # Given the global billable-work switch is disabled.
     monkeypatch.setenv("BILLABLE_PROVIDER_CALLS_ENABLED", "false")
@@ -253,7 +275,7 @@ async def test_accounted_attempt_releases_only_unstarted_quote_capacity() -> Non
     await service.record_usage(
         1, 1, "fixture", "fixture", "image_gen", image_count=1,
         estimated_cost_usd=Decimal("0.40"), idempotency_key="task:scene:0",
-        reservation_owner_id="task",
+        reservation_owner_id="task", reservation_attempt_id="task:scene:0",
     )
 
     # When the task settles, then only its accounted event remains charged.

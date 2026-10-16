@@ -136,11 +136,11 @@ def generate_scene_image(
                     for _scene_attempt in range(_scene_max_attempts):
                         await batch.checkpoint()
                         try:
+                            attempt_id = (
+                                f"{ctx.task_id}:{ctx.delivery_attempt}:"
+                                f"{target_scene.scene_id}:{_scene_attempt}"
+                            )
                             try:
-                                attempt_id = (
-                                    f"{ctx.task_id}:{ctx.delivery_attempt}:"
-                                    f"{target_scene.scene_id}:{_scene_attempt}"
-                                )
                                 if not await authorize_owned_provider_attempt(
                                     ctx.reservation_owner_id, attempt_id, COST_SCENE_IMAGE,
                                 ):
@@ -212,6 +212,7 @@ def generate_scene_image(
                         project_id=ctx.project_id,
                         idempotency_key=f"{ctx.task_id}:{target_scene.scene_id}",
                         reservation_owner_id=ctx.reservation_owner_id,
+                        reservation_attempt_id=attempt_id,
                     )
                     ctx.mark_provider_accounted()
                 except Exception as exc:
