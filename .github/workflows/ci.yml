@@ -186,17 +186,7 @@ jobs:
 
   worker-topology-runtime:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    services:
-      redis:
-        image: redis:7.4-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 2s
-          --health-timeout 2s
-          --health-retries 20
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -204,17 +194,63 @@ jobs:
           python-version: "3.12"
       - name: Install pinned worker dependencies
         run: |
-          python3 -m pip install -c constraints.txt -r apps/worker-orchestrator/requirements.txt -r apps/worker-orchestrator/requirements-dev.txt
+          python3 -m pip install -c constraints.txt -r apps/api/requirements.txt -r apps/worker-orchestrator/requirements.txt -r apps/worker-orchestrator/requirements-dev.txt
           python3 -m pip install -c constraints.txt -e packages/creator-domain -e packages/creator-provider -e packages/creator-service
           python3 -c "import celery; assert celery.__version__ == '5.6.3', celery.__version__"
+      - name: Build shipped worker image and start service containers
+        run: |
+          mkdir -p /tmp/worker-topology-runtime
+          chmod 777 /tmp/worker-topology-runtime
+          docker network create worker-topology
+          docker run -d --name topology-postgres --network worker-topology -p 55441:5432 \
+            -e POSTGRES_DB=topology -e POSTGRES_USER=review -e POSTGRES_PASSWORD=review-local-only \
+            postgres:16.6-alpine
+          docker run -d --name topology-redis --network worker-topology -p 56391:6379 redis:7.4-alpine
+          docker build --target runtime -f apps/worker-orchestrator/Dockerfile -t worker-topology-image .
+          docker image inspect worker-topology-image --format '{{.Id}}' > /tmp/worker-topology-runtime/image-digest.txt
+          docker image inspect worker-topology-image --format '{{json .Config.Entrypoint}} {{json .Config.Cmd}}' \
+            > /tmp/worker-topology-runtime/resolved-command.txt
+          until docker exec topology-postgres pg_isready -U review -d topology; do sleep 1; done
+          until docker exec topology-redis redis-cli ping; do sleep 1; done
+          DATABASE_URL=postgresql://review:review-local-only@127.0.0.1:55441/topology \
+            python3 -m alembic -c apps/api/alembic.ini upgrade head
+          docker run --rm worker-topology-image python -c \
+            "import subprocess; subprocess.run(['ffmpeg', '-version'], check=True)" \
+            > /tmp/worker-topology-runtime/ffmpeg-version.txt
+          ffmpeg -version >> /tmp/worker-topology-runtime/ffmpeg-version.txt
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          manifest = {
+              "dockerfile": "apps/worker-orchestrator/Dockerfile",
+              "image": "worker-topology-image",
+              "postgres": "postgres:16.6-alpine",
+              "redis": "redis:7.4-alpine",
+              "celery": "5.6.3",
+              "scenarios": ["production-claim", "hard-timeout", "sigkill-recreate", "redelivery", "ffmpeg-cleanup", "fairness"],
+          }
+          Path("/tmp/worker-topology-runtime/manifest.json").write_text(json.dumps(manifest, indent=2))
+          PY
       - name: Verify shipped worker cancellation and timeout topology
         env:
           PYTHONPATH: apps/api/src:apps/worker-orchestrator:packages/creator-domain:packages/creator-service:packages/creator-provider
+          DATABASE_URL: postgresql://review:review-local-only@127.0.0.1:55441/topology
+          REDIS_URL: redis://127.0.0.1:56391/0
+          WORKER_TOPOLOGY_IMAGE: worker-topology-image
+          WORKER_TOPOLOGY_EVIDENCE_DIR: /tmp/worker-topology-runtime
         run: >-
           python3 -m pytest
           apps/worker-orchestrator/tests/test_worker_topology_contract.py
           apps/worker-orchestrator/tests/test_worker_topology_process.py
+          apps/worker-orchestrator/tests/test_worker_topology_image.py
           -v --junitxml=/tmp/worker-topology-runtime/results.xml
+      - name: Capture worker runtime logs
+        if: always()
+        run: |
+          for container in topology-worker topology-prefork topology-prefork-replacement; do
+            docker logs "$container" > "/tmp/worker-topology-runtime/${container}.worker.log" 2>&1 || true
+          done
+          cp /tmp/worker-topology-runtime/topology-worker.worker.log /tmp/worker-topology-runtime/worker.log 2>/dev/null || true
       - name: Upload worker topology evidence
         if: always()
         uses: actions/upload-artifact@v4
