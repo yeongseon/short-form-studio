@@ -6,6 +6,7 @@ import subprocess
 import sys
 import uuid
 from collections.abc import AsyncIterator
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import asyncpg
@@ -14,6 +15,7 @@ import pytest_asyncio
 from creator_domain.models import MediaAsset, MediaOrigin, MediaType
 from creator_service import db
 from creator_service.media_asset_service import MediaAssetService
+from creator_service.media_upload_reconciliation import UploadIntent, UploadIntentState
 from creator_service.object_storage import LocalStorageBackend
 from PIL import Image
 
@@ -199,3 +201,32 @@ async def test_postgres_preserves_all_domain_media_types(media_database: None, t
     ]
     # Then storage supports the complete domain rather than only upload routes.
     assert [asset.media_type for asset in saved] == list(MediaType)
+
+
+@pytest.mark.asyncio
+async def test_postgres_upload_intent_is_durable_and_workspace_owned(media_database: None) -> None:
+    # Given an upload intent created before object I/O.
+    storage = MediaAssetService()._asset_storage
+    now = datetime.now(timezone.utc)
+    intent = await storage.create_upload_intent(UploadIntent(
+        id=0, owner_id=uuid.uuid4().hex, workspace_id=9101,
+        storage_key="workspaces/9101/assets/pending.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now,
+    ))
+
+    # When an expired reconciliation lease is claimed and terminally completed.
+    claimed = await storage.claim_expired_upload_intents(
+        now=now, lease_expires_at=now + timedelta(minutes=5), limit=10,
+    )
+    await storage.complete_upload_intent(intent.id)
+
+    # Then the exact owned record was claimed once and remains durable.
+    assert [candidate.id for candidate in claimed] == [intent.id]
+    row = await db.fetch_one(
+        "SELECT state, workspace_id, storage_key FROM creator_media_upload_intents WHERE id = $1",
+        intent.id,
+    )
+    assert row == {
+        "state": "completed", "workspace_id": 9101,
+        "storage_key": "workspaces/9101/assets/pending.png",
+    }
