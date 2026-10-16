@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 
+import asyncpg
 import pytest
 
 from creator_service.dispatch_reconciler import DispatchReconciler
@@ -40,12 +41,26 @@ async def _reconcile(tracking: TaskTrackingService, rollback: Callable[[int, str
     ).reconcile()
 
 
+async def _run_id(pool: asyncpg.Pool | None) -> int:
+    if pool is None:
+        return 1
+    project_id = await pool.fetchval(
+        "INSERT INTO creator_projects (workspace_id) VALUES (1) RETURNING id"
+    )
+    return await pool.fetchval(
+        """INSERT INTO creator_runs
+           (project_id, workspace_id, current_stage, status, style_preset)
+           VALUES ($1, 1, 'AUDIO_GENERATING', 'pending', 'default') RETURNING id""",
+        project_id,
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("quota_pool", ["memory", "postgres"], indirect=True)
 @pytest.mark.parametrize("promoted_status", ["queued", "running", "success", "revoked"])
 async def test_stale_snapshot_cannot_mutate_promoted_task(
     monkeypatch: pytest.MonkeyPatch,
-    quota_pool: object,
+    quota_pool: asyncpg.Pool | None,
     promoted_status: str,
 ) -> None:
     storage = PostgresTaskTrackingStorage() if quota_pool is not None else InMemoryTaskTrackingStorage()
@@ -55,7 +70,8 @@ async def test_stale_snapshot_cannot_mutate_promoted_task(
     assert await usage.reserve_owned(1, "tts", "attempt-a")
     assert await usage.reserve_owned(1, "tts", "attempt-b")
     monkeypatch.setattr("creator_service.usage_service.usage_service", usage)
-    await tracking.record_task_pending(1, "generate_audio", "attempt-a")
+    run_id = await _run_id(quota_pool)
+    await tracking.record_task_pending(run_id, "generate_audio", "attempt-a")
 
     run = {"stage": "AUDIO_GENERATING", "files": ["a.wav", "b.wav"]}
     rollbacks: list[str] = []
@@ -78,7 +94,7 @@ async def test_stale_snapshot_cannot_mutate_promoted_task(
             await tracking.mark_revoked("attempt-a")
         case unreachable:
             raise AssertionError(unreachable)
-    await tracking.record_task_pending(1, "generate_audio", "attempt-b")
+    await tracking.record_task_pending(run_id, "generate_audio", "attempt-b")
     await tracking.promote_pending_to_queued("attempt-b")
     tracking.resume.set()
 
