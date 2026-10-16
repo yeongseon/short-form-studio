@@ -7,6 +7,7 @@ import logging
 import os
 import shutil
 import wave
+from decimal import Decimal
 
 import re
 from pathlib import Path
@@ -21,7 +22,8 @@ from creator_service.audio_service import audio_service as _audio_service
 from creator_service.cost_config import COST_AUDIO_GENERATION
 from creator_service.script_service import script_service as _script_service
 from creator_service.telemetry import trace_task
-from creator_service.usage_service import record_provider_call
+from creator_service.usage_service import authorize_owned_provider_attempt, record_provider_call
+from creator_service.spend_quote import MAX_AUDIO_DURATION_SECONDS, audio_reservation_quote
 from tasks.task_runner import GpuLockContext, TaskContext, TaskResult, TaskRunnerConfig, run_task
 from tasks.task_execution import TaskInputError
 
@@ -148,6 +150,11 @@ def generate_audio(
         registry = get_default_registry()
         entry = registry.resolve(tts_model)
         provider = registry.get_provider(tts_model)
+        delivery_cost = audio_reservation_quote(
+            duration_seconds=MAX_AUDIO_DURATION_SECONDS,
+            max_retries=0,
+            cost_per_second=Decimal("0.0003"),
+        )
 
         gpu_lock = GpuLockContext(ctx.task_id)
         if entry.requires_gpu:
@@ -201,6 +208,12 @@ def generate_audio(
                         section_params["output_path"] = section_path
                         section_params["rate"] = rate
 
+                        if not await authorize_owned_provider_attempt(
+                            ctx.reservation_owner_id,
+                            f"{ctx.task_id}:{ctx.delivery_attempt}:section:{idx}",
+                            delivery_cost,
+                        ):
+                            raise ProviderError("Provider attempt exceeds approved spend")
                         ctx.mark_provider_started()
                         await provider.generate(section_text, voice=voice, params=section_params)
                         section_audio_paths.append(section_path)
@@ -252,6 +265,12 @@ def generate_audio(
                     except Exception:
                         pass
                 try:
+                    if not await authorize_owned_provider_attempt(
+                        ctx.reservation_owner_id,
+                        f"{ctx.task_id}:{ctx.delivery_attempt}:full",
+                        delivery_cost,
+                    ):
+                        raise ProviderError("Provider attempt exceeds approved spend")
                     ctx.mark_provider_started()
                     await provider.generate(script_text, voice=voice, params=params)
                 except ProviderError:
@@ -280,14 +299,18 @@ def generate_audio(
             if entry.requires_gpu:
                 gpu_lock.release()
 
+        audio_seconds = _get_audio_duration_seconds(audio_path)
         try:
             await record_provider_call(
                 run_id,
                 entry.provider_type,
                 tts_model,
                 "tts",
-                audio_seconds=_get_audio_duration_seconds(audio_path),
-                cost_usd=COST_AUDIO_GENERATION,
+                audio_seconds=audio_seconds,
+                cost_usd=(
+                    Decimal(str(audio_seconds)) * Decimal("0.0003")
+                    if audio_seconds is not None else delivery_cost
+                ),
                 workspace_id=ctx.workspace_id,
                 project_id=ctx.project_id,
                 idempotency_key=ctx.task_id,
