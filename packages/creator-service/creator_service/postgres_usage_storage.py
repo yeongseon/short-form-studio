@@ -287,12 +287,17 @@ class PostgresUsageStorage:
                     await connection.execute("SELECT pg_advisory_xact_lock($1)", 860)
                 await connection.execute("SELECT pg_advisory_xact_lock($1)", workspace_id)
                 existing = await connection.fetchrow(
-                    """SELECT workspace_id, operation_type FROM workspace_quota_reservation_owners
+                    """SELECT workspace_id, operation_type, status
+                       FROM workspace_quota_reservation_owners
                        WHERE owner_id = $1""",
                     owner_id,
                 )
                 if existing is not None:
-                    return existing["workspace_id"] == workspace_id and existing["operation_type"] == operation_type
+                    return (
+                        existing["workspace_id"] == workspace_id
+                        and existing["operation_type"] == operation_type
+                        and existing["status"] in {"reserved", "consumed"}
+                    )
                 month_start = await connection.fetchval(
                     "SELECT date_trunc('month', NOW() AT TIME ZONE 'UTC')::timestamptz"
                 )
@@ -510,12 +515,12 @@ class PostgresUsageStorage:
                     raise ValueError("Usage event owner mismatch")
                 if owned["status"] == "cancelled":
                     raise ValueError("Cancelled reservation owner")
-                saved = await connection.fetchrow(
+                inserted = await connection.fetchrow(
                     """INSERT INTO usage_events (workspace_id, project_id, run_id, provider,
                        model_key, operation_type, input_tokens, output_tokens, image_count,
                        audio_seconds, estimated_cost_usd, cost_config_version, idempotency_key)
                        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-                       ON CONFLICT (idempotency_key) DO UPDATE SET idempotency_key = EXCLUDED.idempotency_key
+                       ON CONFLICT (idempotency_key) DO NOTHING
                        RETURNING *""",
                     row.get("workspace_id"), row.get("project_id"), row.get("run_id"),
                     row.get("provider"), row.get("model_key"), row.get("operation_type"),
@@ -523,6 +528,15 @@ class PostgresUsageStorage:
                     row.get("audio_seconds"), row.get("estimated_cost_usd"),
                     row.get("cost_config_version"), row.get("idempotency_key"),
                 )
+                if inserted is None:
+                    saved = await connection.fetchrow(
+                        "SELECT * FROM usage_events WHERE idempotency_key = $1",
+                        row.get("idempotency_key"),
+                    )
+                    if saved is None:
+                        raise RuntimeError("Duplicate usage event disappeared during settlement")
+                    return dict(saved)
+                saved = inserted
                 if owned["status"] == "reserved":
                     await connection.execute(
                         "UPDATE workspace_quota_reservation_owners SET status = 'consumed' WHERE owner_id = $1",
