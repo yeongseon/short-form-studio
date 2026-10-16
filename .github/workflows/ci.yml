@@ -202,10 +202,10 @@ jobs:
           mkdir -p /tmp/worker-topology-runtime
           chmod 777 /tmp/worker-topology-runtime
           docker network create worker-topology
-          docker run -d --name topology-postgres --network worker-topology -p 55441:5432 \
+          docker run -d --name topology-postgres --network worker-topology -p 127.0.0.1:55441:5432 \
             -e POSTGRES_DB=topology -e POSTGRES_USER=review -e POSTGRES_PASSWORD=review-local-only \
             postgres:16.6-alpine
-          docker run -d --name topology-redis --network worker-topology -p 56391:6379 redis:7.4-alpine
+          docker run -d --name topology-redis --network worker-topology -p 127.0.0.1:56391:6379 redis:7.4-alpine
           docker build --target runtime -f apps/worker-orchestrator/Dockerfile -t worker-topology-image .
           docker image inspect worker-topology-image --format '{{.Id}}' > /tmp/worker-topology-runtime/image-digest.txt
           docker image inspect worker-topology-image --format '{{json .Config.Entrypoint}} {{json .Config.Cmd}}' \
