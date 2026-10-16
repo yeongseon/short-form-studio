@@ -121,7 +121,7 @@ def _send(
     delivery_options = {"time_limit": time_limit} if time_limit is not None else {}
     celery_app.send_task(
         "runtime_topology.probe",
-        args=[run_id, mode, f"/evidence/{state.name}", provider_url],
+        args=[run_id, mode, state.name, provider_url],
         task_id=task_id,
         queue=queue,
         **delivery_options,
@@ -134,6 +134,9 @@ def _worker(name: str, command: list[str] | None = None) -> None:
         "-e", "DATABASE_URL=postgresql://review:review-local-only@topology-postgres:5432/topology",
         "-e", "REDIS_URL=redis://topology-redis:6379/0",
         "-e", "ENVIRONMENT=test",
+        "-e", "WORKER_TOPOLOGY_PROBE_ENABLED=1",
+        "-e", "WORKER_TOPOLOGY_EVIDENCE_DIR=/evidence",
+        "-e", f"WORKER_TOPOLOGY_PROVIDER_URL={os.environ['TOPOLOGY_PROVIDER_URL']}",
         "--add-host", "host.docker.internal:host-gateway",
         "-v", f"{EVIDENCE}:/evidence",
         IMAGE,

@@ -102,11 +102,8 @@ redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
 dlq_max_size = max(1, int(os.getenv("DLQ_MAX_SIZE", "10000")))
 dlq_fallback_path = os.getenv("DLQ_FALLBACK_PATH", "/tmp/dlq_fallback.jsonl")
 
-celery_app = Celery(
-    "worker-orchestrator",
-    broker=redis_url,
-    backend=redis_url,
-    include=[
+def _worker_task_modules() -> list[str]:
+    modules = [
         "tasks.generate_script",
         "tasks.generate_visual_plan",
         "tasks.generate_scene_image",
@@ -118,9 +115,18 @@ celery_app = Celery(
         "tasks.reconcile_stale_dispatches",
         "tasks.retry_failed_artifact_deletions",
         "tasks.sweep_expired_artifacts",
-        "tasks.runtime_topology_probe",
         "tasks.revoked_quota",
-    ],
+    ]
+    if os.getenv("WORKER_TOPOLOGY_PROBE_ENABLED") == "1":
+        modules.append("tasks.runtime_topology_probe")
+    return modules
+
+
+celery_app = Celery(
+    "worker-orchestrator",
+    broker=redis_url,
+    backend=redis_url,
+    include=_worker_task_modules(),
 )
 celery_app.conf.task_default_queue = "creator"
 

@@ -68,17 +68,30 @@ def test_pinned_celery_solo_pool_declares_no_timeout_support() -> None:
     assert "self.on_apply = apply_target" in inspect.getsource(TaskPool.__init__)
 
 
-def test_runtime_probe_is_shipped_and_registered_with_the_production_app() -> None:
+def test_runtime_probe_is_shipped_and_registered_with_the_ci_app(monkeypatch) -> None:
     # Given the production Celery app imported exactly as the image imports it.
+    monkeypatch.setenv("WORKER_TOPOLOGY_PROBE_ENABLED", "1")
     from celery_app import celery_app
+    from celery_app import _worker_task_modules
 
     # When its normal include list is loaded, without a test-only --include override.
     celery_app.loader.import_task_module("tasks.runtime_topology_probe")
 
     # Then the shipped probe traverses the production task runner.
     assert "runtime_topology.probe" in celery_app.tasks
-    assert "tasks.runtime_topology_probe" in celery_app.conf.include
-    assert "tasks.revoked_quota" in celery_app.conf.include
+    assert "tasks.runtime_topology_probe" in _worker_task_modules()
+    assert "tasks.revoked_quota" in _worker_task_modules()
+
+
+def test_runtime_probe_is_disabled_without_explicit_ci_enablement(monkeypatch) -> None:
+    # Given a normal production worker environment.
+    monkeypatch.delenv("WORKER_TOPOLOGY_PROBE_ENABLED", raising=False)
+
+    # When the production app inclusion policy is evaluated.
+    from celery_app import _worker_task_modules
+
+    # Then the diagnostic task is not exposed to the broker.
+    assert "tasks.runtime_topology_probe" not in _worker_task_modules()
 
 
 def test_runtime_ci_builds_and_runs_the_shipped_worker_image() -> None:
