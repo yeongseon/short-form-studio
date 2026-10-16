@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import hashlib
+import json
 import os
 import secrets
 import sys
@@ -18,7 +19,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "packages", "creator-service"))
 
 
-async def main(email: str, workspace_name: str, key_name: str) -> None:
+async def main(email: str, workspace_name: str, key_name: str, *, json_output: bool = False) -> None:
     from creator_service.db import get_pool
 
     pool = await get_pool()
@@ -40,7 +41,8 @@ async def main(email: str, workspace_name: str, key_name: str) -> None:
             auth_subject,
         )
         user_id = row["id"]
-        print(f"User: id={user_id} email={email}")
+        if not json_output:
+            print(f"User: id={user_id} email={email}")
 
         # 2. Create or get workspace. `slug` is the unique column (not `name`),
         # and `owner_id` is required, so upsert on slug.
@@ -56,7 +58,8 @@ async def main(email: str, workspace_name: str, key_name: str) -> None:
             user_id,
         )
         workspace_id = row["id"]
-        print(f"Workspace: id={workspace_id} name={workspace_name}")
+        if not json_output:
+            print(f"Workspace: id={workspace_id} name={workspace_name}")
 
         # 3. Add user to workspace (idempotent)
         await conn.execute(
@@ -64,7 +67,8 @@ async def main(email: str, workspace_name: str, key_name: str) -> None:
             user_id,
             workspace_id,
         )
-        print(f"Membership: user_id={user_id} workspace_id={workspace_id}")
+        if not json_output:
+            print(f"Membership: user_id={user_id} workspace_id={workspace_id}")
 
         # 4. Generate API key
         raw_key = secrets.token_urlsafe(32)
@@ -76,10 +80,13 @@ async def main(email: str, workspace_name: str, key_name: str) -> None:
             key_hash,
             key_name,
         )
-        print(f"\n{'='*60}")
-        print("API Key (save this — it cannot be recovered):")
-        print(f"  {raw_key}")
-        print(f"{'='*60}")
+        if json_output:
+            print(json.dumps({"api_key": raw_key, "user_id": user_id, "workspace_id": workspace_id}))
+        else:
+            print(f"\n{'='*60}")
+            print("API Key (save this — it cannot be recovered):")
+            print(f"  {raw_key}")
+            print(f"{'='*60}")
 
 
 if __name__ == "__main__":
@@ -87,6 +94,7 @@ if __name__ == "__main__":
     parser.add_argument("--email", required=True, help="User email")
     parser.add_argument("--workspace", required=True, help="Workspace name")
     parser.add_argument("--name", required=True, help="API key name/label")
+    parser.add_argument("--json", action="store_true", help="Print machine-readable JSON")
     args = parser.parse_args()
 
-    asyncio.run(main(args.email, args.workspace, args.name))
+    asyncio.run(main(args.email, args.workspace, args.name, json_output=args.json))
