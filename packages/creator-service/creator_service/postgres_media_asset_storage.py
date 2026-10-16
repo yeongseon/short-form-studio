@@ -175,12 +175,15 @@ class PostgresMediaAssetStorage:
         if result != "UPDATE 1":
             raise MediaAssetPersistenceFailed()
 
-    async def defer_upload_cleanup(self, intent_id: int) -> None:
-        await db.execute(
-            """UPDATE creator_media_upload_intents SET state = 'cleanup_pending', updated_at = NOW()
-                WHERE id = $1 AND state = 'uploaded'""",
-            intent_id,
+    async def compensate_upload(self, intent: UploadIntent, deletion_failed: bool) -> None:
+        state = UploadIntentState.CLEANUP_PENDING if deletion_failed else UploadIntentState.RECLAIMED
+        result = await db.execute(
+            """UPDATE creator_media_upload_intents SET state = $3, updated_at = NOW()
+                WHERE id = $1 AND owner_id = $2""",
+            intent.id, intent.owner_id, state.value,
         )
+        if result != "UPDATE 1":
+            raise MediaAssetPersistenceFailed()
 
     async def asset_exists_for_key(self, workspace_id: int, storage_key: str) -> bool:
         return await db.fetch_one(
