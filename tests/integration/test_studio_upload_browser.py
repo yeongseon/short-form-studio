@@ -22,11 +22,18 @@ def test_browser_recovers_after_nginx_rejects_oversized_image(
     with playwright.sync_playwright() as automation:
         browser = automation.chromium.launch()
         page = browser.new_page()
-        page.goto(
+        page_errors: list[str] = []
+        page.on("pageerror", lambda error: page_errors.append(str(error)))
+        response = page.goto(
             f"{studio_proxy_runtime.origin}/browser-test/asset-upload.html"
             f"?workspaceId={studio_proxy_runtime.workspace_id}",
+            wait_until="networkidle",
         )
+        assert response is not None
+        assert response.status == 200
+        assert page.title() == "Studio asset upload browser test"
         upload = page.get_by_test_id("asset-file-input")
+        assert upload.count() == 1, f"page errors: {page_errors}; content: {page.content()}"
 
         upload.set_input_files(valid_image)
         page.get_by_test_id("asset-drop-zone").get_by_text("Placed valid.png").wait_for()
