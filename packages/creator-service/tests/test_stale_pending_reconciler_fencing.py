@@ -87,7 +87,7 @@ async def test_stale_snapshot_cannot_mutate_promoted_task(
         case "queued":
             await tracking.promote_pending_to_queued("attempt-a")
         case "running":
-            await tracking.record_task_start(1, "generate_audio", "attempt-a")
+            await tracking.record_task_start(run_id, "generate_audio", "attempt-a")
         case "success":
             await tracking.mark_success("attempt-a")
         case "revoked":
