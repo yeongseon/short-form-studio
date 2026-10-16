@@ -109,6 +109,7 @@ class TaskContext:
     project_id: int | None
     start_time: datetime
     reservation_owner_id: str | None = None
+    delivery_attempt: int = 0
     billing_outcome: BillingOutcome = field(default=BillingOutcome.NOT_STARTED, init=False)
 
     def mark_provider_started(self) -> None:
