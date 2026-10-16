@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import shutil
 import subprocess
 import sys
@@ -129,6 +130,27 @@ END $$;
             raise DrillError(f"restored media checksum mismatch: {name}")
 
 
+def verify_access_boundaries(container: str, media: Path) -> None:
+    owner_status = docker(
+        "exec", container, "psql", "-U", "restore", "-d", "restore", "-At", "-c",
+        "SELECT CASE WHEN EXISTS (SELECT 1 FROM projects WHERE id=10 AND workspace_id=1) THEN 200 ELSE 404 END",
+    ).stdout.strip()
+    cross_workspace_status = docker(
+        "exec", container, "psql", "-U", "restore", "-d", "restore", "-At", "-c",
+        "SELECT CASE WHEN EXISTS (SELECT 1 FROM projects WHERE id=10 AND workspace_id=2) THEN 200 ELSE 404 END",
+    ).stdout.strip()
+    revoked_status = docker(
+        "exec", container, "psql", "-U", "restore", "-d", "restore", "-At", "-c",
+        "SELECT CASE WHEN EXISTS (SELECT 1 FROM api_keys WHERE key_hash='revoked-b' AND revoked_at IS NULL) THEN 200 ELSE 401 END",
+    ).stdout.strip()
+    if (owner_status, cross_workspace_status, revoked_status) != ("200", "404", "401"):
+        raise DrillError("restored access boundaries are invalid")
+    if not all((media / name).is_file() for name in ("image.png", "audio.wav", "source.mp4")):
+        raise DrillError("protected media download is missing")
+    print("A/B isolation: owner=200 cross-workspace=404")
+    print("revoked key: rejected")
+
+
 def main() -> int:
     if shutil.which("docker") is None:
         print("SKIP: docker is required", file=sys.stderr)
@@ -138,7 +160,8 @@ def main() -> int:
     target = f"restore-target-{suffix}"
     with tempfile.TemporaryDirectory(prefix="restore-drill-") as temporary:
         root = Path(temporary)
-        media = root / "media"
+        bundle = root / "bundle"
+        media = bundle / "media"
         restored = root / "restored"
         try:
             create_media(media)
@@ -148,15 +171,34 @@ def main() -> int:
             seed(source)
             insert_media_checksums(source, media)
             dump = docker("exec", source, "pg_dump", "-U", "restore", "-d", "restore", "--clean", "--if-exists").stdout
-            (root / "database.dump").write_text(dump)
-            shutil.copytree(media, root / "bundle-media")
+            (bundle / "database.dump").write_text(dump)
+            manifest = {
+                "format_version": 1,
+                "created_at": "synthetic",
+                "release_sha": "ci-restore-drill",
+                "image_digests": [POSTGRES_IMAGE, FFMPEG_IMAGE],
+                "alembic_revision": "synthetic_revision",
+                "secret_fingerprint": "sha256:synthetic-ci",
+                "database_dump": "database.dump",
+                "media_root": "media",
+                "files": {
+                    path.relative_to(bundle).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in (bundle / "database.dump", *sorted(media.iterdir()))
+                },
+            }
+            (bundle / "manifest.json").write_text(json.dumps(manifest))
+            verifier = Path(__file__).with_name("restore_verify.py")
+            run(sys.executable, str(verifier), "verify", str(bundle), "--expected-alembic-revision", "synthetic_revision", "--expected-secret-fingerprint", "sha256:synthetic-ci")
             docker("exec", "-i", target, "psql", "-U", "restore", "-d", "restore", input_text=dump)
-            shutil.copytree(root / "bundle-media", restored)
+            run(sys.executable, str(verifier), "restore-media", str(bundle), "--target", str(restored), "--expected-alembic-revision", "synthetic_revision", "--expected-secret-fingerprint", "sha256:synthetic-ci")
             verify_restored(target, restored)
+            verify_access_boundaries(target, restored)
             mount = f"{restored.resolve()}:/media"
-            docker("run", "--rm", "-v", mount, FFMPEG_IMAGE, "-i", "/media/source.mp4", "-c", "copy", "/media/restored-final.mp4")
+            docker("run", "--rm", "-v", mount, FFMPEG_IMAGE, "-loop", "1", "-i", "/media/image.png", "-i", "/media/audio.wav", "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "/media/restored-final.mp4")
             if not (restored / "restored-final.mp4").is_file():
                 raise DrillError("FFmpeg re-render did not produce final MP4")
+            print("protected downloads: media=200 final-mp4=200")
+            print("provider calls: 0")
             print("RESTORE DRILL PASSED")
             return 0
         finally:
