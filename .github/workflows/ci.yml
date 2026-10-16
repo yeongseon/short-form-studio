@@ -184,6 +184,44 @@ jobs:
         if: always()
         run: docker rm -f first-short-postgres first-short-redis
 
+  worker-topology-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      redis:
+        image: redis:7.4-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned worker dependencies
+        run: |
+          python3 -m pip install -c constraints.txt -r apps/worker-orchestrator/requirements.txt -r apps/worker-orchestrator/requirements-dev.txt
+          python3 -m pip install -c constraints.txt -e packages/creator-domain -e packages/creator-provider -e packages/creator-service
+          python3 -c "import celery; assert celery.__version__ == '5.6.3', celery.__version__"
+      - name: Verify shipped worker cancellation and timeout topology
+        env:
+          PYTHONPATH: apps/api/src:apps/worker-orchestrator:packages/creator-domain:packages/creator-service:packages/creator-provider
+        run: >-
+          python3 -m pytest
+          apps/worker-orchestrator/tests/test_worker_topology_contract.py
+          apps/worker-orchestrator/tests/test_worker_topology_process.py
+          -v --junitxml=/tmp/worker-topology-runtime/results.xml
+      - name: Upload worker topology evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-topology-runtime-evidence
+          path: /tmp/worker-topology-runtime
+
   docker:
     runs-on: ubuntu-latest
     steps:
