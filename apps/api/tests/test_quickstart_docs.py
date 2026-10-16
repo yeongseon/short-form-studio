@@ -100,3 +100,13 @@ def test_wires_the_generated_key_into_studio_web_for_browser_auth() -> None:
     assert re.search(r"API_KEY:\s*\$\{API_KEY", compose), "studio-web must receive API_KEY from env"
     nginx = (_REPO_ROOT / "apps" / "studio-web" / "nginx.conf.template").read_text(encoding="utf-8")
     assert 'proxy_set_header X-API-Key "${API_KEY}"' in nginx
+
+
+def test_starts_the_complete_application_once_after_key_configuration() -> None:
+    text = _text()
+    key_position = text.index("API_KEY=<paste-the-generated-key>")
+    start_position = text.index("docker compose up -d api worker beat studio-web")
+    first_recreate = text.find("--force-recreate")
+
+    assert key_position < start_position
+    assert first_recreate == -1 or start_position < first_recreate

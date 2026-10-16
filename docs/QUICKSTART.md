@@ -44,14 +44,13 @@ Edit `.env`:
 > to `0.0.0.0`. Keep `ENVIRONMENT=development` for local use; production mode
 > rejects the default password and enforces `CORS_ORIGINS`.
 
-## 3. Start the CPU core
+## 3. Start infrastructure
 
 ```bash
-docker compose up -d
+docker compose up -d postgres redis
 ```
 
-This starts only the CPU core — Postgres, Redis, the API, the worker, the beat
-scheduler, and the studio web UI. The GPU model services (Ollama, Stable
+Wait for both services to become healthy. The GPU model services (Ollama, Stable
 Diffusion, local TTS/STT) stay stopped because they are behind the `gpu` profile.
 
 ## 4. Run database migrations
@@ -77,20 +76,33 @@ printed to stdout. Keep it — the studio UI and API use it to authenticate.
 **Wire the key into the studio UI so the browser can authenticate.** The studio
 UI never holds the key in the browser; instead its server-side proxy injects it
 as the `X-API-Key` header. That injection reads the `API_KEY` env var, so you must
-put the generated key into `.env` and restart the studio container:
+put the generated key into `.env` before starting the application:
 
 ```bash
 # 1. Put the generated key into .env
 API_KEY=<paste-the-generated-key>   # set this line in .env (replaces the placeholder)
 
-# 2. Recreate studio-web so its proxy picks up the key
-docker compose up -d --force-recreate --no-deps studio-web
+# 2. Start the complete CPU application once with that key
+docker compose up -d api worker beat studio-web
 ```
 
 Without this step the UI's calls to `/api/creator/*` return **401 Unauthorized**,
 because the browser sends no key until the proxy is configured with `API_KEY`.
 
-## 6. Open the studio and make your first Short
+## 6. Confirm the CPU application
+
+Start one dedicated Beat scheduler with the API, worker, and Studio. Do not add
+`-B` to workers, including scaled workers.
+
+The preceding command starts `api`, `worker`, one dedicated `beat`, and
+`studio-web` together. Do not start or recreate `studio-web` before `api` on a
+clean installation. Use `docker compose up -d --force-recreate --no-deps
+studio-web` only after changing `API_KEY` on an already-running installation.
+
+The migration → key bootstrap/configuration → Studio proxy → authenticated smoke
+order is also the canonical deployment sequence in [CUTOVER.md](CUTOVER.md).
+
+## 7. Open the studio and make your first Short
 
 Navigate to <http://127.0.0.1:5174>. From there:
 
