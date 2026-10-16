@@ -150,16 +150,6 @@ def redis_available() -> bool:
         return False
 
 
-def wait_redis_queue(queue: str, timeout: float = 10) -> int:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        depth = int(docker("exec", "topology-redis", "redis-cli", "LLEN", queue).stdout)
-        if depth > 0:
-            return depth
-        time.sleep(0.1)
-    pytest.fail(f"timed out waiting for broker redelivery on {queue}")
-
-
 async def recover_lost_claim(task_id: str) -> None:
     from creator_service.task_tracking_service import task_tracking_service
 
