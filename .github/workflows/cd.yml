@@ -237,8 +237,8 @@ jobs:
           python scripts/release_manifest.py validate release.json "$tag" "$RUNNING_SCHEMA" "$RUNNING_QUEUE" "${{ github.repository }}" \
             "${{ vars.STAGING_API_URL }}" "${{ vars.STAGING_STUDIO_URL }}" "${{ vars.PRODUCTION_API_URL }}" "${{ vars.PRODUCTION_STUDIO_URL }}" \
             "${{ vars.STAGING_DEPLOY_TARGET }}" "${{ vars.PRODUCTION_DEPLOY_TARGET }}" \
-            "${{ vars.STAGING_SMOKE_CREATE_URL }}" "${{ vars.STAGING_SMOKE_DOWNLOAD_URL }}" \
-            "${{ vars.PRODUCTION_SMOKE_CREATE_URL }}" "${{ vars.PRODUCTION_SMOKE_DOWNLOAD_URL }}"
+            "${{ vars.STAGING_SMOKE_CREATE_URL }}" "${{ vars.STAGING_SMOKE_DOWNLOAD_BASE_URL }}" \
+            "${{ vars.PRODUCTION_SMOKE_CREATE_URL }}" "${{ vars.PRODUCTION_SMOKE_DOWNLOAD_BASE_URL }}"
           for service in api worker studio; do
             repository="$(jq -r ".images.${service}.repository" release.json)"
             digest="$(jq -r ".images.${service}.digest" release.json)"
