@@ -214,9 +214,12 @@ jobs:
         if: always()
         run: |
           for container in topology-worker topology-prefork topology-prefork-replacement; do
-            docker logs "$container" > "/tmp/worker-topology-runtime/${container}.worker.log" 2>&1 || true
+            if docker inspect "$container" >/dev/null 2>&1; then
+              docker logs "$container" > "/tmp/worker-topology-runtime/${container}.worker.log" 2>&1
+            fi
+            test -s "/tmp/worker-topology-runtime/${container}.worker.log"
           done
-          cp /tmp/worker-topology-runtime/topology-worker.worker.log /tmp/worker-topology-runtime/worker.log 2>/dev/null || true
+          cp /tmp/worker-topology-runtime/topology-worker.worker.log /tmp/worker-topology-runtime/worker.log
       - name: Upload worker topology evidence
         if: always()
         uses: actions/upload-artifact@v4
