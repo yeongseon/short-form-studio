@@ -3,7 +3,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from redis.asyncio import Redis
+from redis.asyncio import Redis as AsyncRedis
 from redis.exceptions import RedisError
 from starlette import status
 
@@ -27,7 +27,7 @@ class ApiIdentity(ServiceIdentity):
 
 
 async def load_worker_identity() -> ServiceIdentity:
-    client = Redis.from_url(REDIS_URL, decode_responses=True)
+    client: AsyncRedis = AsyncRedis.from_url(REDIS_URL, decode_responses=True)
     try:
         values = await client.hgetall("release:worker-identity")
     finally:
