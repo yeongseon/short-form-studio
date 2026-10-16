@@ -152,6 +152,7 @@ def generate_visual_plan(
             full_prompt = f"{system_prompt}\n\n---\nScript sections:\n{sections_prompt}"
             params = dict(entry.default_params or {})
             try:
+                ctx.mark_provider_started()
                 raw_response = await provider.generate(full_prompt, params)
             except ProviderError:
                 raise
@@ -186,6 +187,7 @@ def generate_visual_plan(
                 idempotency_key=ctx.task_id,
                 reservation_owner_id=ctx.reservation_owner_id,
             )
+            ctx.mark_provider_accounted()
         except Exception:
             if ctx.reservation_owner_id is not None:
                 raise

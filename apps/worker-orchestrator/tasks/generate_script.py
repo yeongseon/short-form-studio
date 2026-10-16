@@ -78,6 +78,7 @@ def generate_script(
         try:
             params = dict(entry.default_params or {})
             try:
+                ctx.mark_provider_started()
                 generated = await provider.generate(prompt, params)
             except ProviderError:
                 raise
@@ -110,6 +111,7 @@ def generate_script(
                 idempotency_key=ctx.task_id,
                 reservation_owner_id=ctx.reservation_owner_id,
             )
+            ctx.mark_provider_accounted()
         except Exception:
             if ctx.reservation_owner_id is not None:
                 raise
