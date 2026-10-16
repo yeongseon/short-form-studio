@@ -1,3 +1,5 @@
+import { resolve } from "node:path";
+
 import { defineConfig, loadEnv } from "vite";
 
 export default defineConfig(({ mode }) => {
@@ -13,6 +15,16 @@ export default defineConfig(({ mode }) => {
   };
 
   return {
+    build: env.STUDIO_BROWSER_TEST === "true"
+      ? {
+          rollupOptions: {
+            input: {
+              app: resolve(__dirname, "index.html"),
+              assetUpload: resolve(__dirname, "browser-test/asset-upload.html"),
+            },
+          },
+        }
+      : undefined,
     // Dev server binds to localhost by default. Set VITE_DEV_HOST=0.0.0.0
     // to expose on the LAN — be aware this also exposes the API proxy
     // (and VITE_API_KEY if set) to network neighbours.
