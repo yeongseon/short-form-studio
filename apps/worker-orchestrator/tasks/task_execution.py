@@ -84,16 +84,21 @@ def run_task(
         except Exception:
             runner.logger.warning("Failed to cancel owned quota reservation", exc_info=True)
 
-    def settle_owned(*, billable_unknown: bool = False) -> None:
+    async def settle_owned_in_worker_loop(*, billable_unknown: bool = False) -> None:
         from creator_service.usage_service import usage_service
 
+        settlement = (
+            usage_service.settle_owned_unknown(task_id)
+            if billable_unknown
+            else usage_service.settle_owned(task_id)
+        )
+        await settlement
+
+    def settle_owned(*, billable_unknown: bool = False) -> None:
         try:
-            settlement = (
-                usage_service.settle_owned_unknown(task_id)
-                if billable_unknown
-                else usage_service.settle_owned(task_id)
+            runner.run_in_worker_loop(
+                settle_owned_in_worker_loop(billable_unknown=billable_unknown)
             )
-            runner.run_in_worker_loop(settlement)
         except Exception:
             runner.logger.warning("Failed to settle owned quota reservation", exc_info=True)
 
@@ -102,15 +107,16 @@ def run_task(
         execution_started = True
         return await execute(ctx)
 
-    try:
-        result = runner.run_in_worker_loop(
-            runner._run_task_inner(
-                validated_run_id, task_id, config, execute_owned,
-                claim_token=claim_token, on_claim=mark_claimed,
-            )
+    async def execute_and_settle() -> dict[str, object]:
+        result = await runner._run_task_inner(
+            validated_run_id, task_id, config, execute_owned,
+            claim_token=claim_token, on_claim=mark_claimed,
         )
-        settle_owned()
+        await settle_owned_in_worker_loop()
         return result
+
+    try:
+        return runner.run_in_worker_loop(execute_and_settle())
     except runner.StageGuardError:
         try:
             if claim_token is not None:
