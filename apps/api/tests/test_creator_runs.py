@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator, Sequence
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Literal, cast
 
 import pytest
@@ -1463,6 +1464,14 @@ def stub_generate_visual_assets_services(
     monkeypatch.setattr("shorts_api.routes.creator_runs_visuals.run_service", run_svc)
     monkeypatch.setattr(
         "shorts_api.routes.creator_runs_visuals.dispatch_generate_scene_image", dispatcher
+    )
+
+    async def _get_active_plan(_run_id: int):
+        return SimpleNamespace(scenes=[SimpleNamespace(scene_id="scene-1")])
+
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_visuals.visual_plan_service.get_active_plan",
+        _get_active_plan,
     )
 
     async def _get_project(_project_id: int, workspace_id: int | None = None):
