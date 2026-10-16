@@ -9,6 +9,13 @@ function mockResponse(status: number, body: unknown): Response {
   } as unknown as Response;
 }
 
+function mockHtmlResponse(status: number): Response {
+  return new Response("<html><title>413 Request Entity Too Large</title></html>", {
+    status,
+    headers: { "Content-Type": "text/html" },
+  });
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -66,5 +73,14 @@ describe("apiJson error envelope parsing (SF-78)", () => {
     expect(err).toBeInstanceOf(ApiError);
     expect(err.status).toBe(500);
     expect(typeof err.detail).toBe("string");
+  });
+
+  it("preserves the status when nginx returns an HTML 413", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(mockHtmlResponse(413));
+
+    const err = await apiJson("/x").catch((error: unknown) => error);
+
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err).toMatchObject({ status: 413, detail: "Request failed (413)" });
   });
 });

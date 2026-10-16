@@ -4,6 +4,7 @@ import AssetDropZone from "../components/creator/AssetDropZone";
 import { uploadKindForFile } from "../api/assets";
 import { uploadAsset } from "../api/assets";
 import type { MediaAsset } from "../api/assets";
+import { ApiError } from "../api/client";
 
 vi.mock("../api/assets", async () => {
   const actual = await vi.importActual<typeof import("../api/assets")>("../api/assets");
@@ -133,6 +134,36 @@ describe("AssetDropZone", () => {
       "Upload exceeds maximum allowed size",
     );
     expect(onCommand).not.toHaveBeenCalled();
+  });
+
+  it("explains the image limit and retry when nginx rejects multipart size", async () => {
+    mockedUpload.mockRejectedValue(
+      new ApiError(413, "Request failed (413)"),
+    );
+    render(<AssetDropZone workspaceId={1} sceneId="scene-1" />);
+
+    drop(screen.getByTestId("asset-drop-zone"), [file("big.png", "image/png")]);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("asset-drop-zone")).toHaveTextContent(
+        "Images can be up to 25 MiB. Choose a smaller file and try again.",
+      ),
+    );
+  });
+
+  it("explains the audio limit when the API returns a JSON size error", async () => {
+    mockedUpload.mockRejectedValue(
+      new ApiError(400, "Upload exceeds maximum allowed size"),
+    );
+    render(<AssetDropZone workspaceId={1} sceneId="scene-1" />);
+
+    drop(screen.getByTestId("asset-drop-zone"), [file("big.mp3", "audio/mpeg")]);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("asset-drop-zone")).toHaveTextContent(
+        "Audio files can be up to 100 MiB. Choose a smaller file and try again.",
+      ),
+    );
   });
 
   it("cancels an in-flight upload without emitting a command", async () => {
