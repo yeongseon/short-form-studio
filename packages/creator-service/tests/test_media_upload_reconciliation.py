@@ -64,6 +64,13 @@ class _PausedObjects(_Objects):
         return super().upload(key, data, content_type)
 
 
+class _LateDeleteFailingPausedObjects(_PausedObjects):
+    def delete(self, key: str) -> bool:
+        if key in self.objects:
+            raise StorageDeletionError(key=key)
+        return False
+
+
 class _FailingAssets(InMemoryMediaAssetStorage):
     def __init__(self, *, after_commit: bool = False) -> None:
         super().__init__()
@@ -164,3 +171,36 @@ async def test_upload_losing_expired_lease_compensates_without_saving_metadata()
     assert len(failures) == 1
     assert objects.objects == {}
     assert (await assets.list_assets(7, limit=50, offset=0))[1] == 0
+
+
+@pytest.mark.asyncio
+async def test_late_upload_failed_compensation_restores_cleanup_retry() -> None:
+    # Given reconciliation sees no object while its uploader remains paused.
+    now = datetime.now(timezone.utc)
+    objects = _LateDeleteFailingPausedObjects()
+    assets = InMemoryMediaAssetStorage()
+    service = MediaAssetService(objects, assets)
+    failures: list[BaseException] = []
+
+    async def upload() -> None:
+        try:
+            await service.create_image_asset(
+                workspace_id=7, filename="asset.png", data=_png(), content_type="image/png",
+            )
+        except MediaAssetPersistenceFailed as error:
+            failures.append(error)
+
+    # When the sweep reclaims the absent object before upload, then late deletion fails.
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(upload)
+        await anyio.to_thread.run_sync(objects.upload_started.wait, 5)
+        intent = (await assets.list_upload_intents())[0]
+        await assets.expire_upload_intent(intent.id, now)
+        swept = await MediaUploadReconciler(objects, assets).sweep(now=now)
+        objects.upload_allowed.set()
+
+    # Then the owner restores durable cleanup ownership for a later sweep.
+    assert swept.reclaimed == 1
+    assert len(failures) == 1
+    assert len(objects.objects) == 1
+    assert (await assets.list_upload_intents())[0].state is UploadIntentState.CLEANUP_PENDING
