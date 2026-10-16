@@ -71,6 +71,7 @@ def test_pinned_celery_solo_pool_declares_no_timeout_support() -> None:
 def test_runtime_probe_is_shipped_and_registered_with_the_ci_app(monkeypatch) -> None:
     # Given the production Celery app imported exactly as the image imports it.
     monkeypatch.setenv("WORKER_TOPOLOGY_PROBE_ENABLED", "1")
+    monkeypatch.setenv("ENVIRONMENT", "test")
     from celery_app import celery_app
     from celery_app import _worker_task_modules
 
@@ -91,6 +92,18 @@ def test_runtime_probe_is_disabled_without_explicit_ci_enablement(monkeypatch) -
     from celery_app import _worker_task_modules
 
     # Then the diagnostic task is not exposed to the broker.
+    assert "tasks.runtime_topology_probe" not in _worker_task_modules()
+
+
+def test_runtime_probe_is_disabled_in_production_even_when_requested(monkeypatch) -> None:
+    # Given an accidental production deployment override.
+    monkeypatch.setenv("WORKER_TOPOLOGY_PROBE_ENABLED", "1")
+    monkeypatch.setenv("ENVIRONMENT", "production")
+
+    # When the worker inclusion policy is evaluated.
+    from celery_app import _worker_task_modules
+
+    # Then the diagnostic task remains unavailable to the production broker.
     assert "tasks.runtime_topology_probe" not in _worker_task_modules()
 
 
@@ -122,6 +135,8 @@ def test_runtime_ci_uses_postgres_redis_ffmpeg_and_uploads_complete_evidence() -
         "image-digest.txt",
         "resolved-command.txt",
         'test -s "/tmp/worker-topology-runtime/${container}.worker.log"',
+        "127.0.0.1:55441:5432",
+        "127.0.0.1:56391:6379",
     )
 
     # Then the real dependencies and diagnostic evidence are mandatory.

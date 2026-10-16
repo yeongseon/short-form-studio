@@ -130,7 +130,10 @@ def _worker_task_modules() -> list[str]:
         "tasks.reconcile_media_uploads",
         "tasks.revoked_quota",
     ]
-    if os.getenv("WORKER_TOPOLOGY_PROBE_ENABLED") == "1":
+    if (
+        os.getenv("WORKER_TOPOLOGY_PROBE_ENABLED") == "1"
+        and os.getenv("ENVIRONMENT") == "test"
+    ):
         modules.append("tasks.runtime_topology_probe")
     return modules
 
