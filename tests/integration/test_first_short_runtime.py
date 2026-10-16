@@ -171,6 +171,12 @@ def test_authenticated_demo_survives_restart_and_renders_downloadable_mp4(tmp_pa
                 body = seed.json()
                 run_id, project_id = body["run"]["id"], body["seeded_project_id"]
                 assert body["run"]["current_stage"] == "TIMELINE_REVIEW"
+                created_asset_id = next(iter(body["asset_id_map"].values()))
+                created_media = client.get(
+                    f"/api/creator/workspaces/{workspace}/assets/{created_asset_id}/content",
+                )
+                assert created_media.status_code == 200, created_media.text[:100]
+                assert created_media.content.startswith(b"\x89PNG\r\n\x1a\n")
 
                 api.terminate()
                 api.wait(timeout=15)

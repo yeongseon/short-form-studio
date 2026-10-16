@@ -144,8 +144,9 @@ def test_post_deploy_smoke_downloads_the_created_nonempty_resource() -> None:
     for name in ("verify-staging", "verify-production"):
         commands = "\n".join(step.get("run", "") for step in jobs[name]["steps"])
         assert "jq -er" in commands, name
-        assert "SMOKE_DOWNLOAD_BASE_URL" in commands, name
-        assert "${resource_id}" in commands, name
+        assert "/demo-short/runs" in commands, name
+        assert ".asset_id_map" in commands, name
+        assert "/assets/${artifact_id}/content" in commands, name
         assert "test -s download.bin" in commands, name
 
 
