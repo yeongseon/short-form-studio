@@ -10,16 +10,16 @@ from .db import fetch_all, fetch_one, get_pool
 class PostgresUsageStorage:
     async def record_event(self, row: dict[str, Any]) -> dict[str, Any]:
         idempotency_key = row.get("idempotency_key")
-        if isinstance(idempotency_key, str):
-            existing = await fetch_one(
-                "SELECT * FROM usage_events WHERE idempotency_key = $1",
-                idempotency_key,
-            )
-            if existing is not None:
-                return existing
-
-        saved = await fetch_one(
-            """
+        workspace_id = row.get("workspace_id")
+        pool = await get_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                if isinstance(workspace_id, int):
+                    await connection.execute(
+                        "SELECT pg_advisory_xact_lock($1)", workspace_id
+                    )
+                saved = await connection.fetchrow(
+                    """
             INSERT INTO usage_events (
                 workspace_id,
                 project_id,
@@ -39,30 +39,20 @@ class PostgresUsageStorage:
             ON CONFLICT (idempotency_key) DO NOTHING
             RETURNING *
             """,
-            row.get("workspace_id"),
-            row.get("project_id"),
-            row.get("run_id"),
-            row.get("provider"),
-            row.get("model_key"),
-            row.get("operation_type"),
-            row.get("input_tokens"),
-            row.get("output_tokens"),
-            row.get("image_count"),
-            row.get("audio_seconds"),
-            row.get("estimated_cost_usd"),
-            row.get("cost_config_version"),
-            idempotency_key,
-        )
-        if saved is None and isinstance(idempotency_key, str):
-            existing = await fetch_one(
-                "SELECT * FROM usage_events WHERE idempotency_key = $1",
-                idempotency_key,
-            )
-            if existing is not None:
-                return existing
-        if saved is None:
-            raise ValueError("Failed to create usage event")
-        return saved
+                    workspace_id, row.get("project_id"), row.get("run_id"),
+                    row.get("provider"), row.get("model_key"), row.get("operation_type"),
+                    row.get("input_tokens"), row.get("output_tokens"), row.get("image_count"),
+                    row.get("audio_seconds"), row.get("estimated_cost_usd"),
+                    row.get("cost_config_version"), idempotency_key,
+                )
+                if saved is None and isinstance(idempotency_key, str):
+                    saved = await connection.fetchrow(
+                        "SELECT * FROM usage_events WHERE idempotency_key = $1",
+                        idempotency_key,
+                    )
+                if saved is None:
+                    raise ValueError("Failed to create usage event")
+                return dict(saved)
 
     async def list_by_workspace(self, workspace_id: int, since: datetime) -> list[dict[str, Any]]:
         return await fetch_all(
