@@ -120,4 +120,5 @@ async def generate_visual_assets_trigger(
         quota_operation_type="image_gen",
         workspace_id=user.workspace_id,
         reservation_estimate_usd=quote.maximum_cost_usd,
+        reservation_units=len(plan.scenes),
     )

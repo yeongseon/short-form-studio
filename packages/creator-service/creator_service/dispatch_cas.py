@@ -72,6 +72,7 @@ class DispatchCAS(DispatchRuntime):
         enqueue_error_detail: str, restart_from_stage: str | None = None,
         quota_operation_type: str | None = None, workspace_id: int | None = None,
         reservation_estimate_usd: Decimal | None = None,
+        reservation_units: int = 1,
     ) -> dict[str, JsonValue]:
         task_tracking_service = import_module("creator_service.task_tracking_service").task_tracking_service
 
@@ -90,6 +91,7 @@ class DispatchCAS(DispatchRuntime):
         reserved_workspace = await reserve_quota(
             run_service, run_id, workspace_id=workspace_id, operation_type=quota_operation_type,
             owner_id=owner_id, estimated_cost_usd=reservation_estimate_usd,
+            units=reservation_units,
         )
         if reserved_workspace is not None:
             workspace_id = reserved_workspace

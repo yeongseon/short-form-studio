@@ -11,6 +11,10 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     op.add_column(
+        "workspace_quota_reservation_owners",
+        sa.Column("reserved_units", sa.Integer(), nullable=False, server_default="1"),
+    )
+    op.add_column(
         "workspace_quota_reservation_attempts",
         sa.Column("status", sa.String(32), nullable=False, server_default="authorized"),
     )
@@ -41,3 +45,4 @@ def downgrade() -> None:
     )
     op.drop_column("workspace_quota_reservation_attempts", "usage_event_id")
     op.drop_column("workspace_quota_reservation_attempts", "status")
+    op.drop_column("workspace_quota_reservation_owners", "reserved_units")
