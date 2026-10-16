@@ -40,6 +40,7 @@ class UploadIntent:
     state: UploadIntentState
     lease_expires_at: datetime
     retry_count: int = 0
+    reserved_bytes: int = 0
 
 
 @dataclass(frozen=True, slots=True)
