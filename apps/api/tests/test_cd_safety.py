@@ -221,3 +221,11 @@ def test_ci_executes_two_release_postgres_rollback_lifecycle() -> None:
     assert "scripts/release_lifecycle_acceptance.sh" in commands
     uploads = [step for step in raw["jobs"]["docker"]["steps"] if step.get("uses") == "actions/upload-artifact@v4"]
     assert any(step.get("with", {}).get("name") == "release-lifecycle-evidence" for step in uploads)
+
+
+def test_ci_validates_single_alembic_head_without_parsing_cli_text() -> None:
+    raw = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    commands = "\n".join(step.get("run", "") for step in raw["jobs"]["test"]["steps"])
+
+    assert "ScriptDirectory.from_config" in commands
+    assert "grep -E '^[0-9a-f]+'" not in commands

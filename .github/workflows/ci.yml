@@ -62,14 +62,15 @@ jobs:
         run: |
           cd apps/api
           export DATABASE_URL="postgresql://user:pass@localhost:5432/db"
-          # Verify single migration head (no branches)
-          HEAD_COUNT=$(alembic heads 2>&1 | grep -E '^[0-9a-f]+' | wc -l)
-          if [ "$HEAD_COUNT" -ne 1 ]; then
-            echo "ERROR: Multiple migration heads detected ($HEAD_COUNT heads)"
-            alembic heads
-            exit 1
-          fi
-          echo "Migration validation complete (1 head)"
+          python3 - <<'PY'
+          from alembic.config import Config
+          from alembic.script import ScriptDirectory
+
+          heads = ScriptDirectory.from_config(Config("alembic.ini")).get_heads()
+          if len(heads) != 1:
+              raise SystemExit(f"ERROR: expected one Alembic head, found {heads!r}")
+          print(f"Migration validation complete (head {heads[0]})")
+          PY
       - name: Install Node dependencies
         run: npm --prefix apps/studio-web ci
       - name: Test architecture dependency checker
