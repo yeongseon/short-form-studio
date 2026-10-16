@@ -1,9 +1,10 @@
 import os
 from pathlib import Path
 
+import anyio
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-from redis.asyncio import Redis as AsyncRedis
+from redis import Redis
 from redis.exceptions import RedisError
 from starlette import status
 
@@ -27,11 +28,11 @@ class ApiIdentity(ServiceIdentity):
 
 
 async def load_worker_identity() -> ServiceIdentity:
-    client: AsyncRedis = AsyncRedis.from_url(REDIS_URL, decode_responses=True)
-    try:
-        values = await client.hgetall("release:worker-identity")
-    finally:
-        await client.aclose()
+    def read_identity() -> dict[str, str]:
+        client: Redis = Redis.from_url(REDIS_URL, decode_responses=True)
+        return client.hgetall("release:worker-identity")
+
+    values = await anyio.to_thread.run_sync(read_identity)
     return ServiceIdentity(source_sha=values["source_sha"], digest=values["digest"])
 
 
