@@ -1,10 +1,41 @@
 import json
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from celery.signals import task_failure
 from tasks import generate_audio as generate_audio_module
 
 import celery_app
+from tasks import hard_timeout
+
+
+def test_hard_timeout_request_finalizes_task_run_and_quota(monkeypatch) -> None:
+    # Given a prefork parent request for a claimed production delivery.
+    mark_failed = AsyncMock()
+    cancel_owned = AsyncMock()
+    get_run = AsyncMock(return_value={"current_stage": "RENDER_GENERATING", "status": "running"})
+    update_run = AsyncMock(return_value=(True, {"status": "failed"}))
+    monkeypatch.setattr(
+        hard_timeout,
+        "_terminal_services",
+        lambda: (mark_failed, cancel_owned, get_run, update_run),
+    )
+
+    # When the parent observes the hard timeout after the child is killed.
+    hard_timeout.finalize_hard_timeout("timeout-delivery", 103, 2.0)
+
+    # Then durable task/run ownership and quota are finalized outside the dead child.
+    mark_failed.assert_awaited_once_with(
+        "timeout-delivery",
+        "TIMEOUT",
+        "The task exceeded its 2.0 second hard time limit",
+    )
+    cancel_owned.assert_awaited_once_with("timeout-delivery")
+    update_run.assert_awaited_once_with(
+        103,
+        {"current_stage": "FAILED", "status": "failed"},
+        expected_stages=frozenset({"RENDER_GENERATING"}),
+        rejected_statuses=frozenset({"failed", "cancelled", "completed"}),
+    )
 
 
 class _Sender:
