@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+from decimal import Decimal
 
 from creator_domain.models import TRIGGER_POLICY
 from creator_service.run_service import run_service
+from creator_service.visual_plan_service import visual_plan_service
+from creator_service.usage_service import ReservationQuote
 from creator_service.task_dispatch_service import (
     cas_dispatch_with_rollback,
     dispatch_generate_scene_image,
@@ -89,6 +92,14 @@ async def generate_visual_assets_trigger(
         )
 
     validate_model_key(request.model_key, expected_category="image")
+    plan = await visual_plan_service.get_active_plan(run_id)
+    if plan is None or not plan.scenes:
+        raise HTTPException(status_code=409, detail="Active visual plan has no bounded scenes")
+    internal_attempts = 3 if request.model_key == "groq-svg" else 1
+    quote = ReservationQuote.bounded(
+        unit_cost_usd=Decimal("0.04"), units=len(plan.scenes),
+        internal_attempts=internal_attempts, deliveries=6,
+    )
     return await cas_dispatch_with_rollback(
         run_id=run_id,
         expected_stages=allowed_stages,
@@ -108,4 +119,5 @@ async def generate_visual_assets_trigger(
         enqueue_error_detail="Failed to enqueue image generation task",
         quota_operation_type="image_gen",
         workspace_id=user.workspace_id,
+        reservation_estimate_usd=quote.maximum_cost_usd,
     )
