@@ -5,6 +5,7 @@ import signal
 from unittest.mock import patch
 
 import celery_app as celery_module
+import pytest
 
 
 def test_celery_app_loads(app):
@@ -42,6 +43,28 @@ def test_media_upload_reconciliation_is_scheduled(app) -> None:
     schedule = app.conf.beat_schedule["reconcile-media-uploads"]
     assert schedule["task"] == "reconcile_media_uploads"
     assert schedule["schedule"] == 600.0
+
+
+def test_media_retention_sweep_is_scheduled_safely(app) -> None:
+    schedule = app.conf.beat_schedule["sweep-media-retention"]
+    assert schedule["task"] == "sweep_media_retention"
+    assert schedule["schedule"] == 3600.0
+
+
+@pytest.mark.asyncio
+async def test_media_upload_reconcile_task_executes_sweep(monkeypatch) -> None:
+    from creator_service.media_upload_reconciliation import SweepResult
+    from tasks import reconcile_media_uploads
+
+    async def sweep(self):
+        return SweepResult(reclaimed=1, preserved=2, failed=0, exhausted=0)
+
+    monkeypatch.setattr(
+        "creator_service.media_upload_reconciliation.MediaUploadReconciler.sweep", sweep,
+    )
+    result = await reconcile_media_uploads._reconcile_once()
+
+    assert result == {"reclaimed": 1, "preserved": 2, "failed": 0, "exhausted": 0}
 
 
 def test_sigterm_handler_sets_shutdown_flag() -> None:
