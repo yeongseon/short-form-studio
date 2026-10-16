@@ -1,10 +1,12 @@
 # --- build stage ---
 FROM node:20-slim AS build
+ARG SOURCE_SHA
 WORKDIR /app
 COPY apps/studio-web/package.json apps/studio-web/package-lock.json ./
 RUN npm ci
 COPY apps/studio-web .
 RUN npm run build
+RUN printf '%s' "$SOURCE_SHA" > dist/source-sha
 
 # --- dev stage ---
 FROM node:20-slim AS dev
@@ -19,8 +21,12 @@ CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]
 
 # --- runtime stage ---
 FROM nginxinc/nginx-unprivileged:alpine AS runtime
+ARG SOURCE_SHA
+LABEL org.opencontainers.image.revision="${SOURCE_SHA}"
 COPY apps/studio-web/nginx.conf.template /etc/nginx/templates/default.conf.template
 COPY --from=build /app/dist /usr/share/nginx/html
+COPY apps/studio-web/docker-entrypoint.d/40-release-identity.sh /docker-entrypoint.d/40-release-identity.sh
+RUN chmod +x /docker-entrypoint.d/40-release-identity.sh
 # The nginx docker-entrypoint runs envsubst on /etc/nginx/templates/ at startup.
 # NGINX_ENVSUBST_FILTER limits substitution to API_KEY only, preserving nginx
 # variables ($host, $remote_addr, etc.) in the template.
