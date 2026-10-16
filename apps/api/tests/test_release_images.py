@@ -25,6 +25,10 @@ def test_docker_images_embed_source_revision_and_studio_artifact() -> None:
     assert "release-identity.json" in artifact_script
     assert "STUDIO_IMAGE_DIGEST" in artifact_script
 
+    api = (ROOT / "apps/api/Dockerfile").read_text()
+    assert "mapfile -t revisions" in api
+    assert 'test "${#revisions[@]}" -eq 1' in api
+
 
 def test_studio_entrypoint_writes_runtime_digest(tmp_path: Path) -> None:
     (tmp_path / "source-sha").write_text(SOURCE_SHA)
