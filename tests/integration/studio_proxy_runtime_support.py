@@ -101,6 +101,9 @@ def studio_proxy_runtime(tmp_path_factory: pytest.TempPathFactory) -> Iterator[S
     body_temp = root / "body"
     artifact_root.mkdir()
     body_temp.mkdir()
+    studio_dist = ROOT / "apps/studio-web/dist"
+    if not (studio_dist / "index.html").is_file():
+        pytest.skip("the built Studio is required")
     env = {
         **os.environ,
         "DATABASE_URL": f"{database_url}{'&' if '?' in database_url else '?'}search_path={schema}",
@@ -144,14 +147,13 @@ def studio_proxy_runtime(tmp_path_factory: pytest.TempPathFactory) -> Iterator[S
         configured = template.replace("${API_KEY}", token)
         configured = configured.replace("listen 8080;", f"listen 127.0.0.1:{nginx_port};")
         configured = configured.replace("http://api:8000", api_origin)
-        configured = configured.replace("/usr/share/nginx/html", str(root))
+        configured = configured.replace("/usr/share/nginx/html", str(studio_dist))
         config = root / "nginx.conf"
         config.write_text(
             f"pid {root}/nginx.pid; error_log {root}/nginx-error.log;\n"
             f"events {{}}\nhttp {{ access_log off; client_body_temp_path {body_temp}; "
             f"proxy_temp_path {root}/proxy;\n{configured}\n}}\n",
         )
-        (root / "index.html").write_text("<html>Studio runtime</html>")
         nginx_process = subprocess.Popen(
             [nginx, "-p", str(root), "-c", str(config), "-g", "daemon off;"],
             stdout=subprocess.DEVNULL,
