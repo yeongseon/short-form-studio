@@ -1,25 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import BinaryIO, Protocol
+from datetime import datetime
+from typing import Protocol
 
 import anyio
 from creator_domain.models import MediaAsset, MediaOrigin
 
-
-class _StorageResult(Protocol):
-    key: str
-    size_bytes: int
-    content_type: str
-    checksum: str
-    storage_provider: str
-
-
-class MediaStorageBackend(Protocol):
-    def upload(
-        self, key: str, data: bytes | BinaryIO,
-        content_type: str = "application/octet-stream",
-    ) -> _StorageResult: ...
+from .media_upload_reconciliation import UploadIntent, UploadIntentState
+from .object_storage import ArtifactStorageBackend as MediaStorageBackend
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +29,17 @@ class MediaAssetStorageBackend(Protocol):
         project_id: int | None = None, limit: int, offset: int,
     ) -> tuple[list[dict[str, object]], int]: ...
 
+    async def create_upload_intent(self, intent: UploadIntent) -> UploadIntent: ...
+    async def mark_upload_intent_uploaded(self, intent_id: int) -> None: ...
+    async def complete_upload_intent(self, intent_id: int) -> None: ...
+    async def defer_upload_cleanup(self, intent_id: int) -> None: ...
+    async def asset_exists_for_key(self, workspace_id: int, storage_key: str) -> bool: ...
+    async def claim_expired_upload_intents(
+        self, *, now: datetime, lease_expires_at: datetime, limit: int,
+    ) -> list[UploadIntent]: ...
+    async def record_upload_reclaimed(self, intent_id: int) -> None: ...
+    async def record_upload_cleanup_failure(self, intent_id: int, max_retries: int) -> bool: ...
+
 
 _ORIGIN_SORT_RANK = {
     MediaOrigin.UPLOADED: 0, MediaOrigin.IMPORTED: 1, MediaOrigin.EXTERNAL_URL: 2,
@@ -57,6 +57,8 @@ class InMemoryMediaAssetStorage:
         self._assets: list[dict[str, object]] = []
         self._next_id = 1
         self._lock = anyio.Lock()
+        self._intents: dict[int, UploadIntent] = {}
+        self._next_intent_id = 1
 
     async def save_asset(self, row: dict[str, object]) -> dict[str, object]:
         async with self._lock:
@@ -83,3 +85,78 @@ class InMemoryMediaAssetStorage:
         ]
         ordered = sorted(matched, key=_asset_sort_key)
         return [dict(asset) for asset in ordered[offset:offset + limit]], len(matched)
+
+    async def create_upload_intent(self, intent: UploadIntent) -> UploadIntent:
+        async with self._lock:
+            saved = UploadIntent(
+                id=self._next_intent_id, owner_id=intent.owner_id,
+                workspace_id=intent.workspace_id, storage_key=intent.storage_key,
+                state=intent.state, lease_expires_at=intent.lease_expires_at,
+            )
+            self._intents[saved.id] = saved
+            self._next_intent_id += 1
+        return saved
+
+    def _set_intent(self, intent_id: int, state: UploadIntentState, **changes: object) -> None:
+        intent = self._intents[intent_id]
+        self._intents[intent_id] = UploadIntent(
+            id=intent.id, owner_id=intent.owner_id, workspace_id=intent.workspace_id,
+            storage_key=intent.storage_key, state=state,
+            lease_expires_at=changes.get("lease_expires_at", intent.lease_expires_at),
+            retry_count=changes.get("retry_count", intent.retry_count),
+        )
+
+    async def mark_upload_intent_uploaded(self, intent_id: int) -> None:
+        async with self._lock:
+            self._set_intent(intent_id, UploadIntentState.UPLOADED)
+
+    async def complete_upload_intent(self, intent_id: int) -> None:
+        async with self._lock:
+            self._set_intent(intent_id, UploadIntentState.COMPLETED)
+
+    async def defer_upload_cleanup(self, intent_id: int) -> None:
+        async with self._lock:
+            self._set_intent(intent_id, UploadIntentState.CLEANUP_PENDING)
+
+    async def asset_exists_for_key(self, workspace_id: int, storage_key: str) -> bool:
+        return any(
+            asset["workspace_id"] == workspace_id and asset.get("storage_key") == storage_key
+            for asset in self._assets
+        )
+
+    async def claim_expired_upload_intents(
+        self, *, now: datetime, lease_expires_at: datetime, limit: int,
+    ) -> list[UploadIntent]:
+        async with self._lock:
+            eligible = [
+                intent for intent in self._intents.values()
+                if intent.state in {UploadIntentState.PENDING, UploadIntentState.UPLOADED, UploadIntentState.CLEANUP_PENDING}
+                and intent.lease_expires_at <= now
+            ][:limit]
+            for intent in eligible:
+                self._set_intent(intent.id, intent.state, lease_expires_at=lease_expires_at)
+            return eligible
+
+    async def record_upload_reclaimed(self, intent_id: int) -> None:
+        async with self._lock:
+            self._set_intent(intent_id, UploadIntentState.RECLAIMED)
+
+    async def record_upload_cleanup_failure(self, intent_id: int, max_retries: int) -> bool:
+        async with self._lock:
+            intent = self._intents[intent_id]
+            retries = intent.retry_count + 1
+            exhausted = retries >= max_retries
+            self._set_intent(
+                intent_id,
+                UploadIntentState.EXHAUSTED if exhausted else UploadIntentState.CLEANUP_PENDING,
+                retry_count=retries,
+            )
+        return exhausted
+
+    async def list_upload_intents(self) -> list[UploadIntent]:
+        return list(self._intents.values())
+
+    async def expire_upload_intent(self, intent_id: int, now: datetime) -> None:
+        async with self._lock:
+            intent = self._intents[intent_id]
+            self._set_intent(intent_id, intent.state, lease_expires_at=now)
