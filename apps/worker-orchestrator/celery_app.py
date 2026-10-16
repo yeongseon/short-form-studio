@@ -16,6 +16,7 @@ import json
 import signal
 from datetime import datetime, timezone
 import resource
+from pathlib import Path
 from typing import Any
 
 from celery import Celery
@@ -38,6 +39,8 @@ try:
 except ImportError:
     redis = None
 from creator_service.production_checks import validate_production_config
+from celery_dlq_fallback import append_fallback_entry, read_fallback_entries
+from creator_service.broker_recovery import BrokerSnapshot
 
 
 def _parse_int_env(name: str, default: int) -> int:
@@ -101,6 +104,8 @@ def _apply_resource_limits() -> None:
 redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
 dlq_max_size = max(1, int(os.getenv("DLQ_MAX_SIZE", "10000")))
 dlq_fallback_path = os.getenv("DLQ_FALLBACK_PATH", "/tmp/dlq_fallback.jsonl")
+dlq_fallback_max_bytes = _parse_int_env("DLQ_FALLBACK_MAX_BYTES", 10 * 1024 * 1024)
+broker_recovery_epoch_key = os.getenv("BROKER_RECOVERY_EPOCH_KEY", "queue:recovery_epoch")
 
 celery_app = Celery(
     "worker-orchestrator",
@@ -231,6 +236,9 @@ def _record_failed_task_to_dlq(
     kwargs: dict[str, object],
     exception: BaseException,
 ) -> None:
+    meter = import_module("creator_service.telemetry").get_meter(__name__)
+    retention_failures = meter.create_counter("worker.dlq.retention_failures")
+    retained_entries = meter.create_counter("worker.dlq.retained_entries")
     failure = build_run_failure_summary(exception)
     payload = _sanitize_for_dlq({
         "task_id": task_id,
@@ -245,15 +253,19 @@ def _record_failed_task_to_dlq(
     def _write_dlq_fallback(entry: JsonValue, error: BaseException | None = None) -> None:
         logger = logging.getLogger(__name__)
         try:
-            with open(dlq_fallback_path, "a", encoding="utf-8") as fallback_file:
-                fallback_file.write(json.dumps(entry, allow_nan=False))
-                fallback_file.write("\n")
+            append_fallback_entry(
+                Path(dlq_fallback_path), entry, max_bytes=dlq_fallback_max_bytes
+            )
+            retained_entries.add(1, {"source": "fallback"})
             logger.warning(
                 "DLQ Redis write failed; wrote entry to fallback file",
+                extra={"dlq_retention_failure": 0, "dlq_source": "fallback"},
             )
-        except OSError:
+        except (OSError, ValueError):
+            retention_failures.add(1, {"source": "fallback"})
             logger.error(
                 "DLQ Redis write failed and fallback file write also failed",
+                extra={"dlq_retention_failure": 1, "dlq_source": "fallback"},
             )
         if error is not None:
             logger.error(
@@ -268,8 +280,34 @@ def _record_failed_task_to_dlq(
         client = redis.Redis.from_url(redis_url)
         client.lpush("dlq:creator", json.dumps(payload, allow_nan=False))
         client.ltrim("dlq:creator", 0, dlq_max_size - 1)
+        retained_entries.add(1, {"source": "redis"})
     except Exception as redis_error:
         _write_dlq_fallback(payload, redis_error)
+
+
+def read_dlq_fallback(limit: int = 100) -> list[dict[str, JsonValue]]:
+    return read_fallback_entries(Path(dlq_fallback_path), limit=limit)
+
+
+def ensure_broker_epoch() -> BrokerSnapshot:
+    if redis is None:
+        raise RuntimeError("Redis client unavailable")
+    client = redis.Redis.from_url(redis_url)
+    started_at = datetime.now(timezone.utc)
+    generated = f"{os.urandom(16).hex()}|{started_at.isoformat()}"
+    client.set(broker_recovery_epoch_key, generated, nx=True)
+    stored = client.get(broker_recovery_epoch_key)
+    if not isinstance(stored, (bytes, str)):
+        raise RuntimeError("Broker recovery epoch unavailable")
+    decoded = stored.decode() if isinstance(stored, bytes) else stored
+    epoch, encoded_started_at = decoded.split("|", maxsplit=1)
+    return BrokerSnapshot(
+        epoch=epoch,
+        started_at=datetime.fromisoformat(encoded_started_at),
+        queue_length=0,
+        oldest_wait_seconds=None,
+        workers_online=0,
+    )
 
 
 def _should_record_to_dlq(sender: Any, exception: BaseException | None = None) -> bool:
