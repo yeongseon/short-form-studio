@@ -166,6 +166,23 @@ def test_app_rollback_uses_schema_compatibility_policy_while_deploy_stays_exact(
         assert "verify-db-compatible" not in commands, name
 
 
+def test_runtime_verification_uses_platform_digests_and_every_worker_source() -> None:
+    raw = yaml.safe_load((ROOT / ".github/workflows/cd.yml").read_text())
+    jobs = raw["jobs"]
+
+    for name in ("deploy-staging", "deploy-production"):
+        commands = "\n".join(step.get("run", "") for step in jobs[name]["steps"])
+        assert "platform-attestation.json" in commands, name
+        assert "json.tool platform-attestation.json" in commands, name
+
+    for name in ("verify-staging", "verify-production"):
+        commands = "\n".join(step.get("run", "") for step in jobs[name]["steps"])
+        assert "api_source_sha" in commands, name
+        assert "worker_source_shas" in commands, name
+        assert "studio_source_sha" in commands, name
+        assert "platform-attestation.json" in commands, name
+
+
 def test_deploy_production_condition_references_only_direct_needs() -> None:
     workflow = Workflow.model_validate(yaml.safe_load((ROOT / ".github/workflows/cd.yml").read_text()))
 
