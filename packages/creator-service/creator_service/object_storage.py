@@ -47,6 +47,14 @@ class StorageCredentialMissingError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class StorageDeletionError(RuntimeError):
+    key: str
+
+    def __str__(self) -> str:
+        return f"object storage deletion failed for {self.key}"
+
+
 @dataclass
 class StorageResult:
     """Result of an upload operation."""
@@ -155,10 +163,15 @@ class LocalStorageBackend:
 
     def delete(self, key: str) -> bool:
         path = self._root / self._safe_key(key)
-        if path.is_file():
-            path.unlink()
-            return True
-        return False
+        try:
+            if path.is_file():
+                path.unlink()
+                return True
+            return False
+        except FileNotFoundError:
+            return False
+        except OSError as error:
+            raise StorageDeletionError(key=key) from error
 
     def exists(self, key: str) -> bool:
         return (self._root / self._safe_key(key)).is_file()
@@ -240,7 +253,10 @@ class S3StorageBackend:
         return response["Body"].read()
 
     def delete(self, key: str) -> bool:
-        self._client.delete_object(Bucket=self._bucket, Key=self._full_key(key))
+        try:
+            self._client.delete_object(Bucket=self._bucket, Key=self._full_key(key))
+        except Exception as error:  # noqa: BLE001 - provider SDK boundary normalization
+            raise StorageDeletionError(key=key) from error
         return True
 
     def exists(self, key: str) -> bool:
@@ -370,7 +386,12 @@ class AzureBlobStorageBackend:
 
     def delete(self, key: str) -> bool:
         blob_client = self._container_client.get_blob_client(self._full_key(key))
-        blob_client.delete_blob(delete_snapshots="include")
+        try:
+            blob_client.delete_blob(delete_snapshots="include")
+        except Exception as error:  # noqa: BLE001 - provider SDK boundary normalization
+            if type(error).__name__ == "ResourceNotFoundError":
+                return False
+            raise StorageDeletionError(key=key) from error
         return True
 
     def exists(self, key: str) -> bool:
