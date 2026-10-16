@@ -92,7 +92,7 @@ class _Provider(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b"ok")
 
-    def log_message(self, _format: str, *_args: str) -> None:
+    def log_message(self, format: str, *_args: str) -> None:  # noqa: A002
         return
 
 
