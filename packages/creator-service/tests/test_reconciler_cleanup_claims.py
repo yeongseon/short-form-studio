@@ -77,8 +77,7 @@ async def _prepare_run(pool: asyncpg.Pool | None) -> int:
     if pool is None:
         return 1
     project_id = await pool.fetchval(
-        """INSERT INTO creator_projects (workspace_id, name, idea_brief, status)
-           VALUES (1, 'cleanup-claim', 'test', 'active') RETURNING id"""
+        "INSERT INTO creator_projects (workspace_id) VALUES (1) RETURNING id"
     )
     return await pool.fetchval(
         """INSERT INTO creator_runs

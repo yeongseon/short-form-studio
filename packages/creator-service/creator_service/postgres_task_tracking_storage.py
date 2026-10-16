@@ -53,7 +53,7 @@ class PostgresTaskTrackingStorage:
                                    WHEN EXCLUDED.status = 'queued' THEN NULL
                                    ELSE creator_run_tasks.claim_token END
             WHERE creator_run_tasks.status NOT IN ('success', 'running')
-              AND creator_run_tasks.error_code IS DISTINCT FROM ALL($11::text[])
+              AND NOT (creator_run_tasks.error_code = ANY($11::text[]))
             RETURNING *
             """,
             row.get("run_id"),
@@ -146,7 +146,7 @@ class PostgresTaskTrackingStorage:
                 error_code = NULL,
                 error_message = NULL, claim_token = $3
             WHERE id = $1 AND status IN ('pending', 'queued', 'failed')
-              AND error_code IS DISTINCT FROM ALL($4::text[])
+              AND NOT (error_code = ANY($4::text[]))
             RETURNING *
             """,
             task_id,
