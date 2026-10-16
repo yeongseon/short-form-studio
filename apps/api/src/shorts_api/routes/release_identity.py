@@ -31,7 +31,10 @@ async def load_worker_identity() -> list[ServiceIdentity]:
     def read_identities() -> list[str]:
         client: Redis = Redis.from_url(REDIS_URL, decode_responses=True)
         keys = list(client.scan_iter("release:worker-identity:*"))
-        return [value for value in client.mget(keys) if value is not None]
+        pipeline = client.pipeline(transaction=False)
+        for key in keys:
+            pipeline.get(key)
+        return [value for value in pipeline.execute() if isinstance(value, str)]
 
     values = await anyio.to_thread.run_sync(read_identities)
     return [ServiceIdentity.model_validate_json(value) for value in values]
