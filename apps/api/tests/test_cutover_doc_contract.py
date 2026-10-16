@@ -9,6 +9,8 @@ import yaml
 _ROOT = Path(__file__).resolve().parents[3]
 _CUTOVER = _ROOT / "docs" / "CUTOVER.md"
 _COMPOSE = _ROOT / "docker-compose.yml"
+_CI = _ROOT / ".github" / "workflows" / "ci.yml"
+_RUNTIME_ACCEPTANCE = _ROOT / "scripts" / "cutover_runtime_acceptance.sh"
 
 
 def _text() -> str:
@@ -47,6 +49,38 @@ def test_remote_provider_path_has_the_authenticated_cutover_order() -> None:
     positions = [remote.index(step) for step in ordered_steps]
     assert positions == sorted(positions)
     assert "../README.md#35-bootstrap-an-api-key-first-time-only" in remote
+
+
+def test_smoke_credentials_are_exported_before_curl_expands_them() -> None:
+    text = _text()
+    creator_export = text.index("export API_KEY")
+    creator_curl = text.index('${API_KEY}')
+    admin_export = text.index("export ADMIN_API_KEY")
+    admin_curl = text.index('${ADMIN_API_KEY}')
+
+    assert "read -rsp" in text
+    assert creator_export < creator_curl
+    assert admin_export < admin_curl
+
+
+def test_runtime_acceptance_is_executable_and_wired_to_ci() -> None:
+    assert _RUNTIME_ACCEPTANCE.is_file()
+    assert _RUNTIME_ACCEPTANCE.stat().st_mode & 0o111
+    script = _RUNTIME_ACCEPTANCE.read_text(encoding="utf-8")
+    ci = yaml.safe_load(_CI.read_text(encoding="utf-8"))
+
+    assert "api worker beat studio-web" in script
+    assert "reconcile_stale_dispatches" in script
+    assert "creator_run_tasks" in script
+    assert "SELECT status FROM creator_run_tasks" in script
+    assert "= failed" in script
+    assert "401" in script and "200" in script and "404" in script
+    assert "/assets" in script and '-F "file=@' in script
+    assert any(
+        "scripts/cutover_runtime_acceptance.sh" in step.get("run", "")
+        for job in ci["jobs"].values()
+        for step in job.get("steps", [])
+    )
 
 
 def test_verification_layers_are_separate() -> None:
