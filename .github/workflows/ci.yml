@@ -216,8 +216,8 @@ jobs:
         run: docker build --target runtime -f apps/worker-orchestrator/Dockerfile .
       - name: Build two API releases and verify app-only rollback lifecycle
         run: |
-          git fetch origin main
-          lifecycle_n="$(git merge-base HEAD origin/main)"
+          git fetch origin main:refs/remotes/origin/main --depth=1
+          lifecycle_n="origin/main"
           lifecycle_context="$(mktemp -d)"
           git archive "$lifecycle_n" | tar -x -C "$lifecycle_context"
           docker build --target runtime -f "$lifecycle_context/apps/api/Dockerfile" -t release-lifecycle-n "$lifecycle_context"
