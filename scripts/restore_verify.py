@@ -19,6 +19,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -28,6 +29,7 @@ from typing import NewType, TypedDict
 
 
 Checksum = NewType("Checksum", str)
+SECRET_FINGERPRINT_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
 
 class ManifestJson(TypedDict):
@@ -219,6 +221,10 @@ def verify_bundle(
 
 def create_manifest(args: argparse.Namespace) -> None:
     bundle = Path(args.bundle)
+    if SECRET_FINGERPRINT_PATTERN.fullmatch(args.secret_fingerprint) is None:
+        raise RestoreError(
+            "secret fingerprint must be sha256 plus 64 lowercase hex characters"
+        )
     database_dump = _require_contained_path(bundle, bundle / "database.dump", "database dump")
     if not database_dump.is_file() or database_dump.stat().st_size == 0:
         raise RestoreError("database dump is missing or empty")
