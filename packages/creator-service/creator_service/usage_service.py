@@ -407,6 +407,38 @@ class InMemoryUsageStorage:
                 )
                 if settled_global + reserved_global + residual > global_monthly_cost_usd:
                     return False
+            if status == "reserved":
+                current_usage = self._reservations.setdefault(
+                    (workspace_id, current_period),
+                    {"llm": 0, "image_gen": 0, "tts_requests": 0},
+                )
+                events = await self.list_by_workspace(workspace_id, current_period)
+                usage = {
+                    "llm": sum(row.get("operation_type") == "llm" for row in events),
+                    "image_gen": sum(
+                        int(row.get("image_count") or 1)
+                        for row in events if row.get("operation_type") == "image_gen"
+                    ),
+                    "tts_requests": sum(
+                        row.get("operation_type") in {"tts", "stt", "render"}
+                        for row in events
+                    ),
+                }
+                bucket = (
+                    "tts_requests" if operation_type in {"tts", "stt", "render"}
+                    else operation_type
+                )
+                quota_key = {
+                    "llm": "monthly_llm_calls",
+                    "image_gen": "monthly_image_generations",
+                    "tts_requests": "monthly_tts_requests",
+                }[bucket]
+                if usage[bucket] + current_usage[bucket] + 1 > int(quota[quota_key]):
+                    return False
+                previous_usage = self._reservations.get((workspace_id, period_start))
+                if previous_usage is not None:
+                    previous_usage[bucket] = max(previous_usage[bucket] - 1, 0)
+                current_usage[bucket] += 1
             self._owned[owner_id] = (
                 workspace_id, current_period, operation_type, status, estimate, settled,
             )
