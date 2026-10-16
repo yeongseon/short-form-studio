@@ -581,7 +581,7 @@ class UsageService:
         output_tokens: int | None = None,
         image_count: int | None = None,
         audio_seconds: float | None = None,
-        estimated_cost_usd: float | None = None,
+        estimated_cost_usd: Decimal | float | None = None,
         cost_config_version: str | None = None,
         project_id: int | None = None,
         idempotency_key: str | None = None,
@@ -618,14 +618,17 @@ class UsageService:
         total_llm_calls = 0
         total_image_generations = 0
         total_tts_seconds = 0.0
-        total_estimated_cost_usd = 0.0
-        by_provider: dict[str, float] = {}
+        total_estimated_cost_usd = Decimal("0")
+        by_provider: dict[str, Decimal] = {}
         by_operation: dict[str, int] = {}
 
         for row in rows:
             operation_type = str(row.get("operation_type") or "")
             provider = str(row.get("provider") or "unknown")
-            estimated_cost_usd = float(row.get("estimated_cost_usd") or 0.0)
+            estimated_cost_usd = _money(
+                row.get("estimated_cost_usd") or Decimal("0"),
+                name="estimated_cost_usd",
+            )
             image_count = int(row.get("image_count") or 0)
             audio_seconds = float(row.get("audio_seconds") or 0.0)
 
@@ -637,7 +640,7 @@ class UsageService:
                 total_tts_seconds += audio_seconds
 
             total_estimated_cost_usd += estimated_cost_usd
-            by_provider[provider] = by_provider.get(provider, 0.0) + estimated_cost_usd
+            by_provider[provider] = by_provider.get(provider, Decimal("0")) + estimated_cost_usd
             by_operation[operation_type] = by_operation.get(operation_type, 0) + 1
 
         return UsageSummary(
@@ -747,7 +750,7 @@ async def record_provider_call(
     output_tokens: int | None = None,
     image_count: int | None = None,
     audio_seconds: float | None = None,
-    cost_usd: float | None = None,
+    cost_usd: Decimal | float | None = None,
     cost_config_version: str | None = None,
     workspace_id: int | None = None,
     project_id: int | None = None,

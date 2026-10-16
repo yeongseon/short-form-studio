@@ -1718,7 +1718,10 @@ def stub_single_scene_services(
         "shorts_api.routes.scene_image_dispatch.dispatch_generate_scene_image", dispatcher
     )
 
-    async def _reserve_owned(_workspace_id: int, _operation_type: str, _task_id: str) -> tuple[bool, str]:
+    async def _reserve_owned(
+        _workspace_id: int, _operation_type: str, _task_id: str,
+        _estimated_cost_usd: object = None,
+    ) -> tuple[bool, str]:
         return True, "ok"
 
     async def _pending(_run_id: int, _task_type: str, _task_id: str) -> None:
