@@ -28,7 +28,7 @@ try:
 except ImportError:
     _worker_loop_module = None  # API context — worker_loop not available
 from creator_service.actionable_errors import build_run_failure_summary
-from creator_service.error_redaction import JsonValue, sanitize_error_json
+from creator_service.error_redaction import JsonValue, sanitize_error_json as _sanitize_for_dlq
 from creator_service.logging_config import setup_json_logging
 from kombu import Exchange, Queue
 
@@ -233,7 +233,7 @@ def _record_failed_task_to_dlq(
     exception: BaseException,
 ) -> None:
     failure = build_run_failure_summary(exception)
-    payload = sanitize_error_json({
+    payload = _sanitize_for_dlq({
         "task_id": task_id,
         "task_name": task_name,
         "exception": failure["message"],
