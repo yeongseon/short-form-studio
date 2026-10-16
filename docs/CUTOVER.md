@@ -55,6 +55,19 @@ whose user belongs only to the intended workspaces. Set the resulting server-sid
 key as `API_KEY` in this deployment's `.env`; never put it in browser storage or
 client JavaScript.
 
+Load creator and admin credentials into the operator shell without adding them to
+shell history. These exports are for the smoke commands below; Compose still
+reads the same values from `.env`:
+
+```bash
+read -rsp "Creator API key: " API_KEY; printf '\n'; export API_KEY
+read -rsp "Admin API key: " ADMIN_API_KEY; printf '\n'; export ADMIN_API_KEY
+```
+
+On shared hosts, replace these prompts with the approved secret-manager export
+step. Do not use a literal `export API_KEY=...` command that records the value in
+history.
+
 Also set the remote provider keys required by the chosen pipeline. Provider keys
 authorize paid generation; `API_KEY` authenticates creator API requests. They are
 different trust domains.
