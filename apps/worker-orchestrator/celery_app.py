@@ -116,6 +116,7 @@ BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
     },
     "sweep-expired-artifacts": {"task": "sweep_expired_artifacts", "schedule": 600.0},
     "reconcile-media-uploads": {"task": "reconcile_media_uploads", "schedule": 600.0},
+    "sweep-media-retention": {"task": "sweep_media_retention", "schedule": 3600.0},
 }
 dlq_fallback_max_bytes = _parse_int_env("DLQ_FALLBACK_MAX_BYTES", 10 * 1024 * 1024)
 broker_recovery_epoch_key = os.getenv("BROKER_RECOVERY_EPOCH_KEY", "queue:recovery_epoch")
@@ -135,6 +136,7 @@ def _worker_task_modules() -> list[str]:
         "tasks.retry_failed_artifact_deletions",
         "tasks.sweep_expired_artifacts",
         "tasks.reconcile_media_uploads",
+        "tasks.sweep_media_retention",
         "tasks.revoked_quota",
     ]
     if (
