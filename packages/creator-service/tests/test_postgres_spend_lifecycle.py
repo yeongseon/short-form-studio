@@ -67,3 +67,28 @@ async def test_postgres_rollover_readmission_rechecks_current_budget(quota_pool:
 
     # When the worker re-admits before the next attempt, then current-month limits reject it.
     assert not await service.readmit_owned("stale")
+
+
+async def test_postgres_rollover_and_settlement_share_lock_order(quota_pool: object) -> None:
+    # Given a stale owner with one durable provider event.
+    service = UsageService(PostgresUsageStorage())
+    await service.set_quota(1, monthly_cost_usd=Decimal("2"))
+    assert await service.reserve_owned(1, "llm", "contended", estimated_cost_usd=Decimal("1"))
+    await quota_pool.execute(
+        "UPDATE workspace_quota_reservation_owners SET period_start = $2 WHERE owner_id = $1",
+        "contended", datetime(2000, 1, 1, tzinfo=timezone.utc),
+    )
+    await service.record_usage(
+        1, 1, "fixture", "fixture", "llm", estimated_cost_usd=Decimal("0.5"),
+        idempotency_key="contended:event", reservation_owner_id="contended",
+    )
+    # When rollover admission and settlement contend on the same owner.
+    async with anyio.create_task_group() as group:
+        group.start_soon(lambda: service.readmit_owned("contended"))
+        group.start_soon(lambda: service.settle_owned("contended"))
+
+    # Then both transactions complete without deadlock and the owner is terminal.
+    status = await quota_pool.fetchval(
+        "SELECT status FROM workspace_quota_reservation_owners WHERE owner_id = $1", "contended"
+    )
+    assert status in {"settled", "billable_unknown"}

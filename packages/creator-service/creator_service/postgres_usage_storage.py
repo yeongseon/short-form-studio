@@ -416,8 +416,15 @@ class PostgresUsageStorage:
             async with connection.transaction():
                 await connection.execute("SELECT pg_advisory_xact_lock($1)", 860)
                 owner = await connection.fetchrow(
-                    """SELECT * FROM workspace_quota_reservation_owners
-                       WHERE owner_id = $1 FOR UPDATE""",
+                    "SELECT workspace_id FROM workspace_quota_reservation_owners WHERE owner_id = $1",
+                    owner_id,
+                )
+                if owner is None:
+                    return False
+                workspace_id = int(owner["workspace_id"])
+                await connection.execute("SELECT pg_advisory_xact_lock($1)", workspace_id)
+                owner = await connection.fetchrow(
+                    "SELECT * FROM workspace_quota_reservation_owners WHERE owner_id = $1 FOR UPDATE",
                     owner_id,
                 )
                 if owner is None or owner["status"] not in {"reserved", "consumed"}:
@@ -427,8 +434,6 @@ class PostgresUsageStorage:
                 )
                 if owner["period_start"] == month_start:
                     return True
-                workspace_id = int(owner["workspace_id"])
-                await connection.execute("SELECT pg_advisory_xact_lock($1)", workspace_id)
                 accounting = await connection.fetchrow(
                     """SELECT q.monthly_cost_usd,
                        (SELECT COALESCE(SUM(estimated_cost_usd), 0) FROM usage_events
@@ -462,8 +467,8 @@ class PostgresUsageStorage:
                     > global_monthly_cost_usd
                 ):
                     return False
-                if owned["status"] == "reserved":
-                    operation_type = str(owned["operation_type"])
+                if owner["status"] == "reserved":
+                    operation_type = str(owner["operation_type"])
                     usage_column = {
                         "llm": "llm_count",
                         "image_gen": "image_count",
@@ -499,7 +504,7 @@ class PostgresUsageStorage:
                         f"""UPDATE workspace_quota_reservations
                            SET {usage_column} = GREATEST({usage_column} - 1, 0), updated_at = NOW()
                            WHERE workspace_id = $1 AND period_start = $2""",
-                        workspace_id, owned["period_start"],
+                        workspace_id, owner["period_start"],
                     )
                     await connection.execute(
                         f"""INSERT INTO workspace_quota_reservations
@@ -520,6 +525,7 @@ class PostgresUsageStorage:
         pool = await get_pool()
         async with pool.acquire() as connection:
             async with connection.transaction():
+                await connection.execute("SELECT pg_advisory_xact_lock($1)", 860)
                 owner = await connection.fetchrow(
                     "SELECT workspace_id FROM workspace_quota_reservation_owners WHERE owner_id = $1",
                     owner_id,
@@ -556,6 +562,7 @@ class PostgresUsageStorage:
         pool = await get_pool()
         async with pool.acquire() as connection:
             async with connection.transaction():
+                await connection.execute("SELECT pg_advisory_xact_lock($1)", 860)
                 owner = await connection.fetchrow(
                     "SELECT workspace_id FROM workspace_quota_reservation_owners WHERE owner_id = $1",
                     owner_id,
@@ -622,6 +629,7 @@ class PostgresUsageStorage:
         pool = await get_pool()
         async with pool.acquire() as connection:
             async with connection.transaction():
+                await connection.execute("SELECT pg_advisory_xact_lock($1)", 860)
                 owner = await connection.fetchrow(
                     "SELECT workspace_id FROM workspace_quota_reservation_owners WHERE owner_id = $1",
                     owner_id,
@@ -703,6 +711,7 @@ class PostgresUsageStorage:
         pool = await get_pool()
         async with pool.acquire() as connection:
             async with connection.transaction():
+                await connection.execute("SELECT pg_advisory_xact_lock($1)", 860)
                 owner = await connection.fetchrow(
                     "SELECT workspace_id FROM workspace_quota_reservation_owners WHERE owner_id = $1",
                     owner_id,
