@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import shutil
 import socket
+import struct
 import subprocess
 import time
 
@@ -30,16 +31,21 @@ UPLOAD_BOUNDARIES = (
 )
 
 
-def _seed_media(path: Path, boundary: UploadBoundary) -> None:
+def _seed_media(path: Path, boundary: UploadBoundary, size: int) -> None:
     match boundary.kind:
         case "image":
             from PIL import Image
 
             Image.new("RGB", (16, 16), (10, 20, 30)).save(path, format="PNG")
         case "audio":
-            subprocess.run(
-                ["ffmpeg", "-y", "-nostdin", "-f", "lavfi", "-i", "sine=duration=0.1", str(path)],
-                check=True, capture_output=True, timeout=30,
+            data_size = size - 44
+            path.write_bytes(
+                b"RIFF"
+                + struct.pack("<I", data_size + 36)
+                + b"WAVEfmt "
+                + struct.pack("<IHHIIHH", 16, 1, 1, 8_000, 16_000, 2, 16)
+                + b"data"
+                + struct.pack("<I", data_size)
             )
         case "video":
             subprocess.run(
@@ -55,7 +61,7 @@ def _seed_media(path: Path, boundary: UploadBoundary) -> None:
 
 def _sized_media(tmp_path: Path, boundary: UploadBoundary, size: int) -> Path:
     upload = tmp_path / f"{size}-{boundary.filename}"
-    _seed_media(upload, boundary)
+    _seed_media(upload, boundary, size)
     with upload.open("r+b") as stream:
         stream.truncate(size)
     return upload
