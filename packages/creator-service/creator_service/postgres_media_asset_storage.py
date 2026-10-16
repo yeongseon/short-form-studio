@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
+import asyncpg
 from creator_domain.models import MediaAsset
 from pydantic import TypeAdapter
 
 from . import db
+from .media_upload_reconciliation import (
+    MediaAssetPersistenceFailed,
+    MediaAssetPersistenceIndeterminate,
+    UploadIntent,
+    UploadIntentState,
+)
 
 _METADATA = TypeAdapter(dict[str, object])
 _FILTER = """
@@ -21,7 +29,7 @@ _ORDER = """
 """
 
 
-class MediaAssetAssociationRejected(ValueError):
+class MediaAssetAssociationRejected(MediaAssetPersistenceFailed, ValueError):
     """A referenced project or run does not belong to the asset's workspace/project."""
 
 
@@ -35,8 +43,8 @@ def _decode_asset(row: dict[str, object]) -> dict[str, object]:
 class PostgresMediaAssetStorage:
     async def save_asset(self, row: dict[str, object]) -> dict[str, object]:
         asset = MediaAsset.model_validate({**row, "id": 1})
-        saved = await db.fetch_one(
-            """
+        try:
+            saved = await db.fetch_one("""
             INSERT INTO creator_media_assets (
                 workspace_id, project_id, run_id, media_type, origin, storage_key,
                 mime_type, width, height, duration_seconds, source_url, metadata, created_at
@@ -54,7 +62,11 @@ class PostgresMediaAssetStorage:
             asset.origin.value, asset.storage_key, asset.mime_type, asset.width, asset.height,
             asset.duration_seconds, asset.source_url,
             json.dumps(asset.metadata, allow_nan=False), asset.created_at,
-        )
+            )
+        except (OSError, asyncpg.PostgresConnectionError, asyncpg.InterfaceError) as error:
+            raise MediaAssetPersistenceIndeterminate() from error
+        except asyncpg.PostgresError as error:
+            raise MediaAssetPersistenceFailed() from error
         if saved is None:
             raise MediaAssetAssociationRejected("Media asset association not found")
         return _decode_asset(saved)
@@ -83,3 +95,86 @@ class PostgresMediaAssetStorage:
                     workspace_id, media_type, project_id, limit, offset,
                 )
         return [_decode_asset(dict(row)) for row in rows], int(total)
+
+    async def create_upload_intent(self, intent: UploadIntent) -> UploadIntent:
+        row = await db.fetch_one(
+            """INSERT INTO creator_media_upload_intents
+                (owner_id, workspace_id, storage_key, state, lease_expires_at)
+                VALUES ($1, $2, $3, $4, $5) RETURNING *""",
+            intent.owner_id, intent.workspace_id, intent.storage_key,
+            intent.state.value, intent.lease_expires_at,
+        )
+        if row is None:
+            raise MediaAssetPersistenceFailed()
+        return _decode_intent(row)
+
+    async def _set_intent(self, intent_id: int, state: UploadIntentState) -> None:
+        await db.execute(
+            """UPDATE creator_media_upload_intents SET state = $2, updated_at = NOW()
+                WHERE id = $1 AND state NOT IN ('reclaimed', 'exhausted')""",
+            intent_id, state.value,
+        )
+
+    async def mark_upload_intent_uploaded(self, intent_id: int) -> None:
+        await self._set_intent(intent_id, UploadIntentState.UPLOADED)
+
+    async def complete_upload_intent(self, intent_id: int) -> None:
+        await self._set_intent(intent_id, UploadIntentState.COMPLETED)
+
+    async def defer_upload_cleanup(self, intent_id: int) -> None:
+        await self._set_intent(intent_id, UploadIntentState.CLEANUP_PENDING)
+
+    async def asset_exists_for_key(self, workspace_id: int, storage_key: str) -> bool:
+        return await db.fetch_one(
+            """SELECT id FROM creator_media_assets
+                WHERE workspace_id = $1 AND storage_key = $2""",
+            workspace_id, storage_key,
+        ) is not None
+
+    async def claim_expired_upload_intents(
+        self, *, now: datetime, lease_expires_at: datetime, limit: int,
+    ) -> list[UploadIntent]:
+        pool = await db.get_pool()
+        async with pool.acquire() as connection, connection.transaction():
+            rows = await connection.fetch(
+                """SELECT * FROM creator_media_upload_intents
+                    WHERE state IN ('pending', 'uploaded', 'cleanup_pending')
+                      AND lease_expires_at <= $1
+                    ORDER BY id FOR UPDATE SKIP LOCKED LIMIT $2""",
+                now, limit,
+            )
+            ids = [row["id"] for row in rows]
+            if ids:
+                await connection.execute(
+                    """UPDATE creator_media_upload_intents
+                        SET lease_expires_at = $2, updated_at = NOW()
+                        WHERE id = ANY($1::bigint[])""",
+                    ids, lease_expires_at,
+                )
+        return [_decode_intent(dict(row)) for row in rows]
+
+    async def record_upload_reclaimed(self, intent_id: int) -> None:
+        await self._set_intent(intent_id, UploadIntentState.RECLAIMED)
+
+    async def record_upload_cleanup_failure(self, intent_id: int, max_retries: int) -> bool:
+        row = await db.fetch_one(
+            """UPDATE creator_media_upload_intents
+                SET retry_count = retry_count + 1,
+                    state = CASE WHEN retry_count + 1 >= $2 THEN 'exhausted' ELSE 'cleanup_pending' END,
+                    updated_at = NOW()
+                WHERE id = $1 RETURNING state""",
+            intent_id, max_retries,
+        )
+        return row is not None and row["state"] == UploadIntentState.EXHAUSTED.value
+
+
+def _decode_intent(row: dict[str, object]) -> UploadIntent:
+    lease_expires_at = row["lease_expires_at"]
+    if not isinstance(lease_expires_at, datetime):
+        raise MediaAssetPersistenceFailed()
+    return UploadIntent(
+        id=int(row["id"]), owner_id=str(row["owner_id"]),
+        workspace_id=int(row["workspace_id"]), storage_key=str(row["storage_key"]),
+        state=UploadIntentState(str(row["state"])),
+        lease_expires_at=lease_expires_at, retry_count=int(row["retry_count"]),
+    )
