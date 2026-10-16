@@ -185,7 +185,7 @@ class MediaAssetService:
             try:
                 await self._asset_storage.mark_upload_intent_uploaded(intent.id)
             except MediaAssetPersistenceFailed:
-                await self._io.run(partial(self._backend().delete, result.key))
+                await self._compensate_upload(intent, result.key)
                 raise
             row: dict[str, object] = {
                 "workspace_id": workspace_id, "project_id": project_id, "run_id": run_id,
@@ -204,14 +204,17 @@ class MediaAssetService:
             except MediaAssetPersistenceIndeterminate:
                 raise
             except MediaAssetPersistenceFailed:
-                try:
-                    await self._io.run(partial(self._backend().delete, result.key))
-                except StorageDeletionError:
-                    await self._asset_storage.defer_upload_cleanup(intent.id)
-                else:
-                    await self._asset_storage.record_upload_reclaimed(intent.id)
+                await self._compensate_upload(intent, result.key)
                 raise
         return MediaAsset.model_validate(saved)
+
+    async def _compensate_upload(self, intent: UploadIntent, storage_key: str) -> None:
+        try:
+            await self._io.run(partial(self._backend().delete, storage_key))
+        except StorageDeletionError:
+            await self._asset_storage.compensate_upload(intent, deletion_failed=True)
+        else:
+            await self._asset_storage.compensate_upload(intent, deletion_failed=False)
 
     async def get_asset(self, asset_id: int, workspace_id: int) -> MediaAsset | None:
         row = await self._asset_storage.get_asset(asset_id, workspace_id)
