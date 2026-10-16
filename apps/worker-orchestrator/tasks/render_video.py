@@ -58,6 +58,7 @@ async def execute_render(ctx: TaskContext, render_profile: str = "shorts_default
         audio, subtitles, scene_count = inputs.audio, inputs.subtitles, inputs.scene_count
         render_input = render_input_from_plan(inputs.plan, audio_path=audio, subtitle_path=subtitles)
         try:
+            ctx.mark_provider_started()
             inputs.ffmpeg.render(render_input, output)
         except (TimeoutError, ConnectionError) as exc:
             raise ProviderTimeoutError(f"Provider timed out during video render for run {ctx.run_id}") from exc
@@ -74,6 +75,7 @@ async def execute_render(ctx: TaskContext, render_profile: str = "shorts_default
             workspace_id=ctx.workspace_id, project_id=ctx.project_id, idempotency_key=ctx.task_id,
             reservation_owner_id=ctx.reservation_owner_id,
         )
+        ctx.mark_provider_accounted()
     except Exception:
         if ctx.reservation_owner_id is not None:
             raise

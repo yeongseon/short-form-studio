@@ -136,6 +136,7 @@ def generate_scene_image(
                         await batch.checkpoint()
                         try:
                             try:
+                                ctx.mark_provider_started()
                                 await provider.generate(effective_prompt, params)
                             finally:
                                 await batch.checkpoint()
@@ -203,6 +204,7 @@ def generate_scene_image(
                         idempotency_key=f"{ctx.task_id}:{target_scene.scene_id}",
                         reservation_owner_id=ctx.reservation_owner_id,
                     )
+                    ctx.mark_provider_accounted()
                 except Exception as exc:
                     if ctx.reservation_owner_id is not None:
                         usage_error = exc
