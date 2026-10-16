@@ -104,6 +104,7 @@ def run_task(
 
     async def execute_owned(ctx: TaskContext) -> TaskResult:
         nonlocal billing_outcome
+        ctx.delivery_attempt = getattr(celery_self.request, "retries", 0)
         try:
             return await execute(ctx)
         finally:
