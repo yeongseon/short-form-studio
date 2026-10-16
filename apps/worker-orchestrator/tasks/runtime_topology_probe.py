@@ -123,12 +123,15 @@ def runtime_topology_probe(
                         task_id=ctx.task_id,
                         worker_pid=os.getpid(),
                     )
-                    while True:
+                    cancel_marker = state.with_suffix(".cancel")
+                    while not cancel_marker.exists():
                         current = await run_service.storage.get_run(run_id)
                         if current is not None and current.get("status") == "cancelled":
                             _publish(evidence_path, "cancelled", task_id=ctx.task_id)
                             return TaskResult(status="cancelled")
                         time.sleep(0.05)
+                    _publish(evidence_path, "cancelled", task_id=ctx.task_id)
+                    return TaskResult(status="cancelled")
                 _publish(
                     evidence_path,
                     "claimed",
