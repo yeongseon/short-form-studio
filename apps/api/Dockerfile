@@ -21,7 +21,7 @@ COPY --from=builder /install /usr/local
 COPY --chown=appuser:appuser apps/api/src ./src
 COPY --chown=appuser:appuser apps/api/alembic.ini ./alembic.ini
 COPY --chown=appuser:appuser apps/api/migrations ./migrations
-RUN revision="$(DATABASE_URL=sqlite:///identity.db python -m alembic heads | awk '{print $1}')" && test -n "$revision" && printf '%s' "$revision" > /app/alembic-revision
+RUN bash -euo pipefail -c 'mapfile -t revisions < <(DATABASE_URL=sqlite:///identity.db python -m alembic heads | awk "NF {print \$1}"); test "${#revisions[@]}" -eq 1; printf "%s" "${revisions[0]}" > /app/alembic-revision'
 # Worker task modules needed by API for Celery task dispatch (import_module)
 COPY --chown=appuser:appuser apps/worker-orchestrator/tasks ./tasks
 COPY --chown=appuser:appuser apps/worker-orchestrator/celery_app.py ./celery_app.py
