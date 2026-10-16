@@ -120,6 +120,7 @@ celery_app = Celery(
         "tasks.retry_failed_artifact_deletions",
         "tasks.sweep_expired_artifacts",
         "tasks.reconcile_media_uploads",
+        "tasks.sweep_media_retention",
     ],
 )
 celery_app.conf.task_default_queue = "creator"

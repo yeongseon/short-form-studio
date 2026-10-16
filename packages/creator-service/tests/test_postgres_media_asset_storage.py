@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import uuid
+import anyio
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -17,6 +18,7 @@ from creator_service import db
 from creator_service.media_asset_service import MediaAssetService
 from creator_service.media_upload_reconciliation import UploadIntent, UploadIntentState
 from creator_service.object_storage import LocalStorageBackend
+from creator_service.storage_policy import StorageBudgetExceeded, StoragePolicy
 from PIL import Image
 
 
@@ -230,3 +232,36 @@ async def test_postgres_upload_intent_is_durable_and_workspace_owned(media_datab
         "state": "completed", "workspace_id": 9101,
         "storage_key": "workspaces/9101/assets/pending.png",
     }
+
+
+@pytest.mark.asyncio
+async def test_postgres_concurrent_admission_stays_within_budget(media_database: None) -> None:
+    storage = MediaAssetService()._asset_storage
+    policy = StoragePolicy(max_stored_bytes=10, max_asset_count=10, max_reserved_bytes=10)
+    now = datetime.now(timezone.utc)
+
+    async def reserve(owner_id: str) -> bool:
+        try:
+            await storage.create_upload_intent(
+                UploadIntent(
+                    id=0, owner_id=owner_id, workspace_id=9101,
+                    storage_key=f"workspaces/9101/assets/{owner_id}.png",
+                    state=UploadIntentState.PENDING, lease_expires_at=now,
+                    reserved_bytes=6,
+                ),
+                policy=policy,
+            )
+        except StorageBudgetExceeded:
+            return False
+        return True
+
+    results: list[bool] = []
+
+    async def collect(owner_id: str) -> None:
+        results.append(await reserve(owner_id))
+
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(collect, "budget-a")
+        tasks.start_soon(collect, "budget-b")
+
+    assert sorted(results) == [False, True]

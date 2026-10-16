@@ -17,4 +17,8 @@ BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
         "task": "reconcile_media_uploads",
         "schedule": 600.0,
     },
+    "sweep-media-retention": {
+        "task": "sweep_media_retention",
+        "schedule": 3600.0,
+    },
 }
