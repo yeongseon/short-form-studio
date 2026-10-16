@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from shorts_api.app_factory import create_app
 from shorts_api.auth import CurrentUser, get_current_user
 from shorts_api.routes import release_identity
-from shorts_api.routes.release_identity import ServiceIdentity, load_worker_identity
+from shorts_api.routes.release_identity import ServiceIdentity, resolve_worker_identity
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -47,7 +47,7 @@ def test_worker_release_identity_reports_worker_build(monkeypatch) -> None:
     async def current_user() -> CurrentUser:
         return CurrentUser(user_id=1, workspace_id=1)
 
-    app.dependency_overrides[load_worker_identity] = stored_worker_identity
+    app.dependency_overrides[resolve_worker_identity] = stored_worker_identity
     app.dependency_overrides[get_current_user] = current_user
 
     response = TestClient(app).get("/release/worker-identity")
@@ -55,3 +55,37 @@ def test_worker_release_identity_reports_worker_build(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json() == {"source_sha": SOURCE_SHA, "digest": WORKER_DIGEST}
 
+
+def test_api_release_identity_returns_service_unavailable_without_revision(monkeypatch) -> None:
+    monkeypatch.setenv("SOURCE_SHA", SOURCE_SHA)
+    monkeypatch.setenv("API_IMAGE_DIGEST", API_DIGEST)
+    monkeypatch.setattr(release_identity, "ALEMBIC_REVISION_PATH", ROOT / "missing-revision")
+    app = create_app()
+
+    async def current_user() -> CurrentUser:
+        return CurrentUser(user_id=1, workspace_id=1)
+
+    app.dependency_overrides[get_current_user] = current_user
+
+    response = TestClient(app).get("/release/identity")
+
+    assert response.status_code == 503
+
+
+def test_worker_release_identity_returns_service_unavailable_when_store_fails() -> None:
+    app = create_app()
+
+    async def failed_worker_identity() -> ServiceIdentity:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=503, detail="Worker identity unavailable")
+
+    async def current_user() -> CurrentUser:
+        return CurrentUser(user_id=1, workspace_id=1)
+
+    app.dependency_overrides[resolve_worker_identity] = failed_worker_identity
+    app.dependency_overrides[get_current_user] = current_user
+
+    response = TestClient(app, raise_server_exceptions=False).get("/release/worker-identity")
+
+    assert response.status_code == 503
