@@ -28,6 +28,7 @@ from pathlib import Path
 
 POSTGRES_IMAGE = "postgres:16.6-alpine"
 FFMPEG_IMAGE = "jrottenberg/ffmpeg:7.1-alpine"
+NGINX_IMAGE = "nginx:1.27-alpine"
 PASSWORD = "synthetic-local-only"
 COMMAND_TIMEOUT_SECONDS = 120
 
@@ -151,6 +152,54 @@ def verify_access_boundaries(container: str, media: Path) -> None:
     print("revoked key: rejected")
 
 
+def verify_protected_downloads(container: str, media: Path, root: Path) -> None:
+    configuration = root / "default.conf"
+    configuration.write_text(
+        "server { listen 8080; location /files/ {"
+        " if ($http_x_workspace != '1') { return 404; }"
+        " if ($http_authorization != 'Bearer active-a') { return 401; }"
+        " alias /media/; } }\n"
+    )
+    docker(
+        "run", "-d", "--name", container,
+        "-v", f"{media.resolve()}:/media:ro",
+        "-v", f"{configuration.resolve()}:/etc/nginx/conf.d/default.conf:ro",
+        NGINX_IMAGE,
+    )
+    owner = docker(
+        "exec", container, "wget", "-O", "/tmp/image.png",
+        "--header", "X-Workspace: 1",
+        "--header", "Authorization: Bearer active-a",
+        "http://127.0.0.1:8080/files/image.png",
+    )
+    if "200 OK" not in owner.stderr:
+        raise DrillError("owner protected download did not return 200")
+    downloaded = root / "downloaded-image.png"
+    docker("cp", f"{container}:/tmp/image.png", str(downloaded))
+    if hashlib.sha256(downloaded.read_bytes()).digest() != hashlib.sha256((media / "image.png").read_bytes()).digest():
+        raise DrillError("protected download checksum mismatch")
+    for expected_status, headers in (
+        ("404 Not Found", ("X-Workspace: 2", "Authorization: Bearer active-a")),
+        ("401 Unauthorized", ("X-Workspace: 2", "Authorization: Bearer revoked-b")),
+    ):
+        result = subprocess.run(
+            ["docker", "exec", container, "wget", "-O", "/dev/null", "--header", headers[0], "--header", headers[1], "http://127.0.0.1:8080/files/image.png"],
+            capture_output=True, text=True, check=False, timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+        if result.returncode == 0 or expected_status not in result.stderr:
+            raise DrillError(f"protected download did not return {expected_status}")
+    final_download = docker(
+        "exec", container, "wget", "-O", "/tmp/final.mp4",
+        "--header", "X-Workspace: 1",
+        "--header", "Authorization: Bearer active-a",
+        "http://127.0.0.1:8080/files/restored-final.mp4",
+    )
+    if "200 OK" not in final_download.stderr:
+        raise DrillError("final MP4 protected download did not return 200")
+    print("protected downloads: media=200 final-mp4=200")
+    print("protected download checksum: verified")
+
+
 def main() -> int:
     if shutil.which("docker") is None:
         print("SKIP: docker is required", file=sys.stderr)
@@ -158,6 +207,7 @@ def main() -> int:
     suffix = hashlib.sha256(str(time.time_ns()).encode()).hexdigest()[:10]
     source = f"restore-source-{suffix}"
     target = f"restore-target-{suffix}"
+    downloads = f"restore-downloads-{suffix}"
     with tempfile.TemporaryDirectory(prefix="restore-drill-") as temporary:
         root = Path(temporary)
         bundle = root / "bundle"
@@ -197,13 +247,13 @@ def main() -> int:
             docker("run", "--rm", "-v", mount, FFMPEG_IMAGE, "-loop", "1", "-i", "/media/image.png", "-i", "/media/audio.wav", "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "/media/restored-final.mp4")
             if not (restored / "restored-final.mp4").is_file():
                 raise DrillError("FFmpeg re-render did not produce final MP4")
-            print("protected downloads: media=200 final-mp4=200")
+            verify_protected_downloads(downloads, restored, root)
             print("provider calls: 0")
             print("RESTORE DRILL PASSED")
             return 0
         finally:
             subprocess.run(
-                ["docker", "rm", "-f", source, target],
+                ["docker", "rm", "-f", source, target, downloads],
                 capture_output=True,
                 check=False,
                 timeout=COMMAND_TIMEOUT_SECONDS,
