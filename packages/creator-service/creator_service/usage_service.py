@@ -121,6 +121,7 @@ class InMemoryUsageStorage:
         self._reservations: dict[tuple[int, datetime], dict[str, int]] = {}
         self._owned: dict[str, tuple[int, datetime, str, str, Decimal, Decimal]] = {}
         self._owned_attempts: dict[tuple[str, str], Decimal] = {}
+        self._accounted_attempts: set[tuple[str, str]] = set()
         self._locks: dict[int, asyncio.Lock] = {}
         self._spend_lock = asyncio.Lock()
         self._next_event_id = 1
@@ -340,11 +341,17 @@ class InMemoryUsageStorage:
             workspace_id, period_start, operation_type, status, estimate, settled = owned
             if not billable_unknown and status == "reserved":
                 return False
-            final_status = "billable_unknown" if billable_unknown else "settled"
+            unknown = sum(
+                cost for key, cost in self._owned_attempts.items()
+                if key[0] == owner_id and key not in self._accounted_attempts
+            )
+            final_status = "billable_unknown" if billable_unknown or unknown > 0 else "settled"
             if status == "reserved":
                 self._finish_owned(owner_id, final_status)
+            retained_estimate = estimate if billable_unknown else settled + unknown
             self._owned[owner_id] = (
-                workspace_id, period_start, operation_type, final_status, estimate, settled,
+                workspace_id, period_start, operation_type, final_status,
+                retained_estimate, settled,
             )
             return True
 
@@ -424,6 +431,12 @@ class InMemoryUsageStorage:
             if existing_event is not None:
                 return dict(existing_event)
             saved = await self.record_event(row)
+            attempt_id = row.get("reservation_attempt_id")
+            if isinstance(attempt_id, str):
+                attempt_key = (owner_id, attempt_id)
+                if attempt_key not in self._owned_attempts:
+                    raise ValueError("Usage event references unknown provider attempt")
+                self._accounted_attempts.add(attempt_key)
             if status == "reserved":
                 self._finish_owned(owner_id, "consumed")
             self._owned[owner_id] = (
@@ -594,6 +607,7 @@ class UsageService:
         project_id: int | None = None,
         idempotency_key: str | None = None,
         reservation_owner_id: str | None = None,
+        reservation_attempt_id: str | None = None,
     ) -> UsageEvent:
         payload = {
                 "workspace_id": workspace_id,
@@ -609,6 +623,7 @@ class UsageService:
                 "estimated_cost_usd": estimated_cost_usd,
                 "cost_config_version": cost_config_version,
                 "idempotency_key": idempotency_key,
+                "reservation_attempt_id": reservation_attempt_id,
             }
         if reservation_owner_id is not None:
             row = await self.storage.record_owned_event(payload, reservation_owner_id)
@@ -764,6 +779,7 @@ async def record_provider_call(
     project_id: int | None = None,
     idempotency_key: str | None = None,
     reservation_owner_id: str | None = None,
+    reservation_attempt_id: str | None = None,
 ) -> UsageEvent:
     """Record a provider call from a worker task.
 
@@ -814,6 +830,7 @@ async def record_provider_call(
         project_id=project_id,
         idempotency_key=idempotency_key,
         reservation_owner_id=reservation_owner_id,
+        reservation_attempt_id=reservation_attempt_id,
     )
 
 

@@ -534,7 +534,25 @@ class PostgresUsageStorage:
                 )
                 if settled is None:
                     return False
-                keep = settled["estimated_cost_usd"] if billable_unknown else 0
+                unknown = await connection.fetchval(
+                    """UPDATE workspace_quota_reservation_attempts
+                       SET status = 'unknown'
+                       WHERE owner_id = $1 AND status = 'authorized'
+                       RETURNING estimated_cost_usd""",
+                    owner_id,
+                )
+                unknown_total = await connection.fetchval(
+                    """SELECT COALESCE(SUM(estimated_cost_usd), 0)
+                       FROM workspace_quota_reservation_attempts
+                       WHERE owner_id = $1 AND status = 'unknown'""",
+                    owner_id,
+                )
+                keep = settled["estimated_cost_usd"] if billable_unknown else unknown_total
+                if unknown is not None and not billable_unknown:
+                    await connection.execute(
+                        "UPDATE workspace_quota_reservation_owners SET status = 'billable_unknown' WHERE owner_id = $1",
+                        owner_id,
+                    )
                 decrement_counts = source["status"] == "reserved"
                 await connection.execute(
                     """UPDATE workspace_quota_reservations SET
@@ -595,6 +613,16 @@ class PostgresUsageStorage:
                         raise RuntimeError("Duplicate usage event disappeared during settlement")
                     return dict(saved)
                 saved = inserted
+                attempt_id = row.get("reservation_attempt_id")
+                if attempt_id is not None:
+                    accounted = await connection.execute(
+                        """UPDATE workspace_quota_reservation_attempts
+                           SET status = 'accounted', usage_event_id = $3
+                           WHERE owner_id = $1 AND attempt_id = $2 AND status = 'authorized'""",
+                        owner_id, attempt_id, saved["id"],
+                    )
+                    if accounted != "UPDATE 1":
+                        raise ValueError("Usage event references unknown provider attempt")
                 if owned["status"] == "reserved":
                     await connection.execute(
                         "UPDATE workspace_quota_reservation_owners SET status = 'consumed' WHERE owner_id = $1",

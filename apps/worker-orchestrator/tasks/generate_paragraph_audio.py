@@ -101,10 +101,11 @@ def generate_paragraph_audio(
             os.makedirs(os.path.dirname(audio_path), exist_ok=True)
             params = dict(entry.default_params or {})
             params["output_path"] = audio_path
+            attempt_id = f"{ctx.task_id}:{ctx.delivery_attempt}"
             try:
                 if not await authorize_owned_provider_attempt(
                     ctx.reservation_owner_id,
-                    f"{ctx.task_id}:{ctx.delivery_attempt}",
+                    attempt_id,
                     delivery_cost,
                 ):
                     raise ProviderError("Provider attempt exceeds approved spend")
@@ -156,6 +157,7 @@ def generate_paragraph_audio(
                 project_id=ctx.project_id,
                 idempotency_key=ctx.task_id,
                 reservation_owner_id=ctx.reservation_owner_id,
+                reservation_attempt_id=attempt_id,
             )
             ctx.mark_provider_accounted()
         except Exception:
