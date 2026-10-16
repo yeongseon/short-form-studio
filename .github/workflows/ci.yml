@@ -226,7 +226,7 @@ jobs:
               "postgres": "postgres:16.6-alpine",
               "redis": "redis:7.4-alpine",
               "celery": "5.6.3",
-              "scenarios": ["production-claim", "hard-timeout", "sigkill-recreate", "redelivery", "ffmpeg-cleanup", "fairness"],
+              "scenarios": ["authenticated-stop", "quota-release", "artifact-suppression", "hard-timeout", "active-redelivery", "stale-attempt-fencing", "ffmpeg-cleanup", "fairness"],
           }
           Path("/tmp/worker-topology-runtime/manifest.json").write_text(json.dumps(manifest, indent=2))
           PY
@@ -247,13 +247,20 @@ jobs:
       - name: Capture worker runtime logs
         if: always()
         run: |
-          for container in topology-worker topology-prefork topology-prefork-replacement; do
+          for container in topology-solo-cancel topology-scaled-redelivery topology-scaled-redelivered topology-scaled-ffmpeg topology-scaled-replacement; do
             if docker inspect "$container" >/dev/null 2>&1; then
               docker logs "$container" > "/tmp/worker-topology-runtime/${container}.worker.log" 2>&1
             fi
-            test -s "/tmp/worker-topology-runtime/${container}.worker.log"
           done
-          cp /tmp/worker-topology-runtime/topology-worker.worker.log /tmp/worker-topology-runtime/worker.log
+          test -s /tmp/worker-topology-runtime/topology-solo-cancel.worker.log
+          test -s /tmp/worker-topology-runtime/topology-scaled-redelivery.worker.log
+          test -s /tmp/worker-topology-runtime/topology-scaled-redelivered.worker.log
+          test -s /tmp/worker-topology-runtime/topology-scaled-ffmpeg.worker.log
+          test -s /tmp/worker-topology-runtime/topology-scaled-replacement.worker.log
+          test -s /tmp/worker-topology-runtime/cancellation-final-state.json
+          test -s /tmp/worker-topology-runtime/redelivery-final-state.json
+          test -s /tmp/worker-topology-runtime/timeout-final-state.json
+          cp /tmp/worker-topology-runtime/topology-solo-cancel.worker.log /tmp/worker-topology-runtime/worker.log
       - name: Upload worker topology evidence
         if: always()
         uses: actions/upload-artifact@v4
