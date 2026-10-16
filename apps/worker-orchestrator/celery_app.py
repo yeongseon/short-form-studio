@@ -38,7 +38,10 @@ try:
 except ImportError:
     redis = None
 from creator_service.production_checks import validate_production_config
-import worker_release_identity
+try:
+    import worker_release_identity as _worker_release_identity_module  # noqa: F401 — register signal handler
+except ImportError:
+    _worker_release_identity_module = None
 
 
 def _parse_int_env(name: str, default: int) -> int:

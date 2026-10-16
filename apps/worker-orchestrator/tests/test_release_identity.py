@@ -33,3 +33,17 @@ def test_ready_worker_keeps_starting_when_identity_store_is_unavailable(monkeypa
     )
 
     worker_release_identity.publish_release_identity()
+
+
+def test_ready_worker_skips_identity_publication_without_release_metadata(monkeypatch) -> None:
+    # Given a local worker that was not launched from an approved release image.
+    monkeypatch.delenv("SOURCE_SHA", raising=False)
+    monkeypatch.delenv("WORKER_IMAGE_DIGEST", raising=False)
+    from_url = Mock()
+    monkeypatch.setattr(worker_release_identity.redis.Redis, "from_url", from_url)
+
+    # When the worker-ready signal fires.
+    worker_release_identity.publish_release_identity()
+
+    # Then startup continues without contacting Redis or reporting an identity.
+    from_url.assert_not_called()
