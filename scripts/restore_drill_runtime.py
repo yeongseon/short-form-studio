@@ -154,9 +154,20 @@ def launch_provider_guard(root: Path) -> tuple[subprocess.Popen[bytes], int]:
 
 def launch_api(database_url: str, artifact_root: Path, fixture: RuntimeFixture, root: Path, guard_port: int) -> tuple[subprocess.Popen[bytes], RuntimeFixture]:
     port = _free_port()
+    repository = Path(__file__).parents[1]
     env = {
         **os.environ, "DATABASE_URL": database_url, "ARTIFACT_ROOT": str(artifact_root),
         "STORAGE_BACKEND": "local", "ENVIRONMENT": "development", "REDIS_URL": "",
+        "PYTHONPATH": os.pathsep.join(
+            str(repository / path)
+            for path in (
+                "apps/api/src",
+                "apps/worker-orchestrator",
+                "packages/creator-domain",
+                "packages/creator-service",
+                "packages/creator-provider",
+            )
+        ),
         "OPENAI_API_KEY": "", "ANTHROPIC_API_KEY": "", "GOOGLE_API_KEY": "",
         "ELEVENLABS_API_KEY": "", "STABILITY_API_KEY": "",
         "OLLAMA_BASE_URL": f"http://127.0.0.1:{guard_port}",
@@ -168,7 +179,7 @@ def launch_api(database_url: str, artifact_root: Path, fixture: RuntimeFixture, 
     log = (root / "api.log").open("wb")
     process = subprocess.Popen(
         [os.sys.executable, "-m", "uvicorn", "shorts_api.main:app", "--host", "127.0.0.1", "--port", str(port)],
-        cwd=Path(__file__).parents[1] / "apps/api", env=env, stdout=log, stderr=subprocess.STDOUT,
+        cwd=repository / "apps/api", env=env, stdout=log, stderr=subprocess.STDOUT,
     )
     return process, replace(fixture, port=port)
 
