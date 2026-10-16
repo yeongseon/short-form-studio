@@ -10,6 +10,7 @@ DATABASE_URL="postgresql://review:review-local-only@${POSTGRES}:5432/release_lif
 
 cleanup() {
   docker rm -f "$API" "$POSTGRES" >/dev/null 2>&1 || true
+  docker run --rm -v "$STATE_DIR:/state" alpine:3.21 rm -rf /state/artifacts >/dev/null 2>&1 || true
   docker network rm "$NETWORK" >/dev/null 2>&1 || true
   rm -rf "$STATE_DIR"
 }
@@ -43,18 +44,18 @@ start_api release-lifecycle-n
 SEED="$(curl -fsS -X POST -H "X-API-Key: $API_KEY" \
   "http://127.0.0.1:58080/api/creator/workspaces/${WORKSPACE_ID}/demo-short/runs")"
 PROJECT_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["seeded_project_id"])' <<<"$SEED")"
-ASSET_ID="$(python3 -c 'import json,sys; print(next(iter(json.load(sys.stdin)["asset_id_map"].values())))' <<<"$SEED")"
+PREVIEW="$(curl -fsS -H "X-API-Key: $API_KEY" \
+  "http://127.0.0.1:58080/api/creator/projects/${PROJECT_ID}/timeline/preview")"
+MEDIA_URL="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["segments"][0]["media_url"])' <<<"$PREVIEW")"
 
 docker rm -f "$API" >/dev/null
 docker run --rm --network "$NETWORK" -e DATABASE_URL="$DATABASE_URL" release-lifecycle-n-plus-one alembic upgrade head
 start_api release-lifecycle-n-plus-one
 curl -fsS -H "X-API-Key: $API_KEY" "http://127.0.0.1:58080/api/creator/projects/${PROJECT_ID}" >/dev/null
-curl -fsS -H "X-API-Key: $API_KEY" \
-  "http://127.0.0.1:58080/api/creator/workspaces/${WORKSPACE_ID}/assets/${ASSET_ID}/content" -o /dev/null
+curl -fsS -H "X-API-Key: $API_KEY" "http://127.0.0.1:58080${MEDIA_URL}" -o /dev/null
 
 start_api release-lifecycle-n
 curl -fsS -H "X-API-Key: $API_KEY" "http://127.0.0.1:58080/api/creator/projects/${PROJECT_ID}" >/dev/null
-curl -fsS -H "X-API-Key: $API_KEY" \
-  "http://127.0.0.1:58080/api/creator/workspaces/${WORKSPACE_ID}/assets/${ASSET_ID}/content" -o /dev/null
+curl -fsS -H "X-API-Key: $API_KEY" "http://127.0.0.1:58080${MEDIA_URL}" -o /dev/null
 
 printf 'Release lifecycle acceptance passed: N seed, N+1 upgrade, N app rollback preserved project and media.\n'
