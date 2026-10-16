@@ -184,6 +184,21 @@ class PostgresTaskTrackingStorage:
             kwargs.get("error_message"),
         )
 
+    async def update_task_status_if_active(
+        self, celery_task_id: str, status: str, **kwargs: Any
+    ) -> dict[str, Any] | None:
+        return await fetch_one(
+            """UPDATE creator_run_tasks SET status=$2, claim_token=NULL,
+               finished_at=$3, error_code=$4, error_message=$5
+               WHERE celery_task_id=$1 AND status IN ('pending', 'queued', 'running')
+               RETURNING *""",
+            celery_task_id,
+            status,
+            kwargs.get("finished_at"),
+            kwargs.get("error_code"),
+            kwargs.get("error_message"),
+        )
+
     async def claim_running(self, task_id: int, **kwargs: Any) -> dict[str, Any] | None:
         """Atomically claim: only transition from queued/failed to running.
 
@@ -296,7 +311,8 @@ class PostgresTaskTrackingStorage:
             """SELECT * FROM creator_run_tasks
                WHERE status='failed' AND (
                    error_code IN (
-                       'reconciler_pending_cleanup', 'reconciler_stuck_cleanup'
+                        'reconciler_pending_cleanup', 'reconciler_stuck_cleanup',
+                        'broker_recovery_cleanup'
                    ) OR (
                        error_code='reconciler_cleanup_claimed'
                        AND finished_at < NOW() - make_interval(secs => $1)
@@ -317,7 +333,10 @@ class PostgresTaskTrackingStorage:
                    error_code='reconciler_cleanup_claimed',
                    claim_token=$2, finished_at=NOW()
                WHERE id=$1 AND status='failed' AND (
-                   error_code IN ('reconciler_pending_cleanup', 'reconciler_stuck_cleanup')
+                    error_code IN (
+                        'reconciler_pending_cleanup', 'reconciler_stuck_cleanup',
+                        'broker_recovery_cleanup'
+                    )
                    OR (error_code='reconciler_cleanup_claimed'
                        AND finished_at < NOW() - make_interval(secs => $3))
                ) RETURNING *""",
@@ -342,7 +361,10 @@ class PostgresTaskTrackingStorage:
                SET error_code=error_message, error_message='Cleanup retry required', claim_token=NULL
                WHERE celery_task_id=$1 AND claim_token=$2
                  AND error_code='reconciler_cleanup_claimed'
-                 AND error_message IN ('reconciler_pending_cleanup', 'reconciler_stuck_cleanup')
+                  AND error_message IN (
+                      'reconciler_pending_cleanup', 'reconciler_stuck_cleanup',
+                      'broker_recovery_cleanup'
+                  )
                RETURNING *""",
             celery_task_id, claim_token,
         )
@@ -376,6 +398,13 @@ class PostgresTaskTrackingStorage:
                     return True, dict(updated)
                 current = await connection.fetchrow("SELECT * FROM creator_runs WHERE id=$1", run_id)
                 return False, dict(current) if current is not None else None
+
+    async def list_broker_recovery_tasks(self) -> list[dict[str, Any]]:
+        return await fetch_all(
+            """SELECT * FROM creator_run_tasks
+               WHERE status IN ('pending', 'queued', 'running')
+               ORDER BY created_at ASC"""
+        )
 
     async def promote_pending_to_queued(self, celery_task_id: str) -> dict[str, Any] | None:
         """Atomically promote a task from 'pending' to 'queued'.

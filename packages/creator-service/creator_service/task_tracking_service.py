@@ -319,6 +319,22 @@ class TaskTrackingService:
             expected_stages, rejected_statuses,
         )
 
+    async def list_broker_recovery_tasks(self) -> list[RunTask]:
+        rows = await self.storage.list_broker_recovery_tasks()
+        return [RunTask.from_row(row) for row in rows]
+
+    async def mark_failed_if_active(
+        self, celery_task_id: str, error_code: str, error_message: str
+    ) -> RunTask | None:
+        row = await self.storage.update_task_status_if_active(
+            celery_task_id,
+            "failed",
+            finished_at=datetime.now(timezone.utc),
+            error_code=error_code,
+            error_message=error_message,
+        )
+        return RunTask.from_row(row) if row is not None else None
+
     async def list_run_tasks(self, run_id: int) -> list[RunTask]:
         rows = await self.storage.list_by_run(run_id)
         return [RunTask.from_row(row) for row in rows]
