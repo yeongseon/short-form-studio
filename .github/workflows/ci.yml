@@ -184,7 +184,6 @@ jobs:
           docker run --rm worker-topology-image python -c \
             "import subprocess; subprocess.run(['ffmpeg', '-version'], check=True)" \
             > /tmp/worker-topology-runtime/ffmpeg-version.txt
-          ffmpeg -version >> /tmp/worker-topology-runtime/ffmpeg-version.txt
           python3 - <<'PY'
           import json
           from pathlib import Path
