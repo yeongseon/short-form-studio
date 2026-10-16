@@ -116,7 +116,12 @@ def test_rollback_migration_uses_selected_release_image_and_requires_downgrade_a
     assert "github.event.inputs.approve_db_downgrade == 'DOWNGRADE'" in downgrade["if"]
     commands = "\n".join(step.get("run", "") for step in downgrade["steps"])
     assert "docker run" in commands
-    assert "$API_IMAGE@$CURRENT_API_DIGEST" in commands
+    assert "$MIGRATION_RUNNER_REPOSITORY@$MIGRATION_RUNNER_DIGEST" in commands
+    assert "migration_runner_run_id" in raw[True]["workflow_dispatch"]["inputs"]
+    assert "migration-runner/release.json" in commands
+    assert "actions/runs/$MIGRATION_RUNNER_RUN_ID" in commands
+    assert "verify-db migration-runner/release.json" in commands
+    assert commands.count("verify-db release.json") == 1
     assert "alembic downgrade" not in "\n".join(
         step.get("run", "") for step in downgrade["steps"] if step.get("uses") == "actions/checkout@v4"
     )
