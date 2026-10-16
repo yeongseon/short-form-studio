@@ -11,7 +11,9 @@ from .media_upload_reconciliation import (
     MediaAssetPersistenceIndeterminate,
     UploadIntent,
 )
-from .postgres_upload_intent_storage import PostgresUploadIntentStorage
+from .storage_policy import StoragePolicy, StorageUsage, ensure_budget
+from .postgres_media_retention_storage import PostgresMediaRetentionStorage
+from .postgres_upload_intent_storage import PostgresUploadIntentStorage, _decode_intent
 
 _METADATA = TypeAdapter(dict[str, object])
 _FILTER = """
@@ -38,7 +40,34 @@ def _decode_asset(row: dict[str, object]) -> dict[str, object]:
     return MediaAsset.model_validate({**row, "metadata": metadata}).model_dump()
 
 
-class PostgresMediaAssetStorage(PostgresUploadIntentStorage):
+class PostgresMediaAssetStorage(PostgresUploadIntentStorage, PostgresMediaRetentionStorage):
+    async def get_storage_usage(
+        self, workspace_id: int, *, policy: StoragePolicy | None = None,
+    ) -> StorageUsage:
+        active_policy = policy or StoragePolicy()
+        row = await db.fetch_one(
+            """SELECT
+                COALESCE((SELECT SUM((metadata->>'size_bytes')::bigint)
+                    FROM creator_media_assets WHERE workspace_id = $1), 0) AS stored_bytes,
+                (SELECT COUNT(*) FROM creator_media_assets WHERE workspace_id = $1) AS stored_assets,
+                COALESCE((SELECT SUM(reserved_bytes) FROM creator_media_upload_intents
+                    WHERE workspace_id = $1
+                    AND state IN ('pending', 'uploaded', 'cleanup_pending')), 0) AS reserved_bytes,
+                (SELECT COUNT(*) FROM creator_media_upload_intents WHERE workspace_id = $1
+                    AND state IN ('pending', 'uploaded', 'cleanup_pending')) AS reserved_assets""",
+            workspace_id,
+        )
+        if row is None:
+            raise MediaAssetPersistenceFailed()
+        return StorageUsage(
+            stored_bytes=int(row["stored_bytes"]),
+            stored_asset_count=int(row["stored_assets"]),
+            reserved_bytes=int(row["reserved_bytes"]),
+            reserved_asset_count=int(row["reserved_assets"]),
+            max_stored_bytes=active_policy.max_stored_bytes,
+            max_asset_count=active_policy.max_asset_count,
+            max_reserved_bytes=active_policy.max_reserved_bytes,
+        )
     async def save_asset(self, row: dict[str, object]) -> dict[str, object]:
         asset = MediaAsset.model_validate({**row, "id": 1})
         try:
@@ -136,3 +165,50 @@ class PostgresMediaAssetStorage(PostgresUploadIntentStorage):
                     workspace_id, media_type, project_id, limit, offset,
                 )
         return [_decode_asset(dict(row)) for row in rows], int(total)
+    async def create_upload_intent(
+        self, intent: UploadIntent, *, policy: StoragePolicy | None = None,
+    ) -> UploadIntent:
+        active_policy = policy or StoragePolicy()
+        pool = await db.get_pool()
+        async with pool.acquire() as connection, connection.transaction():
+            await connection.execute("SELECT pg_advisory_xact_lock($1)", intent.workspace_id)
+            usage_row = await connection.fetchrow(
+                """SELECT
+                    COALESCE(SUM((metadata->>'size_bytes')::bigint), 0) AS stored_bytes,
+                    COUNT(*) AS stored_assets
+                    FROM creator_media_assets WHERE workspace_id = $1""",
+                intent.workspace_id,
+            )
+            reserved_row = await connection.fetchrow(
+                """SELECT COALESCE(SUM(reserved_bytes), 0) AS reserved_bytes,
+                    COUNT(*) AS reserved_assets
+                    FROM creator_media_upload_intents
+                    WHERE workspace_id = $1
+                    AND state IN ('pending', 'uploaded', 'cleanup_pending')""",
+                intent.workspace_id,
+            )
+            usage = StorageUsage(
+                stored_bytes=int(usage_row["stored_bytes"]),
+                stored_asset_count=int(usage_row["stored_assets"]),
+                reserved_bytes=int(reserved_row["reserved_bytes"]),
+                reserved_asset_count=int(reserved_row["reserved_assets"]),
+                max_stored_bytes=active_policy.max_stored_bytes,
+                max_asset_count=active_policy.max_asset_count,
+                max_reserved_bytes=active_policy.max_reserved_bytes,
+            )
+            ensure_budget(
+                workspace_id=intent.workspace_id,
+                incoming_bytes=intent.reserved_bytes,
+                usage=usage,
+                policy=active_policy,
+            )
+            row = await connection.fetchrow(
+                """INSERT INTO creator_media_upload_intents
+                    (owner_id, workspace_id, storage_key, state, lease_expires_at, reserved_bytes)
+                    VALUES ($1, $2, $3, $4, $5, $6) RETURNING *""",
+                intent.owner_id, intent.workspace_id, intent.storage_key,
+                intent.state.value, intent.lease_expires_at, intent.reserved_bytes,
+            )
+        if row is None:
+            raise MediaAssetPersistenceFailed()
+        return _decode_intent(row)

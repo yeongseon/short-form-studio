@@ -15,10 +15,10 @@ class PostgresUploadIntentStorage:
     async def create_upload_intent(self, intent: UploadIntent) -> UploadIntent:
         row = await db.fetch_one(
             """INSERT INTO creator_media_upload_intents
-                (owner_id, workspace_id, storage_key, state, lease_expires_at)
-                VALUES ($1, $2, $3, $4, $5) RETURNING *""",
+                (owner_id, workspace_id, storage_key, state, lease_expires_at, reserved_bytes)
+                VALUES ($1, $2, $3, $4, $5, $6) RETURNING *""",
             intent.owner_id, intent.workspace_id, intent.storage_key,
-            intent.state.value, intent.lease_expires_at,
+            intent.state.value, intent.lease_expires_at, intent.reserved_bytes,
         )
         if row is None:
             raise MediaAssetPersistenceFailed()
@@ -158,5 +158,5 @@ def _decode_intent(row: dict[str, object]) -> UploadIntent:
         state=UploadIntentState(str(row["state"])),
         lease_expires_at=lease_expires_at, retry_count=int(row["retry_count"]),
         claim_token=str(row["claim_token"]) if row.get("claim_token") is not None else None,
-        created_at=row["created_at"],
+        created_at=row["created_at"], reserved_bytes=int(row["reserved_bytes"]),
     )
