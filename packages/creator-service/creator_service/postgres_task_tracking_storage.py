@@ -116,6 +116,20 @@ class PostgresTaskTrackingStorage:
         )
         return updated
 
+    async def update_task_status_if_pending(
+        self, task_id: int, status: str, **kwargs: Any
+    ) -> dict[str, Any] | None:
+        return await fetch_one(
+            """UPDATE creator_run_tasks SET status=$2, finished_at=COALESCE($3, finished_at),
+               error_code=$4, error_message=$5
+               WHERE id=$1 AND status='pending' RETURNING *""",
+            task_id,
+            status,
+            kwargs.get("finished_at"),
+            kwargs.get("error_code"),
+            kwargs.get("error_message"),
+        )
+
     async def claim_running(self, task_id: int, **kwargs: Any) -> dict[str, Any] | None:
         """Atomically claim: only transition from queued/failed to running.
 
@@ -217,6 +231,15 @@ class PostgresTaskTrackingStorage:
             ORDER BY created_at ASC
             """,
             threshold_seconds,
+        )
+
+    async def list_reconciliation_pending_tasks(self) -> list[dict[str, Any]]:
+        return await fetch_all(
+            """SELECT * FROM creator_run_tasks
+               WHERE status='failed' AND error_code IN (
+                   'reconciler_pending_cleanup', 'reconciler_stuck_cleanup'
+               )
+               ORDER BY finished_at ASC NULLS LAST"""
         )
 
     async def promote_pending_to_queued(self, celery_task_id: str) -> dict[str, Any] | None:

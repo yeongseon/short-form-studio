@@ -103,6 +103,18 @@ class InMemoryTaskTrackingStorage:
         self._rows[task_id] = row
         return dict(row)
 
+    async def update_task_status_if_pending(
+        self, task_id: int, status: str, **kwargs: Any
+    ) -> dict[str, Any] | None:
+        row = self._rows.get(task_id)
+        if row is None or row.get("status") != "pending":
+            return None
+        row["status"] = status
+        row["finished_at"] = kwargs.get("finished_at")
+        row["error_code"] = kwargs.get("error_code")
+        row["error_message"] = kwargs.get("error_message")
+        return dict(row)
+
     async def finish_if_claimed(
         self, celery_task_id: str, token: str, status: str,
         error_code: str | None = None, error_message: str | None = None,
@@ -197,6 +209,24 @@ class InMemoryTaskTrackingStorage:
             key=lambda row: row.get("created_at") or datetime.min.replace(tzinfo=timezone.utc)
         )
         return stale
+
+    async def list_reconciliation_pending_tasks(self) -> list[dict[str, Any]]:
+        rows = [
+            dict(row)
+            for row in self._rows.values()
+            if row.get("status") == "failed"
+            and row.get("error_code") in {
+                "reconciler_pending_cleanup",
+                "reconciler_stuck_cleanup",
+            }
+        ]
+        rows.sort(
+            key=lambda row: (
+                row.get("finished_at") is None,
+                row.get("finished_at") or datetime.max.replace(tzinfo=timezone.utc),
+            )
+        )
+        return rows
 
     async def promote_pending_to_queued(self, celery_task_id: str) -> dict[str, Any] | None:
         """Atomically promote a task from 'pending' to 'queued'. Returns None if not pending."""
