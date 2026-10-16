@@ -164,6 +164,7 @@ async def _revoke_celery_ids(celery_ids: list[str], run_id: int) -> bool:
         tracking_service = import_module(
             "creator_service.task_tracking_service"
         ).task_tracking_service
+        usage_service = import_module("creator_service.usage_service").usage_service
         revoked: list[str] = []
         all_ok = True
         for tid in celery_ids:
@@ -177,6 +178,8 @@ async def _revoke_celery_ids(celery_ids: list[str], run_id: int) -> bool:
                 )
         if revoked:
             await tracking_service.mark_tasks_revoked(revoked)
+            for task_id in revoked:
+                await usage_service.cancel_owned(task_id)
         return all_ok
     except Exception:
         logger.warning("Failed to revoke captured tasks for run %d", run_id, exc_info=True)
