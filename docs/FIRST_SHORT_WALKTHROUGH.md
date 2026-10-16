@@ -31,6 +31,18 @@ abbreviated command list as a second bootstrap procedure: Quick Start preserves
 the required migration → creator key → Studio proxy → authenticated smoke order
 and starts one dedicated Beat scheduler.
 
+The setup uses these entrypoints; follow Quick Start for the required values and
+the complete order:
+
+```bash
+cp .env.example .env
+docker compose up -d postgres redis
+docker compose run --rm api alembic upgrade head
+docker compose run --rm api python scripts/create_api_key.py \
+  --email local@example.com --workspace local --name local-dev
+docker compose up -d api worker beat studio-web
+```
+
 Then open the Studio at `http://127.0.0.1:5174`.
 
 ## 2. Confirm setup readiness
