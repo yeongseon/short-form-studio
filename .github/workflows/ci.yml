@@ -179,8 +179,8 @@ jobs:
             > /tmp/worker-topology-runtime/resolved-command.txt
           until docker exec topology-postgres pg_isready -U review -d topology; do sleep 1; done
           until docker exec topology-redis redis-cli ping; do sleep 1; done
-          DATABASE_URL=postgresql://review:review-local-only@127.0.0.1:55441/topology \
-            python3 -m alembic -c apps/api/alembic.ini upgrade head
+          (cd apps/api && DATABASE_URL=postgresql://review:review-local-only@127.0.0.1:55441/topology \
+            python3 -m alembic upgrade head)
           docker run --rm worker-topology-image python -c \
             "import subprocess; subprocess.run(['ffmpeg', '-version'], check=True)" \
             > /tmp/worker-topology-runtime/ffmpeg-version.txt
