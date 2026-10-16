@@ -15,10 +15,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Install PostgreSQL restore tooling
+        run: sudo apt-get update && sudo apt-get install --yes postgresql-client
       - name: Install restore test dependency
         run: python3 -m pip install -c constraints.txt pytest
       - name: Test backup manifest boundaries
-        run: python3 -m pytest tests/test_restore_verify.py -q
+        run: python3 -m pytest tests/test_restore_verify.py tests/test_restore_verify_symlinks.py tests/test_restore_verify_target.py tests/test_restore_database_negative.py -v
       - name: Run disposable database and media restore drill
         run: python3 -m pytest tests/test_restore_drill.py -v -s
 
