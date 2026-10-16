@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
@@ -15,6 +16,14 @@ QUOTAS: dict[str, float] = {
     "monthly_image_generations": 200,
     "monthly_tts_requests": 3600,
     "monthly_cost_usd": 50.0,
+}
+
+MAX_ESTIMATED_COST_USD: dict[str, float] = {
+    "llm": 0.10,
+    "image_gen": 2.00,
+    "tts": 1.00,
+    "stt": 0.25,
+    "render": 0.10,
 }
 
 
@@ -45,9 +54,15 @@ class UsageStorageBackend(Protocol):
         self, workspace_id: int, operation_type: str, units: int = 1
     ) -> None: ...
 
-    async def try_reserve_owned(self, workspace_id: int, operation_type: str, owner_id: str) -> bool: ...
+    async def try_reserve_owned(
+        self, workspace_id: int, operation_type: str, owner_id: str,
+        estimated_cost_usd: float, monthly_cost_usd: float,
+        global_monthly_cost_usd: float | None,
+    ) -> bool: ...
 
     async def cancel_owned(self, owner_id: str) -> bool: ...
+
+    async def settle_owned(self, owner_id: str, *, billable_unknown: bool = False) -> bool: ...
 
     async def reservation_owner_id(self, task_id: str) -> str | None: ...
 
@@ -60,8 +75,9 @@ class InMemoryUsageStorage:
         self._events_by_idempotency_key: dict[str, dict[str, Any]] = {}
         self._quotas: dict[int, dict[str, Any]] = {}
         self._reservations: dict[tuple[int, datetime], dict[str, int]] = {}
-        self._owned: dict[str, tuple[int, datetime, str, str]] = {}
+        self._owned: dict[str, tuple[int, datetime, str, str, float, float]] = {}
         self._locks: dict[int, asyncio.Lock] = {}
+        self._spend_lock = asyncio.Lock()
         self._next_event_id = 1
         self._next_quota_id = 1
 
@@ -138,7 +154,7 @@ class InMemoryUsageStorage:
         key = (workspace_id, period_start)
         async with self._lock_for_workspace(workspace_id):
             if owner_id is not None and owner_id in self._owned:
-                old_workspace, _, old_operation, old_status = self._owned[owner_id]
+                old_workspace, _, old_operation, old_status, _, _ = self._owned[owner_id]
                 return (old_workspace, old_operation, old_status) == (workspace_id, operation_type, "reserved")
             quota = await self.get_workspace_quota(workspace_id)
             if quota is None:
@@ -173,7 +189,7 @@ class InMemoryUsageStorage:
                     return False
                 reserved["llm"] += 1
                 if owner_id is not None:
-                    self._owned[owner_id] = (workspace_id, period_start, operation_type, "reserved")
+                    self._owned[owner_id] = (workspace_id, period_start, operation_type, "reserved", 0.0, 0.0)
                 return True
             if operation_type == "image_gen":
                 if usage["image_gen"] + reserved["image_gen"] >= int(
@@ -182,7 +198,7 @@ class InMemoryUsageStorage:
                     return False
                 reserved["image_gen"] += 1
                 if owner_id is not None:
-                    self._owned[owner_id] = (workspace_id, period_start, operation_type, "reserved")
+                    self._owned[owner_id] = (workspace_id, period_start, operation_type, "reserved", 0.0, 0.0)
                 return True
             # STT/render intentionally share the TTS reservation bucket until
             # dedicated monthly_stt/monthly_render quota fields are added.
@@ -194,21 +210,61 @@ class InMemoryUsageStorage:
                     return False
                 reserved["tts_requests"] += 1
                 if owner_id is not None:
-                    self._owned[owner_id] = (workspace_id, period_start, operation_type, "reserved")
+                    self._owned[owner_id] = (workspace_id, period_start, operation_type, "reserved", 0.0, 0.0)
                 return True
             return True
 
-    async def try_reserve_owned(self, workspace_id: int, operation_type: str, owner_id: str) -> bool:
-        return await self.try_reserve_quota(workspace_id, operation_type, owner_id)
+    async def try_reserve_owned(
+        self, workspace_id: int, operation_type: str, owner_id: str,
+        estimated_cost_usd: float, monthly_cost_usd: float,
+        global_monthly_cost_usd: float | None,
+    ) -> bool:
+        async with self._spend_lock:
+            existing = self._owned.get(owner_id)
+            if existing is not None:
+                return existing[0] == workspace_id and existing[2] == operation_type
+            now = datetime.now(timezone.utc)
+            period_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+            settled_workspace = sum(
+                float(row.get("estimated_cost_usd") or 0.0)
+                for row in self._events.values()
+                if row.get("workspace_id") == workspace_id and row["created_at"] >= period_start
+            )
+            reserved_workspace = sum(
+                max(estimate - settled, 0.0)
+                for ws, period, _, status, estimate, settled in self._owned.values()
+                if ws == workspace_id and period == period_start and status in {"reserved", "consumed", "billable_unknown"}
+            )
+            settled_global = sum(
+                float(row.get("estimated_cost_usd") or 0.0)
+                for row in self._events.values() if row["created_at"] >= period_start
+            )
+            reserved_global = sum(
+                max(estimate - settled, 0.0)
+                for _, period, _, status, estimate, settled in self._owned.values()
+                if period == period_start and status in {"reserved", "consumed", "billable_unknown"}
+            )
+            if settled_workspace + reserved_workspace + estimated_cost_usd > monthly_cost_usd:
+                return False
+            if (
+                global_monthly_cost_usd is not None
+                and settled_global + reserved_global + estimated_cost_usd > global_monthly_cost_usd
+            ):
+                return False
+            if not await self.try_reserve_quota(workspace_id, operation_type, owner_id):
+                return False
+            owned = self._owned[owner_id]
+            self._owned[owner_id] = (*owned[:4], estimated_cost_usd, 0.0)
+            return True
 
     def _finish_owned(self, owner_id: str, status: str) -> bool:
         owned = self._owned.get(owner_id)
         if owned is None or owned[3] != "reserved":
             return False
-        workspace_id, period_start, operation_type, _ = owned
+        workspace_id, period_start, operation_type, _, estimate, settled = owned
         bucket = "tts_requests" if operation_type in {"tts", "stt", "render"} else operation_type
         self._reservations[(workspace_id, period_start)][bucket] -= 1
-        self._owned[owner_id] = (workspace_id, period_start, operation_type, status)
+        self._owned[owner_id] = (workspace_id, period_start, operation_type, status, estimate, settled)
         return True
 
     async def cancel_owned(self, owner_id: str) -> bool:
@@ -217,6 +273,22 @@ class InMemoryUsageStorage:
             return False
         async with self._lock_for_workspace(owned[0]):
             return self._finish_owned(owner_id, "cancelled")
+
+    async def settle_owned(self, owner_id: str, *, billable_unknown: bool = False) -> bool:
+        async with self._spend_lock:
+            owned = self._owned.get(owner_id)
+            if owned is None or owned[3] in {"settled", "cancelled", "billable_unknown"}:
+                return False
+            workspace_id, period_start, operation_type, status, estimate, settled = owned
+            if not billable_unknown and status == "reserved":
+                return False
+            final_status = "billable_unknown" if billable_unknown else "settled"
+            if status == "reserved":
+                self._finish_owned(owner_id, final_status)
+            self._owned[owner_id] = (
+                workspace_id, period_start, operation_type, final_status, estimate, settled,
+            )
+            return True
 
     async def reservation_owner_id(self, task_id: str) -> str | None:
         owned = self._owned.get(task_id)
@@ -228,7 +300,7 @@ class InMemoryUsageStorage:
         owned = self._owned.get(owner_id)
         if owned is None:
             raise ValueError("Unknown reservation owner")
-        workspace_id, _, operation_type, status = owned
+        workspace_id, period_start, operation_type, status, estimate, settled = owned
         if row.get("workspace_id") != workspace_id or row.get("operation_type") != operation_type:
             raise ValueError("Usage event owner mismatch")
         if status == "cancelled":
@@ -237,6 +309,10 @@ class InMemoryUsageStorage:
             saved = await self.record_event(row)
             if status == "reserved":
                 self._finish_owned(owner_id, "consumed")
+            self._owned[owner_id] = (
+                workspace_id, period_start, operation_type, "consumed", estimate,
+                settled + float(saved.get("estimated_cost_usd") or 0.0),
+            )
             return saved
 
     async def release_reservation(
@@ -268,7 +344,7 @@ class InMemoryUsageStorage:
                 return
 
             owned = sum(
-                1 for ws, period, op, status in self._owned.values()
+                1 for ws, period, op, status, _, _ in self._owned.values()
                 if ws == workspace_id and period == period_start and status == "reserved"
                 and (
                     op == operation_type if operation_type in {"llm", "image_gen"}
@@ -296,15 +372,32 @@ class UsageService:
     def __init__(self, storage: UsageStorageBackend):
         self.storage = storage
 
-    async def reserve_owned(self, workspace_id: int, operation_type: str, owner_id: str) -> bool:
-        summary = await self.get_monthly_summary(workspace_id)
-        quota = await self.get_quota(workspace_id)
-        if self._quota_exceeded_reason(summary, quota, operation_type) is not None:
+    async def reserve_owned(
+        self, workspace_id: int, operation_type: str, owner_id: str,
+        estimated_cost_usd: float | None = None,
+    ) -> bool:
+        if os.getenv("BILLABLE_PROVIDER_CALLS_ENABLED", "true").lower() not in {"1", "true", "yes"}:
             return False
-        return await self.storage.try_reserve_owned(workspace_id, operation_type, owner_id)
+        estimate = estimated_cost_usd
+        if estimate is None:
+            estimate = MAX_ESTIMATED_COST_USD.get(operation_type)
+        if estimate is None or estimate <= 0:
+            return False
+        quota = await self.get_quota(workspace_id)
+        global_budget_raw = os.getenv("GLOBAL_MONTHLY_ESTIMATED_BUDGET_USD")
+        global_budget = float(global_budget_raw) if global_budget_raw else None
+        return await self.storage.try_reserve_owned(
+            workspace_id, operation_type, owner_id, estimate, quota.monthly_cost_usd, global_budget,
+        )
 
     async def cancel_owned(self, owner_id: str) -> bool:
         return await self.storage.cancel_owned(owner_id)
+
+    async def settle_owned(self, owner_id: str) -> bool:
+        return await self.storage.settle_owned(owner_id)
+
+    async def settle_owned_unknown(self, owner_id: str) -> bool:
+        return await self.storage.settle_owned(owner_id, billable_unknown=True)
 
     async def reservation_owner_id(self, task_id: str) -> str | None:
         return await self.storage.reservation_owner_id(task_id)
