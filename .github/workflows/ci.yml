@@ -245,7 +245,9 @@ jobs:
       - name: Build Studio Web runtime image
         run: docker build --target runtime -f apps/studio-web/Dockerfile .
       - name: Build Worker runtime image
-        run: docker build --target runtime -f apps/worker-orchestrator/Dockerfile .
+        run: |
+          docker build --target runtime -f apps/worker-orchestrator/Dockerfile -t first-short-worker-runtime .
+          docker run --rm first-short-worker-runtime python -c "from celery_app import celery_app; assert celery_app.conf.beat_schedule['reconcile-media-uploads']['task'] == 'reconcile_media_uploads'"
       - name: Build two API releases and verify app-only rollback lifecycle
         run: |
           set -euo pipefail
