@@ -1,5 +1,6 @@
 import anyio
 import pytest
+from decimal import Decimal
 
 from creator_service.usage_service import InMemoryUsageStorage, UsageService
 
@@ -140,6 +141,30 @@ async def test_unset_cost_model_is_rejected_conservatively() -> None:
 
     # When admission cannot determine its maximum spend, then it is rejected.
     assert not await service.reserve_owned(1, "unpriced-provider", "task")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", [Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")])
+async def test_non_finite_reservation_estimate_is_rejected(invalid: Decimal) -> None:
+    # Given a non-finite monetary estimate from an admission boundary.
+    service = UsageService(InMemoryUsageStorage())
+
+    # When reservation admission parses the estimate, then it rejects it before arithmetic.
+    assert not await service.reserve_owned(1, "llm", "invalid", estimated_cost_usd=invalid)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", ["NaN", "Infinity", "-Infinity"])
+async def test_non_finite_global_budget_is_rejected_at_startup(
+    monkeypatch: pytest.MonkeyPatch, invalid: str,
+) -> None:
+    # Given an invalid global monetary configuration.
+    monkeypatch.setenv("GLOBAL_MONTHLY_ESTIMATED_BUDGET_USD", invalid)
+    service = UsageService(InMemoryUsageStorage())
+
+    # When a billable reservation loads configuration, then startup validation fails closed.
+    with pytest.raises(ValueError, match="GLOBAL_MONTHLY_ESTIMATED_BUDGET_USD"):
+        await service.reserve_owned(1, "llm", "invalid", estimated_cost_usd=Decimal("0.1"))
 
 
 @pytest.mark.asyncio

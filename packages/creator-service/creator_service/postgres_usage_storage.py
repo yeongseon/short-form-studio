@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from .db import fetch_all, fetch_one, get_pool
@@ -277,8 +278,8 @@ class PostgresUsageStorage:
 
     async def try_reserve_owned(
         self, workspace_id: int, operation_type: str, owner_id: str,
-        estimated_cost_usd: float, monthly_cost_usd: float,
-        global_monthly_cost_usd: float | None,
+        estimated_cost_usd: Decimal, monthly_cost_usd: Decimal,
+        global_monthly_cost_usd: Decimal | None,
     ) -> bool:
         pool = await get_pool()
         async with pool.acquire() as connection:
@@ -314,7 +315,7 @@ class PostgresUsageStorage:
                          AND status IN ('reserved', 'consumed', 'billable_unknown')""",
                     workspace_id, month_start,
                 )
-                if float(settled_workspace) + float(reserved_workspace) + estimated_cost_usd > monthly_cost_usd:
+                if settled_workspace + reserved_workspace + estimated_cost_usd > monthly_cost_usd:
                     return False
                 if global_monthly_cost_usd is not None:
                     settled_global = await connection.fetchval(
@@ -328,7 +329,7 @@ class PostgresUsageStorage:
                            WHERE period_start = $1 AND status IN ('reserved', 'consumed', 'billable_unknown')""",
                         month_start,
                     )
-                    if float(settled_global) + float(reserved_global) + estimated_cost_usd > global_monthly_cost_usd:
+                    if settled_global + reserved_global + estimated_cost_usd > global_monthly_cost_usd:
                         return False
                 allowed = await self._reserve_count(
                     connection, workspace_id, operation_type, owner_id, month_start,
@@ -338,7 +339,7 @@ class PostgresUsageStorage:
 
     async def _reserve_count(
         self, connection: Any, workspace_id: int, operation_type: str, owner_id: str,
-        month_start: datetime, estimated_cost_usd: float,
+        month_start: datetime, estimated_cost_usd: Decimal,
     ) -> bool:
         quota = await connection.fetchrow(
             "SELECT * FROM workspace_quotas WHERE workspace_id = $1", workspace_id,
