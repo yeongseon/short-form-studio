@@ -8,6 +8,7 @@ from functools import partial
 from typing import Final, Protocol
 
 from .blocking_io import BlockingIO
+from .object_storage import StorageDeletionError
 
 logger = logging.getLogger(__name__)
 DEFAULT_UPLOAD_LEASE: Final = timedelta(minutes=30)
@@ -26,6 +27,7 @@ class UploadIntentState(StrEnum):
     PENDING = "pending"
     UPLOADED = "uploaded"
     CLEANUP_PENDING = "cleanup_pending"
+    RECLAIMING = "reclaiming"
     COMPLETED = "completed"
     RECLAIMED = "reclaimed"
     EXHAUSTED = "exhausted"
@@ -40,6 +42,7 @@ class UploadIntent:
     state: UploadIntentState
     lease_expires_at: datetime
     retry_count: int = 0
+    claim_token: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,14 +56,18 @@ class SweepResult:
 class UploadIntentStorage(Protocol):
     async def create_upload_intent(self, intent: UploadIntent) -> UploadIntent: ...
     async def mark_upload_intent_uploaded(self, intent_id: int) -> None: ...
-    async def complete_upload_intent(self, intent_id: int) -> None: ...
+    async def complete_upload_intent(
+        self, intent_id: int, *, owner_id: str | None = None, claim_token: str | None = None,
+    ) -> None: ...
     async def defer_upload_cleanup(self, intent_id: int) -> None: ...
     async def asset_exists_for_key(self, workspace_id: int, storage_key: str) -> bool: ...
     async def claim_expired_upload_intents(
         self, *, now: datetime, lease_expires_at: datetime, limit: int,
     ) -> list[UploadIntent]: ...
-    async def record_upload_reclaimed(self, intent_id: int) -> None: ...
-    async def record_upload_cleanup_failure(self, intent_id: int, max_retries: int) -> bool: ...
+    async def record_upload_reclaimed(self, intent_id: int, claim_token: str | None = None) -> None: ...
+    async def record_upload_cleanup_failure(
+        self, intent_id: int, max_retries: int, claim_token: str | None = None,
+    ) -> bool: ...
 
 
 class DeletableStorage(Protocol):
@@ -88,14 +95,17 @@ class MediaUploadReconciler:
         reclaimed = preserved = failed = exhausted = 0
         for intent in claimed:
             if await self._intents.asset_exists_for_key(intent.workspace_id, intent.storage_key):
-                await self._intents.complete_upload_intent(intent.id)
+                await self._intents.complete_upload_intent(
+                    intent.id, claim_token=intent.claim_token,
+                )
                 preserved += 1
                 continue
             try:
                 await self._io.run(partial(self._objects.delete, intent.storage_key))
-            except OSError:
+            except StorageDeletionError:
                 is_exhausted = await self._intents.record_upload_cleanup_failure(
                     intent.id, self._max_retries,
+                    intent.claim_token,
                 )
                 logger.warning(
                     "media_upload.cleanup_failed intent_id=%s workspace_id=%s retry=%s exhausted=%s",
@@ -104,6 +114,6 @@ class MediaUploadReconciler:
                 failed += 1
                 exhausted += int(is_exhausted)
                 continue
-            await self._intents.record_upload_reclaimed(intent.id)
+            await self._intents.record_upload_reclaimed(intent.id, intent.claim_token)
             reclaimed += 1
         return SweepResult(reclaimed, preserved, failed, exhausted)

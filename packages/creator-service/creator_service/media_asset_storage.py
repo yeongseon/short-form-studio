@@ -3,11 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
+import uuid
 
 import anyio
 from creator_domain.models import MediaAsset, MediaOrigin
 
-from .media_upload_reconciliation import UploadIntent, UploadIntentState
+from .media_upload_reconciliation import MediaAssetPersistenceFailed, UploadIntent, UploadIntentState
 from .object_storage import ArtifactStorageBackend as MediaStorageBackend
 
 
@@ -21,6 +22,9 @@ class AssetPage:
 
 class MediaAssetStorageBackend(Protocol):
     async def save_asset(self, row: dict[str, object]) -> dict[str, object]: ...
+    async def save_uploaded_asset(
+        self, row: dict[str, object], intent: UploadIntent,
+    ) -> dict[str, object]: ...
 
     async def get_asset(self, asset_id: int, workspace_id: int) -> dict[str, object] | None: ...
 
@@ -31,14 +35,18 @@ class MediaAssetStorageBackend(Protocol):
 
     async def create_upload_intent(self, intent: UploadIntent) -> UploadIntent: ...
     async def mark_upload_intent_uploaded(self, intent_id: int) -> None: ...
-    async def complete_upload_intent(self, intent_id: int) -> None: ...
+    async def complete_upload_intent(
+        self, intent_id: int, *, owner_id: str | None = None, claim_token: str | None = None,
+    ) -> None: ...
     async def defer_upload_cleanup(self, intent_id: int) -> None: ...
     async def asset_exists_for_key(self, workspace_id: int, storage_key: str) -> bool: ...
     async def claim_expired_upload_intents(
         self, *, now: datetime, lease_expires_at: datetime, limit: int,
     ) -> list[UploadIntent]: ...
-    async def record_upload_reclaimed(self, intent_id: int) -> None: ...
-    async def record_upload_cleanup_failure(self, intent_id: int, max_retries: int) -> bool: ...
+    async def record_upload_reclaimed(self, intent_id: int, claim_token: str | None = None) -> None: ...
+    async def record_upload_cleanup_failure(
+        self, intent_id: int, max_retries: int, claim_token: str | None = None,
+    ) -> bool: ...
 
 
 _ORIGIN_SORT_RANK = {
@@ -65,6 +73,19 @@ class InMemoryMediaAssetStorage:
             saved = MediaAsset.model_validate({**row, "id": self._next_id})
             self._next_id += 1
             self._assets.append(saved.model_dump())
+        return saved.model_dump()
+
+    async def save_uploaded_asset(
+        self, row: dict[str, object], intent: UploadIntent,
+    ) -> dict[str, object]:
+        async with self._lock:
+            current = self._intents[intent.id]
+            if current.state is not UploadIntentState.UPLOADED or current.owner_id != intent.owner_id:
+                raise MediaAssetPersistenceFailed()
+            saved = MediaAsset.model_validate({**row, "id": self._next_id})
+            self._next_id += 1
+            self._assets.append(saved.model_dump())
+            self._set_intent(intent.id, UploadIntentState.COMPLETED)
         return saved.model_dump()
 
     async def get_asset(self, asset_id: int, workspace_id: int) -> dict[str, object] | None:
@@ -104,14 +125,24 @@ class InMemoryMediaAssetStorage:
             storage_key=intent.storage_key, state=state,
             lease_expires_at=changes.get("lease_expires_at", intent.lease_expires_at),
             retry_count=changes.get("retry_count", intent.retry_count),
+            claim_token=changes.get("claim_token", intent.claim_token),
         )
 
     async def mark_upload_intent_uploaded(self, intent_id: int) -> None:
         async with self._lock:
+            if self._intents[intent_id].state is not UploadIntentState.PENDING:
+                raise MediaAssetPersistenceFailed()
             self._set_intent(intent_id, UploadIntentState.UPLOADED)
 
-    async def complete_upload_intent(self, intent_id: int) -> None:
+    async def complete_upload_intent(
+        self, intent_id: int, *, owner_id: str | None = None, claim_token: str | None = None,
+    ) -> None:
         async with self._lock:
+            intent = self._intents[intent_id]
+            uploader_owns = owner_id is not None and intent.owner_id == owner_id and intent.state is UploadIntentState.UPLOADED
+            reconciler_owns = claim_token is not None and intent.claim_token == claim_token and intent.state is UploadIntentState.RECLAIMING
+            if not uploader_owns and not reconciler_owns:
+                raise MediaAssetPersistenceFailed()
             self._set_intent(intent_id, UploadIntentState.COMPLETED)
 
     async def defer_upload_cleanup(self, intent_id: int) -> None:
@@ -134,16 +165,26 @@ class InMemoryMediaAssetStorage:
                 and intent.lease_expires_at <= now
             ][:limit]
             for intent in eligible:
-                self._set_intent(intent.id, intent.state, lease_expires_at=lease_expires_at)
-            return eligible
+                self._set_intent(
+                    intent.id, UploadIntentState.RECLAIMING,
+                    lease_expires_at=lease_expires_at, claim_token=uuid.uuid4().hex,
+                )
+            return [self._intents[intent.id] for intent in eligible]
 
-    async def record_upload_reclaimed(self, intent_id: int) -> None:
-        async with self._lock:
-            self._set_intent(intent_id, UploadIntentState.RECLAIMED)
-
-    async def record_upload_cleanup_failure(self, intent_id: int, max_retries: int) -> bool:
+    async def record_upload_reclaimed(self, intent_id: int, claim_token: str | None = None) -> None:
         async with self._lock:
             intent = self._intents[intent_id]
+            if claim_token is not None and intent.claim_token != claim_token:
+                raise MediaAssetPersistenceFailed()
+            self._set_intent(intent_id, UploadIntentState.RECLAIMED)
+
+    async def record_upload_cleanup_failure(
+        self, intent_id: int, max_retries: int, claim_token: str | None = None,
+    ) -> bool:
+        async with self._lock:
+            intent = self._intents[intent_id]
+            if claim_token is not None and intent.claim_token != claim_token:
+                raise MediaAssetPersistenceFailed()
             retries = intent.retry_count + 1
             exhausted = retries >= max_retries
             self._set_intent(
