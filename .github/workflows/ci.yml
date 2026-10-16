@@ -27,6 +27,8 @@ jobs:
       - name: Test backup manifest boundaries
         run: python3 -m pytest tests/test_restore_verify.py tests/test_restore_verify_symlinks.py tests/test_restore_verify_target.py tests/test_restore_database_negative.py -v
       - name: Run disposable database and media restore drill
+        env:
+          GITHUB_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python3 -m pytest tests/test_restore_drill.py -v -s
 
   lint:
