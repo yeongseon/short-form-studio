@@ -318,18 +318,23 @@ class PostgresUsageStorage:
                 if settled_workspace + reserved_workspace + estimated_cost_usd > monthly_cost_usd:
                     return False
                 if global_monthly_cost_usd is not None:
-                    settled_global = await connection.fetchval(
-                        "SELECT COALESCE(SUM(estimated_cost_usd), 0) FROM usage_events WHERE created_at >= $1",
+                    global_accounting = await connection.fetchrow(
+                        """SELECT
+                           (SELECT COALESCE(SUM(estimated_cost_usd), 0) FROM usage_events
+                            WHERE created_at >= $1) AS settled,
+                           (SELECT COALESCE(SUM(GREATEST(
+                              estimated_cost_usd - settled_estimated_cost_usd, 0)), 0)
+                            FROM workspace_quota_reservation_owners
+                            WHERE period_start = $1
+                              AND status IN ('reserved', 'consumed', 'billable_unknown')) AS reserved""",
                         month_start,
                     )
-                    reserved_global = await connection.fetchval(
-                        """SELECT COALESCE(SUM(GREATEST(
-                             estimated_cost_usd - settled_estimated_cost_usd, 0)), 0)
-                           FROM workspace_quota_reservation_owners
-                           WHERE period_start = $1 AND status IN ('reserved', 'consumed', 'billable_unknown')""",
-                        month_start,
-                    )
-                    if settled_global + reserved_global + estimated_cost_usd > global_monthly_cost_usd:
+                    if (
+                        global_accounting["settled"]
+                        + global_accounting["reserved"]
+                        + estimated_cost_usd
+                        > global_monthly_cost_usd
+                    ):
                         return False
                 allowed = await self._reserve_count(
                     connection, workspace_id, operation_type, owner_id, month_start,
@@ -410,6 +415,67 @@ class PostgresUsageStorage:
             if row is not None and row["status"] == "cancelled":
                 raise ValueError("Cancelled reservation owner")
             return row["owner_id"] if row is not None else None
+
+    async def readmit_owned(
+        self, owner_id: str, global_monthly_cost_usd: Decimal | None,
+    ) -> bool:
+        pool = await get_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                await connection.execute("SELECT pg_advisory_xact_lock($1)", 860)
+                owner = await connection.fetchrow(
+                    """SELECT * FROM workspace_quota_reservation_owners
+                       WHERE owner_id = $1 FOR UPDATE""",
+                    owner_id,
+                )
+                if owner is None or owner["status"] not in {"reserved", "consumed"}:
+                    return False
+                month_start = await connection.fetchval(
+                    "SELECT date_trunc('month', NOW() AT TIME ZONE 'UTC')::timestamptz"
+                )
+                if owner["period_start"] == month_start:
+                    return True
+                workspace_id = int(owner["workspace_id"])
+                await connection.execute("SELECT pg_advisory_xact_lock($1)", workspace_id)
+                accounting = await connection.fetchrow(
+                    """SELECT q.monthly_cost_usd,
+                       (SELECT COALESCE(SUM(estimated_cost_usd), 0) FROM usage_events
+                        WHERE workspace_id = $1 AND created_at >= $2) AS workspace_settled,
+                       (SELECT COALESCE(SUM(GREATEST(
+                          estimated_cost_usd - settled_estimated_cost_usd, 0)), 0)
+                        FROM workspace_quota_reservation_owners
+                        WHERE workspace_id = $1 AND period_start = $2
+                          AND status IN ('reserved', 'consumed', 'billable_unknown')) AS workspace_reserved,
+                       (SELECT COALESCE(SUM(estimated_cost_usd), 0) FROM usage_events
+                        WHERE created_at >= $2) AS global_settled,
+                       (SELECT COALESCE(SUM(GREATEST(
+                          estimated_cost_usd - settled_estimated_cost_usd, 0)), 0)
+                        FROM workspace_quota_reservation_owners
+                        WHERE period_start = $2
+                          AND status IN ('reserved', 'consumed', 'billable_unknown')) AS global_reserved
+                       FROM workspace_quotas q WHERE q.workspace_id = $1""",
+                    workspace_id, month_start,
+                )
+                if accounting is None:
+                    return False
+                residual = max(
+                    owner["estimated_cost_usd"] - owner["settled_estimated_cost_usd"],
+                    Decimal("0"),
+                )
+                if accounting["workspace_settled"] + accounting["workspace_reserved"] + residual > accounting["monthly_cost_usd"]:
+                    return False
+                if (
+                    global_monthly_cost_usd is not None
+                    and accounting["global_settled"] + accounting["global_reserved"] + residual
+                    > global_monthly_cost_usd
+                ):
+                    return False
+                await connection.execute(
+                    """UPDATE workspace_quota_reservation_owners SET period_start = $2
+                       WHERE owner_id = $1""",
+                    owner_id, month_start,
+                )
+                return True
 
     async def cancel_owned(self, owner_id: str) -> bool:
         pool = await get_pool()

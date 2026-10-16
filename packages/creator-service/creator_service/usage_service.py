@@ -78,6 +78,10 @@ class UsageStorageBackend(Protocol):
 
     async def reservation_owner_id(self, task_id: str) -> str | None: ...
 
+    async def readmit_owned(
+        self, owner_id: str, global_monthly_cost_usd: Decimal | None,
+    ) -> bool: ...
+
     async def record_owned_event(self, row: dict[str, Any], owner_id: str) -> dict[str, Any]: ...
 
 
@@ -321,6 +325,57 @@ class InMemoryUsageStorage:
             raise ValueError("Cancelled reservation owner")
         return task_id if owned is not None else None
 
+    async def readmit_owned(
+        self, owner_id: str, global_monthly_cost_usd: Decimal | None,
+    ) -> bool:
+        async with self._spend_lock:
+            owned = self._owned.get(owner_id)
+            if owned is None or owned[3] not in {"reserved", "consumed"}:
+                return False
+            workspace_id, period_start, operation_type, status, estimate, settled = owned
+            now = datetime.now(timezone.utc)
+            current_period = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+            if period_start == current_period:
+                return True
+            quota = await self.get_workspace_quota(workspace_id)
+            if quota is None:
+                return False
+            residual = max(estimate - settled, Decimal("0"))
+            settled_workspace = sum(
+                _money(row.get("estimated_cost_usd") or Decimal("0"), name="estimated_cost_usd")
+                for row in self._events.values()
+                if row.get("workspace_id") == workspace_id and row["created_at"] >= current_period
+            )
+            reserved_workspace = sum(
+                max(candidate_estimate - candidate_settled, Decimal("0"))
+                for candidate_owner, candidate_period, _, candidate_status,
+                candidate_estimate, candidate_settled in self._owned.values()
+                if candidate_owner == workspace_id and candidate_period == current_period
+                and candidate_status in {"reserved", "consumed", "billable_unknown"}
+            )
+            if settled_workspace + reserved_workspace + residual > _money(
+                quota["monthly_cost_usd"], name="monthly_cost_usd",
+            ):
+                return False
+            if global_monthly_cost_usd is not None:
+                settled_global = sum(
+                    _money(row.get("estimated_cost_usd") or Decimal("0"), name="estimated_cost_usd")
+                    for row in self._events.values() if row["created_at"] >= current_period
+                )
+                reserved_global = sum(
+                    max(candidate_estimate - candidate_settled, Decimal("0"))
+                    for _, candidate_period, _, candidate_status,
+                    candidate_estimate, candidate_settled in self._owned.values()
+                    if candidate_period == current_period
+                    and candidate_status in {"reserved", "consumed", "billable_unknown"}
+                )
+                if settled_global + reserved_global + residual > global_monthly_cost_usd:
+                    return False
+            self._owned[owner_id] = (
+                workspace_id, current_period, operation_type, status, estimate, settled,
+            )
+            return True
+
     async def record_owned_event(self, row: dict[str, Any], owner_id: str) -> dict[str, Any]:
         owned = self._owned.get(owner_id)
         if owned is None:
@@ -448,6 +503,15 @@ class UsageService:
 
     async def reservation_owner_id(self, task_id: str) -> str | None:
         return await self.storage.reservation_owner_id(task_id)
+
+    async def readmit_owned(self, owner_id: str) -> bool:
+        global_budget_raw = os.getenv("GLOBAL_MONTHLY_ESTIMATED_BUDGET_USD")
+        global_budget = (
+            _money(global_budget_raw, name="GLOBAL_MONTHLY_ESTIMATED_BUDGET_USD")
+            if global_budget_raw
+            else None
+        )
+        return await self.storage.readmit_owned(owner_id, global_budget)
 
     async def record_usage(
         self,
