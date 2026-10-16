@@ -145,6 +145,14 @@ def _worker(name: str, command: list[str] | None = None) -> None:
     assert _docker("inspect", "-f", "{{.State.Running}}", name).stdout.strip() == "true"
 
 
+def _capture_worker(name: str) -> None:
+    logs = _docker("logs", name, check=False)
+    (EVIDENCE / f"{name}.worker.log").write_text(
+        logs.stdout + logs.stderr,
+        encoding="utf-8",
+    )
+
+
 @pytest.fixture(scope="module", autouse=True)
 def runtime() -> Iterator[None]:
     if not DATABASE_URL or not REDIS_URL or not shutil.which("docker"):
@@ -169,11 +177,7 @@ def runtime() -> Iterator[None]:
         server.shutdown()
         thread.join(timeout=2)
         for name in ("topology-worker", "topology-prefork", "topology-prefork-replacement"):
-            logs = _docker("logs", name, check=False)
-            (EVIDENCE / f"{name}.worker.log").write_text(
-                logs.stdout + logs.stderr,
-                encoding="utf-8",
-            )
+            _capture_worker(name)
             _docker("rm", "-f", name, check=False)
 
 
@@ -240,6 +244,7 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_with_worker() -> None:
     while not _redis_available() and time.monotonic() < deadline:
         time.sleep(0.1)
     assert _redis_available()
+    _capture_worker("topology-prefork")
     _docker("rm", "-f", "topology-prefork")
     _worker("topology-prefork", command)
     _send(104, "ffmpeg-delivery", "ffmpeg_hang", ffmpeg_state, queue="image")
@@ -247,6 +252,7 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_with_worker() -> None:
     _docker("kill", "--signal=TERM", "topology-prefork")
     time.sleep(1)
     _docker("kill", "--signal=KILL", "topology-prefork", check=False)
+    _capture_worker("topology-prefork")
     anyio.run(_sql, "UPDATE creator_runs SET status='cancelled' WHERE id=104")
 
     # Then forced worker loss removes the real FFmpeg child and a replacement can start.
