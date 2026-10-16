@@ -895,6 +895,10 @@ class TestReconcilerDoesNotClobberAdvancedRun:
                 def side_effect(name):
                     if name == "creator_service.run_service":
                         return fake_module
+                    if name == "creator_service.task_tracking_service":
+                        tracking_module = MagicMock()
+                        tracking_module.task_tracking_service = service
+                        return tracking_module
                     return __import__("importlib").import_module(name)
                 mock_import.side_effect = side_effect
 
@@ -968,6 +972,10 @@ class TestReconcilerDoesNotClobberAdvancedRun:
                 def side_effect(name):
                     if name == "creator_service.run_service":
                         return fake_module
+                    if name == "creator_service.task_tracking_service":
+                        tracking_module = MagicMock()
+                        tracking_module.task_tracking_service = service
+                        return tracking_module
                     return __import__("importlib").import_module(name)
                 mock_import.side_effect = side_effect
 
