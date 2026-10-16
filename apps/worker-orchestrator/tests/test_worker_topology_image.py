@@ -28,6 +28,7 @@ from tests.worker_topology_runtime import (
     initialize_database,
     new_run,
     persist_snapshot,
+    recover_lost_claim,
     redis_available,
     row,
     send,
@@ -35,6 +36,7 @@ from tests.worker_topology_runtime import (
     stop_run,
     wait_state,
     wait_task,
+    wait_redis_queue,
     worker,
 )
 
@@ -193,6 +195,8 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
     first_claim = wait_task("active-redelivery", "running")
     assert int(claimed["worker_pid"]) > 0
     redelivery_state.with_suffix(".kill").touch()
+    broker_redelivery_depth = wait_redis_queue("image")
+    anyio.run(recover_lost_claim, "active-redelivery")
     wait_task("active-redelivery", "failed")
     docker("rm", "-f", "topology-scaled-redelivery")
     worker("topology-scaled-redelivered", command)
@@ -208,7 +212,11 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
     assert stale_update == "UPDATE 0"
     stop_run(103)
     wait_state(redelivery_state, "cancelled")
-    persist_snapshot("redelivery-final-state.json", 103)
+    persist_snapshot(
+        "redelivery-final-state.json",
+        103,
+        broker_redelivery_depth=broker_redelivery_depth,
+    )
 
     new_run(106)
     send(106, "timeout-delivery", "wait", timeout_state, queue="image", time_limit=2)
