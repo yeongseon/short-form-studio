@@ -58,21 +58,27 @@ an authenticated create and download using `X-API-Key`.
 
 ### Application rollback and database downgrade
 
-Use `workflow_dispatch`, choose `release_action=rollback`, and paste the exact
-JSON from a prior `release-manifest-*` artifact. Preflight proves the images
-still exist and the selected release is compatible with the current
-schema/queue contract. The app-only rollback skips both migration jobs, deploys
-all three recorded digests together, then runs full staging and production
-verification. It never runs migrations from the current main checkout.
+Use `workflow_dispatch`, choose `release_action=rollback`, and enter the run ID
+of a successful prior CD run that retained its `release-manifest-*` artifact.
+Preflight verifies the run's workflow identity and successful conclusion,
+downloads its manifest, proves the images still exist, and checks compatibility
+with the current schema/queue contract. The app-only rollback skips both
+migration jobs, deploys all three recorded digests together, then verifies the
+live DB revision against `SCHEMA_COMPATIBLE_DB_REVISIONS` rather than requiring
+the older manifest's exact revision. It never runs migrations from the current
+main checkout.
 
 Keep the additive database schema by default. A database downgrade is a
-separate emergency operation: choose `release_action=db_downgrade` and type
-`DOWNGRADE` in `approve_db_downgrade`. The target revision is taken from the
-validated selected release manifest rather than freeform operator input.
+separate emergency operation: choose `release_action=db_downgrade`, provide the
+target release run ID and a `migration_runner_run_id` whose manifest revision
+exactly matches the current newer database, then type `DOWNGRADE` in
+`approve_db_downgrade`. The workflow validates both successful-run artifacts,
+repository identities, immutable tags, digests, contracts, and the live DB's
+exact match to the migration-runner manifest. It runs Alembic from that newer
+runner image, then verifies exact equality with the target manifest revision.
 Approval occurs in the separately protected `production-db-downgrade`
-environment. Alembic runs from the selected release API image by digest; this
-operation does not deploy applications. Require a tested backup/restore plan
-and drained traffic before approving it.
+environment; this operation does not deploy applications. Require a tested
+backup/restore plan and drained traffic before approving it.
 
 ### Evidence and recovery
 
@@ -89,10 +95,11 @@ app-only rollback. After verification failure, freeze promotion, preserve the
 evidence artifact, compare each running digest, and redeploy the same manifest.
 Use database downgrade only through its separate approval path.
 
-The real deploy, rollback, and disposable-environment install → upgrade → app
-rollback preservation tests were **not executed** as part of issue #858. They
-require Docker, a registry, protected environments, real deployment targets,
-PostgreSQL, and authenticated application infrastructure.
+CI builds API images from release N and N+1, installs N into disposable
+PostgreSQL, seeds an authenticated project and media asset, upgrades to N+1,
+then rolls the application back to N without a DB downgrade and verifies both
+resources remain accessible. Real registry promotion and protected-environment
+deployments still require hosted infrastructure and explicit operator approval.
 
 This document outlines the production deployment workflow for Short Form Studio, with a focus on database migration safety and rollback strategies.
 
