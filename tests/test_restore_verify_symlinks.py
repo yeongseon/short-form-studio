@@ -90,7 +90,7 @@ def _run(command: str, bundle: Path) -> subprocess.CompletedProcess[str]:
                 "--alembic-revision",
                 "revision-1",
                 "--secret-fingerprint",
-                "sha256:fingerprint-v1",
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "--timestamp",
                 "2026-10-16T00:00:00Z",
             ]
@@ -101,7 +101,7 @@ def _run(command: str, bundle: Path) -> subprocess.CompletedProcess[str]:
                 "--expected-alembic-revision",
                 "revision-1",
                 "--expected-secret-fingerprint",
-                "sha256:fingerprint-v1",
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             ]
         )
     return subprocess.run(arguments, capture_output=True, text=True, check=False)

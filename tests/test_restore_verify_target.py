@@ -83,7 +83,7 @@ def test_restore_exclusive_create_rejects_concurrent_target(
             "--expected-alembic-revision",
             "revision-1",
             "--expected-secret-fingerprint",
-            "sha256:fingerprint-v1",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         ]
     )
 
@@ -112,7 +112,7 @@ def _bundle(tmp_path: Path) -> Path:
             "--alembic-revision",
             "revision-1",
             "--secret-fingerprint",
-            "sha256:fingerprint-v1",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             "--timestamp",
             "2026-10-16T00:00:00Z",
         ],
@@ -136,7 +136,7 @@ def _restore(bundle: Path, target: Path) -> subprocess.CompletedProcess[str]:
             "--expected-alembic-revision",
             "revision-1",
             "--expected-secret-fingerprint",
-            "sha256:fingerprint-v1",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         ],
         capture_output=True,
         text=True,
