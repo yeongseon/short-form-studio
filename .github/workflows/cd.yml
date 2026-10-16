@@ -303,7 +303,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with: {name: "selected-release-${{ github.run_id }}"}
       - name: Verify identities, database, and authenticated create/download
-        env: {API_KEY: "${{ secrets.SMOKE_API_KEY }}", DATABASE_URL: "${{ secrets.DATABASE_URL }}"}
+        env:
+          API_KEY: "${{ secrets.SMOKE_API_KEY }}"
+          DATABASE_URL: "${{ secrets.DATABASE_URL }}"
+          RELEASE_ACTION: "${{ github.event.inputs.release_action }}"
+          SCHEMA_COMPATIBLE_DB_REVISIONS: "${{ vars.SCHEMA_COMPATIBLE_DB_REVISIONS }}"
         run: |
           set -euo pipefail
           curl --fail --silent -H "X-API-Key: $API_KEY" "${{ vars.STAGING_API_URL }}/release/identity" > api.json
@@ -313,7 +317,11 @@ jobs:
             '{source_sha:$api[0].source_sha,api_digest:$api[0].digest,worker_digest:$worker[0].digest,studio_digest:$studio[0].digest}' > runtime.json
           python scripts/release_manifest.py verify-runtime release.json runtime.json
           current="$(docker run --rm -e DATABASE_URL "$API_IMAGE@${{ needs.release-preflight.outputs.api_digest }}" alembic current)"
-          python scripts/release_manifest.py verify-db release.json "$current"
+          if [ "$RELEASE_ACTION" = rollback ]; then
+            python scripts/release_manifest.py verify-db-compatible release.json "$current" "$SCHEMA_COMPATIBLE_DB_REVISIONS"
+          else
+            python scripts/release_manifest.py verify-db release.json "$current"
+          fi
           curl --fail --silent -X POST -H "X-API-Key: $API_KEY" "${{ vars.STAGING_SMOKE_CREATE_URL }}" > create.json
           resource_id="$(jq -er .resource_id create.json)"
           curl --fail --silent -H "X-API-Key: $API_KEY" "${{ vars.STAGING_SMOKE_DOWNLOAD_BASE_URL }}/${resource_id}" -o download.bin
@@ -371,7 +379,11 @@ jobs:
       - uses: actions/download-artifact@v4
         with: {name: "selected-release-${{ github.run_id }}"}
       - name: Verify identities, database, and authenticated create/download
-        env: {API_KEY: "${{ secrets.SMOKE_API_KEY }}", DATABASE_URL: "${{ secrets.DATABASE_URL }}"}
+        env:
+          API_KEY: "${{ secrets.SMOKE_API_KEY }}"
+          DATABASE_URL: "${{ secrets.DATABASE_URL }}"
+          RELEASE_ACTION: "${{ github.event.inputs.release_action }}"
+          SCHEMA_COMPATIBLE_DB_REVISIONS: "${{ vars.SCHEMA_COMPATIBLE_DB_REVISIONS }}"
         run: |
           set -euo pipefail
           curl --fail --silent -H "X-API-Key: $API_KEY" "${{ vars.PRODUCTION_API_URL }}/release/identity" > api.json
@@ -381,7 +393,11 @@ jobs:
             '{source_sha:$api[0].source_sha,api_digest:$api[0].digest,worker_digest:$worker[0].digest,studio_digest:$studio[0].digest}' > runtime.json
           python scripts/release_manifest.py verify-runtime release.json runtime.json
           current="$(docker run --rm -e DATABASE_URL "$API_IMAGE@${{ needs.release-preflight.outputs.api_digest }}" alembic current)"
-          python scripts/release_manifest.py verify-db release.json "$current"
+          if [ "$RELEASE_ACTION" = rollback ]; then
+            python scripts/release_manifest.py verify-db-compatible release.json "$current" "$SCHEMA_COMPATIBLE_DB_REVISIONS"
+          else
+            python scripts/release_manifest.py verify-db release.json "$current"
+          fi
           curl --fail --silent -X POST -H "X-API-Key: $API_KEY" "${{ vars.PRODUCTION_SMOKE_CREATE_URL }}" > create.json
           resource_id="$(jq -er .resource_id create.json)"
           curl --fail --silent -H "X-API-Key: $API_KEY" "${{ vars.PRODUCTION_SMOKE_DOWNLOAD_BASE_URL }}/${resource_id}" -o download.bin

@@ -144,6 +144,23 @@ def test_post_deploy_smoke_downloads_the_created_nonempty_resource() -> None:
         assert "test -s download.bin" in commands, name
 
 
+def test_app_rollback_uses_schema_compatibility_policy_while_deploy_stays_exact() -> None:
+    raw = yaml.safe_load((ROOT / ".github/workflows/cd.yml").read_text())
+    jobs = raw["jobs"]
+
+    for name in ("verify-staging", "verify-production"):
+        steps = jobs[name]["steps"]
+        commands = "\n".join(step.get("run", "") for step in steps)
+        assert "verify-db-compatible" in commands, name
+        assert "SCHEMA_COMPATIBLE_DB_REVISIONS" in str(steps), name
+        assert "github.event.inputs.release_action" in str(steps), name
+
+    for name in ("migrate-staging", "migrate-production", "downgrade-production"):
+        commands = "\n".join(step.get("run", "") for step in jobs[name]["steps"])
+        assert "verify-db release.json" in commands, name
+        assert "verify-db-compatible" not in commands, name
+
+
 def test_deploy_production_condition_references_only_direct_needs() -> None:
     workflow = Workflow.model_validate(yaml.safe_load((ROOT / ".github/workflows/cd.yml").read_text()))
 
