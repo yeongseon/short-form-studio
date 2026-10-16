@@ -2,6 +2,7 @@
 
 from collections.abc import Sequence
 from datetime import datetime, timezone
+from decimal import Decimal
 
 import pytest
 from fastapi import HTTPException
@@ -158,9 +159,10 @@ def _patch_quota_functions(
     monkeypatch: pytest.MonkeyPatch,
     route_names: set[str],
     outcomes: list[tuple[bool, str]] | None = None,
-) -> dict[str, list[tuple[int, str]]]:
+) -> dict[str, list]:
     quota_calls: list[tuple[int, str]] = []
     cancel_calls: list[tuple[int, str]] = []
+    estimates: list[object] = []
     owners: dict[str, tuple[int, str]] = {}
     results = list(outcomes or [])
 
@@ -174,8 +176,9 @@ def _patch_quota_functions(
 
     async def reserve_owned(
         workspace_id: int, operation_type: str, owner_id: str,
-        _estimated_cost_usd: object = None,
+        estimated_cost_usd: object = None,
     ) -> tuple[bool, str]:
+        estimates.append(estimated_cost_usd)
         allowed, reason = await _check_workspace_quota(workspace_id, operation_type)
         if allowed:
             owners[owner_id] = (workspace_id, operation_type)
@@ -198,7 +201,7 @@ def _patch_quota_functions(
     monkeypatch.setattr("shorts_api.routes.storyboard_dispatch.reserve_owned_quota", reserve_owned)
     monkeypatch.setattr("shorts_api.routes.storyboard_dispatch.cancel_owned_quota_reservation", cancel_owned)
 
-    return {"quota": quota_calls, "cancel": cancel_calls}
+    return {"quota": quota_calls, "cancel": cancel_calls, "estimates": estimates}
 
 
 @pytest.fixture
@@ -353,6 +356,7 @@ async def test_generate_paragraph_audio_checks_quota_before_dispatch(
 
     assert response.status_code == 202
     assert quota["quota"] == [(1, "tts")]
+    assert quota["estimates"] == [Decimal("4.3200")]
     audio_calls = calls["audio"]
     assert isinstance(audio_calls, list)
     assert len(audio_calls) == 1
@@ -400,6 +404,7 @@ async def test_generate_all_audio_checks_quota_per_paragraph(
 
     assert response.status_code == 202
     assert quota["quota"] == [(1, "tts"), (1, "tts")]
+    assert quota["estimates"] == [Decimal("4.3200"), Decimal("4.3200")]
     audio_calls = calls["audio"]
     assert isinstance(audio_calls, list)
     assert len(audio_calls) == 2
