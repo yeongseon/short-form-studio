@@ -1,6 +1,7 @@
 import anyio
 import pytest
 from decimal import Decimal
+from datetime import datetime, timezone
 
 from creator_service.usage_service import InMemoryUsageStorage, UsageService
 
@@ -181,3 +182,25 @@ async def test_global_budget_blocks_only_new_billable_reservations(
     # When another workspace requests billable admission, then it is rejected globally.
     assert not await service.reserve_owned(2, "llm", "second", estimated_cost_usd=0.01)
     assert (await service.get_monthly_summary(2)).total_estimated_cost_usd == 0.0
+
+
+@pytest.mark.asyncio
+async def test_stale_owner_is_readmitted_before_provider_execution() -> None:
+    # Given an active owner admitted in the prior month and a full current-month budget.
+    storage = InMemoryUsageStorage()
+    service = UsageService(storage)
+    await service.set_quota(1, monthly_cost_usd=1.0)
+    assert await service.reserve_owned(1, "llm", "stale", estimated_cost_usd=Decimal("1"))
+    owner = storage._owned["stale"]
+    storage._owned["stale"] = (
+        owner[0], datetime(2000, 1, 1, tzinfo=timezone.utc), *owner[2:],
+    )
+    await service.record_usage(
+        1, 1, "fixture", "fixture", "llm", estimated_cost_usd=1.0,
+    )
+
+    # When the worker re-admits its stale reservation for the current month.
+    admitted = await service.readmit_owned("stale")
+
+    # Then it is rejected before another provider call can start.
+    assert not admitted
