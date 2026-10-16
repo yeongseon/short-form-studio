@@ -22,8 +22,73 @@ server {
         try_files $uri $uri/ /index.html;
     }
 
-    # Proxy API requests to the backend
+    # Upload request limits include 1 MiB for multipart framing above API file caps.
+    location ~ ^/api/creator/workspaces/[0-9]+/assets$ {
+        client_max_body_size 26m;
+        set $csrf_check 0;
+        if ($http_origin = "$client_scheme://$http_host") {
+            set $csrf_check 1;
+        }
+        if ($request_method !~ ^(GET|HEAD|OPTIONS)$) {
+            set $csrf_check "${csrf_check}m";
+        }
+        if ($csrf_check = "0m") {
+            return 403;
+        }
+
+        proxy_pass http://api:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-API-Key "${API_KEY}";
+    }
+
+    location ~ ^/api/creator/workspaces/[0-9]+/assets/audio$ {
+        client_max_body_size 101m;
+        set $csrf_check 0;
+        if ($http_origin = "$client_scheme://$http_host") {
+            set $csrf_check 1;
+        }
+        if ($request_method !~ ^(GET|HEAD|OPTIONS)$) {
+            set $csrf_check "${csrf_check}m";
+        }
+        if ($csrf_check = "0m") {
+            return 403;
+        }
+
+        proxy_pass http://api:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-API-Key "${API_KEY}";
+    }
+
+    location ~ ^/api/creator/workspaces/[0-9]+/assets/videos$ {
+        client_max_body_size 501m;
+        set $csrf_check 0;
+        if ($http_origin = "$client_scheme://$http_host") {
+            set $csrf_check 1;
+        }
+        if ($request_method !~ ^(GET|HEAD|OPTIONS)$) {
+            set $csrf_check "${csrf_check}m";
+        }
+        if ($csrf_check = "0m") {
+            return 403;
+        }
+
+        proxy_pass http://api:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-API-Key "${API_KEY}";
+    }
+
+    # Proxy API requests to the backend; keep ordinary JSON requests small.
     location /api/ {
+        client_max_body_size 1m;
         set $csrf_check 0;
         if ($http_origin = "$client_scheme://$http_host") {
             set $csrf_check 1;
