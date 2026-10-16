@@ -45,6 +45,7 @@ def test_create_and_verify_bundle_when_contents_are_complete(tmp_path: Path) -> 
     ("mutation", "message"),
     [
         ("empty_database", "database dump is empty"),
+        ("truncated_database", "checksum mismatch"),
         ("missing_media", "listed file is missing"),
         ("checksum", "checksum mismatch"),
     ],
@@ -62,6 +63,8 @@ def test_verify_fails_without_touching_original_when_bundle_is_corrupt(
     match mutation:
         case "empty_database":
             (bundle / "database.dump").write_bytes(b"")
+        case "truncated_database":
+            (bundle / "database.dump").write_bytes(b"PGDMP truncated")
         case "missing_media":
             (bundle / "media/workspace-a/audio.wav").unlink()
         case "checksum":
