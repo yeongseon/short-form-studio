@@ -269,6 +269,21 @@ async def test_stale_owner_count_is_moved_to_current_month() -> None:
 
 
 @pytest.mark.asyncio
+async def test_image_fanout_reserves_each_scene_count_unit() -> None:
+    # Given an image quota of one operation.
+    service = UsageService(InMemoryUsageStorage())
+    await service.set_quota(1, monthly_image_generations=1, monthly_cost_usd=10.0)
+
+    # When a three-scene fan-out requests three image units.
+    admitted = await service.reserve_owned(
+        1, "image_gen", "fanout", estimated_cost_usd=Decimal("3"), units=3
+    )
+
+    # Then admission is rejected before any scene provider can run.
+    assert not admitted
+
+
+@pytest.mark.asyncio
 async def test_provider_attempts_atomically_consume_only_approved_capacity() -> None:
     # Given a quote approving two ten-cent provider attempts.
     service = UsageService(InMemoryUsageStorage())

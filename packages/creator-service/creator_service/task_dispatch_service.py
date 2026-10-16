@@ -78,6 +78,7 @@ async def cas_dispatch_with_rollback(
     enqueue_error_detail: str, restart_from_stage: str | None = None,
     quota_operation_type: str | None = None, workspace_id: int | None = None,
     reservation_estimate_usd: Decimal | None = None,
+    reservation_units: int = 1,
 ) -> dict[str, JsonValue]:
     return await task_dispatch_service.cas_dispatch_with_rollback(
         run_id=run_id, expected_stages=expected_stages, target_stage=target_stage,
@@ -86,4 +87,5 @@ async def cas_dispatch_with_rollback(
         enqueue_error_detail=enqueue_error_detail, restart_from_stage=restart_from_stage,
         quota_operation_type=quota_operation_type, workspace_id=workspace_id,
         reservation_estimate_usd=reservation_estimate_usd,
+        reservation_units=reservation_units,
     )

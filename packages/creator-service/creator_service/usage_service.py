@@ -93,7 +93,7 @@ class UsageStorageBackend(Protocol):
     async def try_reserve_owned(
         self, workspace_id: int, operation_type: str, owner_id: str,
         estimated_cost_usd: Decimal, monthly_cost_usd: Decimal,
-        global_monthly_cost_usd: Decimal | None,
+        global_monthly_cost_usd: Decimal | None, units: int,
     ) -> bool: ...
 
     async def cancel_owned(self, owner_id: str) -> bool: ...
@@ -122,6 +122,7 @@ class InMemoryUsageStorage:
         self._owned: dict[str, tuple[int, datetime, str, str, Decimal, Decimal]] = {}
         self._owned_attempts: dict[tuple[str, str], Decimal] = {}
         self._accounted_attempts: set[tuple[str, str]] = set()
+        self._owned_units: dict[str, int] = {}
         self._locks: dict[int, asyncio.Lock] = {}
         self._spend_lock = asyncio.Lock()
         self._next_event_id = 1
@@ -272,7 +273,7 @@ class InMemoryUsageStorage:
     async def try_reserve_owned(
         self, workspace_id: int, operation_type: str, owner_id: str,
         estimated_cost_usd: Decimal, monthly_cost_usd: Decimal,
-        global_monthly_cost_usd: Decimal | None,
+        global_monthly_cost_usd: Decimal | None, units: int,
     ) -> bool:
         async with self._spend_lock:
             existing = self._owned.get(owner_id)
@@ -310,8 +311,34 @@ class InMemoryUsageStorage:
                 and settled_global + reserved_global + estimated_cost_usd > global_monthly_cost_usd
             ):
                 return False
-            if not await self.try_reserve_quota(workspace_id, operation_type, owner_id):
+            quota = await self.get_workspace_quota(workspace_id)
+            if quota is None:
                 return False
+            events = await self.list_by_workspace(workspace_id, period_start)
+            bucket = "tts_requests" if operation_type in {"tts", "stt", "render"} else operation_type
+            quota_key = {
+                "llm": "monthly_llm_calls",
+                "image_gen": "monthly_image_generations",
+                "tts_requests": "monthly_tts_requests",
+            }[bucket]
+            used = sum(
+                int(row.get("image_count") or 1) if bucket == "image_gen" else 1
+                for row in events
+                if row.get("operation_type") == operation_type
+                or bucket == "tts_requests" and row.get("operation_type") in {"tts", "stt", "render"}
+            )
+            reserved = self._reservations.setdefault(
+                (workspace_id, period_start),
+                {"llm": 0, "image_gen": 0, "tts_requests": 0},
+            )
+            if used + reserved[bucket] + units > int(quota[quota_key]):
+                return False
+            reserved[bucket] += units
+            self._owned[owner_id] = (
+                workspace_id, period_start, operation_type, "reserved",
+                Decimal("0"), Decimal("0"),
+            )
+            self._owned_units[owner_id] = units
             owned = self._owned[owner_id]
             self._owned[owner_id] = (*owned[:4], estimated_cost_usd, Decimal("0"))
             return True
@@ -322,7 +349,7 @@ class InMemoryUsageStorage:
             return False
         workspace_id, period_start, operation_type, _, estimate, settled = owned
         bucket = "tts_requests" if operation_type in {"tts", "stt", "render"} else operation_type
-        self._reservations[(workspace_id, period_start)][bucket] -= 1
+        self._reservations[(workspace_id, period_start)][bucket] -= self._owned_units.get(owner_id, 1)
         self._owned[owner_id] = (workspace_id, period_start, operation_type, status, estimate, settled)
         return True
 
@@ -433,12 +460,13 @@ class InMemoryUsageStorage:
                     "image_gen": "monthly_image_generations",
                     "tts_requests": "monthly_tts_requests",
                 }[bucket]
-                if usage[bucket] + current_usage[bucket] + 1 > int(quota[quota_key]):
+                units = self._owned_units.get(owner_id, 1)
+                if usage[bucket] + current_usage[bucket] + units > int(quota[quota_key]):
                     return False
                 previous_usage = self._reservations.get((workspace_id, period_start))
                 if previous_usage is not None:
-                    previous_usage[bucket] = max(previous_usage[bucket] - 1, 0)
-                current_usage[bucket] += 1
+                    previous_usage[bucket] = max(previous_usage[bucket] - units, 0)
+                current_usage[bucket] += units
             self._owned[owner_id] = (
                 workspace_id, current_period, operation_type, status, estimate, settled,
             )
@@ -469,10 +497,15 @@ class InMemoryUsageStorage:
                 if attempt_key not in self._owned_attempts:
                     raise ValueError("Usage event references unknown provider attempt")
                 self._accounted_attempts.add(attempt_key)
-            if status == "reserved":
-                self._finish_owned(owner_id, "consumed")
+            remaining_units = self._owned_units.get(owner_id, 1)
+            if remaining_units > 0:
+                bucket = "tts_requests" if operation_type in {"tts", "stt", "render"} else operation_type
+                self._reservations[(workspace_id, period_start)][bucket] -= 1
+                remaining_units -= 1
+                self._owned_units[owner_id] = remaining_units
+            next_status = "consumed" if remaining_units == 0 else "reserved"
             self._owned[owner_id] = (
-                workspace_id, period_start, operation_type, "consumed", estimate,
+                workspace_id, period_start, operation_type, next_status, estimate,
                 settled + _money(
                     saved.get("estimated_cost_usd") or Decimal("0"),
                     name="estimated_cost_usd",
@@ -560,6 +593,7 @@ class UsageService:
     async def reserve_owned(
         self, workspace_id: int, operation_type: str, owner_id: str,
         estimated_cost_usd: Decimal | float | None = None,
+        units: int = 1,
     ) -> bool:
         if not _billable_provider_calls_enabled():
             return False
@@ -572,7 +606,7 @@ class UsageService:
             estimate = _money(raw_estimate, name="estimated_cost_usd")
         except ValueError:
             return False
-        if estimate <= 0:
+        if estimate <= 0 or units <= 0:
             return False
         quota = await self.get_quota(workspace_id)
         global_budget_raw = os.getenv("GLOBAL_MONTHLY_ESTIMATED_BUDGET_USD")
@@ -583,7 +617,7 @@ class UsageService:
         )
         return await self.storage.try_reserve_owned(
             workspace_id, operation_type, owner_id, estimate,
-            _money(quota.monthly_cost_usd, name="monthly_cost_usd"), global_budget,
+            _money(quota.monthly_cost_usd, name="monthly_cost_usd"), global_budget, units,
         )
 
     async def cancel_owned(self, owner_id: str) -> bool:
@@ -919,9 +953,10 @@ async def cancel_workspace_quota_reservation(
 async def reserve_owned_quota(
     workspace_id: int, operation_type: str, owner_id: str,
     estimated_cost_usd: Decimal | float | None = None,
+    units: int = 1,
 ) -> tuple[bool, str]:
     allowed = await usage_service.reserve_owned(
-        workspace_id, operation_type, owner_id, estimated_cost_usd,
+        workspace_id, operation_type, owner_id, estimated_cost_usd, units,
     )
     return allowed, "ok" if allowed else "Quota exceeded"
 

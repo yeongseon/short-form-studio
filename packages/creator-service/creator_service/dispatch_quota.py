@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 async def reserve_quota(
     run_service: DispatchRunService, run_id: int,
     *, workspace_id: int | None, operation_type: str | None, owner_id: str | None = None,
-    estimated_cost_usd: Decimal | None = None,
+    estimated_cost_usd: Decimal | None = None, units: int = 1,
 ) -> int | None:
     if operation_type is None:
         return None
@@ -46,6 +46,7 @@ async def reserve_quota(
         if owner_id is not None:
             allowed, reason = await usage.reserve_owned_quota(
                 reservation_workspace, operation_type, owner_id, estimated_cost_usd,
+                units,
             )
         else:
             allowed, reason = await usage.check_workspace_quota(reservation_workspace, operation_type=operation_type)

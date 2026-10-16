@@ -269,7 +269,7 @@ class PostgresUsageStorage:
     async def try_reserve_owned(
         self, workspace_id: int, operation_type: str, owner_id: str,
         estimated_cost_usd: Decimal, monthly_cost_usd: Decimal,
-        global_monthly_cost_usd: Decimal | None,
+        global_monthly_cost_usd: Decimal | None, units: int,
     ) -> bool:
         pool = await get_pool()
         async with pool.acquire() as connection:
@@ -329,13 +329,13 @@ class PostgresUsageStorage:
                         return False
                 allowed = await self._reserve_count(
                     connection, workspace_id, operation_type, owner_id, month_start,
-                    estimated_cost_usd,
+                    estimated_cost_usd, units,
                 )
                 return allowed
 
     async def _reserve_count(
         self, connection: Any, workspace_id: int, operation_type: str, owner_id: str,
-        month_start: datetime, estimated_cost_usd: Decimal,
+        month_start: datetime, estimated_cost_usd: Decimal, units: int,
     ) -> bool:
         quota = await connection.fetchrow(
             "SELECT * FROM workspace_quotas WHERE workspace_id = $1", workspace_id,
@@ -365,15 +365,15 @@ class PostgresUsageStorage:
         llm_count = int(usage["llm_count"]) + (int(reserved["llm_count"]) if reserved else 0)
         image_count = int(usage["image_count"]) + (int(reserved["image_count"]) if reserved else 0)
         tts_count = int(usage["tts_count"]) + (int(reserved["tts_request_count"]) if reserved else 0)
-        if operation_type == "llm" and llm_count >= int(quota["monthly_llm_calls"]):
+        if operation_type == "llm" and llm_count + units > int(quota["monthly_llm_calls"]):
             return False
-        if operation_type == "image_gen" and image_count >= int(quota["monthly_image_generations"]):
+        if operation_type == "image_gen" and image_count + units > int(quota["monthly_image_generations"]):
             return False
-        if operation_type in {"tts", "stt", "render"} and tts_count >= int(quota["monthly_tts_requests"]):
+        if operation_type in {"tts", "stt", "render"} and tts_count + units > int(quota["monthly_tts_requests"]):
             return False
         increments = (
-            int(operation_type == "llm"), int(operation_type == "image_gen"),
-            int(operation_type in {"tts", "stt", "render"}),
+            units * int(operation_type == "llm"), units * int(operation_type == "image_gen"),
+            units * int(operation_type in {"tts", "stt", "render"}),
         )
         await connection.execute(
             """INSERT INTO workspace_quota_reservations
@@ -390,9 +390,10 @@ class PostgresUsageStorage:
         )
         await connection.execute(
             """INSERT INTO workspace_quota_reservation_owners
-               (owner_id, workspace_id, period_start, operation_type, status, estimated_cost_usd)
-               VALUES ($1,$2,$3,$4,'reserved',$5)""",
-            owner_id, workspace_id, month_start, operation_type, estimated_cost_usd,
+               (owner_id, workspace_id, period_start, operation_type, status,
+                estimated_cost_usd, reserved_units)
+               VALUES ($1,$2,$3,$4,'reserved',$5,$6)""",
+            owner_id, workspace_id, month_start, operation_type, estimated_cost_usd, units,
         )
         return True
 
