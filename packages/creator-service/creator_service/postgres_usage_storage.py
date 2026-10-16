@@ -275,8 +275,124 @@ class PostgresUsageStorage:
                     )
                 return True
 
-    async def try_reserve_owned(self, workspace_id: int, operation_type: str, owner_id: str) -> bool:
-        return await self.try_reserve_quota(workspace_id, operation_type, owner_id)
+    async def try_reserve_owned(
+        self, workspace_id: int, operation_type: str, owner_id: str,
+        estimated_cost_usd: float, monthly_cost_usd: float,
+        global_monthly_cost_usd: float | None,
+    ) -> bool:
+        pool = await get_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                if global_monthly_cost_usd is not None:
+                    await connection.execute("SELECT pg_advisory_xact_lock($1)", 860)
+                await connection.execute("SELECT pg_advisory_xact_lock($1)", workspace_id)
+                existing = await connection.fetchrow(
+                    """SELECT workspace_id, operation_type FROM workspace_quota_reservation_owners
+                       WHERE owner_id = $1""",
+                    owner_id,
+                )
+                if existing is not None:
+                    return existing["workspace_id"] == workspace_id and existing["operation_type"] == operation_type
+                month_start = await connection.fetchval(
+                    "SELECT date_trunc('month', NOW() AT TIME ZONE 'UTC')::timestamptz"
+                )
+                settled_workspace = await connection.fetchval(
+                    """SELECT COALESCE(SUM(estimated_cost_usd), 0) FROM usage_events
+                       WHERE workspace_id = $1 AND created_at >= $2""",
+                    workspace_id, month_start,
+                )
+                reserved_workspace = await connection.fetchval(
+                    """SELECT COALESCE(SUM(GREATEST(
+                         estimated_cost_usd - settled_estimated_cost_usd, 0)), 0)
+                       FROM workspace_quota_reservation_owners
+                       WHERE workspace_id = $1 AND period_start = $2
+                         AND status IN ('reserved', 'consumed', 'billable_unknown')""",
+                    workspace_id, month_start,
+                )
+                if float(settled_workspace) + float(reserved_workspace) + estimated_cost_usd > monthly_cost_usd:
+                    return False
+                if global_monthly_cost_usd is not None:
+                    settled_global = await connection.fetchval(
+                        "SELECT COALESCE(SUM(estimated_cost_usd), 0) FROM usage_events WHERE created_at >= $1",
+                        month_start,
+                    )
+                    reserved_global = await connection.fetchval(
+                        """SELECT COALESCE(SUM(GREATEST(
+                             estimated_cost_usd - settled_estimated_cost_usd, 0)), 0)
+                           FROM workspace_quota_reservation_owners
+                           WHERE period_start = $1 AND status IN ('reserved', 'consumed', 'billable_unknown')""",
+                        month_start,
+                    )
+                    if float(settled_global) + float(reserved_global) + estimated_cost_usd > global_monthly_cost_usd:
+                        return False
+                allowed = await self._reserve_count(
+                    connection, workspace_id, operation_type, owner_id, month_start,
+                    estimated_cost_usd,
+                )
+                return allowed
+
+    async def _reserve_count(
+        self, connection: Any, workspace_id: int, operation_type: str, owner_id: str,
+        month_start: datetime, estimated_cost_usd: float,
+    ) -> bool:
+        quota = await connection.fetchrow(
+            "SELECT * FROM workspace_quotas WHERE workspace_id = $1", workspace_id,
+        )
+        if quota is None:
+            quota = await connection.fetchrow(
+                """INSERT INTO workspace_quotas
+                   (workspace_id, monthly_llm_calls, monthly_image_generations,
+                    monthly_tts_requests, monthly_cost_usd)
+                   VALUES ($1, 1000, 200, 3600, 50.00) RETURNING *""",
+                workspace_id,
+            )
+        usage = await connection.fetchrow(
+            """SELECT
+               COALESCE(SUM((operation_type = 'llm')::int), 0)::int AS llm_count,
+               COALESCE(SUM(CASE WHEN operation_type = 'image_gen'
+                 THEN GREATEST(COALESCE(image_count, 0), 1) ELSE 0 END), 0)::int AS image_count,
+               COALESCE(SUM((operation_type IN ('tts','stt','render'))::int), 0)::int AS tts_count
+               FROM usage_events WHERE workspace_id = $1 AND created_at >= $2""",
+            workspace_id, month_start,
+        )
+        reserved = await connection.fetchrow(
+            """SELECT llm_count, image_count, tts_request_count
+               FROM workspace_quota_reservations WHERE workspace_id = $1 AND period_start = $2""",
+            workspace_id, month_start,
+        )
+        llm_count = int(usage["llm_count"]) + (int(reserved["llm_count"]) if reserved else 0)
+        image_count = int(usage["image_count"]) + (int(reserved["image_count"]) if reserved else 0)
+        tts_count = int(usage["tts_count"]) + (int(reserved["tts_request_count"]) if reserved else 0)
+        if operation_type == "llm" and llm_count >= int(quota["monthly_llm_calls"]):
+            return False
+        if operation_type == "image_gen" and image_count >= int(quota["monthly_image_generations"]):
+            return False
+        if operation_type in {"tts", "stt", "render"} and tts_count >= int(quota["monthly_tts_requests"]):
+            return False
+        increments = (
+            int(operation_type == "llm"), int(operation_type == "image_gen"),
+            int(operation_type in {"tts", "stt", "render"}),
+        )
+        await connection.execute(
+            """INSERT INTO workspace_quota_reservations
+               (workspace_id, period_start, llm_count, image_count, tts_request_count,
+                reserved_estimated_cost_usd)
+               VALUES ($1,$2,$3,$4,$5,$6)
+               ON CONFLICT (workspace_id, period_start) DO UPDATE SET
+                 llm_count = workspace_quota_reservations.llm_count + EXCLUDED.llm_count,
+                 image_count = workspace_quota_reservations.image_count + EXCLUDED.image_count,
+                 tts_request_count = workspace_quota_reservations.tts_request_count + EXCLUDED.tts_request_count,
+                 reserved_estimated_cost_usd = workspace_quota_reservations.reserved_estimated_cost_usd
+                   + EXCLUDED.reserved_estimated_cost_usd, updated_at = NOW()""",
+            workspace_id, month_start, *increments, estimated_cost_usd,
+        )
+        await connection.execute(
+            """INSERT INTO workspace_quota_reservation_owners
+               (owner_id, workspace_id, period_start, operation_type, status, estimated_cost_usd)
+               VALUES ($1,$2,$3,$4,'reserved',$5)""",
+            owner_id, workspace_id, month_start, operation_type, estimated_cost_usd,
+        )
+        return True
 
     async def reservation_owner_id(self, task_id: str) -> str | None:
         pool = await get_pool()
@@ -304,7 +420,7 @@ class PostgresUsageStorage:
                 owned = await connection.fetchrow(
                     """UPDATE workspace_quota_reservation_owners SET status = 'cancelled'
                        WHERE owner_id = $1 AND status = 'reserved'
-                       RETURNING period_start, operation_type""",
+                       RETURNING period_start, operation_type, estimated_cost_usd, status""",
                     owner_id,
                 )
                 if owned is None:
@@ -314,12 +430,62 @@ class PostgresUsageStorage:
                        llm_count = llm_count - $3,
                        image_count = image_count - $4,
                        tts_request_count = tts_request_count - $5,
+                       reserved_estimated_cost_usd = GREATEST(reserved_estimated_cost_usd - $6, 0),
                        updated_at = NOW()
                        WHERE workspace_id = $1 AND period_start = $2""",
                     workspace_id, owned["period_start"],
                     int(owned["operation_type"] == "llm"),
                     int(owned["operation_type"] == "image_gen"),
                     int(owned["operation_type"] in {"tts", "stt", "render"}),
+                    owned["estimated_cost_usd"],
+                )
+                return True
+
+    async def settle_owned(self, owner_id: str, *, billable_unknown: bool = False) -> bool:
+        pool = await get_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                owner = await connection.fetchrow(
+                    "SELECT workspace_id FROM workspace_quota_reservation_owners WHERE owner_id = $1",
+                    owner_id,
+                )
+                if owner is None:
+                    return False
+                workspace_id = int(owner["workspace_id"])
+                await connection.execute("SELECT pg_advisory_xact_lock($1)", workspace_id)
+                status = "billable_unknown" if billable_unknown else "settled"
+                source = await connection.fetchrow(
+                    """SELECT period_start, operation_type, estimated_cost_usd, status
+                       FROM workspace_quota_reservation_owners WHERE owner_id = $1 FOR UPDATE""",
+                    owner_id,
+                )
+                if source is None or source["status"] not in {"reserved", "consumed"}:
+                    return False
+                if not billable_unknown and source["status"] == "reserved":
+                    return False
+                settled = await connection.fetchrow(
+                    """UPDATE workspace_quota_reservation_owners SET status = $2
+                       WHERE owner_id = $1 AND status IN ('reserved', 'consumed')
+                       RETURNING period_start, operation_type, estimated_cost_usd""",
+                    owner_id, status,
+                )
+                if settled is None:
+                    return False
+                keep = settled["estimated_cost_usd"] if billable_unknown else 0
+                decrement_counts = source["status"] == "reserved"
+                await connection.execute(
+                    """UPDATE workspace_quota_reservations SET
+                       llm_count = GREATEST(llm_count - $3, 0),
+                       image_count = GREATEST(image_count - $4, 0),
+                       tts_request_count = GREATEST(tts_request_count - $5, 0),
+                       reserved_estimated_cost_usd = GREATEST(
+                         reserved_estimated_cost_usd - $6 + $7, 0), updated_at = NOW()
+                       WHERE workspace_id = $1 AND period_start = $2""",
+                    workspace_id, settled["period_start"],
+                    int(decrement_counts and settled["operation_type"] == "llm"),
+                    int(decrement_counts and settled["operation_type"] == "image_gen"),
+                    int(decrement_counts and settled["operation_type"] in {"tts", "stt", "render"}),
+                    settled["estimated_cost_usd"], keep,
                 )
                 return True
 
@@ -372,6 +538,14 @@ class PostgresUsageStorage:
                         int(owned["operation_type"] == "image_gen"),
                         int(owned["operation_type"] in {"tts", "stt", "render"}),
                     )
+                await connection.execute(
+                    """UPDATE workspace_quota_reservation_owners
+                       SET settled_estimated_cost_usd = LEAST(
+                         estimated_cost_usd,
+                         settled_estimated_cost_usd + COALESCE($2, 0))
+                       WHERE owner_id = $1""",
+                    owner_id, row.get("estimated_cost_usd"),
+                )
                 return dict(saved)
 
     async def release_reservation(
