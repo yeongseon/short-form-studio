@@ -18,7 +18,12 @@ jobs:
       - name: Install PostgreSQL restore tooling
         run: sudo apt-get update && sudo apt-get install --yes postgresql-client
       - name: Install restore test dependency
-        run: python3 -m pip install -c constraints.txt pytest
+        run: python3 -m pip install -c constraints.txt -r apps/api/requirements.txt -r apps/worker-orchestrator/requirements.txt pytest
+      - name: Install restore runtime packages
+        run: |
+          pip install -c constraints.txt -e packages/creator-domain
+          pip install -c constraints.txt -e packages/creator-provider
+          pip install -c constraints.txt -e packages/creator-service
       - name: Test backup manifest boundaries
         run: python3 -m pytest tests/test_restore_verify.py tests/test_restore_verify_symlinks.py tests/test_restore_verify_target.py tests/test_restore_database_negative.py -v
       - name: Run disposable database and media restore drill
