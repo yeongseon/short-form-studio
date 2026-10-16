@@ -83,6 +83,13 @@ def test_runtime_acceptance_is_executable_and_wired_to_ci() -> None:
     )
 
 
+def test_beat_schedule_database_uses_a_writable_runtime_path() -> None:
+    compose = yaml.safe_load(_COMPOSE.read_text(encoding="utf-8"))
+    command = compose["services"]["beat"]["command"]
+
+    assert "--schedule=/tmp/celerybeat-schedule" in command
+
+
 def test_verification_layers_are_separate() -> None:
     verification = _section("Verification ladder")
     headings = re.findall(r"^### (.+)$", verification, re.MULTILINE)

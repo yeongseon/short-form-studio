@@ -71,7 +71,10 @@ RUN_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<<"$R
 docker compose exec -T postgres psql -U short_form_user -d short_form_studio -v ON_ERROR_STOP=1 \
   -c "INSERT INTO creator_run_tasks (run_id,task_type,celery_task_id,status,attempt,created_at) VALUES (${RUN_ID},'generate_script','cutover-stale-${RUN_ID}','pending',1,NOW()-INTERVAL '5 minutes');"
 
-timeout 150 bash -c "until [ \"\$(docker compose exec -T postgres psql -U short_form_user -d short_form_studio -Atc \"SELECT status FROM creator_run_tasks WHERE celery_task_id='cutover-stale-${RUN_ID}'\")\" = failed ]; do sleep 3; done"
+if ! timeout 150 bash -c "until [ \"\$(docker compose exec -T postgres psql -U short_form_user -d short_form_studio -Atc \"SELECT status FROM creator_run_tasks WHERE celery_task_id='cutover-stale-${RUN_ID}'\")\" = failed ]; do sleep 3; done"; then
+  docker compose logs beat worker
+  fail "Beat did not reconcile the stale task within 150 seconds"
+fi
 RUN_STATE="$(docker compose exec -T postgres psql -U short_form_user -d short_form_studio -Atc "SELECT status||':'||current_stage FROM creator_runs WHERE id=${RUN_ID}")"
 [ "$RUN_STATE" = "failed:FAILED" ] || fail "Beat housekeeping produced unexpected run state: $RUN_STATE"
 docker compose logs beat | grep -q 'reconcile-stale-dispatches' \
