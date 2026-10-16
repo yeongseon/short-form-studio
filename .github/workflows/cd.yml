@@ -11,10 +11,10 @@ on:
         default: rollback
         type: choice
         options: [deploy, rollback, db_downgrade]
-      release_manifest:
-        description: "Validated release manifest JSON from an earlier successful CD run"
+      release_run_id:
+        description: "Successful CD run ID containing the promoted release manifest artifact"
         required: true
-        type: string
+        type: number
       approve_db_downgrade:
         description: "Leave empty for app-only rollback; enter DOWNGRADE for the separate production DB downgrade"
         required: false
@@ -85,6 +85,7 @@ jobs:
           tags: ${{ env.API_IMAGE }}:${{ steps.tags.outputs.candidate_tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: SOURCE_SHA=${{ github.sha }}
       - name: Build and push worker candidate
         id: worker
         uses: docker/build-push-action@v5
@@ -96,6 +97,7 @@ jobs:
           tags: ${{ env.WORKER_IMAGE }}:${{ steps.tags.outputs.candidate_tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: SOURCE_SHA=${{ github.sha }}
       - name: Build and push Studio candidate
         id: studio
         uses: docker/build-push-action@v5
@@ -107,6 +109,7 @@ jobs:
           tags: ${{ env.STUDIO_IMAGE }}:${{ steps.tags.outputs.candidate_tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: SOURCE_SHA=${{ github.sha }}
 
   trivy-scan:
     if: ${{ vars.DEPLOYMENT_ENABLED == 'true' && github.event_name == 'push' }}
@@ -120,6 +123,8 @@ jobs:
           - ghcr.io/${{ github.repository }}/worker@${{ needs.build-candidate.outputs.worker_digest }}
           - ghcr.io/${{ github.repository }}/studio-web@${{ needs.build-candidate.outputs.studio_digest }}
     steps:
+      - uses: docker/login-action@v3
+        with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
       - uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ matrix.image }}
@@ -135,6 +140,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
+      - name: Install pinned release validator dependency
+        run: python -m pip install --disable-pip-version-check pydantic==2.12.3
       - name: Bind release identities and contracts
         env:
           RELEASE_TAG: ${{ needs.build-candidate.outputs.release_tag }}
@@ -151,7 +160,7 @@ jobs:
             --arg api "$API_DIGEST" --arg worker "$WORKER_DIGEST" --arg studio "$STUDIO_DIGEST" \
             --arg db "$db_revision" --arg schema "$SCHEMA_CONTRACT" --arg queue "$QUEUE_CONTRACT" \
             '{release_tag:$tag,source_sha:$sha,images:{api:{repository:env.API_IMAGE,digest:$api},worker:{repository:env.WORKER_IMAGE,digest:$worker},studio:{repository:env.STUDIO_IMAGE,digest:$studio}},db_revision:$db,schema_contract:$schema,queue_contract:$queue}' > release.json
-          python scripts/release_manifest.py validate release.json "$RELEASE_TAG" "$SCHEMA_CONTRACT" "$QUEUE_CONTRACT" \
+          python scripts/release_manifest.py validate release.json "$RELEASE_TAG" "$SCHEMA_CONTRACT" "$QUEUE_CONTRACT" "${{ github.repository }}" \
             "${{ vars.STAGING_API_URL }}" "${{ vars.STAGING_STUDIO_URL }}" "${{ vars.PRODUCTION_API_URL }}" "${{ vars.PRODUCTION_STUDIO_URL }}"
       - uses: actions/upload-artifact@v4
         with: {name: "release-manifest-${{ needs.build-candidate.outputs.release_tag }}", path: release.json, retention-days: 90}
@@ -161,6 +170,8 @@ jobs:
     needs: [build-candidate, trivy-scan, create-manifest]
     runs-on: ubuntu-latest
     steps:
+      - uses: docker/login-action@v3
+        with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
       - uses: imjasonh/setup-crane@v0.4
       - name: Promote scanned digests to approved release and latest tags
         env:
@@ -172,6 +183,8 @@ jobs:
           set -euo pipefail
           for target in "$API_IMAGE@$API_DIGEST" "$WORKER_IMAGE@$WORKER_DIGEST" "$STUDIO_IMAGE@$STUDIO_DIGEST"; do
             crane tag "$target" "$RELEASE_TAG"
+          done
+          for target in "$API_IMAGE@$API_DIGEST" "$WORKER_IMAGE@$WORKER_DIGEST" "$STUDIO_IMAGE@$STUDIO_DIGEST"; do
             crane tag "$target" latest
           done
 
@@ -181,18 +194,38 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       release_tag: ${{ steps.manifest.outputs.release_tag }}
+      source_sha: ${{ steps.manifest.outputs.source_sha }}
       api_digest: ${{ steps.manifest.outputs.api_digest }}
       worker_digest: ${{ steps.manifest.outputs.worker_digest }}
       studio_digest: ${{ steps.manifest.outputs.studio_digest }}
       db_revision: ${{ steps.manifest.outputs.db_revision }}
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
+      - uses: imjasonh/setup-crane@v0.4
+      - name: Install pinned release validator dependency
+        run: python -m pip install --disable-pip-version-check pydantic==2.12.3
       - if: ${{ github.event_name == 'push' }}
         uses: actions/download-artifact@v4
         with: {name: "release-manifest-${{ needs.build-candidate.outputs.release_tag }}"}
       - if: ${{ github.event_name == 'workflow_dispatch' }}
-        env: {RELEASE_MANIFEST: "${{ github.event.inputs.release_manifest }}"}
-        run: printf '%s' "$RELEASE_MANIFEST" > release.json
+        name: Verify selected release run provenance
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_RUN_ID: ${{ github.event.inputs.release_run_id }}
+        run: |
+          set -euo pipefail
+          run="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$RELEASE_RUN_ID")"
+          test "$(jq -r .conclusion <<<"$run")" = success
+          test "$(jq -r .workflow_id <<<"$run")" = "$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/cd.yml" --jq .id)"
+      - if: ${{ github.event_name == 'workflow_dispatch' }}
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-manifest-*
+          merge-multiple: true
+          run-id: ${{ github.event.inputs.release_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Validate selected release before any migration
         id: manifest
         env:
@@ -201,7 +234,7 @@ jobs:
         run: |
           set -euo pipefail
           tag="$(jq -r .release_tag release.json)"
-          python scripts/release_manifest.py validate release.json "$tag" "$RUNNING_SCHEMA" "$RUNNING_QUEUE" \
+          python scripts/release_manifest.py validate release.json "$tag" "$RUNNING_SCHEMA" "$RUNNING_QUEUE" "${{ github.repository }}" \
             "${{ vars.STAGING_API_URL }}" "${{ vars.STAGING_STUDIO_URL }}" "${{ vars.PRODUCTION_API_URL }}" "${{ vars.PRODUCTION_STUDIO_URL }}" \
             "${{ vars.STAGING_DEPLOY_TARGET }}" "${{ vars.PRODUCTION_DEPLOY_TARGET }}" \
             "${{ vars.STAGING_SMOKE_CREATE_URL }}" "${{ vars.STAGING_SMOKE_DOWNLOAD_URL }}" \
@@ -209,9 +242,10 @@ jobs:
           for service in api worker studio; do
             repository="$(jq -r ".images.${service}.repository" release.json)"
             digest="$(jq -r ".images.${service}.digest" release.json)"
-            docker manifest inspect "${repository}@${digest}" >/dev/null
+            test "$(crane digest "${repository}:${tag}")" = "$digest"
           done
           echo "release_tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "source_sha=$(jq -r .source_sha release.json)" >> "$GITHUB_OUTPUT"
           echo "api_digest=$(jq -r .images.api.digest release.json)" >> "$GITHUB_OUTPUT"
           echo "worker_digest=$(jq -r .images.worker.digest release.json)" >> "$GITHUB_OUTPUT"
           echo "studio_digest=$(jq -r .images.studio.digest release.json)" >> "$GITHUB_OUTPUT"
@@ -226,6 +260,10 @@ jobs:
     environment: staging
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
+      - name: Install pinned release validator dependency
+        run: python -m pip install --disable-pip-version-check pydantic==2.12.3
       - uses: actions/download-artifact@v4
         with: {name: "selected-release-${{ github.run_id }}"}
       - name: Migrate with selected release image
@@ -248,7 +286,7 @@ jobs:
         run: |
           set -euo pipefail
           curl --fail --silent --show-error -X POST -H "Authorization: Bearer $DEPLOY_TOKEN" -H 'Content-Type: application/json' \
-            -d '{"api":"${{ env.API_IMAGE }}@${{ needs.release-preflight.outputs.api_digest }}","worker":"${{ env.WORKER_IMAGE }}@${{ needs.release-preflight.outputs.worker_digest }}","studio":"${{ env.STUDIO_IMAGE }}@${{ needs.release-preflight.outputs.studio_digest }}"}' \
+            -d '{"api":"${{ env.API_IMAGE }}@${{ needs.release-preflight.outputs.api_digest }}","worker":"${{ env.WORKER_IMAGE }}@${{ needs.release-preflight.outputs.worker_digest }}","studio":"${{ env.STUDIO_IMAGE }}@${{ needs.release-preflight.outputs.studio_digest }}","identity":{"source_sha":"${{ needs.release-preflight.outputs.source_sha }}","api_digest":"${{ needs.release-preflight.outputs.api_digest }}","worker_digest":"${{ needs.release-preflight.outputs.worker_digest }}","studio_digest":"${{ needs.release-preflight.outputs.studio_digest }}"}}' \
             "${{ vars.STAGING_DEPLOY_TARGET }}"
 
   verify-staging:
@@ -258,6 +296,10 @@ jobs:
     environment: staging
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
+      - name: Install pinned release validator dependency
+        run: python -m pip install --disable-pip-version-check pydantic==2.12.3
       - uses: actions/download-artifact@v4
         with: {name: "selected-release-${{ github.run_id }}"}
       - name: Verify identities, database, and authenticated create/download
@@ -273,7 +315,9 @@ jobs:
           current="$(docker run --rm -e DATABASE_URL "$API_IMAGE@${{ needs.release-preflight.outputs.api_digest }}" alembic current)"
           python scripts/release_manifest.py verify-db release.json "$current"
           curl --fail --silent -X POST -H "X-API-Key: $API_KEY" "${{ vars.STAGING_SMOKE_CREATE_URL }}" > create.json
-          curl --fail --silent -H "X-API-Key: $API_KEY" "${{ vars.STAGING_SMOKE_DOWNLOAD_URL }}" -o download.bin
+          resource_id="$(jq -er .resource_id create.json)"
+          curl --fail --silent -H "X-API-Key: $API_KEY" "${{ vars.STAGING_SMOKE_DOWNLOAD_BASE_URL }}/${resource_id}" -o download.bin
+          test -s download.bin
       - uses: actions/upload-artifact@v4
         with: {name: "staging-release-evidence-${{ github.run_id }}", path: "*.json", retention-days: 90}
 
@@ -284,6 +328,10 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
+      - name: Install pinned release validator dependency
+        run: python -m pip install --disable-pip-version-check pydantic==2.12.3
       - uses: actions/download-artifact@v4
         with: {name: "selected-release-${{ github.run_id }}"}
       - name: Migrate with selected release image
@@ -297,7 +345,7 @@ jobs:
 
   deploy-production:
     if: ${{ always() && vars.DEPLOYMENT_ENABLED == 'true' && needs.release-preflight.result == 'success' && needs.verify-staging.result == 'success' && (needs.migrate-production.result == 'success' || github.event.inputs.release_action == 'rollback') }}
-    needs: [release-preflight, migrate-production]
+    needs: [release-preflight, verify-staging, migrate-production]
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -306,7 +354,7 @@ jobs:
         run: |
           set -euo pipefail
           curl --fail --silent --show-error -X POST -H "Authorization: Bearer $DEPLOY_TOKEN" -H 'Content-Type: application/json' \
-            -d '{"api":"${{ env.API_IMAGE }}@${{ needs.release-preflight.outputs.api_digest }}","worker":"${{ env.WORKER_IMAGE }}@${{ needs.release-preflight.outputs.worker_digest }}","studio":"${{ env.STUDIO_IMAGE }}@${{ needs.release-preflight.outputs.studio_digest }}"}' \
+            -d '{"api":"${{ env.API_IMAGE }}@${{ needs.release-preflight.outputs.api_digest }}","worker":"${{ env.WORKER_IMAGE }}@${{ needs.release-preflight.outputs.worker_digest }}","studio":"${{ env.STUDIO_IMAGE }}@${{ needs.release-preflight.outputs.studio_digest }}","identity":{"source_sha":"${{ needs.release-preflight.outputs.source_sha }}","api_digest":"${{ needs.release-preflight.outputs.api_digest }}","worker_digest":"${{ needs.release-preflight.outputs.worker_digest }}","studio_digest":"${{ needs.release-preflight.outputs.studio_digest }}"}}' \
             "${{ vars.PRODUCTION_DEPLOY_TARGET }}"
 
   verify-production:
@@ -316,6 +364,10 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
+      - name: Install pinned release validator dependency
+        run: python -m pip install --disable-pip-version-check pydantic==2.12.3
       - uses: actions/download-artifact@v4
         with: {name: "selected-release-${{ github.run_id }}"}
       - name: Verify identities, database, and authenticated create/download
@@ -331,7 +383,9 @@ jobs:
           current="$(docker run --rm -e DATABASE_URL "$API_IMAGE@${{ needs.release-preflight.outputs.api_digest }}" alembic current)"
           python scripts/release_manifest.py verify-db release.json "$current"
           curl --fail --silent -X POST -H "X-API-Key: $API_KEY" "${{ vars.PRODUCTION_SMOKE_CREATE_URL }}" > create.json
-          curl --fail --silent -H "X-API-Key: $API_KEY" "${{ vars.PRODUCTION_SMOKE_DOWNLOAD_URL }}" -o download.bin
+          resource_id="$(jq -er .resource_id create.json)"
+          curl --fail --silent -H "X-API-Key: $API_KEY" "${{ vars.PRODUCTION_SMOKE_DOWNLOAD_BASE_URL }}/${resource_id}" -o download.bin
+          test -s download.bin
       - uses: actions/upload-artifact@v4
         with: {name: "production-release-evidence-${{ github.run_id }}", path: "*.json", retention-days: 90}
 
@@ -341,8 +395,22 @@ jobs:
     runs-on: ubuntu-latest
     environment: production-db-downgrade
     steps:
-      - name: Downgrade only from the explicitly selected release image
-        env: {DATABASE_URL: "${{ secrets.DATABASE_URL }}", API_DIGEST: "${{ needs.release-preflight.outputs.api_digest }}"}
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
+      - name: Install pinned release validator dependency
+        run: python -m pip install --disable-pip-version-check pydantic==2.12.3
+      - uses: actions/download-artifact@v4
+        with: {name: "selected-release-${{ github.run_id }}"}
+      - name: Downgrade with the currently deployed image and verify the target revision
+        env:
+          API_KEY: "${{ secrets.SMOKE_API_KEY }}"
+          DATABASE_URL: "${{ secrets.DATABASE_URL }}"
+          TARGET_REVISION: "${{ needs.release-preflight.outputs.db_revision }}"
         run: |
           set -euo pipefail
-          docker run --rm -e DATABASE_URL "$API_IMAGE@$API_DIGEST" alembic downgrade "${{ needs.release-preflight.outputs.db_revision }}"
+          curl --fail --silent -H "X-API-Key: $API_KEY" "${{ vars.PRODUCTION_API_URL }}/release/identity" > current-api.json
+          CURRENT_API_DIGEST="$(jq -er .digest current-api.json)"
+          docker run --rm -e DATABASE_URL "$API_IMAGE@$CURRENT_API_DIGEST" alembic downgrade "$TARGET_REVISION"
+          current="$(docker run --rm -e DATABASE_URL "$API_IMAGE@$CURRENT_API_DIGEST" alembic current)"
+          python scripts/release_manifest.py verify-db release.json "$current"
