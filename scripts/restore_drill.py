@@ -31,7 +31,9 @@ from restore_drill_runtime import (
     launch_api,
     launch_provider_guard,
     mapped_postgres_url,
+    recovery_states,
     run,
+    run_reconciler,
     seed_production_fixture,
     wait_for_api,
     wait_for_postgres,
@@ -136,12 +138,19 @@ def main() -> int:
             api_process, fixture = launch_api(target_url, restored, fixture, root, guard_port)
             wait_for_api(fixture.port, api_process)
             verify_http(fixture, restored)
+            reconciliation = run_reconciler(target_url)
+            states = recovery_states(target)
+            if reconciliation != {"reenqueued": 0, "rolled_back": 1, "stuck_failed": 1, "errors": []}:
+                raise DrillError(f"unexpected reconciler result: {reconciliation}")
+            if states != "restore-pending=failed\nrestore-queued=queued\nrestore-running=failed":
+                raise DrillError(f"unexpected recovered task states: {states}")
             if (root / "provider-invoked").exists():
                 raise DrillError("provider-call guard detected an invocation")
             print("production schema: migrated")
             print("provider guard: armed and untouched")
+            print("broker recovery: pending=failed queued=queued running=failed")
             print("provider calls: 0")
-            evidence = {"github_sha": manifest["release_sha"], "image_digests": manifest["image_digests"], "phase_durations_seconds": {**durations, "total": time.monotonic() - started}, "credential_free": True}
+            evidence = {"github_sha": manifest["release_sha"], "image_digests": manifest["image_digests"], "phase_durations_seconds": {**durations, "total": time.monotonic() - started}, "reconciliation": reconciliation, "recovered_task_states": states.splitlines(), "credential_free": True}
             print("RESTORE_EVIDENCE=" + json.dumps(evidence, sort_keys=True))
             print("RESTORE DRILL PASSED")
             return 0

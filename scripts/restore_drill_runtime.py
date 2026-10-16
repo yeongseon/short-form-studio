@@ -83,9 +83,50 @@ INSERT INTO creator_timelines(project_id,workspace_id,timeline_id,revision,segme
 INSERT INTO creator_stage_reviews(run_id,stage_name,review_status,reviewer,notes) VALUES (501,'TIMELINE_REVIEW','approved','101','{{"timeline_id":"timeline-restored","revision":1}}');
 INSERT INTO creator_media_assets(id,workspace_id,project_id,run_id,media_type,origin,storage_key,mime_type,metadata) VALUES (601,201,401,501,'IMAGE','UPLOADED','image.png','image/png','{{"sha256":"{image_hash}","storage_provider":"local"}}');
 INSERT INTO creator_artifacts(id,run_id,artifact_type,file_path,file_size_bytes,mime_type,storage_key,content_type,size_bytes,workspace_id,project_id,storage_provider,checksum) VALUES (701,501,'video','final.mp4',0,'video/mp4','final.mp4','video/mp4',0,201,401,'local','{video_hash}');
+INSERT INTO creator_runs(id,project_id,current_stage,status,workspace_id,version) VALUES (502,401,'SCRIPT_GENERATING','running',201,1),(503,401,'RENDER_GENERATING','running',201,1),(504,401,'FINAL_REVIEW','paused',201,1);
+INSERT INTO creator_run_tasks(run_id,task_type,celery_task_id,status,started_at,created_at,claim_token) VALUES
+ (502,'generate_script','restore-pending','pending',NULL,NOW()-INTERVAL '10 minutes',NULL),
+ (503,'render_video','restore-running','running',NOW()-INTERVAL '30 minutes',NOW()-INTERVAL '30 minutes','restore-claim'),
+ (504,'render_video','restore-queued','queued',NULL,NOW(),NULL);
 """
     docker("exec", "-i", container, "psql", "-U", "restore", "-d", "restore", "-c", sql)
     return RuntimeFixture(owner, foreign, revoked, 201, 401, 501, 601, 701)
+
+
+def run_reconciler(database_url: str) -> dict[str, int | list[str]]:
+    environment = {
+        **os.environ,
+        "DATABASE_URL": database_url,
+        "PYTHONPATH": os.pathsep.join(
+            str(Path(__file__).parents[1] / path)
+            for path in (
+                "packages/creator-domain",
+                "packages/creator-service",
+                "packages/creator-provider",
+                "apps/worker-orchestrator",
+            )
+        ),
+    }
+    completed = run(
+        os.sys.executable,
+        "-c",
+        "import json; from tasks.reconcile_stale_dispatches import reconcile_stale_dispatches; print(json.dumps(reconcile_stale_dispatches()))",
+        cwd=Path(__file__).parents[1] / "apps/worker-orchestrator",
+        env=environment,
+    )
+    import json
+
+    result = json.loads(completed.stdout.splitlines()[-1])
+    if not isinstance(result, dict):
+        raise DrillError("reconciler returned invalid evidence")
+    return result
+
+
+def recovery_states(container: str) -> str:
+    return docker(
+        "exec", container, "psql", "-U", "restore", "-d", "restore", "-At", "-c",
+        "SELECT celery_task_id || '=' || status FROM creator_run_tasks ORDER BY celery_task_id",
+    ).stdout.strip()
 
 
 def _free_port() -> int:

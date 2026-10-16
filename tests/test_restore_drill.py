@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import subprocess
 import sys
@@ -34,3 +36,12 @@ def test_disposable_restore_drill() -> None:
     assert "real API auth: owner=200 workspace-b=404 revoked=401 missing=401" in result.stdout
     assert "real API downloads: media=200 final-mp4=200 checksum=verified ffprobe=verified" in result.stdout
     assert "provider guard: armed and untouched" in result.stdout
+    assert "broker recovery: pending=failed queued=queued running=failed" in result.stdout
+    evidence_line = next(
+        line for line in result.stdout.splitlines() if line.startswith("RESTORE_EVIDENCE=")
+    )
+    evidence = json.loads(evidence_line.removeprefix("RESTORE_EVIDENCE="))
+    assert evidence["github_sha"] == os.environ["GITHUB_SHA"]
+    assert all("@sha256:" in digest for digest in evidence["image_digests"])
+    assert evidence["credential_free"] is True
+    assert evidence["phase_durations_seconds"]["total"] > 0
