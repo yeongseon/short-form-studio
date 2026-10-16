@@ -18,7 +18,7 @@ from creator_service.run_service import run_service
 from tasks.hard_timeout import finalize_hard_timeout
 from tasks.task_runner import TaskContext, TaskResult, TaskRunnerConfig, run_task
 
-type ProbeMode = Literal["complete", "cooperative", "ffmpeg_hang", "wait"]
+type ProbeMode = Literal["complete", "cooperative", "ffmpeg_hang", "redelivery", "wait"]
 
 
 def _evidence_file(name: str) -> Path:
@@ -82,7 +82,15 @@ def runtime_topology_probe(
                 while True:
                     current = await run_service.storage.get_run(run_id)
                     if current is not None and current.get("status") == "cancelled":
-                        _publish(evidence_path, "cancelled", task_id=ctx.task_id)
+                        from creator_service.usage_service import usage_service
+
+                        await usage_service.cancel_owned(ctx.task_id)
+                        _publish(
+                            evidence_path,
+                            "cancelled",
+                            task_id=ctx.task_id,
+                            second_boundary_suppressed=True,
+                        )
                         return TaskResult(status="cancelled")
                     time.sleep(0.05)
             case "ffmpeg_hang":
@@ -104,6 +112,19 @@ def runtime_topology_probe(
                         child.wait(timeout=5)
             case "wait":
                 _publish(evidence_path, "running", task_id=ctx.task_id)
+                while True:
+                    time.sleep(0.1)
+            case "redelivery":
+                state = _evidence_file(evidence_path)
+                if state.exists():
+                    _publish(evidence_path, "redelivered", task_id=ctx.task_id)
+                    while True:
+                        current = await run_service.storage.get_run(run_id)
+                        if current is not None and current.get("status") == "cancelled":
+                            _publish(evidence_path, "cancelled", task_id=ctx.task_id)
+                            return TaskResult(status="cancelled")
+                        time.sleep(0.05)
+                _publish(evidence_path, "claimed", task_id=ctx.task_id)
                 while True:
                     time.sleep(0.1)
             case unreachable:
