@@ -210,3 +210,12 @@ def test_workflow_has_no_reachable_placeholder_targets() -> None:
     text = (ROOT / ".github/workflows/cd.yml").read_text().lower()
     assert "example.com" not in text
     assert "todo" not in text
+
+
+def test_ci_executes_two_release_postgres_rollback_lifecycle() -> None:
+    raw = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    commands = "\n".join(step.get("run", "") for step in raw["jobs"]["docker"]["steps"])
+
+    assert "release-lifecycle-n" in commands
+    assert "release-lifecycle-n-plus-one" in commands
+    assert "scripts/release_lifecycle_acceptance.sh" in commands

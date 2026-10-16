@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+NETWORK="release-lifecycle-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
+POSTGRES="${NETWORK}-postgres"
+API="${NETWORK}-api"
+STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/release-lifecycle.XXXXXX")"
+DATABASE_URL="postgresql://review:review-local-only@${POSTGRES}:5432/release_lifecycle"
+
+cleanup() {
+  docker rm -f "$API" "$POSTGRES" >/dev/null 2>&1 || true
+  docker network rm "$NETWORK" >/dev/null 2>&1 || true
+  rm -rf "$STATE_DIR"
+}
+trap cleanup EXIT
+
+docker network create "$NETWORK" >/dev/null
+docker run -d --name "$POSTGRES" --network "$NETWORK" \
+  -e POSTGRES_USER=review -e POSTGRES_PASSWORD=review-local-only \
+  -e POSTGRES_DB=release_lifecycle postgres:16-alpine >/dev/null
+timeout 60 bash -c "until docker exec '$POSTGRES' pg_isready -U review; do sleep 1; done"
+
+docker run --rm --network "$NETWORK" -e DATABASE_URL="$DATABASE_URL" release-lifecycle-n alembic upgrade head
+docker run --rm --network "$NETWORK" -e DATABASE_URL="$DATABASE_URL" release-lifecycle-n \
+  python scripts/create_api_key.py --email lifecycle@example.com --workspace lifecycle --name lifecycle-ci --json \
+  > "$STATE_DIR/key.json"
+API_KEY="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["api_key"])' < "$STATE_DIR/key.json")"
+WORKSPACE_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["workspace_id"])' < "$STATE_DIR/key.json")"
+
+start_api() {
+  local image="$1"
+  docker rm -f "$API" >/dev/null 2>&1 || true
+  docker run -d --name "$API" --network "$NETWORK" -p 127.0.0.1:58080:8000 \
+    -e DATABASE_URL="$DATABASE_URL" -e ARTIFACT_ROOT=/tmp/release-artifacts \
+    -v "$STATE_DIR/artifacts:/tmp/release-artifacts" "$image" >/dev/null
+  timeout 60 bash -c 'until curl -sf http://127.0.0.1:58080/healthz >/dev/null; do sleep 1; done'
+}
+
+mkdir -p "$STATE_DIR/artifacts"
+chmod 777 "$STATE_DIR/artifacts"
+start_api release-lifecycle-n
+SEED="$(curl -fsS -X POST -H "X-API-Key: $API_KEY" \
+  "http://127.0.0.1:58080/api/creator/workspaces/${WORKSPACE_ID}/demo-short/runs")"
+PROJECT_ID="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["seeded_project_id"])' <<<"$SEED")"
+ASSET_ID="$(python3 -c 'import json,sys; print(next(iter(json.load(sys.stdin)["asset_id_map"].values())))' <<<"$SEED")"
+
+docker rm -f "$API" >/dev/null
+docker run --rm --network "$NETWORK" -e DATABASE_URL="$DATABASE_URL" release-lifecycle-n-plus-one alembic upgrade head
+start_api release-lifecycle-n-plus-one
+curl -fsS -H "X-API-Key: $API_KEY" "http://127.0.0.1:58080/api/creator/projects/${PROJECT_ID}" >/dev/null
+curl -fsS -H "X-API-Key: $API_KEY" \
+  "http://127.0.0.1:58080/api/creator/workspaces/${WORKSPACE_ID}/assets/${ASSET_ID}/content" -o /dev/null
+
+start_api release-lifecycle-n
+curl -fsS -H "X-API-Key: $API_KEY" "http://127.0.0.1:58080/api/creator/projects/${PROJECT_ID}" >/dev/null
+curl -fsS -H "X-API-Key: $API_KEY" \
+  "http://127.0.0.1:58080/api/creator/workspaces/${WORKSPACE_ID}/assets/${ASSET_ID}/content" -o /dev/null
+
+printf 'Release lifecycle acceptance passed: N seed, N+1 upgrade, N app rollback preserved project and media.\n'
