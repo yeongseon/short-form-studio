@@ -43,6 +43,7 @@ from shorts_api.routes.creator_usage import router as usage_router
 from shorts_api.routes.creator_users import router as users_router
 from shorts_api.routes.creator_visual_plan import router as visual_plan_router
 from shorts_api.routes.creator_workspaces import router as workspaces_router
+from shorts_api.routes.release_identity import router as release_identity_router
 
 setup_json_logging(service_name="api", level="INFO")
 logger = logging.getLogger(__name__)
@@ -208,5 +209,6 @@ def create_app() -> FastAPI:
     app.include_router(onboarding_router, prefix="/api/creator")
     app.include_router(users_router, prefix="/api/creator")
     app.include_router(admin_router, prefix="/api/admin")
+    app.include_router(release_identity_router)
     register_health_routes(app)
     return app
