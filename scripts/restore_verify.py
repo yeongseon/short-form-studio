@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import sys
 from dataclasses import asdict, dataclass
@@ -69,12 +70,55 @@ def checksum(path: Path) -> Checksum:
     return Checksum(digest.hexdigest())
 
 
+def _require_contained_path(bundle: Path, path: Path, label: str) -> Path:
+    bundle_root = bundle.resolve(strict=True)
+    try:
+        bundle.lstat()
+    except OSError as error:
+        raise RestoreError(f"{label} is inaccessible: {error}") from error
+    if bundle.is_symlink():
+        raise RestoreError("bundle must not be a symlink")
+    try:
+        relative = path.relative_to(bundle)
+    except ValueError as error:
+        raise RestoreError(f"{label} escapes bundle") from error
+    current = bundle
+    for part in relative.parts:
+        current /= part
+        try:
+            current.lstat()
+        except OSError as error:
+            raise RestoreError(f"{label} is inaccessible: {error}") from error
+        if current.is_symlink():
+            raise RestoreError(f"{label} contains symlink: {relative}")
+    resolved = path.resolve(strict=True)
+    if not resolved.is_relative_to(bundle_root):
+        raise RestoreError(f"{label} escapes bundle: {relative}")
+    return resolved
+
+
+def _require_safe_tree(bundle: Path, root: Path, label: str) -> list[Path]:
+    safe_root = _require_contained_path(bundle, root, label)
+    entries: list[Path] = []
+    for directory, directory_names, file_names in os.walk(safe_root, followlinks=False):
+        directory_path = Path(directory)
+        for name in [*directory_names, *file_names]:
+            entry = directory_path / name
+            _require_contained_path(bundle, entry, label)
+            entries.append(entry)
+    return entries
+
+
 def parse_manifest(bundle: Path) -> Manifest:
     manifest_path = bundle / "manifest.json"
-    if not manifest_path.is_file():
+    try:
+        safe_manifest = _require_contained_path(bundle, manifest_path, "manifest")
+    except RestoreError as error:
+        if "inaccessible" not in str(error):
+            raise
         raise RestoreError("manifest is missing")
     try:
-        raw: ManifestJson = json.loads(manifest_path.read_text())
+        raw: ManifestJson = json.loads(safe_manifest.read_text())
         if raw["format_version"] != 1:
             raise RestoreError(
                 f"unsupported manifest format version: {raw['format_version']}"
@@ -115,15 +159,27 @@ def verify_bundle(
     if manifest.secret_fingerprint != expected_secret_fingerprint:
         raise RestoreError("secret fingerprint mismatch")
     database_dump = bundle / manifest.database_dump
-    if not database_dump.is_file():
+    try:
+        safe_database_dump = _require_contained_path(bundle, database_dump, "database dump")
+    except RestoreError as error:
+        if "inaccessible" not in str(error):
+            raise
         raise RestoreError("database dump is missing")
-    if database_dump.stat().st_size == 0:
+    if not safe_database_dump.is_file():
+        raise RestoreError("database dump is missing")
+    if safe_database_dump.stat().st_size == 0:
         raise RestoreError("database dump is empty")
     for relative, expected_checksum in manifest.files.items():
         path = bundle / relative
-        if not path.is_file():
+        try:
+            safe_path = _require_contained_path(bundle, path, "listed file")
+        except RestoreError as error:
+            if "inaccessible" not in str(error):
+                raise
             raise RestoreError(f"listed file is missing: {relative}")
-        if checksum(path) != expected_checksum:
+        if not safe_path.is_file():
+            raise RestoreError(f"listed file is missing: {relative}")
+        if checksum(safe_path) != expected_checksum:
             raise RestoreError(f"checksum mismatch: {relative}")
     media_root = PurePosixPath(manifest.media_root)
     listed_media = {
@@ -131,13 +187,14 @@ def verify_bundle(
         for relative in manifest.files
         if PurePosixPath(relative).is_relative_to(media_root)
     }
+    safe_media_entries = _require_safe_tree(
+        bundle, bundle / manifest.media_root, "media tree"
+    )
     actual_media = {
         path.relative_to(bundle).as_posix()
-        for path in (bundle / manifest.media_root).rglob("*")
-        if path.is_file() and not path.is_symlink()
+        for path in safe_media_entries
+        if path.is_file()
     }
-    if any(path.is_symlink() for path in (bundle / manifest.media_root).rglob("*")):
-        raise RestoreError("media tree contains symlink")
     if actual_media != {path.as_posix() for path in listed_media}:
         raise RestoreError("media tree contains unlisted file")
     return manifest
@@ -145,15 +202,14 @@ def verify_bundle(
 
 def create_manifest(args: argparse.Namespace) -> None:
     bundle = Path(args.bundle)
-    database_dump = bundle / "database.dump"
+    database_dump = _require_contained_path(bundle, bundle / "database.dump", "database dump")
     if not database_dump.is_file() or database_dump.stat().st_size == 0:
         raise RestoreError("database dump is missing or empty")
-    media = bundle / "media"
+    media = _require_contained_path(bundle, bundle / "media", "media tree")
     if not media.is_dir():
         raise RestoreError("media tree is missing")
-    if any(path.is_symlink() for path in media.rglob("*")):
-        raise RestoreError("media tree contains symlink")
-    files = [database_dump, *(path for path in media.rglob("*") if path.is_file())]
+    media_entries = _require_safe_tree(bundle, media, "media tree")
+    files = [database_dump, *(path for path in media_entries if path.is_file())]
     manifest = Manifest(
         created_at=args.timestamp,
         release_sha=args.release_sha,
