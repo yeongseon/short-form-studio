@@ -4,6 +4,7 @@ from billiard.exceptions import SoftTimeLimitExceeded
 from creator_provider.exceptions import ProviderTimeoutError
 from creator_service.usage_service import InMemoryUsageStorage, UsageService
 from tasks import task_runner
+from tasks.task_execution import TaskInputError
 from worker_loop import run_in_worker_loop
 
 from .terminal_validation_support import RunnerCase, runner_case as runner_case  # noqa: F401
@@ -116,6 +117,42 @@ def test_cancelled_owner_rejects_worker_before_provider_execution(
     assert executed == []
     assert run_in_worker_loop(quota_case.reserve_owned(1, "llm", "replacement"))
     assert not run_in_worker_loop(quota_case.reserve_owned(1, "llm", "overflow"))
+
+
+def test_stage_guard_releases_not_started_reservation(
+    runner_case: RunnerCase, quota_case: UsageService,
+) -> None:
+    # Given an owned delivery whose run no longer accepts its stage.
+    run_in_worker_loop(runner_case.runs.storage.update_run(
+        runner_case.run_id, {"current_stage": "SCRIPT_REVIEW"},
+    ))
+
+    # When the stage guard rejects the delivery before provider execution.
+    with pytest.raises(task_runner.StageGuardError):
+        task_runner.run_task(
+            runner_case.delivery(), runner_case.run_id, runner_case.config,
+            lambda _ctx: None,
+        )
+
+    # Then its definitely unbilled reservation is released.
+    assert run_in_worker_loop(quota_case.reserve_owned(1, "llm", "replacement"))
+
+
+def test_input_failure_releases_not_started_reservation(
+    runner_case: RunnerCase, quota_case: UsageService,
+) -> None:
+    # Given an owned delivery whose task input cannot be resolved.
+    async def reject_input(_ctx: task_runner.TaskContext) -> task_runner.TaskResult:
+        raise TaskInputError("missing task input")
+
+    # When task validation fails inside execute before a provider starts.
+    with pytest.raises(TaskInputError):
+        task_runner.run_task(
+            runner_case.delivery(), runner_case.run_id, runner_case.config, reject_input,
+        )
+
+    # Then its definitely unbilled reservation is released.
+    assert run_in_worker_loop(quota_case.reserve_owned(1, "llm", "replacement"))
 
 
 def test_generation_records_verified_owner_separately_from_usage_key(
