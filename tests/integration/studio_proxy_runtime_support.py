@@ -26,7 +26,7 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-async def _change_schema(database_url: str, schema: str, *, drop: bool) -> None:
+async def _change_schema(database_url: str, schema: str, drop: bool) -> None:
     connection = await asyncpg.connect(database_url)
     try:
         statement = f'DROP SCHEMA "{schema}" CASCADE' if drop else f'CREATE SCHEMA "{schema}"'
@@ -112,7 +112,7 @@ def studio_proxy_runtime(tmp_path_factory: pytest.TempPathFactory) -> Iterator[S
             "packages/creator-domain", "packages/creator-service", "packages/creator-provider", "apps/api/src",
         )),
     }
-    anyio.run(_change_schema, database_url, schema, drop=False)
+    anyio.run(_change_schema, database_url, schema, False)
     processes: list[subprocess.Popen[bytes]] = []
     api_log = (root / "api.log").open("wb")
     try:
@@ -169,4 +169,4 @@ def studio_proxy_runtime(tmp_path_factory: pytest.TempPathFactory) -> Iterator[S
             process.terminate()
             process.wait(timeout=15)
         api_log.close()
-        anyio.run(_change_schema, database_url, schema, drop=True)
+        anyio.run(_change_schema, database_url, schema, True)
