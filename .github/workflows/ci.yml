@@ -237,6 +237,7 @@ jobs:
           REDIS_URL: redis://127.0.0.1:56391/0
           WORKER_TOPOLOGY_IMAGE: worker-topology-image
           WORKER_TOPOLOGY_EVIDENCE_DIR: /tmp/worker-topology-runtime
+          WORKER_TOPOLOGY_PROBE_ENABLED: "1"
         run: >-
           python3 -m pytest
           apps/worker-orchestrator/tests/test_worker_topology_contract.py
