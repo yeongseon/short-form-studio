@@ -177,23 +177,27 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
     # Given the shipped image running the production prefork queue command.
     new_run(103)
     new_run(104)
+    new_run(107)
     command = SCALED_IMAGE_COMMAND
     worker("topology-scaled-redelivery", command)
     redelivery_state = EVIDENCE / "active-redelivery.json"
+    occupied_state = EVIDENCE / "occupied-slot.json"
     timeout_state = EVIDENCE / "timeout.json"
     ffmpeg_state = EVIDENCE / "ffmpeg.json"
 
     # When a claimed delivery loses its worker, the broker redelivers it to the exact scaled command.
+    send(107, "occupied-slot", "wait", occupied_state, queue="image")
+    wait_state(occupied_state, "running")
     send(103, "active-redelivery", "redelivery", redelivery_state, queue="image")
-    wait_state(redelivery_state, "claimed")
+    claimed = wait_state(redelivery_state, "claimed")
     first_claim = wait_task("active-redelivery", "running")
-    docker("stop", "topology-redis")
-    time.sleep(2)
-    docker("start", "topology-redis")
-    deadline = time.monotonic() + 10
-    while not redis_available() and time.monotonic() < deadline:
-        time.sleep(0.1)
-    assert redis_available()
+    docker(
+        "exec",
+        "topology-scaled-redelivery",
+        "kill",
+        "-KILL",
+        str(claimed["worker_pid"]),
+    )
     wait_task("active-redelivery", "failed")
     docker("rm", "-f", "topology-scaled-redelivery")
     worker("topology-scaled-redelivered", command)

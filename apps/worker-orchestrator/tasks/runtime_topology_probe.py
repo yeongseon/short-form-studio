@@ -117,14 +117,24 @@ def runtime_topology_probe(
             case "redelivery":
                 state = _evidence_file(evidence_path)
                 if state.exists():
-                    _publish(evidence_path, "redelivered", task_id=ctx.task_id)
+                    _publish(
+                        evidence_path,
+                        "redelivered",
+                        task_id=ctx.task_id,
+                        worker_pid=os.getpid(),
+                    )
                     while True:
                         current = await run_service.storage.get_run(run_id)
                         if current is not None and current.get("status") == "cancelled":
                             _publish(evidence_path, "cancelled", task_id=ctx.task_id)
                             return TaskResult(status="cancelled")
                         time.sleep(0.05)
-                _publish(evidence_path, "claimed", task_id=ctx.task_id)
+                _publish(
+                    evidence_path,
+                    "claimed",
+                    task_id=ctx.task_id,
+                    worker_pid=os.getpid(),
+                )
                 while True:
                     time.sleep(0.1)
             case unreachable:
