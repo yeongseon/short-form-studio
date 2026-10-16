@@ -87,6 +87,7 @@ def generate_paragraph_subtitles(
             params["format"] = subtitle_format
             params["output_path"] = subtitle_path
             try:
+                ctx.mark_provider_started()
                 await provider.transcribe(audio_path, params=params)
             except ProviderError:
                 raise
@@ -124,6 +125,7 @@ def generate_paragraph_subtitles(
                 idempotency_key=ctx.task_id,
                 reservation_owner_id=ctx.reservation_owner_id,
             )
+            ctx.mark_provider_accounted()
         except Exception:
             if ctx.reservation_owner_id is not None:
                 raise
