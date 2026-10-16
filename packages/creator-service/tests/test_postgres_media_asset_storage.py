@@ -223,8 +223,7 @@ async def test_postgres_upload_intent_is_durable_and_workspace_owned(media_datab
     claimed = await storage.claim_expired_upload_intents(
         now=now, lease_expires_at=now + timedelta(minutes=5), limit=10,
     )
-    await storage.mark_upload_intent_uploaded(intent.id)
-    await storage.complete_upload_intent(intent.id, owner_id=intent.owner_id)
+    await storage.record_upload_reclaimed(intent.id, claimed[0].claim_token)
 
     # Then the exact owned record was claimed once and remains durable.
     assert [candidate.id for candidate in claimed] == [intent.id]
@@ -233,7 +232,7 @@ async def test_postgres_upload_intent_is_durable_and_workspace_owned(media_datab
         intent.id,
     )
     assert row == {
-        "state": "completed", "workspace_id": 9101,
+        "state": "reclaimed", "workspace_id": 9101,
         "storage_key": "workspaces/9101/assets/pending.png",
     }
 
