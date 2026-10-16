@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import shutil
 import socket
@@ -11,6 +12,7 @@ from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Literal
+from urllib.request import Request, urlopen
 
 import anyio
 import asyncpg
@@ -21,7 +23,9 @@ EVIDENCE = Path(os.getenv("WORKER_TOPOLOGY_EVIDENCE_DIR", "/tmp/worker-topology-
 IMAGE = os.getenv("WORKER_TOPOLOGY_IMAGE", "worker-topology-image")
 DATABASE_URL = os.getenv("DATABASE_URL", "")
 REDIS_URL = os.getenv("REDIS_URL", "")
-type ProbeMode = Literal["complete", "cooperative", "ffmpeg_hang", "wait"]
+type ProbeMode = Literal["complete", "cooperative", "ffmpeg_hang", "redelivery", "wait"]
+API_KEY = "topology-runtime-key"
+API_URL = "http://127.0.0.1:58064"
 
 
 class _Provider(BaseHTTPRequestHandler):
@@ -84,15 +88,11 @@ def _wait_task(task_id: str, status: str, timeout: float = 30) -> asyncpg.Record
     pytest.fail(f"timed out waiting for task {task_id}={status}")
 
 
-def _process_exists(pid: int) -> bool:
-    result = subprocess.run(
-        ["ps", "-p", str(pid), "-o", "comm="],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=5,
-    )
-    return result.returncode == 0 and result.stdout.strip() == "ffmpeg"
+def _container_ffmpeg_host_pid(name: str) -> int:
+    output = _docker("top", name, "-eo", "pid,comm").stdout.splitlines()
+    ffmpeg = [line.split()[0] for line in output[1:] if line.split()[-1] == "ffmpeg"]
+    assert len(ffmpeg) == 1
+    return int(ffmpeg[0])
 
 
 def _redis_available() -> bool:
@@ -148,6 +148,39 @@ def _worker(name: str, command: list[str] | None = None) -> None:
     assert _docker("inspect", "-f", "{{.State.Running}}", name).stdout.strip() == "true"
 
 
+def _stop_run(run_id: int) -> None:
+    request = Request(
+        f"{API_URL}/api/creator/runs/{run_id}/stop",
+        method="POST",
+        headers={"X-API-Key": API_KEY},
+    )
+    with urlopen(request, timeout=10) as response:
+        assert response.status == 200
+
+
+async def _snapshot(run_id: int) -> dict[str, object]:
+    connection = await asyncpg.connect(DATABASE_URL)
+    try:
+        run = await connection.fetchrow("SELECT id, status, current_stage FROM creator_runs WHERE id=$1", run_id)
+        tasks = await connection.fetch(
+            "SELECT celery_task_id, status, attempt, claim_token FROM creator_run_tasks WHERE run_id=$1 ORDER BY id",
+            run_id,
+        )
+        quota = await connection.fetch(
+            "SELECT owner_id, status, operation_type FROM workspace_quota_reservation_owners "
+            "WHERE owner_id IN (SELECT celery_task_id FROM creator_run_tasks WHERE run_id=$1) ORDER BY owner_id",
+            run_id,
+        )
+        return {"run": dict(run) if run else None, "tasks": [dict(row) for row in tasks], "quota": [dict(row) for row in quota]}
+    finally:
+        await connection.close()
+
+
+def _persist_snapshot(name: str, run_id: int, **fields: object) -> None:
+    state = anyio.run(_snapshot, run_id)
+    (EVIDENCE / name).write_text(json.dumps({**state, **fields}, default=str), encoding="utf-8")
+
+
 def _capture_worker(name: str) -> None:
     logs = _docker("logs", name, check=False)
     if logs.returncode != 0:
@@ -163,7 +196,12 @@ def runtime() -> Iterator[None]:
     if not DATABASE_URL or not REDIS_URL or not shutil.which("docker"):
         pytest.skip("runtime image environment unavailable")
     EVIDENCE.mkdir(parents=True, exist_ok=True)
-    anyio.run(_sql, "TRUNCATE creator_run_tasks, creator_runs, creator_projects, workspace_members, workspaces, users CASCADE")
+    anyio.run(
+        _sql,
+        "TRUNCATE creator_media_assets, creator_artifacts, workspace_quota_reservation_owners, "
+        "workspace_quota_reservations, creator_run_tasks, creator_runs, creator_projects, "
+        "workspace_members, api_keys, workspaces, users CASCADE",
+    )
     anyio.run(
         _sql,
         """INSERT INTO users(id, auth_subject) VALUES(1, 'topology');
@@ -172,16 +210,47 @@ def runtime() -> Iterator[None]:
         INSERT INTO creator_projects(id, title, source_type, status, workspace_id)
         VALUES(1, 'Topology', 'idea', 'active', 1);""",
     )
-    server = ThreadingHTTPServer(("0.0.0.0", 0), _Provider)
+    anyio.run(
+        _sql,
+        "INSERT INTO api_keys(user_id, key_hash, name) VALUES(1, $1, 'topology-runtime')",
+        (hashlib.sha256(API_KEY.encode()).hexdigest(),),
+    )
+    gateway = _docker("network", "inspect", "worker-topology", "-f", "{{(index .IPAM.Config 0).Gateway}}").stdout.strip()
+    server = ThreadingHTTPServer((gateway, 0), _Provider)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    os.environ["TOPOLOGY_PROVIDER_URL"] = f"http://host.docker.internal:{server.server_port}"
+    os.environ["TOPOLOGY_PROVIDER_URL"] = f"http://{gateway}:{server.server_port}"
+    api_environment = os.environ | {
+        "DATABASE_URL": DATABASE_URL,
+        "REDIS_URL": REDIS_URL,
+        "ENVIRONMENT": "test",
+    }
+    api = subprocess.Popen(
+        ["python3", "-m", "uvicorn", "shorts_api.main:app", "--host", "127.0.0.1", "--port", "58064"],
+        env=api_environment,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        try:
+            with urlopen(f"{API_URL}/healthz", timeout=1):
+                break
+        except OSError:
+            time.sleep(0.1)
+    else:
+        pytest.fail("topology API did not start")
     try:
         yield
     finally:
+        api.terminate()
+        api.wait(timeout=5)
         server.shutdown()
         thread.join(timeout=2)
-        for name in ("topology-worker", "topology-prefork", "topology-prefork-replacement"):
+        for name in (
+            "topology-solo-cancel", "topology-scaled-redelivery", "topology-scaled-redelivered",
+            "topology-scaled-timeout", "topology-scaled-ffmpeg", "topology-scaled-replacement",
+        ):
             _capture_worker(name)
             _docker("rm", "-f", name, check=False)
 
@@ -199,9 +268,17 @@ def test_shipped_image_runs_production_claims_redelivery_and_fairness() -> None:
     # Given the shipped image using its default production entrypoint and solo command.
     _new_run(101)
     _new_run(102)
-    _worker("topology-worker")
+    _Provider.calls = 0
+    _worker("topology-solo-cancel")
     blocked = EVIDENCE / "blocked.json"
     successor = EVIDENCE / "successor.json"
+    anyio.run(
+        _sql,
+        """INSERT INTO workspace_quota_reservations(workspace_id, period_start, image_count)
+        VALUES(1, date_trunc('month', now()), 1);
+        INSERT INTO workspace_quota_reservation_owners(owner_id, workspace_id, period_start, operation_type, status)
+        VALUES('blocked-delivery', 1, date_trunc('month', now()), 'image_gen', 'reserved');""",
+    )
 
     # When a long production task owns the worker and successor work is queued.
     _send(101, "blocked-delivery", "cooperative", blocked, provider_url=os.environ["TOPOLOGY_PROVIDER_URL"])
@@ -210,35 +287,74 @@ def test_shipped_image_runs_production_claims_redelivery_and_fairness() -> None:
     _send(102, "successor-delivery", "complete", successor)
     time.sleep(1)
     assert not successor.exists()
-    anyio.run(_sql, "UPDATE creator_runs SET status='cancelled' WHERE id=101")
-    _wait_state(blocked, "cancelled")
+    _stop_run(101)
+    cancelled = _wait_state(blocked, "cancelled")
     _wait_state(successor, "completed")
     delay = time.monotonic() - started
 
-    # Then Postgres owns the claims, queue delay is measured, and stale redelivery is fenced.
+    # Then Postgres owns the claims and cancellation prevents new provider or persistence work.
     first = _wait_task("successor-delivery", "success")
-    _send(102, "successor-delivery", "complete", successor)
-    time.sleep(1)
-    second = _wait_task("successor-delivery", "success")
-    assert first["attempt"] == second["attempt"] == 1
-    assert second["claim_token"] is None
+    quota = anyio.run(_row, "SELECT status FROM workspace_quota_reservation_owners WHERE owner_id='blocked-delivery'")
+    reservation = anyio.run(_row, "SELECT image_count FROM workspace_quota_reservations WHERE workspace_id=1")
+    artifact_rows = anyio.run(_row, "SELECT count(*) AS count FROM creator_artifacts WHERE run_id=101")
+    media_rows = anyio.run(_row, "SELECT count(*) AS count FROM creator_media_assets WHERE run_id=101")
+    storage = EVIDENCE / "storage" / "101"
+    storage_entries = list(storage.rglob("*")) if storage.exists() else []
+    provider_calls = _Provider.calls
+    assert first["attempt"] == 1
+    assert quota is not None and quota["status"] == "cancelled"
+    assert reservation is not None and reservation["image_count"] == 0
+    assert artifact_rows is not None and artifact_rows["count"] == 0
+    assert media_rows is not None and media_rows["count"] == 0
+    assert provider_calls == 1
+    assert storage_entries == []
+    assert cancelled["second_boundary_suppressed"] is True
     (EVIDENCE / "fairness.json").write_text(json.dumps({"successor_delay_seconds": delay}), encoding="utf-8")
+    _persist_snapshot(
+        "cancellation-final-state.json", 101, provider_calls=provider_calls,
+        artifact_rows=artifact_rows["count"], media_asset_rows=media_rows["count"],
+        storage_entries=[str(path) for path in storage_entries],
+    )
 
 
 def test_prefork_hard_timeout_and_ffmpeg_child_die_with_worker() -> None:
     # Given the shipped image running the production prefork queue command.
     _new_run(103)
     _new_run(104)
-    command = [
-        "celery", "-A", "celery_app.celery_app", "worker", "--loglevel=info",
-        "--pool=prefork", "--concurrency=1", "-Q", "image",
-    ]
-    _worker("topology-prefork", command)
+    command = ['celery', '-A', 'celery_app.celery_app', 'worker', '--loglevel=info', '--pool=prefork', '--concurrency=2', '-Q', 'image']
+    _worker("topology-scaled-redelivery", command)
+    redelivery_state = EVIDENCE / "active-redelivery.json"
     timeout_state = EVIDENCE / "timeout.json"
     ffmpeg_state = EVIDENCE / "ffmpeg.json"
 
-    # When a delivery exceeds its hard deadline, then the broker is lost and restored.
-    _send(103, "timeout-delivery", "wait", timeout_state, queue="image", time_limit=2)
+    # When a claimed delivery loses its worker, the broker redelivers it to the exact scaled command.
+    _send(103, "active-redelivery", "redelivery", redelivery_state, queue="image")
+    _wait_state(redelivery_state, "claimed")
+    first_claim = _wait_task("active-redelivery", "running")
+    _docker("kill", "--signal=KILL", "topology-scaled-redelivery")
+    anyio.run(
+        _sql,
+        "UPDATE creator_run_tasks SET status='failed', finished_at=NOW() "
+        "WHERE celery_task_id='active-redelivery' AND claim_token=$1 AND status='running'",
+        (first_claim["claim_token"],),
+    )
+    _worker("topology-scaled-redelivered", command)
+    _wait_state(redelivery_state, "redelivered")
+    redelivered = _wait_task("active-redelivery", "running")
+    assert redelivered["attempt"] == first_claim["attempt"]
+    assert redelivered["claim_token"] != first_claim["claim_token"]
+    stale_update = anyio.run(
+        _sql,
+        "UPDATE creator_run_tasks SET status='success' WHERE celery_task_id='active-redelivery' AND claim_token=$1",
+        (first_claim["claim_token"],),
+    )
+    assert stale_update == "UPDATE 0"
+    _stop_run(103)
+    _wait_state(redelivery_state, "cancelled")
+    _persist_snapshot("redelivery-final-state.json", 103)
+
+    _new_run(106)
+    _send(106, "timeout-delivery", "wait", timeout_state, queue="image", time_limit=2)
     _wait_state(timeout_state, "running")
     _wait_task("timeout-delivery", "failed")
     _docker("stop", "topology-redis")
@@ -249,25 +365,27 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_with_worker() -> None:
     while not _redis_available() and time.monotonic() < deadline:
         time.sleep(0.1)
     assert _redis_available()
-    _capture_worker("topology-prefork")
-    _docker("rm", "-f", "topology-prefork")
-    _worker("topology-prefork", command)
+    _persist_snapshot("timeout-final-state.json", 106)
+    _capture_worker("topology-scaled-redelivered")
+    _docker("rm", "-f", "topology-scaled-redelivered")
+    _worker("topology-scaled-ffmpeg", command)
     _send(104, "ffmpeg-delivery", "ffmpeg_hang", ffmpeg_state, queue="image")
     state = _wait_state(ffmpeg_state, "ffmpeg_running")
-    _docker("kill", "--signal=TERM", "topology-prefork")
+    host_pid = _container_ffmpeg_host_pid("topology-scaled-ffmpeg")
+    _docker("kill", "--signal=TERM", "topology-scaled-ffmpeg")
     time.sleep(1)
-    _docker("kill", "--signal=KILL", "topology-prefork", check=False)
-    _capture_worker("topology-prefork")
+    _docker("kill", "--signal=KILL", "topology-scaled-ffmpeg", check=False)
+    _capture_worker("topology-scaled-ffmpeg")
     anyio.run(_sql, "UPDATE creator_runs SET status='cancelled' WHERE id=104")
 
     # Then forced worker loss removes the real FFmpeg child and a replacement can start.
-    assert _docker("inspect", "-f", "{{.State.Running}}", "topology-prefork").stdout.strip() == "false"
-    assert not _process_exists(int(state["child_pid"]))
-    _worker("topology-prefork-replacement", command)
+    assert _docker("inspect", "-f", "{{.State.Running}}", "topology-scaled-ffmpeg").stdout.strip() == "false"
+    assert not Path(f"/proc/{host_pid}").exists()
+    _worker("topology-scaled-replacement", command)
     _new_run(105)
     replacement = EVIDENCE / "replacement.json"
     _send(105, "replacement-delivery", "complete", replacement, queue="image")
     _wait_state(replacement, "completed")
     (EVIDENCE / "ffmpeg-cleanup.json").write_text(
-        json.dumps({"child_pid": state["child_pid"], "container_running": False}), encoding="utf-8",
+        json.dumps({"container_pid": state["child_pid"], "host_pid": host_pid, "container_running": False}), encoding="utf-8",
     )
