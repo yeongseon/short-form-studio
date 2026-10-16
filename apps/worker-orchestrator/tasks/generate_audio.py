@@ -201,6 +201,7 @@ def generate_audio(
                         section_params["output_path"] = section_path
                         section_params["rate"] = rate
 
+                        ctx.mark_provider_started()
                         await provider.generate(section_text, voice=voice, params=section_params)
                         section_audio_paths.append(section_path)
                         section_ids.append(section.section_id or f"section_{idx}")
@@ -251,6 +252,7 @@ def generate_audio(
                     except Exception:
                         pass
                 try:
+                    ctx.mark_provider_started()
                     await provider.generate(script_text, voice=voice, params=params)
                 except ProviderError:
                     raise
@@ -291,6 +293,7 @@ def generate_audio(
                 idempotency_key=ctx.task_id,
                 reservation_owner_id=ctx.reservation_owner_id,
             )
+            ctx.mark_provider_accounted()
         except Exception:
             if ctx.reservation_owner_id is not None:
                 raise
