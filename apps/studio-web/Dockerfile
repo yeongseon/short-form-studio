@@ -24,8 +24,8 @@ FROM nginxinc/nginx-unprivileged:alpine AS runtime
 ARG SOURCE_SHA
 LABEL org.opencontainers.image.revision="${SOURCE_SHA}"
 COPY apps/studio-web/nginx.conf.template /etc/nginx/templates/default.conf.template
-COPY --from=build /app/dist /usr/share/nginx/html
-COPY apps/studio-web/docker-entrypoint.d/40-release-identity.sh /docker-entrypoint.d/40-release-identity.sh
+COPY --chown=101:101 --from=build /app/dist /usr/share/nginx/html
+COPY --chown=101:101 apps/studio-web/docker-entrypoint.d/40-release-identity.sh /docker-entrypoint.d/40-release-identity.sh
 RUN chmod +x /docker-entrypoint.d/40-release-identity.sh
 # The nginx docker-entrypoint runs envsubst on /etc/nginx/templates/ at startup.
 # NGINX_ENVSUBST_FILTER limits substitution to API_KEY only, preserving nginx
