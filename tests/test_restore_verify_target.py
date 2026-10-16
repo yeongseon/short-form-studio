@@ -10,6 +10,11 @@ import pytest
 SCRIPT = Path(__file__).parents[1] / "scripts" / "restore_verify.py"
 
 
+@pytest.fixture(autouse=True)
+def _accept_synthetic_dump(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PG_RESTORE", "/usr/bin/true")
+
+
 def test_restore_rejects_symlinked_target_ancestor(tmp_path: Path) -> None:
     # Given
     bundle = _bundle(tmp_path)

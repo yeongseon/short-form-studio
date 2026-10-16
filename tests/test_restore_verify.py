@@ -12,6 +12,11 @@ import pytest
 SCRIPT = Path(__file__).parents[1] / "scripts" / "restore_verify.py"
 
 
+@pytest.fixture(autouse=True)
+def _accept_synthetic_dump(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PG_RESTORE", "/usr/bin/true")
+
+
 def test_create_and_verify_bundle_when_contents_are_complete(tmp_path: Path) -> None:
     # Given
     bundle = _bundle(tmp_path)
@@ -227,6 +232,30 @@ def test_verify_rejects_unsupported_manifest_version(tmp_path: Path) -> None:
     # Then
     assert result.returncode != 0
     assert "unsupported manifest format version: 2" in result.stderr
+
+
+def test_verify_requires_exact_database_dump_checksum(tmp_path: Path) -> None:
+    # Given
+    bundle = _bundle(tmp_path)
+    assert _run("create", bundle).returncode == 0
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    del manifest["files"][manifest["database_dump"]]
+    manifest_path.write_text(json.dumps(manifest))
+
+    # When
+    result = _run(
+        "verify",
+        bundle,
+        "--expected-alembic-revision",
+        "revision-1",
+        "--expected-secret-fingerprint",
+        "sha256:fingerprint-v1",
+    )
+
+    # Then
+    assert result.returncode != 0
+    assert "database dump must have exactly one checksum" in result.stderr
 
 
 def test_verify_rejects_symlinked_media(tmp_path: Path) -> None:

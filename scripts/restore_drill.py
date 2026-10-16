@@ -216,8 +216,8 @@ def main() -> int:
                 wait_for_postgres(container)
             seed(source)
             insert_media_checksums(source, media)
-            dump = docker("exec", source, "pg_dump", "-U", "restore", "-d", "restore", "--clean", "--if-exists").stdout
-            (bundle / "database.dump").write_text(dump)
+            docker("exec", source, "pg_dump", "-U", "restore", "-d", "restore", "--format=custom", "--file=/tmp/database.dump")
+            docker("cp", f"{source}:/tmp/database.dump", str(bundle / "database.dump"))
             manifest = {
                 "format_version": 1,
                 "created_at": "synthetic",
@@ -235,7 +235,8 @@ def main() -> int:
             (bundle / "manifest.json").write_text(json.dumps(manifest))
             verifier = Path(__file__).with_name("restore_verify.py")
             run(sys.executable, str(verifier), "verify", str(bundle), "--expected-alembic-revision", "synthetic_revision", "--expected-secret-fingerprint", "sha256:synthetic-ci")
-            docker("exec", "-i", target, "psql", "-U", "restore", "-d", "restore", input_text=dump)
+            docker("cp", str(bundle / "database.dump"), f"{target}:/tmp/database.dump")
+            docker("exec", target, "pg_restore", "-U", "restore", "-d", "restore", "--clean", "--if-exists", "/tmp/database.dump")
             run(sys.executable, str(verifier), "restore-media", str(bundle), "--target", str(restored), "--expected-alembic-revision", "synthetic_revision", "--expected-secret-fingerprint", "sha256:synthetic-ci")
             verify_restored(target, restored)
             verify_access_boundaries(target, restored)

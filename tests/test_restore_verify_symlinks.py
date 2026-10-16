@@ -10,6 +10,11 @@ import pytest
 SCRIPT = Path(__file__).parents[1] / "scripts" / "restore_verify.py"
 
 
+@pytest.fixture(autouse=True)
+def _accept_synthetic_dump(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PG_RESTORE", "/usr/bin/true")
+
+
 @pytest.mark.parametrize(
     "symlink_kind",
     ["bundle", "manifest", "database", "media-root", "nested-directory", "media-file"],
