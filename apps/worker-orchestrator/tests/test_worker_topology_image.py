@@ -147,6 +147,8 @@ def _worker(name: str, command: list[str] | None = None) -> None:
 
 def _capture_worker(name: str) -> None:
     logs = _docker("logs", name, check=False)
+    if logs.returncode != 0:
+        return
     (EVIDENCE / f"{name}.worker.log").write_text(
         logs.stdout + logs.stderr,
         encoding="utf-8",
