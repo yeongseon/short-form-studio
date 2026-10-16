@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
 import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
@@ -169,6 +170,22 @@ def verify_bundle(
         raise RestoreError("database dump is missing")
     if safe_database_dump.stat().st_size == 0:
         raise RestoreError("database dump is empty")
+    database_entries = [
+        relative for relative in manifest.files if relative == manifest.database_dump
+    ]
+    if len(database_entries) != 1:
+        raise RestoreError("database dump must have exactly one checksum")
+    pg_restore = os.environ.get("PG_RESTORE") or shutil.which("pg_restore")
+    if pg_restore is None:
+        raise RestoreError("pg_restore is required to validate database dump")
+    archive = subprocess.run(
+        [pg_restore, "--list", str(safe_database_dump)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if archive.returncode != 0:
+        raise RestoreError("database dump is not a valid custom-format archive")
     for relative, expected_checksum in manifest.files.items():
         path = bundle / relative
         try:
