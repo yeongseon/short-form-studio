@@ -9,13 +9,18 @@ from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import anyio
 import asyncpg
 import pytest
 import pytest_asyncio
 from creator_domain.models import MediaAsset, MediaOrigin, MediaType
 from creator_service import db
 from creator_service.media_asset_service import MediaAssetService
-from creator_service.media_upload_reconciliation import UploadIntent, UploadIntentState
+from creator_service.media_upload_reconciliation import (
+    MediaAssetPersistenceFailed,
+    UploadIntent,
+    UploadIntentState,
+)
 from creator_service.object_storage import LocalStorageBackend
 from PIL import Image
 
@@ -218,7 +223,8 @@ async def test_postgres_upload_intent_is_durable_and_workspace_owned(media_datab
     claimed = await storage.claim_expired_upload_intents(
         now=now, lease_expires_at=now + timedelta(minutes=5), limit=10,
     )
-    await storage.complete_upload_intent(intent.id)
+    await storage.mark_upload_intent_uploaded(intent.id)
+    await storage.complete_upload_intent(intent.id, owner_id=intent.owner_id)
 
     # Then the exact owned record was claimed once and remains durable.
     assert [candidate.id for candidate in claimed] == [intent.id]
@@ -230,3 +236,31 @@ async def test_postgres_upload_intent_is_durable_and_workspace_owned(media_datab
         "state": "completed", "workspace_id": 9101,
         "storage_key": "workspaces/9101/assets/pending.png",
     }
+
+
+@pytest.mark.asyncio
+async def test_postgres_claim_is_skip_locked_and_fences_uploader_cas(media_database: None) -> None:
+    # Given one expired upload intent and two concurrent reconciliation workers.
+    storage = MediaAssetService()._asset_storage
+    now = datetime.now(timezone.utc)
+    intent = await storage.create_upload_intent(UploadIntent(
+        id=0, owner_id=uuid.uuid4().hex, workspace_id=9101,
+        storage_key="workspaces/9101/assets/racing.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now,
+    ))
+    claims: list[list[UploadIntent]] = []
+
+    async def claim() -> None:
+        claims.append(await storage.claim_expired_upload_intents(
+            now=now, lease_expires_at=now + timedelta(minutes=5), limit=1,
+        ))
+
+    # When both workers claim via SKIP LOCKED and the uploader attempts its CAS.
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(claim)
+        tasks.start_soon(claim)
+
+    # Then exactly one worker owns a claim and the stale uploader is fenced out.
+    assert sorted(len(claimed) for claimed in claims) == [0, 1]
+    with pytest.raises(MediaAssetPersistenceFailed):
+        await storage.mark_upload_intent_uploaded(intent.id)
