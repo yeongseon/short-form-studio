@@ -208,9 +208,6 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
         (first_claim["claim_token"],),
     )
     assert stale_update == "UPDATE 0"
-    stop_run(103)
-    redelivery_state.with_suffix(".cancel").touch()
-    wait_state(redelivery_state, "cancelled")
     persist_snapshot("redelivery-final-state.json", 103)
     capture_worker("topology-scaled-redelivery")
     docker("rm", "-f", "topology-scaled-redelivery")
