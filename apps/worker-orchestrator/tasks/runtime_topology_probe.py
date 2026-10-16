@@ -11,11 +11,27 @@ from urllib.request import urlopen
 
 from celery import Task
 from celery_app import celery_app
+from celery.worker.request import Request
 from creator_domain.models.stage import RunStage
 from creator_service.run_service import run_service
+from tasks.hard_timeout import finalize_hard_timeout
 from tasks.task_runner import TaskContext, TaskResult, TaskRunnerConfig, run_task
 
 type ProbeMode = Literal["complete", "cooperative", "ffmpeg_hang", "wait"]
+
+
+class _TopologyRequest(Request):
+    def on_timeout(self, soft: bool, timeout: float) -> None:
+        super().on_timeout(soft, timeout)
+        if soft or not isinstance(self.id, str) or not self.args:
+            return
+        run_id = self.args[0]
+        if isinstance(run_id, int):
+            finalize_hard_timeout(self.id, run_id, timeout)
+
+
+class _TopologyTask(Task):
+    Request = _TopologyRequest
 
 
 def _publish(path: str, status: str, **fields: str | int | float | bool) -> None:
@@ -25,7 +41,7 @@ def _publish(path: str, status: str, **fields: str | int | float | bool) -> None
     temporary.replace(destination)
 
 
-@celery_app.task(bind=True, name="runtime_topology.probe", acks_late=True)
+@celery_app.task(bind=True, base=_TopologyTask, name="runtime_topology.probe", acks_late=True)
 def runtime_topology_probe(
     self: Task,
     run_id: int,
