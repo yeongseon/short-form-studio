@@ -235,3 +235,17 @@ def test_default_worker_starts_against_redis_using_shipped_command(tmp_path: Pat
     finally:
         redis.terminate()
         redis.wait(timeout=5)
+
+
+def test_synthetic_terminal_state_is_published_after_cleanup() -> None:
+    # Given the legacy synthetic helper retained for fast local signal checks.
+    source = (WORKER / "tests" / "worker_topology_tasks.py").read_text(encoding="utf-8")
+
+    # When cancellation and timeout terminal publication are compared with cleanup.
+    cancelled = source.index("status=terminal_status")
+    timed_out = source.index('status="failed_timeout"')
+    cleanup = source.index("_stop_child(child)")
+
+    # Then cleanup happens before either terminal state can be observed.
+    assert cleanup < cancelled
+    assert cleanup < timed_out

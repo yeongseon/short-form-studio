@@ -118,6 +118,8 @@ celery_app = Celery(
         "tasks.reconcile_stale_dispatches",
         "tasks.retry_failed_artifact_deletions",
         "tasks.sweep_expired_artifacts",
+        "tasks.runtime_topology_probe",
+        "tasks.revoked_quota",
     ],
 )
 celery_app.conf.task_default_queue = "creator"
@@ -221,9 +223,6 @@ def setup_worker_process_telemetry(**kwargs: object) -> None:
 
 
 
-_sanitize_for_dlq = sanitize_error_json
-
-
 def _record_failed_task_to_dlq(
     task_id: str | None,
     task_name: str,
@@ -232,7 +231,7 @@ def _record_failed_task_to_dlq(
     exception: BaseException,
 ) -> None:
     failure = build_run_failure_summary(exception)
-    payload = _sanitize_for_dlq({
+    payload = sanitize_error_json({
         "task_id": task_id,
         "task_name": task_name,
         "exception": failure["message"],
