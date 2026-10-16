@@ -29,7 +29,7 @@ def test_create_and_verify_bundle_when_contents_are_complete(tmp_path: Path) -> 
         "--expected-alembic-revision",
         "revision-1",
         "--expected-secret-fingerprint",
-        "sha256:fingerprint-v1",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )
 
     # Then
@@ -86,7 +86,7 @@ def test_verify_fails_without_touching_original_when_bundle_is_corrupt(
         "--expected-alembic-revision",
         "revision-1",
         "--expected-secret-fingerprint",
-        "sha256:fingerprint-v1",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )
 
     # Then
@@ -99,7 +99,7 @@ def test_verify_fails_without_touching_original_when_bundle_is_corrupt(
     ("flag", "value", "message"),
     [
         ("--expected-alembic-revision", "revision-2", "alembic revision mismatch"),
-        ("--expected-secret-fingerprint", "sha256:fingerprint-v2", "secret fingerprint mismatch"),
+        ("--expected-secret-fingerprint", "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "secret fingerprint mismatch"),
     ],
 )
 def test_verify_fails_when_restore_environment_is_incompatible(
@@ -114,7 +114,7 @@ def test_verify_fails_when_restore_environment_is_incompatible(
         "--expected-alembic-revision",
         "revision-1",
         "--expected-secret-fingerprint",
-        "sha256:fingerprint-v1",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     ]
     args[args.index(flag) + 1] = value
 
@@ -146,7 +146,7 @@ def test_restore_refuses_non_empty_target(tmp_path: Path) -> None:
         "--expected-alembic-revision",
         "revision-1",
         "--expected-secret-fingerprint",
-        "sha256:fingerprint-v1",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )
 
     # Then
@@ -177,7 +177,7 @@ def test_verify_rejects_unsafe_manifest_roots(
         "--expected-alembic-revision",
         "revision-1",
         "--expected-secret-fingerprint",
-        "sha256:fingerprint-v1",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )
 
     # Then
@@ -201,7 +201,7 @@ def test_restore_rejects_unlisted_media_without_touching_target(tmp_path: Path) 
         "--expected-alembic-revision",
         "revision-1",
         "--expected-secret-fingerprint",
-        "sha256:fingerprint-v1",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )
 
     # Then
@@ -226,7 +226,7 @@ def test_verify_rejects_unsupported_manifest_version(tmp_path: Path) -> None:
         "--expected-alembic-revision",
         "revision-1",
         "--expected-secret-fingerprint",
-        "sha256:fingerprint-v1",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )
 
     # Then
@@ -250,7 +250,7 @@ def test_verify_requires_exact_database_dump_checksum(tmp_path: Path) -> None:
         "--expected-alembic-revision",
         "revision-1",
         "--expected-secret-fingerprint",
-        "sha256:fingerprint-v1",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )
 
     # Then
@@ -291,7 +291,7 @@ def test_restore_refuses_symlink_target(tmp_path: Path) -> None:
         "--expected-alembic-revision",
         "revision-1",
         "--expected-secret-fingerprint",
-        "sha256:fingerprint-v1",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     )
 
     # Then
@@ -328,7 +328,7 @@ def _run(command: str, bundle: Path, *args: str) -> subprocess.CompletedProcess[
                 "--alembic-revision",
                 "revision-1",
                 "--secret-fingerprint",
-                "sha256:fingerprint-v1",
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "--timestamp",
                 "2026-10-16T00:00:00Z",
             ]

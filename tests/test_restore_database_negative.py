@@ -31,7 +31,7 @@ def test_checksummed_corrupt_dump_cannot_restore_to_fresh_database(
         "release_sha": "abc123",
         "image_digests": ["postgres@sha256:placeholder"],
         "alembic_revision": "revision-1",
-        "secret_fingerprint": "sha256:fingerprint-v1",
+        "secret_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "database_dump": "database.dump",
         "media_root": "media",
         "files": {"database.dump": digest},
@@ -58,7 +58,7 @@ def test_checksummed_corrupt_dump_cannot_restore_to_fresh_database(
 
         # When
         validation = subprocess.run(
-            [sys.executable, str(SCRIPT), "verify", str(bundle), "--expected-alembic-revision", "revision-1", "--expected-secret-fingerprint", "sha256:fingerprint-v1"],
+            [sys.executable, str(SCRIPT), "verify", str(bundle), "--expected-alembic-revision", "revision-1", "--expected-secret-fingerprint", "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
             capture_output=True,
             text=True,
             check=False,
