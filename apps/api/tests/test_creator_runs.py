@@ -2363,6 +2363,14 @@ def stub_generate_audio_services(
         "shorts_api.routes.creator_runs_scene_assets.dispatch_generate_audio", dispatcher
     )
 
+    async def _get_active_draft(_run_id: int):
+        return SimpleNamespace(structured_script=[])
+
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_scene_assets.script_service.get_active_draft",
+        _get_active_draft,
+    )
+
     async def _get_project(_project_id: int, workspace_id: int | None = None):
         _ = workspace_id
 
