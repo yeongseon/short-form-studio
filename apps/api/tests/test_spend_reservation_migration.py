@@ -36,3 +36,10 @@ def test_spend_reservation_migration_emits_expected_postgresql_columns() -> None
     assert "reserved_estimated_cost_usd" in ddl
     assert "estimated_cost_usd" in ddl
     assert "billable_unknown" in ddl
+
+
+def test_provider_attempt_revision_follows_spend_reservations() -> None:
+    script = ScriptDirectory(str(MIGRATIONS)).get_revision("039")
+
+    assert script is not None
+    assert script.down_revision == "038"

@@ -3,7 +3,9 @@ import pytest
 from decimal import Decimal
 from datetime import datetime, timezone
 
-from creator_service.usage_service import InMemoryUsageStorage, UsageService
+from creator_service.usage_service import (
+    InMemoryUsageStorage, ReservationQuote, UsageService,
+)
 
 
 @pytest.mark.asyncio
@@ -204,3 +206,62 @@ async def test_stale_owner_is_readmitted_before_provider_execution() -> None:
 
     # Then it is rejected before another provider call can start.
     assert not admitted
+
+
+@pytest.mark.asyncio
+async def test_provider_attempts_atomically_consume_only_approved_capacity() -> None:
+    # Given a quote approving two ten-cent provider attempts.
+    service = UsageService(InMemoryUsageStorage())
+    await service.set_quota(1, monthly_cost_usd=1.0)
+    assert await service.reserve_owned(
+        1, "image_gen", "task", estimated_cost_usd=Decimal("0.20")
+    )
+
+    # When attempts are authorized, duplicate delivery is idempotent and excess exposure is denied.
+    assert await service.authorize_owned_attempt("task", "task:0", Decimal("0.10"))
+    assert await service.authorize_owned_attempt("task", "task:0", Decimal("0.10"))
+    assert await service.authorize_owned_attempt("task", "task:1", Decimal("0.10"))
+    assert not await service.authorize_owned_attempt("task", "task:2", Decimal("0.10"))
+
+
+@pytest.mark.asyncio
+async def test_accounted_attempt_releases_only_unstarted_quote_capacity() -> None:
+    # Given one started attempt inside a larger conservative task quote.
+    service = UsageService(InMemoryUsageStorage())
+    await service.set_quota(1, monthly_cost_usd=Decimal("1"))
+    assert await service.reserve_owned(
+        1, "image_gen", "task", estimated_cost_usd=Decimal("1")
+    )
+    assert await service.authorize_owned_attempt("task", "task:scene:0", Decimal("0.40"))
+    await service.record_usage(
+        1, 1, "fixture", "fixture", "image_gen", image_count=1,
+        estimated_cost_usd=Decimal("0.40"), idempotency_key="task:scene:0",
+        reservation_owner_id="task",
+    )
+
+    # When the task settles, then only its accounted event remains charged.
+    assert await service.settle_owned("task")
+    assert await service.reserve_owned(
+        1, "image_gen", "replacement", estimated_cost_usd=Decimal("0.60")
+    )
+
+
+def test_scene_quote_bounds_fanout_internal_attempts_and_retries() -> None:
+    # Given two scenes, three internal attempts, and five Celery retries.
+    quote = ReservationQuote.bounded(
+        unit_cost_usd=Decimal("0.04"), units=2, internal_attempts=3, deliveries=6,
+    )
+
+    # When the quote is calculated, then every possible provider attempt is covered.
+    assert quote.maximum_cost_usd == Decimal("1.440000")
+
+
+@pytest.mark.parametrize("units", [None, 0, -1])
+def test_quote_rejects_unbounded_or_empty_work(units: int | None) -> None:
+    # Given work whose maximum units cannot be positively bounded.
+    # When a quote is requested, then admission rejects the task before dispatch.
+    with pytest.raises(ValueError, match="units"):
+        ReservationQuote.bounded(
+            unit_cost_usd=Decimal("0.04"), units=units,
+            internal_attempts=1, deliveries=1,
+        )

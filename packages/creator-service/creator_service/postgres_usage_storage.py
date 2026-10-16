@@ -287,8 +287,11 @@ class PostgresUsageStorage:
                 if global_monthly_cost_usd is not None:
                     await connection.execute("SELECT pg_advisory_xact_lock($1)", 860)
                 await connection.execute("SELECT pg_advisory_xact_lock($1)", workspace_id)
+                month_start = await connection.fetchval(
+                    "SELECT date_trunc('month', NOW() AT TIME ZONE 'UTC')::timestamptz"
+                )
                 existing = await connection.fetchrow(
-                    """SELECT workspace_id, operation_type, status
+                    """SELECT workspace_id, operation_type, status, period_start
                        FROM workspace_quota_reservation_owners
                        WHERE owner_id = $1""",
                     owner_id,
@@ -297,11 +300,9 @@ class PostgresUsageStorage:
                     return (
                         existing["workspace_id"] == workspace_id
                         and existing["operation_type"] == operation_type
+                        and existing["period_start"] == month_start
                         and existing["status"] in {"reserved", "consumed"}
                     )
-                month_start = await connection.fetchval(
-                    "SELECT date_trunc('month', NOW() AT TIME ZONE 'UTC')::timestamptz"
-                )
                 settled_workspace = await connection.fetchval(
                     """SELECT COALESCE(SUM(estimated_cost_usd), 0) FROM usage_events
                        WHERE workspace_id = $1 AND created_at >= $2""",
@@ -628,6 +629,46 @@ class PostgresUsageStorage:
                     owner_id, row.get("estimated_cost_usd"),
                 )
                 return dict(saved)
+
+    async def authorize_owned_attempt(
+        self, owner_id: str, attempt_id: str, estimated_cost_usd: Decimal,
+    ) -> bool:
+        pool = await get_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                owner = await connection.fetchrow(
+                    "SELECT workspace_id FROM workspace_quota_reservation_owners WHERE owner_id = $1",
+                    owner_id,
+                )
+                if owner is None:
+                    return False
+                await connection.execute(
+                    "SELECT pg_advisory_xact_lock($1)", int(owner["workspace_id"])
+                )
+                existing = await connection.fetchval(
+                    """SELECT estimated_cost_usd
+                       FROM workspace_quota_reservation_attempts
+                       WHERE owner_id = $1 AND attempt_id = $2""",
+                    owner_id, attempt_id,
+                )
+                if existing is not None:
+                    return existing == estimated_cost_usd
+                inserted = await connection.fetchrow(
+                    """INSERT INTO workspace_quota_reservation_attempts
+                       (owner_id, attempt_id, estimated_cost_usd)
+                       SELECT owner_id, $2, $3
+                       FROM workspace_quota_reservation_owners owner
+                       WHERE owner.owner_id = $1
+                         AND owner.status IN ('reserved', 'consumed')
+                         AND (SELECT COALESCE(SUM(attempt.estimated_cost_usd), 0)
+                              FROM workspace_quota_reservation_attempts attempt
+                              WHERE attempt.owner_id = owner.owner_id) + $3
+                             <= owner.estimated_cost_usd
+                       ON CONFLICT (owner_id, attempt_id) DO NOTHING
+                       RETURNING estimated_cost_usd""",
+                    owner_id, attempt_id, estimated_cost_usd,
+                )
+                return inserted is not None
 
     async def release_reservation(
         self, workspace_id: int, operation_type: str, units: int = 1
