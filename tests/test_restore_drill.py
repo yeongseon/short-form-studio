@@ -20,6 +20,7 @@ def test_disposable_restore_drill() -> None:
     result = subprocess.run(
         [sys.executable, str(SCRIPT)], capture_output=True, text=True, check=False
     )
+    print(result.stdout, end="")
 
     # Then
     assert result.returncode == 0, result.stderr
