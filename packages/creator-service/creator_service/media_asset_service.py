@@ -49,15 +49,18 @@ from .media_upload_validation import (
     _validate_image_upload as _validate_image_upload,
     _validate_video_upload as _validate_video_upload,
 )
+from .storage_policy import StoragePolicy, StorageUsage
 
 
 class MediaAssetService:
     def __init__(
         self, storage_backend: MediaStorageBackend | None = None,
         asset_storage: MediaAssetStorageBackend | None = None,
+        storage_policy: StoragePolicy | None = None,
     ) -> None:
         self._storage_backend = storage_backend
         self._io = BlockingIO(4)
+        self._storage_policy = storage_policy or StoragePolicy.from_env()
         if asset_storage is not None:
             self._asset_storage = asset_storage
         elif os.getenv("DATABASE_URL"):
@@ -93,6 +96,7 @@ class MediaAssetService:
         )
 
     async def create_file_asset(self, source: BinaryIO, upload: FileUpload) -> MediaAsset:
+        self._storage_policy.ensure_temp_capacity(upload.max_bytes)
         async with prepare_upload(source, upload, self._io) as prepared:
             return await self._store_asset(
                 workspace_id=upload.workspace_id, safe_name=prepared.safe_name,
@@ -168,11 +172,14 @@ class MediaAssetService:
         }
         annotations = {key: value for key, value in (metadata or {}).items() if key not in owned}
         now = datetime.now(timezone.utc)
+        incoming_bytes = data.stat().st_size if isinstance(data, Path) else len(data)
+        self._storage_policy.ensure_temp_capacity(incoming_bytes)
         intent = await self._asset_storage.create_upload_intent(UploadIntent(
             id=0, owner_id=uuid.uuid4().hex, workspace_id=workspace_id,
             storage_key=storage_key, state=UploadIntentState.PENDING,
             lease_expires_at=now + DEFAULT_UPLOAD_LEASE, created_at=now,
-        ))
+            reserved_bytes=incoming_bytes,
+        ), policy=self._storage_policy)
         await anyio.lowlevel.checkpoint()
         # Once upload starts, retain ownership through the async metadata save.
         with anyio.CancelScope(shield=True):
@@ -225,6 +232,11 @@ class MediaAssetService:
     async def get_asset(self, asset_id: int, workspace_id: int) -> MediaAsset | None:
         row = await self._asset_storage.get_asset(asset_id, workspace_id)
         return MediaAsset.model_validate(row) if row is not None else None
+
+    async def get_storage_usage(self, workspace_id: int) -> StorageUsage:
+        return await self._asset_storage.get_storage_usage(
+            workspace_id, policy=self._storage_policy,
+        )
 
     async def list_assets(
         self, *, workspace_id: int, media_type: MediaType | None = None,
