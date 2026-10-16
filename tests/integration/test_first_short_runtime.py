@@ -88,6 +88,16 @@ def await_api(client: httpx.Client, process: subprocess.Popen[bytes]) -> None:
     pytest.fail("API did not become healthy within 30 seconds")
 
 
+def await_worker(process: subprocess.Popen[bytes], log_path: Path) -> None:
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        assert process.poll() is None, "Worker exited during startup; inspect worker.log"
+        if "ready." in log_path.read_text():
+            return
+        time.sleep(0.1)
+    pytest.fail("Worker did not become ready within 30 seconds")
+
+
 def wait_for_render(client: httpx.Client, run_id: int) -> None:
     deadline = time.monotonic() + 90
     while time.monotonic() < deadline:
@@ -201,6 +211,7 @@ def test_authenticated_demo_survives_restart_and_renders_downloadable_mp4(tmp_pa
                     cwd=ROOT / "apps/worker-orchestrator", env=env, stdout=worker_log, stderr=subprocess.STDOUT,
                 )
                 processes.append(worker)
+                await_worker(worker, tmp_path / "worker.log")
                 approve = client.post(
                     f"/api/creator/runs/{run_id}/approve-timeline-render",
                     json={"expected_revision": timeline_data["revision"]},
