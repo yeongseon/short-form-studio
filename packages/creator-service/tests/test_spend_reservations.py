@@ -43,6 +43,22 @@ async def test_redelivery_does_not_double_reserve_spend() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cancelled_owner_is_not_readmitted_by_redelivery() -> None:
+    # Given an owner whose pre-provider reservation was cancelled.
+    service = UsageService(InMemoryUsageStorage())
+    await service.set_quota(1, monthly_cost_usd=1.0)
+    assert await service.reserve_owned(1, "llm", "attempt-a", estimated_cost_usd=1.0)
+    assert await service.cancel_owned("attempt-a")
+
+    # When the cancelled delivery is redelivered.
+    admitted = await service.reserve_owned(1, "llm", "attempt-a", estimated_cost_usd=1.0)
+
+    # Then its terminal owner state rejects it while a new owner can use the capacity.
+    assert not admitted
+    assert await service.reserve_owned(1, "llm", "attempt-b", estimated_cost_usd=1.0)
+
+
+@pytest.mark.asyncio
 async def test_pre_execution_cancel_releases_spend_but_unknown_keeps_it() -> None:
     # Given two independent workspaces with one-dollar budgets.
     service = UsageService(InMemoryUsageStorage())
@@ -78,6 +94,32 @@ async def test_success_settlement_releases_unused_approved_spend_once() -> None:
     # Then only settled usage remains and unused approval can be reused.
     assert await service.reserve_owned(1, "image_gen", "next", estimated_cost_usd=0.6)
     assert not await service.reserve_owned(1, "image_gen", "overflow", estimated_cost_usd=0.01)
+
+
+@pytest.mark.asyncio
+async def test_duplicate_event_does_not_settle_owner_twice() -> None:
+    # Given a one-dollar approval and a 40-cent provider event.
+    service = UsageService(InMemoryUsageStorage())
+    await service.set_quota(1, monthly_cost_usd=1.0)
+    assert await service.reserve_owned(1, "image_gen", "fanout", estimated_cost_usd=1.0)
+    event = {
+        "workspace_id": 1,
+        "run_id": 1,
+        "provider": "fixture",
+        "model_key": "fixture",
+        "operation_type": "image_gen",
+        "image_count": 1,
+        "estimated_cost_usd": 0.4,
+        "idempotency_key": "fanout:scene-1",
+        "reservation_owner_id": "fanout",
+    }
+
+    # When the same event is delivered twice.
+    await service.record_usage(**event)
+    await service.record_usage(**event)
+
+    # Then only 40 cents is accounted and the remaining 60-cent exposure stays reserved.
+    assert not await service.reserve_owned(1, "image_gen", "premature", estimated_cost_usd=0.4)
 
 
 @pytest.mark.asyncio

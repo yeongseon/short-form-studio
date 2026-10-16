@@ -222,7 +222,11 @@ class InMemoryUsageStorage:
         async with self._spend_lock:
             existing = self._owned.get(owner_id)
             if existing is not None:
-                return existing[0] == workspace_id and existing[2] == operation_type
+                return (
+                    existing[0] == workspace_id
+                    and existing[2] == operation_type
+                    and existing[3] in {"reserved", "consumed"}
+                )
             now = datetime.now(timezone.utc)
             period_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
             settled_workspace = sum(
@@ -305,7 +309,15 @@ class InMemoryUsageStorage:
             raise ValueError("Usage event owner mismatch")
         if status == "cancelled":
             raise ValueError("Cancelled reservation owner")
-        async with self._lock_for_workspace(workspace_id):
+        async with self._spend_lock, self._lock_for_workspace(workspace_id):
+            idempotency_key = row.get("idempotency_key")
+            existing_event = (
+                self._events_by_idempotency_key.get(idempotency_key)
+                if isinstance(idempotency_key, str)
+                else None
+            )
+            if existing_event is not None:
+                return dict(existing_event)
             saved = await self.record_event(row)
             if status == "reserved":
                 self._finish_owned(owner_id, "consumed")
