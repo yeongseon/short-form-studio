@@ -68,14 +68,14 @@ async def test_retry_stage_and_pending_owner_are_published_atomically(
     if quota_pool is None:
         run_storage = InMemoryRunStorage()
 
-        class BarrierStorage(InMemoryTaskTrackingStorage):
+        class MemoryBarrierStorage(InMemoryTaskTrackingStorage):
             async def create_task(self, row):
                 if row.get("celery_task_id") == "attempt-b":
                     inserted.set()
                     await resume.wait()
                 return await super().create_task(row)
 
-        storage = BarrierStorage()
+        storage = MemoryBarrierStorage()
         runs = RunService(run_storage)
         run = await runs.create_run(
             1, None, "default", current_stage="VISUAL_ASSET_REVIEW"
@@ -84,13 +84,13 @@ async def test_retry_stage_and_pending_owner_are_published_atomically(
     else:
         run_storage = PostgresRunStorage()
 
-        class BarrierStorage(PostgresTaskTrackingStorage):
+        class PostgresBarrierStorage(PostgresTaskTrackingStorage):
             async def _insert_pending_task(self, connection, row):
                 inserted.set()
                 await resume.wait()
                 return await super()._insert_pending_task(connection, row)
 
-        storage = BarrierStorage()
+        storage = PostgresBarrierStorage()
         run_id = await _run_id(quota_pool)
         await quota_pool.execute(
             "UPDATE creator_runs SET current_stage='VISUAL_ASSET_REVIEW' WHERE id=$1",
