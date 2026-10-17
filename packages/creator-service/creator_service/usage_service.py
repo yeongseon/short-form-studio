@@ -490,12 +490,14 @@ class InMemoryUsageStorage:
             )
             if existing_event is not None:
                 return dict(existing_event)
-            saved = await self.record_event(row)
             attempt_id = row.get("reservation_attempt_id")
             if isinstance(attempt_id, str):
                 attempt_key = (owner_id, attempt_id)
                 if attempt_key not in self._owned_attempts:
                     raise ValueError("Usage event references unknown provider attempt")
+            saved = await self.record_event(row)
+            if isinstance(attempt_id, str):
+                attempt_key = (owner_id, attempt_id)
                 self._accounted_attempts.add(attempt_key)
             remaining_units = self._owned_units.get(owner_id, 1)
             if remaining_units > 0:
