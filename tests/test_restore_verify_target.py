@@ -102,6 +102,53 @@ def test_restore_parent_swap_does_not_redirect_output(
     assert (moved_parent / "restore/workspace-a/image.png").read_bytes() == b"synthetic image"
 
 
+def test_restore_rejects_source_file_swapped_after_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given
+    import importlib.util
+
+    monkeypatch.syspath_prepend(str(SCRIPT.parent))
+    specification = importlib.util.spec_from_file_location("restore_verify", SCRIPT)
+    assert specification is not None
+    assert specification.loader is not None
+    module = importlib.util.module_from_spec(specification)
+    sys.modules[specification.name] = module
+    specification.loader.exec_module(module)
+    bundle = _bundle(tmp_path)
+    source = bundle / "media/workspace-a/image.png"
+    outside = tmp_path / "outside.txt"
+    outside.write_bytes(b"external secret")
+    target = tmp_path / "restore"
+    original_copy = module.copy_tree_to_new_target
+
+    def swap_source(
+        source_root: Path, target_root: Path, expected_checksums: dict[str, str]
+    ) -> None:
+        source.unlink()
+        source.symlink_to(outside)
+        original_copy(source_root, target_root, expected_checksums)
+
+    monkeypatch.setattr(module, "copy_tree_to_new_target", swap_source)
+    arguments = module.parser().parse_args(
+        [
+            "restore-media",
+            str(bundle),
+            "--target",
+            str(target),
+            "--expected-alembic-revision",
+            "revision-1",
+            "--expected-secret-fingerprint",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ]
+    )
+
+    # When / Then
+    with pytest.raises(module.RestoreError, match="source changed during restore"):
+        module.restore_media(arguments)
+    assert not (target / "workspace-a/image.png").exists()
+
+
 def _bundle(tmp_path: Path) -> Path:
     bundle = tmp_path / "bundle"
     media = bundle / "media/workspace-a"
