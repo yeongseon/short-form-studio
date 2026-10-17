@@ -243,9 +243,23 @@ def create_manifest(args: argparse.Namespace) -> None:
     )
     payload = asdict(manifest)
     payload["image_digests"] = list(manifest.image_digests)
-    (bundle / "manifest.json").write_text(
-        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    manifest_path = bundle / "manifest.json"
+    if manifest_path.is_symlink():
+        raise RestoreError("manifest must not be a symlink")
+    temporary_path = bundle / f".manifest.{os.getpid()}.tmp"
+    try:
+        descriptor = os.open(
+            temporary_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+            0o600,
+        )
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, manifest_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def verify(args: argparse.Namespace) -> None:

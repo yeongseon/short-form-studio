@@ -273,6 +273,25 @@ def test_verify_rejects_symlinked_media(tmp_path: Path) -> None:
     assert "media tree contains symlink" in result.stderr
 
 
+def test_create_rejects_symlinked_manifest_without_overwriting_target(
+    tmp_path: Path,
+) -> None:
+    # Given
+    bundle = _bundle(tmp_path)
+    outside = tmp_path / "outside.json"
+    outside.write_text("preserve")
+    (bundle / "manifest.json").symlink_to(outside)
+
+    # When
+    result = _run("create", bundle)
+
+    # Then
+    assert result.returncode != 0
+    assert "manifest must not be a symlink" in result.stderr
+    assert outside.read_text() == "preserve"
+    assert (bundle / "manifest.json").is_symlink()
+
+
 def test_restore_refuses_symlink_target(tmp_path: Path) -> None:
     # Given
     bundle = _bundle(tmp_path)
