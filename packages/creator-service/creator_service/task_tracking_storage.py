@@ -8,6 +8,11 @@ if TYPE_CHECKING:
 
 
 class TaskTrackingStorageBackend(Protocol):
+    async def transition_run_and_create_pending(
+        self, run_storage: RunStorageBackend, run_id: int, updates: dict[str, Any],
+        expected_stages: frozenset[str], task_row: dict[str, Any],
+        workspace_id: int | None, rejected_statuses: frozenset[str],
+    ) -> tuple[bool, dict[str, Any] | None]: ...
     async def create_task(self, row: dict[str, Any]) -> dict[str, Any] | None: ...
     async def update_task_status(
         self, task_id: int, status: str, **kwargs: Any

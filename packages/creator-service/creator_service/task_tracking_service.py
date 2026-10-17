@@ -37,6 +37,28 @@ class TaskTrackingService:
             )
         return RunTask.from_row(row)
 
+    async def transition_run_and_record_pending(
+        self, run_storage: RunStorageBackend, run_id: int, updates: dict[str, Any],
+        expected_stages: frozenset[str], task_type: str, celery_task_id: str,
+        *, workspace_id: int | None = None,
+        rejected_statuses: frozenset[str] = frozenset(),
+    ) -> tuple[bool, dict[str, Any] | None]:
+        return await self.storage.transition_run_and_create_pending(
+            run_storage,
+            run_id,
+            updates,
+            expected_stages,
+            {
+                "run_id": run_id,
+                "task_type": task_type,
+                "celery_task_id": celery_task_id,
+                "status": "pending",
+                "attempt": 1,
+            },
+            workspace_id,
+            rejected_statuses,
+        )
+
     async def promote_pending_to_queued(self, celery_task_id: str) -> RunTask | None:
         """Promote pending to queued without overwriting a worker claim."""
         row = await self.storage.promote_pending_to_queued(celery_task_id)

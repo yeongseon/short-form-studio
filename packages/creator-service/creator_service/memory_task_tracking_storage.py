@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+import anyio
+
 if TYPE_CHECKING:
     from .run_service import InMemoryRunStorage
 
@@ -12,6 +14,30 @@ class InMemoryTaskTrackingStorage:
         self._rows: dict[int, dict[str, Any]] = {}
         self._rows_by_celery_task_id: dict[str, int] = {}
         self._next_id = 1
+        self._ownership_lock = anyio.Lock()
+
+    async def transition_run_and_create_pending(
+        self, run_storage: InMemoryRunStorage, run_id: int, updates: dict[str, Any],
+        expected_stages: frozenset[str], task_row: dict[str, Any],
+        workspace_id: int | None, rejected_statuses: frozenset[str],
+    ) -> tuple[bool, dict[str, Any] | None]:
+        async with self._ownership_lock:
+            previous = await run_storage.get_run(run_id, workspace_id)
+            ok, row = await run_storage.conditional_update_run(
+                run_id, updates, expected_stages, workspace_id, rejected_statuses
+            )
+            if not ok:
+                return False, row
+            committed = False
+            try:
+                pending = await self.create_task(task_row)
+                if pending is None:
+                    raise ValueError("Pending task ownership already exists")
+                committed = True
+            finally:
+                if not committed and previous is not None:
+                    run_storage._rows[run_id] = previous
+            return True, row
 
     async def create_task(self, row: dict[str, Any]) -> dict[str, Any] | None:
         celery_task_id = row.get("celery_task_id")
@@ -305,23 +331,24 @@ class InMemoryTaskTrackingStorage:
         run_id: int, eligible_task_types: frozenset[str],
         expected_stages: frozenset[str], rejected_statuses: frozenset[str],
     ) -> tuple[bool, dict[str, Any] | None]:
-        row_id = self._rows_by_celery_task_id.get(celery_task_id)
-        owner = self._rows.get(row_id) if row_id is not None else None
-        if owner is None or owner.get("run_id") != run_id or owner.get("task_type") not in eligible_task_types:
-            return False, await run_storage.get_run(run_id)
-        has_newer_owner = any(
-            row.get("run_id") == run_id
-            and row.get("task_type") == owner.get("task_type")
-            and int(row.get("id", 0)) > int(owner.get("id", 0))
-            and row.get("status") in {"pending", "queued", "running", "success"}
-            for row in self._rows.values()
-        )
-        if has_newer_owner:
-            return False, await run_storage.get_run(run_id)
-        return await run_storage.conditional_update_run(
-            run_id, {"current_stage": "FAILED", "status": "failed"},
-            expected_stages=expected_stages, rejected_statuses=rejected_statuses,
-        )
+        async with self._ownership_lock:
+            row_id = self._rows_by_celery_task_id.get(celery_task_id)
+            owner = self._rows.get(row_id) if row_id is not None else None
+            if owner is None or owner.get("run_id") != run_id or owner.get("task_type") not in eligible_task_types:
+                return False, await run_storage.get_run(run_id)
+            has_newer_owner = any(
+                row.get("run_id") == run_id
+                and row.get("task_type") == owner.get("task_type")
+                and int(row.get("id", 0)) > int(owner.get("id", 0))
+                and row.get("status") in {"pending", "queued", "running", "success"}
+                for row in self._rows.values()
+            )
+            if has_newer_owner:
+                return False, await run_storage.get_run(run_id)
+            return await run_storage.conditional_update_run(
+                run_id, {"current_stage": "FAILED", "status": "failed"},
+                expected_stages=expected_stages, rejected_statuses=rejected_statuses,
+            )
 
     async def promote_pending_to_queued(self, celery_task_id: str) -> dict[str, Any] | None:
         """Atomically promote a task from 'pending' to 'queued'. Returns None if not pending."""

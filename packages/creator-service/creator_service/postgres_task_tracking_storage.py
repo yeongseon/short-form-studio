@@ -7,9 +7,58 @@ if TYPE_CHECKING:
 
 from . import db
 from .db import fetch_all, fetch_one
+from .run_update_columns import UPDATABLE_RUN_COLUMNS
 
 
 class PostgresTaskTrackingStorage:
+    async def _insert_pending_task(self, connection: Any, row: dict[str, Any]) -> dict[str, Any] | None:
+        saved = await connection.fetchrow(
+            """INSERT INTO creator_run_tasks
+               (run_id, task_type, celery_task_id, status, attempt)
+               VALUES ($1, $2, $3, 'pending', $4)
+               ON CONFLICT (celery_task_id) DO NOTHING RETURNING *""",
+            row.get("run_id"), row.get("task_type"), row.get("celery_task_id"),
+            row.get("attempt", 1),
+        )
+        return dict(saved) if saved is not None else None
+
+    async def transition_run_and_create_pending(
+        self, run_storage: PostgresRunStorage, run_id: int, updates: dict[str, Any],
+        expected_stages: frozenset[str], task_row: dict[str, Any],
+        workspace_id: int | None, rejected_statuses: frozenset[str],
+    ) -> tuple[bool, dict[str, Any] | None]:
+        del run_storage
+        invalid_columns = set(updates) - UPDATABLE_RUN_COLUMNS
+        if invalid_columns:
+            invalid_list = ", ".join(sorted(invalid_columns))
+            raise ValueError(f"Invalid update columns: {invalid_list}")
+        keys = list(updates)
+        assignments = ", ".join(f"{key} = ${index}" for index, key in enumerate(keys, start=3))
+        values = [run_id, list(expected_stages), *[updates[key] for key in keys]]
+        clauses = ["id = $1", "current_stage = ANY($2::text[])"]
+        clauses.append(f"status != ALL(${len(values) + 1}::text[])")
+        values.append(list(rejected_statuses))
+        if workspace_id is not None:
+            clauses.append(f"workspace_id = ${len(values) + 1}")
+            values.append(workspace_id)
+        pool = await db.get_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                updated = await connection.fetchrow(
+                    f"UPDATE creator_runs SET {assignments}, version=version+1 "
+                    f"WHERE {' AND '.join(clauses)} RETURNING *",
+                    *values,
+                )
+                if updated is None:
+                    current = await connection.fetchrow(
+                        "SELECT * FROM creator_runs WHERE id=$1", run_id
+                    )
+                    return False, dict(current) if current is not None else None
+                pending = await self._insert_pending_task(connection, task_row)
+                if pending is None:
+                    raise ValueError("Pending task ownership already exists")
+                return True, dict(updated)
+
     async def create_task(self, row: dict[str, Any]) -> dict[str, Any] | None:
         saved = await fetch_one(
             """
