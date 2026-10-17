@@ -95,6 +95,7 @@ def runtime() -> Iterator[None]:
             "topology-scaled-redelivery",
             "topology-scaled-redelivered",
             "topology-scaled-timeout",
+            "topology-scaled-timeout",
             "topology-scaled-ffmpeg",
             "topology-scaled-replacement",
         ):
@@ -200,6 +201,7 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
     new_run(103)
     new_run(104)
     new_run(107)
+    new_run(108)
     command = SCALED_IMAGE_COMMAND
     worker("topology-scaled-redelivery", command)
     redelivery_state = EVIDENCE / "active-redelivery.json"
@@ -246,6 +248,21 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
     docker("rm", "-f", "topology-scaled-redelivery")
     worker("topology-scaled-redelivered", command)
 
+    broker_loss_state = EVIDENCE / "active-broker-loss.json"
+    send(108, "broker-loss-delivery", "wait", broker_loss_state, queue="image")
+    wait_state(broker_loss_state, "running")
+    docker("stop", "topology-redis")
+    time.sleep(1)
+    assert not redis_available()
+    docker("start", "topology-redis")
+    deadline = time.monotonic() + 10
+    while not redis_available() and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert redis_available()
+    capture_worker("topology-scaled-redelivered")
+    docker("rm", "-f", "topology-scaled-redelivered")
+    worker("topology-scaled-timeout", command)
+
     new_run(106)
     anyio.run(
         sql,
@@ -269,15 +286,7 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
     timeout_pid = int(timeout_resources["child_pid"])
     timeout_file = EVIDENCE / str(timeout_resources["temporary_path"])
     assert timeout_file.is_file()
-    docker("stop", "topology-redis")
-    time.sleep(1)
-    assert not redis_available()
-    docker("start", "topology-redis")
     wait_task("timeout-delivery", "failed")
-    deadline = time.monotonic() + 10
-    while not redis_available() and time.monotonic() < deadline:
-        time.sleep(0.1)
-    assert redis_available()
     timeout_run = anyio.run(row, "SELECT status FROM creator_runs WHERE id=106")
     timeout_quota = anyio.run(
         row,
@@ -288,8 +297,8 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
     assert not timeout_file.exists()
     assert not Path(f"/proc/{timeout_pid}").exists()
     persist_snapshot("timeout-final-state.json", 106)
-    capture_worker("topology-scaled-redelivered")
-    docker("rm", "-f", "topology-scaled-redelivered")
+    capture_worker("topology-scaled-timeout")
+    docker("rm", "-f", "topology-scaled-timeout")
     worker("topology-scaled-ffmpeg", command)
     send(104, "ffmpeg-delivery", "ffmpeg_hang", ffmpeg_state, queue="image")
     state = wait_state(ffmpeg_state, "ffmpeg_running")
