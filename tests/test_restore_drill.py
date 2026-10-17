@@ -29,8 +29,9 @@ def test_disposable_restore_drill() -> None:
     assert "RESTORE DRILL PASSED" in result.stdout
     assert "provider calls: 0" in result.stdout
     assert "production schema: migrated" in result.stdout
-    assert "real API auth: owner=200 workspace-b=404 revoked=401 missing=401" in result.stdout
-    assert "real API downloads: media=200 final-mp4=200 checksum=verified ffprobe=verified" in result.stdout
+    assert "real API auth: owner=200 workspace-b=404 revoked=401 missing=401 timeline=200/404" in result.stdout
+    assert "real API downloads: media=200 final-mp4=200 foreign=404 revoked=401 missing=401 checksum=verified ffprobe=verified" in result.stdout
+    assert "post-restore render: restored Timeline image audio -> final.mp4" in result.stdout
     assert "provider guard: armed and untouched" in result.stdout
     assert "broker recovery: pending=failed queued=queued running=failed" in result.stdout
     evidence_line = next(
