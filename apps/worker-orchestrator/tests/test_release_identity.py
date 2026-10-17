@@ -1,5 +1,7 @@
 from unittest.mock import ANY, Mock
 
+import pytest
+
 import worker_release_identity
 
 
@@ -16,7 +18,7 @@ def test_ready_worker_publishes_its_runtime_identity(monkeypatch) -> None:
     client.set.assert_called_once_with(
         ANY,
         '{"source_sha":"' + "b" * 40 + '","digest":"sha256:' + "c" * 64 + '"}',
-        ex=120,
+        ex=worker_release_identity.IDENTITY_TTL_SECONDS,
     )
     assert client.set.call_args.args[0].startswith("release:worker-identity:")
     from_url.assert_called_once_with(
@@ -26,7 +28,7 @@ def test_ready_worker_publishes_its_runtime_identity(monkeypatch) -> None:
     )
 
 
-def test_ready_worker_keeps_starting_when_identity_store_is_unavailable(monkeypatch) -> None:
+def test_ready_worker_fails_release_readiness_when_identity_store_is_unavailable(monkeypatch) -> None:
     monkeypatch.setenv("SOURCE_SHA", "b" * 40)
     monkeypatch.setenv("WORKER_IMAGE_DIGEST", "sha256:" + "c" * 64)
     monkeypatch.setattr(
@@ -35,7 +37,21 @@ def test_ready_worker_keeps_starting_when_identity_store_is_unavailable(monkeypa
         Mock(side_effect=ConnectionError("unavailable")),
     )
 
-    worker_release_identity.publish_release_identity()
+    with pytest.raises(worker_release_identity.ReleaseIdentityRegistrationError):
+        worker_release_identity.publish_release_identity()
+
+
+def test_worker_heartbeat_refreshes_its_runtime_identity(monkeypatch) -> None:
+    client = Mock()
+    monkeypatch.setenv("SOURCE_SHA", "b" * 40)
+    monkeypatch.setenv("WORKER_IMAGE_DIGEST", "sha256:" + "c" * 64)
+    monkeypatch.setenv("HOSTNAME", "worker-1")
+    monkeypatch.setattr(worker_release_identity.redis.Redis, "from_url", Mock(return_value=client))
+
+    worker_release_identity.refresh_release_identity()
+
+    client.set.assert_called_once_with(ANY, ANY, ex=worker_release_identity.IDENTITY_TTL_SECONDS)
+    assert worker_release_identity.IDENTITY_TTL_SECONDS > worker_release_identity.HEARTBEAT_INTERVAL_SECONDS
 
 
 def test_ready_worker_skips_identity_publication_without_release_metadata(monkeypatch) -> None:
