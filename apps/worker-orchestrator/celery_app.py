@@ -101,6 +101,14 @@ def _apply_resource_limits() -> None:
 redis_url = os.getenv("REDIS_URL", "redis://redis:6379/0")
 dlq_max_size = max(1, int(os.getenv("DLQ_MAX_SIZE", "10000")))
 dlq_fallback_path = os.getenv("DLQ_FALLBACK_PATH", "/tmp/dlq_fallback.jsonl")
+BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
+    "reconcile-stale-dispatches": {"task": "reconcile_stale_dispatches", "schedule": 60.0},
+    "retry-failed-artifact-deletions": {
+        "task": "retry_failed_artifact_deletions", "schedule": 300.0,
+    },
+    "sweep-expired-artifacts": {"task": "sweep_expired_artifacts", "schedule": 600.0},
+    "reconcile-media-uploads": {"task": "reconcile_media_uploads", "schedule": 600.0},
+}
 
 celery_app = Celery(
     "worker-orchestrator",
@@ -118,6 +126,7 @@ celery_app = Celery(
         "tasks.reconcile_stale_dispatches",
         "tasks.retry_failed_artifact_deletions",
         "tasks.sweep_expired_artifacts",
+        "tasks.reconcile_media_uploads",
     ],
 )
 celery_app.conf.task_default_queue = "creator"
@@ -159,20 +168,7 @@ celery_app.conf.task_routes = _default_task_routes
 # - task_acks_late=True ensures at-least-once delivery by acknowledging AFTER execution
 # - task_reject_on_worker_lost=True prevents message loss if worker dies
 # This ensures failed tasks are not lost and can be replayed from the DLQ.
-celery_app.conf.beat_schedule = {
-    "reconcile-stale-dispatches": {
-        "task": "reconcile_stale_dispatches",
-        "schedule": 60.0,
-    },
-    "retry-failed-artifact-deletions": {
-        "task": "retry_failed_artifact_deletions",
-        "schedule": 300.0,  # every 5 minutes
-    },
-    "sweep-expired-artifacts": {
-        "task": "sweep_expired_artifacts",
-        "schedule": 600.0,  # every 10 minutes
-    },
-}
+celery_app.conf.beat_schedule = BEAT_SCHEDULE
 celery_app.conf.update(
     # Prefetch only 1 task per worker to prevent queue saturation
     worker_prefetch_multiplier=1,

@@ -6,14 +6,22 @@ import subprocess
 import sys
 import uuid
 from collections.abc import AsyncIterator
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import anyio
 import asyncpg
 import pytest
 import pytest_asyncio
 from creator_domain.models import MediaAsset, MediaOrigin, MediaType
 from creator_service import db
 from creator_service.media_asset_service import MediaAssetService
+from creator_service.media_upload_reconciliation import (
+    MediaAssetPersistenceFailed,
+    MediaUploadReconciler,
+    UploadIntent,
+    UploadIntentState,
+)
 from creator_service.object_storage import LocalStorageBackend
 from PIL import Image
 
@@ -199,3 +207,129 @@ async def test_postgres_preserves_all_domain_media_types(media_database: None, t
     ]
     # Then storage supports the complete domain rather than only upload routes.
     assert [asset.media_type for asset in saved] == list(MediaType)
+
+
+@pytest.mark.asyncio
+async def test_postgres_upload_intent_is_durable_and_workspace_owned(media_database: None) -> None:
+    # Given an upload intent created before object I/O.
+    storage = MediaAssetService()._asset_storage
+    now = datetime.now(timezone.utc)
+    intent = await storage.create_upload_intent(UploadIntent(
+        id=0, owner_id=uuid.uuid4().hex, workspace_id=9101,
+        storage_key="workspaces/9101/assets/pending.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now,
+    ))
+
+    # When an expired reconciliation lease is claimed and terminally completed.
+    claimed = await storage.claim_expired_upload_intents(
+        now=now, lease_expires_at=now + timedelta(minutes=5), limit=10,
+    )
+    await storage.record_upload_reclaimed(intent.id, claimed[0].claim_token)
+
+    # Then the exact owned record was claimed once and remains durable.
+    assert [candidate.id for candidate in claimed] == [intent.id]
+    row = await db.fetch_one(
+        "SELECT state, workspace_id, storage_key FROM creator_media_upload_intents WHERE id = $1",
+        intent.id,
+    )
+    assert row == {
+        "state": "reclaimed", "workspace_id": 9101,
+        "storage_key": "workspaces/9101/assets/pending.png",
+    }
+
+
+@pytest.mark.asyncio
+async def test_postgres_claim_is_skip_locked_and_fences_uploader_cas(media_database: None) -> None:
+    # Given one expired upload intent and two concurrent reconciliation workers.
+    storage = MediaAssetService()._asset_storage
+    now = datetime.now(timezone.utc)
+    intent = await storage.create_upload_intent(UploadIntent(
+        id=0, owner_id=uuid.uuid4().hex, workspace_id=9101,
+        storage_key="workspaces/9101/assets/racing.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now,
+    ))
+    claims: list[list[UploadIntent]] = []
+
+    async def claim() -> None:
+        claims.append(await storage.claim_expired_upload_intents(
+            now=now, lease_expires_at=now + timedelta(minutes=5), limit=1,
+        ))
+
+    # When both workers claim via SKIP LOCKED and the uploader attempts its CAS.
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(claim)
+        tasks.start_soon(claim)
+
+    # Then exactly one worker owns a claim and the stale uploader is fenced out.
+    assert sorted(len(claimed) for claimed in claims) == [0, 1]
+    with pytest.raises(MediaAssetPersistenceFailed):
+        await storage.mark_upload_intent_uploaded(intent.id)
+
+
+@pytest.mark.asyncio
+async def test_postgres_expired_claim_replacement_fences_stale_updates(media_database: None) -> None:
+    # Given a PostgreSQL reconciliation claim that expires before completion.
+    storage = MediaAssetService()._asset_storage
+    now = datetime.now(timezone.utc)
+    intent = await storage.create_upload_intent(UploadIntent(
+        id=0, owner_id=uuid.uuid4().hex, workspace_id=9101,
+        storage_key="workspaces/9101/assets/stranded.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now,
+    ))
+    first = (await storage.claim_expired_upload_intents(
+        now=now, lease_expires_at=now, limit=1,
+    ))[0]
+
+    # When a successor atomically replaces the expired claim token.
+    successor = (await storage.claim_expired_upload_intents(
+        now=now, lease_expires_at=now + timedelta(minutes=5), limit=1,
+    ))[0]
+
+    # Then stale terminal/failure writes cannot overwrite successor ownership.
+    assert successor.claim_token != first.claim_token
+    with pytest.raises(MediaAssetPersistenceFailed):
+        await storage.record_upload_reclaimed(intent.id, first.claim_token)
+    with pytest.raises(MediaAssetPersistenceFailed):
+        await storage.record_upload_cleanup_failure(intent.id, 5, first.claim_token)
+    await storage.record_upload_reclaimed(intent.id, successor.claim_token)
+
+
+@pytest.mark.asyncio
+async def test_postgres_late_upload_after_absent_observation_is_reclaimed(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given PostgreSQL retains an expired pending intent after observing no object.
+    storage = MediaAssetService()._asset_storage
+    objects = LocalStorageBackend(str(tmp_path))
+    now = datetime.now(timezone.utc)
+    intent = await storage.create_upload_intent(UploadIntent(
+        id=0, owner_id=uuid.uuid4().hex, workspace_id=9101,
+        storage_key="workspaces/9101/assets/late-process-death.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now,
+    ))
+    first = await MediaUploadReconciler(objects, storage).sweep(now=now)
+
+    # When retention elapses while absent, then the object appears without an uploader update.
+    retention = now + timedelta(hours=1)
+    await db.execute(
+        "UPDATE creator_media_upload_intents SET lease_expires_at = $2 WHERE id = $1",
+        intent.id, retention,
+    )
+    absent = await MediaUploadReconciler(objects, storage).sweep(now=retention)
+    objects.upload(intent.storage_key, image_bytes(), content_type="image/png")
+    later = retention + timedelta(minutes=5)
+    await db.execute(
+        "UPDATE creator_media_upload_intents SET lease_expires_at = $2 WHERE id = $1",
+        intent.id, later,
+    )
+    second = await MediaUploadReconciler(objects, storage).sweep(now=later)
+
+    # Then PostgreSQL retains ownership while absent and later deletes the object.
+    assert first.reclaimed == 0
+    assert absent.reclaimed == 0
+    assert second.reclaimed == 1
+    assert not (tmp_path / intent.storage_key).exists()
+    row = await db.fetch_one(
+        "SELECT state FROM creator_media_upload_intents WHERE id = $1", intent.id,
+    )
+    assert row == {"state": "reclaimed"}

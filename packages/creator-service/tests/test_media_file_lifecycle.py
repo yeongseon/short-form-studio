@@ -11,6 +11,7 @@ from PIL import Image
 from creator_service.media_asset_service import InMemoryMediaAssetStorage, MediaAssetService
 from creator_service.media_file_ingestion import FileUpload
 from creator_service.media_upload_validation import MediaUploadRejected
+from creator_service.media_upload_reconciliation import UploadIntent
 from creator_service.object_storage import LocalStorageBackend, StorageResult
 
 
@@ -62,9 +63,11 @@ class FailingMetadata(InMemoryMediaAssetStorage):
         super().__init__()
         self.commit = commit
 
-    async def save_asset(self, row: dict[str, object]) -> dict[str, object]:
+    async def save_uploaded_asset(
+        self, row: dict[str, object], intent: UploadIntent,
+    ) -> dict[str, object]:
         if self.commit:
-            await super().save_asset(row)
+            await super().save_uploaded_asset(row, intent)
         raise ConnectionError("ambiguous acknowledgement")
 
 

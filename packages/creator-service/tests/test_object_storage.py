@@ -3,6 +3,9 @@ from __future__ import annotations
 import hashlib
 import importlib
 from io import BytesIO
+from pathlib import Path
+
+import pytest
 
 
 def _object_storage_module():
@@ -76,6 +79,28 @@ def test_delete_returns_false_for_missing_file(tmp_path):
     deleted = backend.delete("missing/file.bin")
 
     assert deleted is False
+
+
+def test_local_delete_normalizes_non_missing_os_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a local object whose filesystem deletion fails.
+    module = _object_storage_module()
+    backend = module.LocalStorageBackend(root=str(tmp_path))
+    key = "run-5/render.mp4"
+    backend.upload(key, b"video-bytes")
+
+    def fail_unlink(_path: Path) -> None:
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(Path, "unlink", fail_unlink)
+
+    # When deletion crosses the storage adapter boundary.
+    with pytest.raises(module.StorageDeletionError) as failure:
+        backend.delete(key)
+
+    # Then callers receive the shared typed deletion failure.
+    assert failure.value.key == key
 
 
 def test_exists_returns_true_and_false(tmp_path):
