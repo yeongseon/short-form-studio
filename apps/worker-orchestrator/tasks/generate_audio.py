@@ -155,6 +155,7 @@ def generate_audio(
             max_retries=0,
             cost_per_second=Decimal("0.0003"),
         )
+        attempt_id = f"{ctx.task_id}:{ctx.delivery_attempt}:full"
 
         gpu_lock = GpuLockContext(ctx.task_id)
         if entry.requires_gpu:
@@ -208,9 +209,10 @@ def generate_audio(
                         section_params["output_path"] = section_path
                         section_params["rate"] = rate
 
+                        attempt_id = f"{ctx.task_id}:{ctx.delivery_attempt}:section:{idx}"
                         if not await authorize_owned_provider_attempt(
                             ctx.reservation_owner_id,
-                            f"{ctx.task_id}:{ctx.delivery_attempt}:section:{idx}",
+                            attempt_id,
                             delivery_cost,
                         ):
                             raise ProviderError("Provider attempt exceeds approved spend")
@@ -265,9 +267,10 @@ def generate_audio(
                     except Exception:
                         pass
                 try:
+                    attempt_id = f"{ctx.task_id}:{ctx.delivery_attempt}:full"
                     if not await authorize_owned_provider_attempt(
                         ctx.reservation_owner_id,
-                        f"{ctx.task_id}:{ctx.delivery_attempt}:full",
+                        attempt_id,
                         delivery_cost,
                     ):
                         raise ProviderError("Provider attempt exceeds approved spend")
@@ -315,6 +318,7 @@ def generate_audio(
                 project_id=ctx.project_id,
                 idempotency_key=ctx.task_id,
                 reservation_owner_id=ctx.reservation_owner_id,
+                reservation_attempt_id=attempt_id,
             )
             ctx.mark_provider_accounted()
         except Exception:
