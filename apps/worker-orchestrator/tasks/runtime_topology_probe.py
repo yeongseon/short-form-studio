@@ -18,7 +18,9 @@ from creator_service.run_service import run_service
 from tasks.hard_timeout import finalize_hard_timeout
 from tasks.task_runner import TaskContext, TaskResult, TaskRunnerConfig, run_task
 
-type ProbeMode = Literal["complete", "cooperative", "ffmpeg_hang", "redelivery", "wait"]
+type ProbeMode = Literal[
+    "boundaries", "complete", "cooperative", "ffmpeg_hang", "redelivery", "wait"
+]
 
 
 def _evidence_file(name: str) -> Path:
@@ -73,6 +75,23 @@ def runtime_topology_probe(
 
     async def execute(ctx: TaskContext) -> TaskResult:
         match mode:
+            case "boundaries":
+                from creator_service.render_service import render_service
+
+                for _ in range(2):
+                    with urlopen(f"{_provider_url(provider_url)}/provider", timeout=5) as response:
+                        response.read()
+                storage = _evidence_file(f"storage/{run_id}/artifact.bin")
+                storage.parent.mkdir(parents=True, exist_ok=True)
+                storage.write_bytes(b"topology-artifact")
+                await render_service.create_artifact(
+                    run_id,
+                    str(storage),
+                    storage_provider="local",
+                    storage_key=str(storage.relative_to(_evidence_file("storage"))),
+                    idempotency_key=ctx.task_id,
+                )
+                _publish(evidence_path, "boundaries_completed", task_id=ctx.task_id)
             case "complete":
                 _publish(evidence_path, "completed", task_id=ctx.task_id)
             case "cooperative":
@@ -89,7 +108,6 @@ def runtime_topology_probe(
                             evidence_path,
                             "cancelled",
                             task_id=ctx.task_id,
-                            second_boundary_suppressed=True,
                         )
                         return TaskResult(status="cancelled")
                     time.sleep(0.05)

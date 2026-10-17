@@ -103,10 +103,12 @@ def runtime() -> Iterator[None]:
 
 def test_shipped_image_runs_production_claims_redelivery_and_fairness() -> None:
     # Given the shipped image using its default production entrypoint and solo command.
+    new_run(100)
     new_run(101)
     new_run(102)
     Provider.calls = 0
     worker("topology-solo-cancel")
+    boundaries = EVIDENCE / "boundaries.json"
     blocked = EVIDENCE / "blocked.json"
     successor = EVIDENCE / "successor.json"
     anyio.run(
@@ -116,6 +118,23 @@ def test_shipped_image_runs_production_claims_redelivery_and_fairness() -> None:
         INSERT INTO workspace_quota_reservation_owners(owner_id, workspace_id, period_start, operation_type, status)
         VALUES('blocked-delivery', 1, date_trunc('month', now()), 'image_gen', 'reserved');""",
     )
+
+    # When the uncancelled branch crosses both provider and artifact persistence boundaries.
+    send(
+        100,
+        "boundary-delivery",
+        "boundaries",
+        boundaries,
+        provider_url=os.environ["TOPOLOGY_PROVIDER_URL"],
+    )
+    wait_state(boundaries, "boundaries_completed")
+    boundary_artifacts = anyio.run(
+        row, "SELECT count(*) AS count FROM creator_artifacts WHERE run_id=100"
+    )
+    assert Provider.calls == 2
+    assert boundary_artifacts is not None and boundary_artifacts["count"] == 1
+    assert (EVIDENCE / "storage" / "100" / "artifact.bin").is_file()
+    Provider.calls = 0
 
     # When a long production task owns the worker and successor work is queued.
     send(
@@ -160,7 +179,6 @@ def test_shipped_image_runs_production_claims_redelivery_and_fairness() -> None:
     assert mediarows is not None and mediarows["count"] == 0
     assert provider_calls == 1
     assert storage_entries == []
-    assert cancelled["second_boundary_suppressed"] is True
     (EVIDENCE / "fairness.json").write_text(
         json.dumps({"successor_delay_seconds": delay}), encoding="utf-8"
     )
