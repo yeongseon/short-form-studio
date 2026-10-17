@@ -30,6 +30,25 @@ perform cleanup (save partial results, update status to FAILED).
 Kills the worker process if the task exceeds this. Always set 60s above the
 soft limit to allow cleanup time.
 
+### Pool support in the shipped topology
+
+The declarations above are enforced only by pools that implement timeouts.
+With the pinned Celery 5.6.3, `celery/concurrency/solo.py` defines a blocking,
+inline `TaskPool` and reports an empty timeout capability tuple. Consequently,
+the base Compose worker and scaled script/audio/render workers do **not**
+deliver Celery soft or hard time limits while a task is running. The scaled
+image worker uses `prefork`; the process-level CI test verifies its soft-timeout
+failure state and cleanup of the synthetic child, temporary file, and quota
+marker. Provider HTTP timeouts and explicit subprocess termination remain
+required boundaries regardless of pool.
+
+Remote-control revoke has the same solo limitation: the consumer cannot handle
+the command until inline execution returns, and terminate has no child worker
+process to signal. SIGTERM is warm shutdown and waits for active work. These
+limits are evidence for operational caution, not authorization to change pools;
+prefork migration would separately require event-loop, DB-pool, GPU-lock, and
+file-ownership regression coverage.
+
 ### Why Image/Render Get Longer Limits
 - **Image generation** may involve external API calls with queuing (DALL-E, Stability)
 - **Video render** runs FFmpeg which is CPU-bound and scales with video length
