@@ -234,6 +234,47 @@ def test_verify_rejects_unsupported_manifest_version(tmp_path: Path) -> None:
     assert "unsupported manifest format version: 2" in result.stderr
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("files", []),
+        ("image_digests", "registry/api@sha256:" + "d" * 64),
+        ("release_sha", {}),
+        ("format_version", "1"),
+        ("created_at", []),
+        ("alembic_revision", {}),
+        ("secret_fingerprint", []),
+        ("database_dump", {}),
+        ("media_root", []),
+    ],
+)
+def test_verify_rejects_malformed_manifest_fields_without_traceback(
+    tmp_path: Path, field: str, value: str | list[str] | dict[str, str]
+) -> None:
+    # Given
+    bundle = _bundle(tmp_path)
+    assert _run("create", bundle).returncode == 0
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest[field] = value
+    manifest_path.write_text(json.dumps(manifest))
+
+    # When
+    result = _run(
+        "verify",
+        bundle,
+        "--expected-alembic-revision",
+        "revision-1",
+        "--expected-secret-fingerprint",
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    )
+
+    # Then
+    assert result.returncode != 0
+    assert "manifest is invalid" in result.stderr
+    assert "traceback" not in result.stderr.lower()
+
+
 def test_verify_requires_exact_database_dump_checksum(tmp_path: Path) -> None:
     # Given
     bundle = _bundle(tmp_path)
@@ -341,9 +382,9 @@ def _run(command: str, bundle: Path, *args: str) -> subprocess.CompletedProcess[
         base.extend(
             [
                 "--release-sha",
-                "abc123",
+                "abc123def456",
                 "--image-digest",
-                "api=sha256:placeholder",
+                "registry/api@sha256:" + "d" * 64,
                 "--alembic-revision",
                 "revision-1",
                 "--secret-fingerprint",
