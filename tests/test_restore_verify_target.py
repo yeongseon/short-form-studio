@@ -58,6 +58,7 @@ def test_restore_parent_swap_does_not_redirect_output(
     # Given
     import importlib.util
 
+    monkeypatch.syspath_prepend(str(SCRIPT.parent))
     specification = importlib.util.spec_from_file_location("restore_verify", SCRIPT)
     assert specification is not None
     assert specification.loader is not None

@@ -99,7 +99,12 @@ def test_checksummed_corrupt_dump_cannot_restore_to_fresh_database(
         assert validation.returncode != 0
         assert "database dump is not a valid custom-format archive" in validation.stderr
         assert restore.returncode != 0
-        assert b"input file is too short" in restore.stderr or b"unexpected end of file" in restore.stderr
+        corruption_errors = (
+            b"input file is too short",
+            b"unexpected end of file",
+            b"sanity check on integer size",
+        )
+        assert any(message in restore.stderr for message in corruption_errors)
         sentinel = subprocess.run(
             [
                 "docker", "exec", container, "psql", "-U", "postgres", "-d", "postgres",
