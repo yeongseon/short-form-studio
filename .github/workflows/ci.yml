@@ -28,7 +28,8 @@ jobs:
         run: python3 -m pytest tests/test_restore_verify.py tests/test_restore_verify_symlinks.py tests/test_restore_verify_target.py tests/test_restore_secret_fingerprint.py tests/test_restore_database_negative.py -v
       - name: Run disposable database and media restore drill
         env:
-          GITHUB_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          RESTORE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          RESTORE_RELEASE_MANIFEST: tests/fixtures/approved-release-manifest.json
         run: python3 -m pytest tests/test_restore_drill.py -v -s
 
   lint:

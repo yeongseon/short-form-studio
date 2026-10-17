@@ -38,7 +38,7 @@ def test_disposable_restore_drill() -> None:
         line for line in result.stdout.splitlines() if line.startswith("RESTORE_EVIDENCE=")
     )
     evidence = json.loads(evidence_line.removeprefix("RESTORE_EVIDENCE="))
-    assert evidence["github_sha"] == os.environ["GITHUB_SHA"]
-    assert all("@sha256:" in digest for digest in evidence["image_digests"])
+    assert evidence["restore_head_sha"] == os.environ["RESTORE_HEAD_SHA"]
+    assert all("@sha256:" in digest for digest in evidence["release_image_digests"])
     assert evidence["credential_free"] is True
     assert evidence["phase_durations_seconds"]["total"] > 0

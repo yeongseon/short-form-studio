@@ -138,8 +138,8 @@ def main() -> int:
             docker("cp", f"{source}:/tmp/database.dump", str(bundle / "database.dump"))
             durations["backup_seconds"] = time.monotonic() - phase
             manifest = {
-                "format_version": 1, "created_at": "synthetic", "release_sha": os.environ.get("GITHUB_SHA", run("git", "rev-parse", "HEAD", cwd=ROOT).stdout.strip()),
-                "image_digests": [image_digest(POSTGRES_IMAGE), image_digest(FFMPEG_IMAGE)],
+                "format_version": 1, "created_at": "synthetic", "release_sha": os.environ.get("RESTORE_HEAD_SHA", run("git", "rev-parse", "HEAD", cwd=ROOT).stdout.strip()),
+                "image_digests": [image_digest(POSTGRES_IMAGE), image_digest(FFMPEG_IMAGE), *json.loads(Path(os.environ["RESTORE_RELEASE_MANIFEST"]).read_text()).values()],
                 "alembic_revision": alembic_head, "secret_fingerprint": FINGERPRINT,
                 "database_dump": "database.dump", "media_root": "media",
                 "files": {path.relative_to(bundle).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest() for path in (bundle / "database.dump", *sorted(media.iterdir()))},
@@ -173,7 +173,7 @@ def main() -> int:
             print("provider guard: armed and untouched")
             print("broker recovery: pending=failed queued=queued running=failed")
             print("provider calls: 0")
-            evidence = {"github_sha": manifest["release_sha"], "image_digests": manifest["image_digests"], "phase_durations_seconds": {**durations, "total": time.monotonic() - started}, "reconciliation": reconciliation, "recovered_task_states": states.splitlines(), "credential_free": True}
+            evidence = {"restore_head_sha": manifest["release_sha"], "release_image_digests": manifest["image_digests"], "phase_durations_seconds": {**durations, "total": time.monotonic() - started}, "reconciliation": reconciliation, "recovered_task_states": states.splitlines(), "credential_free": True}
             print("RESTORE_EVIDENCE=" + json.dumps(evidence, sort_keys=True))
             print("RESTORE DRILL PASSED")
             return 0
