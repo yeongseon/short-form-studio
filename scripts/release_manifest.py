@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Annotated, Final, NewType, assert_never
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, StringConstraints, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
 
 Digest = NewType("Digest", str)
@@ -84,6 +84,7 @@ class RuntimeIdentity(BaseModel):
     api_digest: DigestText
     worker_digest: DigestText
     studio_digest: DigestText
+    worker_replica_count: Annotated[int, Field(ge=1)]
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,6 +189,8 @@ def assert_database_revision_compatible(
 
 
 def assert_runtime_identity(manifest: ReleaseManifest, runtime: RuntimeIdentity) -> None:
+    if len(runtime.worker_source_shas) != runtime.worker_replica_count:
+        raise ManifestError(detail="worker replica count does not match registered worker identities")
     expected = RuntimeIdentity(
         api_source_sha=manifest.source_sha,
         worker_source_shas=[manifest.source_sha] * len(runtime.worker_source_shas),
@@ -195,6 +198,7 @@ def assert_runtime_identity(manifest: ReleaseManifest, runtime: RuntimeIdentity)
         api_digest=manifest.images.api.digest,
         worker_digest=manifest.images.worker.digest,
         studio_digest=manifest.images.studio.digest,
+        worker_replica_count=runtime.worker_replica_count,
     )
     if runtime != expected:
         raise ManifestError(detail="running API, worker, and Studio do not match the approved release")

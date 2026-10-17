@@ -137,9 +137,26 @@ def test_runtime_identity_rejects_one_stale_worker_instance() -> None:
         api_digest=DIGEST,
         worker_digest=DIGEST,
         studio_digest=DIGEST,
+        worker_replica_count=2,
     )
 
     with pytest.raises(ValueError, match="approved release"):
+        assert_runtime_identity(manifest, runtime)
+
+
+def test_runtime_identity_rejects_missing_platform_observed_worker() -> None:
+    manifest = ReleaseManifest.model_validate(manifest_data())
+    runtime = RuntimeIdentity(
+        api_source_sha=SOURCE_SHA,
+        worker_source_shas=[SOURCE_SHA],
+        studio_source_sha=SOURCE_SHA,
+        api_digest=DIGEST,
+        worker_digest=DIGEST,
+        studio_digest=DIGEST,
+        worker_replica_count=2,
+    )
+
+    with pytest.raises(ValueError, match="worker replica count"):
         assert_runtime_identity(manifest, runtime)
 
 

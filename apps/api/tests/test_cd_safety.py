@@ -182,6 +182,7 @@ def test_runtime_verification_uses_platform_digests_and_every_worker_source() ->
         commands = "\n".join(step.get("run", "") for step in jobs[name]["steps"])
         assert "api_source_sha" in commands, name
         assert "worker_source_shas" in commands, name
+        assert "worker_replica_count:$platform[0].worker_replica_count" in commands, name
         assert "studio_source_sha" in commands, name
         assert "platform-attestation.json" in commands, name
 
