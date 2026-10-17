@@ -179,6 +179,9 @@ async def generate_subtitles_trigger(
         )
 
     validate_model_key(request.subtitle_model, expected_category="stt")
+    quote = ReservationQuote.bounded(
+        unit_cost_usd=Decimal("0.001"), units=1, internal_attempts=1, deliveries=6,
+    )
     return await cas_dispatch_with_rollback(
         run_id=run_id,
         expected_stages=allowed_stages,
@@ -195,6 +198,7 @@ async def generate_subtitles_trigger(
         enqueue_error_detail="Failed to enqueue subtitle generation task",
         quota_operation_type="stt",
         workspace_id=user.workspace_id,
+        reservation_estimate_usd=quote.maximum_cost_usd,
     )
 
 
@@ -217,6 +221,9 @@ async def render_trigger(
         )
 
     validate_render_profile(request.render_profile)
+    quote = ReservationQuote.bounded(
+        unit_cost_usd=Decimal("0.001"), units=1, internal_attempts=1, deliveries=4,
+    )
     return await cas_dispatch_with_rollback(
         run_id=run_id,
         expected_stages=allowed_stages,
@@ -232,6 +239,7 @@ async def render_trigger(
         enqueue_error_detail="Failed to enqueue render task",
         quota_operation_type="render",
         workspace_id=user.workspace_id,
+        reservation_estimate_usd=quote.maximum_cost_usd,
     )
 
 

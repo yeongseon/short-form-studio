@@ -149,6 +149,29 @@ async def test_success_retains_authorized_attempt_without_usage_event() -> None:
 
 
 @pytest.mark.asyncio
+async def test_failed_delivery_attempt_remains_reserved_after_later_success() -> None:
+    # Given two separately authorized deliveries for one retried provider task.
+    service = UsageService(InMemoryUsageStorage())
+    await service.set_quota(1, monthly_cost_usd=Decimal("2"))
+    assert await service.reserve_owned(1, "llm", "retry", estimated_cost_usd=Decimal("2"))
+    assert await service.authorize_owned_attempt("retry", "retry:delivery:0", Decimal("1"))
+    assert await service.authorize_owned_attempt("retry", "retry:delivery:1", Decimal("1"))
+
+    # When only the later successful delivery records usage and settles.
+    await service.record_usage(
+        1, 1, "fixture", "fixture", "llm", estimated_cost_usd=Decimal("1"),
+        idempotency_key="retry:success", reservation_owner_id="retry",
+        reservation_attempt_id="retry:delivery:1",
+    )
+    assert await service.settle_owned("retry")
+
+    # Then the possibly-billable failed delivery still reserves its approved exposure.
+    assert not await service.reserve_owned(
+        1, "llm", "replacement", estimated_cost_usd=Decimal("1"),
+    )
+
+
+@pytest.mark.asyncio
 async def test_operator_kill_switch_blocks_new_billable_work(monkeypatch: pytest.MonkeyPatch) -> None:
     # Given the global billable-work switch is disabled.
     monkeypatch.setenv("BILLABLE_PROVIDER_CALLS_ENABLED", "false")
