@@ -70,7 +70,7 @@ def verify_http(runtime: RuntimeFixture, media: Path) -> None:
         raise DrillError("missing key was accepted")
     timeline_path = f"{project_path}/timeline"
     timeline_status, timeline_body = api_request(runtime.port, timeline_path, owner)
-    if timeline_status != 200 or json.loads(timeline_body)["timeline_id"] != "timeline-restored":
+    if timeline_status != 200 or json.loads(timeline_body)["id"] != "timeline-restored":
         raise DrillError("owner could not open restored Timeline")
     if api_request(runtime.port, timeline_path, foreign)[0] != 404:
         raise DrillError("foreign user could open restored Timeline")
