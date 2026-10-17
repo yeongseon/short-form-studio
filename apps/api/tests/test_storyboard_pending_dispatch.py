@@ -63,7 +63,10 @@ def boundary(monkeypatch: pytest.MonkeyPatch):
         quota.append(owners.pop(owner_id))
         return True
 
-    async def reserve(workspace_id: int, operation_type: str, owner_id: str) -> tuple[bool, str]:
+    async def reserve(
+        workspace_id: int, operation_type: str, owner_id: str,
+        _estimated_cost_usd: object = None,
+    ) -> tuple[bool, str]:
         owners[owner_id] = (workspace_id, operation_type)
         return True, "ok"
 
@@ -215,7 +218,10 @@ async def test_storyboard_dispatch_reserves_and_cancels_only_task_owner(
     reserved: list[str] = []
     cancelled: list[str] = []
 
-    async def reserve(_workspace_id: int, _operation_type: str, owner_id: str) -> tuple[bool, str]:
+    async def reserve(
+        _workspace_id: int, _operation_type: str, owner_id: str,
+        _estimated_cost_usd: object = None,
+    ) -> tuple[bool, str]:
         reserved.append(owner_id)
         return True, "ok"
 

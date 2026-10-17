@@ -14,7 +14,10 @@ from shorts_api.routes import creator_runs_storyboard, storyboard_dispatch
 
 @pytest.fixture(autouse=True)
 def owned_storyboard_quota(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def reserve(_workspace_id: int, _operation_type: str, _task_id: str) -> tuple[bool, str]:
+    async def reserve(
+        _workspace_id: int, _operation_type: str, _task_id: str,
+        _estimated_cost_usd: object = None,
+    ) -> tuple[bool, str]:
         return True, "ok"
 
     async def cancel(_task_id: str) -> bool:

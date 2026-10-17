@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from creator_domain.models import TRIGGER_POLICY
 from creator_service.audio_service import audio_service
+from creator_service.script_service import script_service
 from creator_service.render_service import render_service
 from creator_service.run_service import run_service
 from creator_service.subtitle_service import subtitle_service
@@ -16,6 +18,7 @@ from creator_service.task_dispatch_service import (
     dispatch_render_video,
 )
 from creator_service.visual_asset_service import visual_asset_service
+from creator_service.usage_service import ReservationQuote
 from fastapi import APIRouter, Depends, HTTPException
 
 if TYPE_CHECKING:
@@ -129,6 +132,14 @@ async def generate_audio_trigger(
         )
 
     validate_model_key(request.tts_model, expected_category="tts")
+    draft = await script_service.get_active_draft(run_id)
+    if draft is None:
+        raise HTTPException(status_code=400, detail="No script draft available")
+    provider_calls = len(draft.structured_script or []) + 1
+    quote = ReservationQuote.bounded(
+        unit_cost_usd=Decimal("0.0003"), units=3600 * provider_calls,
+        internal_attempts=1, deliveries=6,
+    )
     return await cas_dispatch_with_rollback(
         run_id=run_id,
         expected_stages=allowed_stages,
@@ -145,6 +156,7 @@ async def generate_audio_trigger(
         enqueue_error_detail="Failed to enqueue audio generation task",
         quota_operation_type="tts",
         workspace_id=user.workspace_id,
+        reservation_estimate_usd=quote.maximum_cost_usd,
     )
 
 
@@ -167,6 +179,9 @@ async def generate_subtitles_trigger(
         )
 
     validate_model_key(request.subtitle_model, expected_category="stt")
+    quote = ReservationQuote.bounded(
+        unit_cost_usd=Decimal("0.001"), units=1, internal_attempts=1, deliveries=6,
+    )
     return await cas_dispatch_with_rollback(
         run_id=run_id,
         expected_stages=allowed_stages,
@@ -183,6 +198,7 @@ async def generate_subtitles_trigger(
         enqueue_error_detail="Failed to enqueue subtitle generation task",
         quota_operation_type="stt",
         workspace_id=user.workspace_id,
+        reservation_estimate_usd=quote.maximum_cost_usd,
     )
 
 
@@ -205,6 +221,9 @@ async def render_trigger(
         )
 
     validate_render_profile(request.render_profile)
+    quote = ReservationQuote.bounded(
+        unit_cost_usd=Decimal("0.001"), units=1, internal_attempts=1, deliveries=4,
+    )
     return await cas_dispatch_with_rollback(
         run_id=run_id,
         expected_stages=allowed_stages,
@@ -220,6 +239,7 @@ async def render_trigger(
         enqueue_error_detail="Failed to enqueue render task",
         quota_operation_type="render",
         workspace_id=user.workspace_id,
+        reservation_estimate_usd=quote.maximum_cost_usd,
     )
 
 

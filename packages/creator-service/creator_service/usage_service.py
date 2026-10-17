@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
 from creator_service.cost_config import COST_CONFIG_VERSION
@@ -16,6 +19,48 @@ QUOTAS: dict[str, float] = {
     "monthly_tts_requests": 3600,
     "monthly_cost_usd": 50.0,
 }
+
+MONEY_SCALE = Decimal("0.000001")
+MAX_ESTIMATED_COST_USD: dict[str, Decimal] = {
+    "llm": Decimal("0.10"),
+    "image_gen": Decimal("2.00"),
+    "tts": Decimal("1.00"),
+    "stt": Decimal("0.25"),
+    "render": Decimal("0.10"),
+}
+
+
+def _billable_provider_calls_enabled() -> bool:
+    return os.getenv("BILLABLE_PROVIDER_CALLS_ENABLED", "true").lower() in {"1", "true", "yes"}
+
+
+def _money(value: Decimal | float | str, *, name: str) -> Decimal:
+    try:
+        parsed = Decimal(str(value))
+    except InvalidOperation as exc:
+        raise ValueError(f"{name} must be a finite monetary value") from exc
+    if not parsed.is_finite() or parsed < 0:
+        raise ValueError(f"{name} must be a finite non-negative monetary value")
+    return parsed.quantize(MONEY_SCALE)
+
+
+@dataclass(frozen=True, slots=True)
+class ReservationQuote:
+    maximum_cost_usd: Decimal
+
+    @classmethod
+    def bounded(
+        cls, *, unit_cost_usd: Decimal, units: int | None,
+        internal_attempts: int, deliveries: int,
+    ) -> ReservationQuote:
+        if units is None or units <= 0:
+            raise ValueError("units must have a positive finite bound")
+        if internal_attempts <= 0 or deliveries <= 0:
+            raise ValueError("attempt and delivery bounds must be positive")
+        return cls(_money(
+            unit_cost_usd * units * internal_attempts * deliveries,
+            name="maximum_cost_usd",
+        ))
 
 
 class UsageStorageBackend(Protocol):
@@ -45,13 +90,27 @@ class UsageStorageBackend(Protocol):
         self, workspace_id: int, operation_type: str, units: int = 1
     ) -> None: ...
 
-    async def try_reserve_owned(self, workspace_id: int, operation_type: str, owner_id: str) -> bool: ...
+    async def try_reserve_owned(
+        self, workspace_id: int, operation_type: str, owner_id: str,
+        estimated_cost_usd: Decimal, monthly_cost_usd: Decimal,
+        global_monthly_cost_usd: Decimal | None, units: int,
+    ) -> bool: ...
 
     async def cancel_owned(self, owner_id: str) -> bool: ...
 
+    async def settle_owned(self, owner_id: str, *, billable_unknown: bool = False) -> bool: ...
+
     async def reservation_owner_id(self, task_id: str) -> str | None: ...
 
+    async def readmit_owned(
+        self, owner_id: str, global_monthly_cost_usd: Decimal | None,
+    ) -> bool: ...
+
     async def record_owned_event(self, row: dict[str, Any], owner_id: str) -> dict[str, Any]: ...
+
+    async def authorize_owned_attempt(
+        self, owner_id: str, attempt_id: str, estimated_cost_usd: Decimal,
+    ) -> bool: ...
 
 
 class InMemoryUsageStorage:
@@ -60,8 +119,12 @@ class InMemoryUsageStorage:
         self._events_by_idempotency_key: dict[str, dict[str, Any]] = {}
         self._quotas: dict[int, dict[str, Any]] = {}
         self._reservations: dict[tuple[int, datetime], dict[str, int]] = {}
-        self._owned: dict[str, tuple[int, datetime, str, str]] = {}
+        self._owned: dict[str, tuple[int, datetime, str, str, Decimal, Decimal]] = {}
+        self._owned_attempts: dict[tuple[str, str], Decimal] = {}
+        self._accounted_attempts: set[tuple[str, str]] = set()
+        self._owned_units: dict[str, int] = {}
         self._locks: dict[int, asyncio.Lock] = {}
+        self._spend_lock = asyncio.Lock()
         self._next_event_id = 1
         self._next_quota_id = 1
 
@@ -138,7 +201,7 @@ class InMemoryUsageStorage:
         key = (workspace_id, period_start)
         async with self._lock_for_workspace(workspace_id):
             if owner_id is not None and owner_id in self._owned:
-                old_workspace, _, old_operation, old_status = self._owned[owner_id]
+                old_workspace, _, old_operation, old_status, _, _ = self._owned[owner_id]
                 return (old_workspace, old_operation, old_status) == (workspace_id, operation_type, "reserved")
             quota = await self.get_workspace_quota(workspace_id)
             if quota is None:
@@ -173,7 +236,10 @@ class InMemoryUsageStorage:
                     return False
                 reserved["llm"] += 1
                 if owner_id is not None:
-                    self._owned[owner_id] = (workspace_id, period_start, operation_type, "reserved")
+                    self._owned[owner_id] = (
+                        workspace_id, period_start, operation_type, "reserved",
+                        Decimal("0"), Decimal("0"),
+                    )
                 return True
             if operation_type == "image_gen":
                 if usage["image_gen"] + reserved["image_gen"] >= int(
@@ -182,7 +248,10 @@ class InMemoryUsageStorage:
                     return False
                 reserved["image_gen"] += 1
                 if owner_id is not None:
-                    self._owned[owner_id] = (workspace_id, period_start, operation_type, "reserved")
+                    self._owned[owner_id] = (
+                        workspace_id, period_start, operation_type, "reserved",
+                        Decimal("0"), Decimal("0"),
+                    )
                 return True
             # STT/render intentionally share the TTS reservation bucket until
             # dedicated monthly_stt/monthly_render quota fields are added.
@@ -194,21 +263,94 @@ class InMemoryUsageStorage:
                     return False
                 reserved["tts_requests"] += 1
                 if owner_id is not None:
-                    self._owned[owner_id] = (workspace_id, period_start, operation_type, "reserved")
+                    self._owned[owner_id] = (
+                        workspace_id, period_start, operation_type, "reserved",
+                        Decimal("0"), Decimal("0"),
+                    )
                 return True
             return True
 
-    async def try_reserve_owned(self, workspace_id: int, operation_type: str, owner_id: str) -> bool:
-        return await self.try_reserve_quota(workspace_id, operation_type, owner_id)
+    async def try_reserve_owned(
+        self, workspace_id: int, operation_type: str, owner_id: str,
+        estimated_cost_usd: Decimal, monthly_cost_usd: Decimal,
+        global_monthly_cost_usd: Decimal | None, units: int,
+    ) -> bool:
+        async with self._spend_lock:
+            existing = self._owned.get(owner_id)
+            if existing is not None:
+                return (
+                    existing[0] == workspace_id
+                    and existing[2] == operation_type
+                    and existing[3] in {"reserved", "consumed"}
+                )
+            now = datetime.now(timezone.utc)
+            period_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+            settled_workspace = sum(
+                _money(row.get("estimated_cost_usd") or Decimal("0"), name="estimated_cost_usd")
+                for row in self._events.values()
+                if row.get("workspace_id") == workspace_id and row["created_at"] >= period_start
+            )
+            reserved_workspace = sum(
+                max(estimate - settled, Decimal("0"))
+                for ws, period, _, status, estimate, settled in self._owned.values()
+                if ws == workspace_id and period == period_start and status in {"reserved", "consumed", "billable_unknown"}
+            )
+            settled_global = sum(
+                _money(row.get("estimated_cost_usd") or Decimal("0"), name="estimated_cost_usd")
+                for row in self._events.values() if row["created_at"] >= period_start
+            )
+            reserved_global = sum(
+                max(estimate - settled, Decimal("0"))
+                for _, period, _, status, estimate, settled in self._owned.values()
+                if period == period_start and status in {"reserved", "consumed", "billable_unknown"}
+            )
+            if settled_workspace + reserved_workspace + estimated_cost_usd > monthly_cost_usd:
+                return False
+            if (
+                global_monthly_cost_usd is not None
+                and settled_global + reserved_global + estimated_cost_usd > global_monthly_cost_usd
+            ):
+                return False
+            quota = await self.get_workspace_quota(workspace_id)
+            if quota is None:
+                return False
+            events = await self.list_by_workspace(workspace_id, period_start)
+            bucket = "tts_requests" if operation_type in {"tts", "stt", "render"} else operation_type
+            quota_key = {
+                "llm": "monthly_llm_calls",
+                "image_gen": "monthly_image_generations",
+                "tts_requests": "monthly_tts_requests",
+            }[bucket]
+            used = sum(
+                int(row.get("image_count") or 1) if bucket == "image_gen" else 1
+                for row in events
+                if row.get("operation_type") == operation_type
+                or bucket == "tts_requests" and row.get("operation_type") in {"tts", "stt", "render"}
+            )
+            reserved = self._reservations.setdefault(
+                (workspace_id, period_start),
+                {"llm": 0, "image_gen": 0, "tts_requests": 0},
+            )
+            if used + reserved[bucket] + units > int(quota[quota_key]):
+                return False
+            reserved[bucket] += units
+            self._owned[owner_id] = (
+                workspace_id, period_start, operation_type, "reserved",
+                Decimal("0"), Decimal("0"),
+            )
+            self._owned_units[owner_id] = units
+            owned = self._owned[owner_id]
+            self._owned[owner_id] = (*owned[:4], estimated_cost_usd, Decimal("0"))
+            return True
 
     def _finish_owned(self, owner_id: str, status: str) -> bool:
         owned = self._owned.get(owner_id)
         if owned is None or owned[3] != "reserved":
             return False
-        workspace_id, period_start, operation_type, _ = owned
+        workspace_id, period_start, operation_type, _, estimate, settled = owned
         bucket = "tts_requests" if operation_type in {"tts", "stt", "render"} else operation_type
-        self._reservations[(workspace_id, period_start)][bucket] -= 1
-        self._owned[owner_id] = (workspace_id, period_start, operation_type, status)
+        self._reservations[(workspace_id, period_start)][bucket] -= self._owned_units.get(owner_id, 1)
+        self._owned[owner_id] = (workspace_id, period_start, operation_type, status, estimate, settled)
         return True
 
     async def cancel_owned(self, owner_id: str) -> bool:
@@ -218,26 +360,180 @@ class InMemoryUsageStorage:
         async with self._lock_for_workspace(owned[0]):
             return self._finish_owned(owner_id, "cancelled")
 
+    async def settle_owned(self, owner_id: str, *, billable_unknown: bool = False) -> bool:
+        async with self._spend_lock:
+            owned = self._owned.get(owner_id)
+            if owned is None or owned[3] in {"settled", "cancelled", "billable_unknown"}:
+                return False
+            workspace_id, period_start, operation_type, status, estimate, settled = owned
+            if not billable_unknown and status == "reserved":
+                return False
+            unknown = sum(
+                cost for key, cost in self._owned_attempts.items()
+                if key[0] == owner_id and key not in self._accounted_attempts
+            )
+            final_status = "billable_unknown" if billable_unknown or unknown > 0 else "settled"
+            if status == "reserved":
+                self._finish_owned(owner_id, final_status)
+            retained_estimate = estimate if billable_unknown else settled + unknown
+            self._owned[owner_id] = (
+                workspace_id, period_start, operation_type, final_status,
+                retained_estimate, settled,
+            )
+            return True
+
     async def reservation_owner_id(self, task_id: str) -> str | None:
         owned = self._owned.get(task_id)
         if owned is not None and owned[3] == "cancelled":
             raise ValueError("Cancelled reservation owner")
         return task_id if owned is not None else None
 
+    async def readmit_owned(
+        self, owner_id: str, global_monthly_cost_usd: Decimal | None,
+    ) -> bool:
+        async with self._spend_lock:
+            owned = self._owned.get(owner_id)
+            if owned is None or owned[3] not in {"reserved", "consumed"}:
+                return False
+            workspace_id, period_start, operation_type, status, estimate, settled = owned
+            now = datetime.now(timezone.utc)
+            current_period = datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+            if period_start == current_period:
+                return True
+            quota = await self.get_workspace_quota(workspace_id)
+            if quota is None:
+                return False
+            residual = max(estimate - settled, Decimal("0"))
+            settled_workspace = sum(
+                _money(row.get("estimated_cost_usd") or Decimal("0"), name="estimated_cost_usd")
+                for row in self._events.values()
+                if row.get("workspace_id") == workspace_id and row["created_at"] >= current_period
+            )
+            reserved_workspace = sum(
+                max(candidate_estimate - candidate_settled, Decimal("0"))
+                for candidate_owner, candidate_period, _, candidate_status,
+                candidate_estimate, candidate_settled in self._owned.values()
+                if candidate_owner == workspace_id and candidate_period == current_period
+                and candidate_status in {"reserved", "consumed", "billable_unknown"}
+            )
+            if settled_workspace + reserved_workspace + residual > _money(
+                quota["monthly_cost_usd"], name="monthly_cost_usd",
+            ):
+                return False
+            if global_monthly_cost_usd is not None:
+                settled_global = sum(
+                    _money(row.get("estimated_cost_usd") or Decimal("0"), name="estimated_cost_usd")
+                    for row in self._events.values() if row["created_at"] >= current_period
+                )
+                reserved_global = sum(
+                    max(candidate_estimate - candidate_settled, Decimal("0"))
+                    for _, candidate_period, _, candidate_status,
+                    candidate_estimate, candidate_settled in self._owned.values()
+                    if candidate_period == current_period
+                    and candidate_status in {"reserved", "consumed", "billable_unknown"}
+                )
+                if settled_global + reserved_global + residual > global_monthly_cost_usd:
+                    return False
+            if status == "reserved":
+                current_usage = self._reservations.setdefault(
+                    (workspace_id, current_period),
+                    {"llm": 0, "image_gen": 0, "tts_requests": 0},
+                )
+                events = await self.list_by_workspace(workspace_id, current_period)
+                usage = {
+                    "llm": sum(row.get("operation_type") == "llm" for row in events),
+                    "image_gen": sum(
+                        int(row.get("image_count") or 1)
+                        for row in events if row.get("operation_type") == "image_gen"
+                    ),
+                    "tts_requests": sum(
+                        row.get("operation_type") in {"tts", "stt", "render"}
+                        for row in events
+                    ),
+                }
+                bucket = (
+                    "tts_requests" if operation_type in {"tts", "stt", "render"}
+                    else operation_type
+                )
+                quota_key = {
+                    "llm": "monthly_llm_calls",
+                    "image_gen": "monthly_image_generations",
+                    "tts_requests": "monthly_tts_requests",
+                }[bucket]
+                units = self._owned_units.get(owner_id, 1)
+                if usage[bucket] + current_usage[bucket] + units > int(quota[quota_key]):
+                    return False
+                previous_usage = self._reservations.get((workspace_id, period_start))
+                if previous_usage is not None:
+                    previous_usage[bucket] = max(previous_usage[bucket] - units, 0)
+                current_usage[bucket] += units
+            self._owned[owner_id] = (
+                workspace_id, current_period, operation_type, status, estimate, settled,
+            )
+            return True
+
     async def record_owned_event(self, row: dict[str, Any], owner_id: str) -> dict[str, Any]:
         owned = self._owned.get(owner_id)
         if owned is None:
             raise ValueError("Unknown reservation owner")
-        workspace_id, _, operation_type, status = owned
+        workspace_id, period_start, operation_type, status, estimate, settled = owned
         if row.get("workspace_id") != workspace_id or row.get("operation_type") != operation_type:
             raise ValueError("Usage event owner mismatch")
         if status == "cancelled":
             raise ValueError("Cancelled reservation owner")
-        async with self._lock_for_workspace(workspace_id):
+        async with self._spend_lock, self._lock_for_workspace(workspace_id):
+            idempotency_key = row.get("idempotency_key")
+            existing_event = (
+                self._events_by_idempotency_key.get(idempotency_key)
+                if isinstance(idempotency_key, str)
+                else None
+            )
+            if existing_event is not None:
+                return dict(existing_event)
+            attempt_id = row.get("reservation_attempt_id")
+            if isinstance(attempt_id, str):
+                attempt_key = (owner_id, attempt_id)
+                if attempt_key not in self._owned_attempts:
+                    raise ValueError("Usage event references unknown provider attempt")
             saved = await self.record_event(row)
-            if status == "reserved":
-                self._finish_owned(owner_id, "consumed")
+            if isinstance(attempt_id, str):
+                attempt_key = (owner_id, attempt_id)
+                self._accounted_attempts.add(attempt_key)
+            remaining_units = self._owned_units.get(owner_id, 1)
+            if remaining_units > 0:
+                bucket = "tts_requests" if operation_type in {"tts", "stt", "render"} else operation_type
+                self._reservations[(workspace_id, period_start)][bucket] -= 1
+                remaining_units -= 1
+                self._owned_units[owner_id] = remaining_units
+            next_status = "consumed" if remaining_units == 0 else "reserved"
+            self._owned[owner_id] = (
+                workspace_id, period_start, operation_type, next_status, estimate,
+                settled + _money(
+                    saved.get("estimated_cost_usd") or Decimal("0"),
+                    name="estimated_cost_usd",
+                ),
+            )
             return saved
+
+    async def authorize_owned_attempt(
+        self, owner_id: str, attempt_id: str, estimated_cost_usd: Decimal,
+    ) -> bool:
+        async with self._spend_lock:
+            owned = self._owned.get(owner_id)
+            if owned is None or owned[3] not in {"reserved", "consumed"}:
+                return False
+            key = (owner_id, attempt_id)
+            existing = self._owned_attempts.get(key)
+            if existing is not None:
+                return existing == estimated_cost_usd
+            authorized = sum(
+                cost for (candidate_owner, _), cost in self._owned_attempts.items()
+                if candidate_owner == owner_id
+            )
+            if authorized + estimated_cost_usd > owned[4]:
+                return False
+            self._owned_attempts[key] = estimated_cost_usd
+            return True
 
     async def release_reservation(
         self, workspace_id: int, operation_type: str, units: int = 1
@@ -268,7 +564,7 @@ class InMemoryUsageStorage:
                 return
 
             owned = sum(
-                1 for ws, period, op, status in self._owned.values()
+                1 for ws, period, op, status, _, _ in self._owned.values()
                 if ws == workspace_id and period == period_start and status == "reserved"
                 and (
                     op == operation_type if operation_type in {"llm", "image_gen"}
@@ -296,18 +592,71 @@ class UsageService:
     def __init__(self, storage: UsageStorageBackend):
         self.storage = storage
 
-    async def reserve_owned(self, workspace_id: int, operation_type: str, owner_id: str) -> bool:
-        summary = await self.get_monthly_summary(workspace_id)
-        quota = await self.get_quota(workspace_id)
-        if self._quota_exceeded_reason(summary, quota, operation_type) is not None:
+    async def reserve_owned(
+        self, workspace_id: int, operation_type: str, owner_id: str,
+        estimated_cost_usd: Decimal | float | None = None,
+        units: int = 1,
+    ) -> bool:
+        if not _billable_provider_calls_enabled():
             return False
-        return await self.storage.try_reserve_owned(workspace_id, operation_type, owner_id)
+        raw_estimate = estimated_cost_usd
+        if raw_estimate is None:
+            raw_estimate = MAX_ESTIMATED_COST_USD.get(operation_type)
+        if raw_estimate is None:
+            return False
+        try:
+            estimate = _money(raw_estimate, name="estimated_cost_usd")
+        except ValueError:
+            return False
+        if estimate <= 0 or units <= 0:
+            return False
+        quota = await self.get_quota(workspace_id)
+        global_budget_raw = os.getenv("GLOBAL_MONTHLY_ESTIMATED_BUDGET_USD")
+        global_budget = (
+            _money(global_budget_raw, name="GLOBAL_MONTHLY_ESTIMATED_BUDGET_USD")
+            if global_budget_raw
+            else None
+        )
+        return await self.storage.try_reserve_owned(
+            workspace_id, operation_type, owner_id, estimate,
+            _money(quota.monthly_cost_usd, name="monthly_cost_usd"), global_budget, units,
+        )
 
     async def cancel_owned(self, owner_id: str) -> bool:
         return await self.storage.cancel_owned(owner_id)
 
+    async def settle_owned(self, owner_id: str) -> bool:
+        return await self.storage.settle_owned(owner_id)
+
+    async def settle_owned_unknown(self, owner_id: str) -> bool:
+        return await self.storage.settle_owned(owner_id, billable_unknown=True)
+
     async def reservation_owner_id(self, task_id: str) -> str | None:
         return await self.storage.reservation_owner_id(task_id)
+
+    async def authorize_owned_attempt(
+        self, owner_id: str, attempt_id: str, estimated_cost_usd: Decimal | float | str,
+    ) -> bool:
+        if not _billable_provider_calls_enabled():
+            return False
+        try:
+            estimate = _money(estimated_cost_usd, name="estimated_cost_usd")
+        except ValueError:
+            return False
+        if estimate <= 0:
+            return False
+        return await self.storage.authorize_owned_attempt(owner_id, attempt_id, estimate)
+
+    async def readmit_owned(self, owner_id: str) -> bool:
+        if not _billable_provider_calls_enabled():
+            return False
+        global_budget_raw = os.getenv("GLOBAL_MONTHLY_ESTIMATED_BUDGET_USD")
+        global_budget = (
+            _money(global_budget_raw, name="GLOBAL_MONTHLY_ESTIMATED_BUDGET_USD")
+            if global_budget_raw
+            else None
+        )
+        return await self.storage.readmit_owned(owner_id, global_budget)
 
     async def record_usage(
         self,
@@ -321,11 +670,12 @@ class UsageService:
         output_tokens: int | None = None,
         image_count: int | None = None,
         audio_seconds: float | None = None,
-        estimated_cost_usd: float | None = None,
+        estimated_cost_usd: Decimal | float | None = None,
         cost_config_version: str | None = None,
         project_id: int | None = None,
         idempotency_key: str | None = None,
         reservation_owner_id: str | None = None,
+        reservation_attempt_id: str | None = None,
     ) -> UsageEvent:
         payload = {
                 "workspace_id": workspace_id,
@@ -341,6 +691,7 @@ class UsageService:
                 "estimated_cost_usd": estimated_cost_usd,
                 "cost_config_version": cost_config_version,
                 "idempotency_key": idempotency_key,
+                "reservation_attempt_id": reservation_attempt_id,
             }
         if reservation_owner_id is not None:
             row = await self.storage.record_owned_event(payload, reservation_owner_id)
@@ -358,14 +709,17 @@ class UsageService:
         total_llm_calls = 0
         total_image_generations = 0
         total_tts_seconds = 0.0
-        total_estimated_cost_usd = 0.0
-        by_provider: dict[str, float] = {}
+        total_estimated_cost_usd = Decimal("0")
+        by_provider: dict[str, Decimal] = {}
         by_operation: dict[str, int] = {}
 
         for row in rows:
             operation_type = str(row.get("operation_type") or "")
             provider = str(row.get("provider") or "unknown")
-            estimated_cost_usd = float(row.get("estimated_cost_usd") or 0.0)
+            estimated_cost_usd = _money(
+                row.get("estimated_cost_usd") or Decimal("0"),
+                name="estimated_cost_usd",
+            )
             image_count = int(row.get("image_count") or 0)
             audio_seconds = float(row.get("audio_seconds") or 0.0)
 
@@ -377,7 +731,7 @@ class UsageService:
                 total_tts_seconds += audio_seconds
 
             total_estimated_cost_usd += estimated_cost_usd
-            by_provider[provider] = by_provider.get(provider, 0.0) + estimated_cost_usd
+            by_provider[provider] = by_provider.get(provider, Decimal("0")) + estimated_cost_usd
             by_operation[operation_type] = by_operation.get(operation_type, 0) + 1
 
         return UsageSummary(
@@ -487,12 +841,13 @@ async def record_provider_call(
     output_tokens: int | None = None,
     image_count: int | None = None,
     audio_seconds: float | None = None,
-    cost_usd: float | None = None,
+    cost_usd: Decimal | float | None = None,
     cost_config_version: str | None = None,
     workspace_id: int | None = None,
     project_id: int | None = None,
     idempotency_key: str | None = None,
     reservation_owner_id: str | None = None,
+    reservation_attempt_id: str | None = None,
 ) -> UsageEvent:
     """Record a provider call from a worker task.
 
@@ -543,6 +898,7 @@ async def record_provider_call(
         project_id=project_id,
         idempotency_key=idempotency_key,
         reservation_owner_id=reservation_owner_id,
+        reservation_attempt_id=reservation_attempt_id,
     )
 
 
@@ -598,10 +954,24 @@ async def cancel_workspace_quota_reservation(
 
 async def reserve_owned_quota(
     workspace_id: int, operation_type: str, owner_id: str,
+    estimated_cost_usd: Decimal | float | None = None,
+    units: int = 1,
 ) -> tuple[bool, str]:
-    allowed = await usage_service.reserve_owned(workspace_id, operation_type, owner_id)
+    allowed = await usage_service.reserve_owned(
+        workspace_id, operation_type, owner_id, estimated_cost_usd, units,
+    )
     return allowed, "ok" if allowed else "Quota exceeded"
 
 
 async def cancel_owned_quota_reservation(owner_id: str) -> bool:
     return await usage_service.cancel_owned(owner_id)
+
+
+async def authorize_owned_provider_attempt(
+    owner_id: str | None, attempt_id: str, estimated_cost_usd: Decimal | float | str,
+) -> bool:
+    if owner_id is None:
+        return True
+    return await usage_service.authorize_owned_attempt(
+        owner_id, attempt_id, estimated_cost_usd,
+    )

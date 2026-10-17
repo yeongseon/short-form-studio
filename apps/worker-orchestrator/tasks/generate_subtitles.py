@@ -17,7 +17,7 @@ from creator_service.cost_config import COST_SUBTITLE_GENERATION
 from creator_service.script_service import script_service as _script_service
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
 from creator_service.telemetry import trace_task
-from creator_service.usage_service import record_provider_call
+from creator_service.usage_service import authorize_owned_provider_attempt, record_provider_call
 from tasks.task_runner import GpuLockContext, TaskContext, TaskResult, TaskRunnerConfig, run_task
 from tasks.task_execution import TaskInputError
 
@@ -96,6 +96,12 @@ def generate_subtitles(
             params["format"] = subtitle_format
             params["output_path"] = subtitle_path
             try:
+                attempt_id = f"{ctx.task_id}:{ctx.delivery_attempt}:stt"
+                if not await authorize_owned_provider_attempt(
+                    ctx.reservation_owner_id, attempt_id, COST_SUBTITLE_GENERATION,
+                ):
+                    raise ProviderError("Provider attempt exceeds approved spend")
+                ctx.mark_provider_started()
                 await provider.transcribe(audio_path, params=params)
             except ProviderError:
                 raise
@@ -129,7 +135,9 @@ def generate_subtitles(
                 project_id=ctx.project_id,
                 idempotency_key=ctx.task_id,
                 reservation_owner_id=ctx.reservation_owner_id,
+                reservation_attempt_id=attempt_id,
             )
+            ctx.mark_provider_accounted()
         except Exception:
             if ctx.reservation_owner_id is not None:
                 raise

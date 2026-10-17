@@ -18,7 +18,7 @@ async def test_scene_dispatch_keeps_loop_alive_until_tracking(monkeypatch):
 
     owners = []
 
-    async def reserve(_workspace_id, _operation_type, owner_id):
+    async def reserve(_workspace_id, _operation_type, owner_id, _estimate=None):
         owners.append(owner_id)
         return True, "ok"
 
@@ -67,7 +67,7 @@ async def test_scene_dispatch_releases_only_its_owner_on_failure(monkeypatch, st
     monkeypatch.setattr(routes, "validate_model_key", lambda *a, **kw: None)
     monkeypatch.setattr(routes, "_enforce_run_quota", AsyncMock(return_value=1))
 
-    async def reserve(_workspace_id, _operation_type, owner_id):
+    async def reserve(_workspace_id, _operation_type, owner_id, _estimate=None):
         owners.append(owner_id)
         return True, "ok"
 
@@ -114,7 +114,7 @@ async def test_scene_dispatch_terminalizes_pending_task_when_publish_raises(monk
     monkeypatch.setattr(routes, "validate_model_key", lambda *a, **kw: None)
     monkeypatch.setattr(routes, "_enforce_run_quota", AsyncMock(return_value=1))
 
-    async def reserve(_workspace_id, _operation_type, owner_id):
+    async def reserve(_workspace_id, _operation_type, owner_id, _estimate=None):
         owners.append(owner_id)
         return True, "ok"
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import partial
 import logging
+from decimal import Decimal
 from uuid import uuid4
 from typing import TYPE_CHECKING
 
@@ -10,7 +11,11 @@ from creator_service.project_service import project_service
 from creator_service.run_service import run_service
 from creator_service.task_dispatch_service import dispatch_generate_scene_image, task_dispatch_service
 from creator_service.task_tracking_service import task_tracking_service
-from creator_service.usage_service import reserve_owned_quota, cancel_owned_quota_reservation
+from creator_service.usage_service import (
+    ReservationQuote,
+    cancel_owned_quota_reservation,
+    reserve_owned_quota,
+)
 from fastapi import APIRouter, Depends, HTTPException
 
 from shorts_api.auth import CurrentUser, require_run_access
@@ -37,9 +42,17 @@ async def _enforce_run_quota(run_id: int, operation_type: str, workspace_id: int
     return int(project_workspace_id)
 
 
-async def _dispatch_image(run_id: int, workspace_id: int, **kwargs: object) -> str:
+async def _dispatch_image(
+    run_id: int, workspace_id: int, *, internal_attempts: int, **kwargs: object,
+) -> str:
     task_id = str(uuid4())
-    allowed, reason = await reserve_owned_quota(workspace_id, "image_gen", task_id)
+    quote = ReservationQuote.bounded(
+        unit_cost_usd=Decimal("0.04"), units=1,
+        internal_attempts=internal_attempts, deliveries=6,
+    )
+    allowed, reason = await reserve_owned_quota(
+        workspace_id, "image_gen", task_id, quote.maximum_cost_usd,
+    )
     if not allowed:
         raise HTTPException(status_code=429, detail=reason)
     pending_created = False
@@ -88,7 +101,9 @@ async def generate_scene_image_endpoint(
     validate_model_key(effective_request.model_key, expected_category="image")
     workspace_id = await _enforce_run_quota(run_id, "image_gen", workspace_id=access[0].workspace_id)
     task_id = await _dispatch_image(
-        run_id, workspace_id, model_key=effective_request.model_key,
+        run_id, workspace_id,
+        internal_attempts=3 if effective_request.model_key == "groq-svg" else 1,
+        model_key=effective_request.model_key,
         scene_id=scene_id, prompt_override=None, is_active=True,
         image_params=effective_request.image_params.model_dump() if effective_request.image_params else None,
     )
@@ -109,7 +124,9 @@ async def regenerate_scene_image_endpoint(
     validate_model_key(request.model_key, expected_category="image")
     workspace_id = await _enforce_run_quota(run_id, "image_gen", workspace_id=access[0].workspace_id)
     task_id = await _dispatch_image(
-        run_id, workspace_id, model_key=request.model_key,
+        run_id, workspace_id,
+        internal_attempts=3 if request.model_key == "groq-svg" else 1,
+        model_key=request.model_key,
         scene_id=scene_id, prompt_override=request.prompt_override, is_active=False,
         image_params=request.image_params.model_dump() if request.image_params else None,
     )

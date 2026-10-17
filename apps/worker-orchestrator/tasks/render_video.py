@@ -17,7 +17,7 @@ from creator_service.render_service import render_service as _render_service
 from creator_service.script_service import script_service as _script_service
 from creator_service.subtitle_service import subtitle_service as _subtitle_service
 from creator_service.telemetry import trace_task
-from creator_service.usage_service import record_provider_call
+from creator_service.usage_service import authorize_owned_provider_attempt, record_provider_call
 from creator_service.visual_asset_service import visual_asset_service as _visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
 from tasks.legacy_render_adapter import prepare_legacy_render
@@ -41,11 +41,17 @@ async def execute_render(ctx: TaskContext, render_profile: str = "shorts_default
     output = request.output("output.mp4")
     audio: Path | None = None
     subtitles: Path | None = None
+    attempt_id = f"{ctx.task_id}:{ctx.delivery_attempt}:render"
     if read_render_metadata(ctx).render_source == "timeline":
         narration = await _audio_service.get_latest(ctx.run_id)
         captions = await _subtitle_service.get_latest(ctx.run_id)
         audio = request.path(narration.path) if narration else None
         subtitles = request.path(captions.path) if captions else None
+        if not await authorize_owned_provider_attempt(
+            ctx.reservation_owner_id, attempt_id, COST_RENDER_VIDEO,
+        ):
+            raise ProviderError("Provider attempt exceeds approved spend")
+        ctx.mark_provider_started()
         scene_count = await render_saved_timeline(
             ctx, _resolve_profile(render_profile), output, layers=RenderLayers(audio, subtitles),
         )
@@ -58,6 +64,11 @@ async def execute_render(ctx: TaskContext, render_profile: str = "shorts_default
         audio, subtitles, scene_count = inputs.audio, inputs.subtitles, inputs.scene_count
         render_input = render_input_from_plan(inputs.plan, audio_path=audio, subtitle_path=subtitles)
         try:
+            if not await authorize_owned_provider_attempt(
+                ctx.reservation_owner_id, attempt_id, COST_RENDER_VIDEO,
+            ):
+                raise ProviderError("Provider attempt exceeds approved spend")
+            ctx.mark_provider_started()
             inputs.ffmpeg.render(render_input, output)
         except (TimeoutError, ConnectionError) as exc:
             raise ProviderTimeoutError(f"Provider timed out during video render for run {ctx.run_id}") from exc
@@ -73,7 +84,9 @@ async def execute_render(ctx: TaskContext, render_profile: str = "shorts_default
             ctx.run_id, "ffmpeg", render_profile, "render", cost_usd=COST_RENDER_VIDEO,
             workspace_id=ctx.workspace_id, project_id=ctx.project_id, idempotency_key=ctx.task_id,
             reservation_owner_id=ctx.reservation_owner_id,
+            reservation_attempt_id=attempt_id,
         )
+        ctx.mark_provider_accounted()
     except Exception:
         if ctx.reservation_owner_id is not None:
             raise
