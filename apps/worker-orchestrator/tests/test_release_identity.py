@@ -54,6 +54,14 @@ def test_worker_heartbeat_refreshes_its_runtime_identity(monkeypatch) -> None:
     assert worker_release_identity.IDENTITY_TTL_SECONDS > worker_release_identity.HEARTBEAT_INTERVAL_SECONDS
 
 
+def test_ready_worker_rejects_partial_release_metadata(monkeypatch) -> None:
+    monkeypatch.setenv("SOURCE_SHA", "b" * 40)
+    monkeypatch.delenv("WORKER_IMAGE_DIGEST", raising=False)
+
+    with pytest.raises(worker_release_identity.ReleaseIdentityRegistrationError, match="incomplete"):
+        worker_release_identity.publish_release_identity()
+
+
 def test_ready_worker_skips_identity_publication_without_release_metadata(monkeypatch) -> None:
     # Given a local worker that was not launched from an approved release image.
     monkeypatch.delenv("SOURCE_SHA", raising=False)

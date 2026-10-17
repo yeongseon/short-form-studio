@@ -40,6 +40,8 @@ def publish_release_identity(**_kwargs: object) -> None:
     image_digest = os.getenv("WORKER_IMAGE_DIGEST")
     if source_sha is None and image_digest is None:
         return
+    if source_sha is None or image_digest is None:
+        raise ReleaseIdentityRegistrationError("Worker release identity metadata is incomplete")
     try:
         _write_release_identity()
     except (KeyError, redis.RedisError, OSError, ConnectionError) as error:
