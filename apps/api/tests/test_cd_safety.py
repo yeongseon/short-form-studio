@@ -187,6 +187,18 @@ def test_runtime_verification_uses_platform_digests_and_every_worker_source() ->
         assert "platform-attestation.json" in commands, name
 
 
+def test_lifecycle_builds_additive_newer_head_and_runs_cd_rollback_verification() -> None:
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    lifecycle = (ROOT / "scripts/release_lifecycle_acceptance.sh").read_text()
+
+    assert "038_release_lifecycle_additive" in workflow
+    assert "down_revision: str | None = \"037\"" in workflow
+    assert "LIFECYCLE_N_HEAD" in workflow
+    assert "LIFECYCLE_N_PLUS_ONE_HEAD" in workflow
+    assert "MigrationContext.configure(connection).get_current_heads()" in lifecycle
+    assert "verify-db-compatible" in lifecycle
+
+
 def test_deploy_production_condition_references_only_direct_needs() -> None:
     workflow = Workflow.model_validate(yaml.safe_load((ROOT / ".github/workflows/cd.yml").read_text()))
 
