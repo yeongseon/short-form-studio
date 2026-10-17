@@ -43,7 +43,7 @@ try:
     import worker_release_identity as _worker_release_identity_module  # noqa: F401 — register signal handler
 except ImportError:
     _worker_release_identity_module = None
-from celery_dlq_fallback import append_fallback_entry, read_fallback_entries
+from creator_service.celery_dlq_fallback import append_fallback_entry, read_fallback_entries
 from creator_service.broker_recovery import BrokerSnapshot
 
 
