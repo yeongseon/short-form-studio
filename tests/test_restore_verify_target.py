@@ -33,6 +33,27 @@ def test_restore_rejects_symlinked_target_ancestor(tmp_path: Path) -> None:
     assert list(outside.iterdir()) == []
 
 
+def test_restore_rejects_intermediate_symlinked_target_ancestor(
+    tmp_path: Path,
+) -> None:
+    # Given
+    bundle = _bundle(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    safe = tmp_path / "safe"
+    safe.mkdir()
+    (safe / "linked").symlink_to(outside, target_is_directory=True)
+    target = safe / "linked/inner/restore"
+
+    # When
+    result = _restore(bundle, target)
+
+    # Then
+    assert result.returncode != 0
+    assert "target ancestor must not be a symlink" in result.stderr
+    assert list(outside.iterdir()) == []
+
+
 @pytest.mark.parametrize("existing_content", [False, True])
 def test_restore_requires_absent_target(
     tmp_path: Path, existing_content: bool
@@ -100,6 +121,70 @@ def test_restore_parent_swap_does_not_redirect_output(
     # Then
     assert list(outside.iterdir()) == []
     assert (moved_parent / "restore/workspace-a/image.png").read_bytes() == b"synthetic image"
+
+
+def test_restore_intermediate_ancestor_swap_does_not_redirect_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given
+    import importlib.util
+
+    monkeypatch.syspath_prepend(str(SCRIPT.parent))
+    specification = importlib.util.spec_from_file_location("restore_verify", SCRIPT)
+    assert specification is not None
+    assert specification.loader is not None
+    module = importlib.util.module_from_spec(specification)
+    sys.modules[specification.name] = module
+    specification.loader.exec_module(module)
+    bundle = _bundle(tmp_path)
+    ancestor = tmp_path / "ancestor"
+    parent = ancestor / "parent"
+    parent.mkdir(parents=True)
+    target = parent / "restore"
+    moved_ancestor = tmp_path / "moved-ancestor"
+    outside = tmp_path / "outside"
+    (outside / "parent").mkdir(parents=True)
+    original_open = module.copy_tree_to_new_target.__globals__["os"].open
+    swapped = False
+
+    def swap_ancestor(
+        path: str | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        descriptor = original_open(path, flags, mode, dir_fd=dir_fd)
+        if Path(path).name == "ancestor" and not swapped:
+            swapped = True
+            ancestor.rename(moved_ancestor)
+            ancestor.symlink_to(outside, target_is_directory=True)
+        return descriptor
+
+    monkeypatch.setattr(
+        module.copy_tree_to_new_target.__globals__["os"], "open", swap_ancestor
+    )
+    arguments = module.parser().parse_args(
+        [
+            "restore-media",
+            str(bundle),
+            "--target",
+            str(target),
+            "--expected-alembic-revision",
+            "revision-1",
+            "--expected-secret-fingerprint",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ]
+    )
+
+    # When
+    module.restore_media(arguments)
+
+    # Then
+    assert list((outside / "parent").iterdir()) == []
+    restored = moved_ancestor / "parent/restore/workspace-a/image.png"
+    assert restored.read_bytes() == b"synthetic image"
 
 
 def test_restore_rejects_source_file_swapped_after_verification(
