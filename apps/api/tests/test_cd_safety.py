@@ -158,6 +158,8 @@ def test_app_rollback_uses_schema_compatibility_policy_while_deploy_stays_exact(
         steps = jobs[name]["steps"]
         commands = "\n".join(step.get("run", "") for step in steps)
         assert "verify-db-compatible" in commands, name
+        assert ".get_current_heads()" in commands, name
+        assert "alembic current" not in commands, name
         assert "SCHEMA_COMPATIBLE_DB_REVISIONS" in str(steps), name
         assert "github.event.inputs.release_action" in str(steps), name
 
