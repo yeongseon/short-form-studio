@@ -8,7 +8,6 @@ import subprocess
 import time
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Literal
 from urllib.request import Request, urlopen
 
@@ -168,11 +167,17 @@ async def recover_lost_claim(task_id: str) -> None:
 def send_delayed_failure(task_id: str, claim_token: str) -> None:
     from celery.signals import task_failure
 
-    sender = SimpleNamespace(
-        name="runtime_topology.probe",
-        max_retries=0,
-        request=SimpleNamespace(retries=0, claim_token=claim_token),
-    )
+    class Sender:
+        name = "runtime_topology.probe"
+        max_retries = 0
+
+        class Request:
+            retries = 0
+
+        request = Request()
+
+    sender = Sender()
+    sender.request.claim_token = claim_token
     task_failure.send(
         sender=sender,
         task_id=task_id,
