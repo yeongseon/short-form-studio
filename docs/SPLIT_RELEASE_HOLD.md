@@ -52,6 +52,10 @@ and media together only under a separately approved restore plan.
 Manual rollback now requires a previously validated release manifest. App-only
 rollback skips migrations and redeploys the manifest's three digests together.
 A DB downgrade requires the separate `db_downgrade` action, the revision bound
-to the validated manifest, typed `DOWNGRADE` approval, and the protected `production-db-downgrade`
-environment; Alembic runs from the selected API image. Keep the hold closed
-until every adapter and verification endpoint is configured and tested.
+to the validated target manifest, typed `DOWNGRADE` approval, and the protected
+`production-db-downgrade` environment. Supply both the target release run ID and
+`migration_runner_run_id`; the latter must identify the currently deployed,
+newer manifest whose API image contains the full downgrade path. The workflow
+validates both manifests, runs Alembic from that newer migration-runner digest,
+and verifies the resulting revision against the target manifest. Keep the hold
+closed until every adapter and verification endpoint is configured and tested.
