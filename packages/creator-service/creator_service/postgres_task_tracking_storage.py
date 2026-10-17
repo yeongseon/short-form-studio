@@ -165,15 +165,13 @@ class PostgresTaskTrackingStorage:
                 )
                 if claimed is None:
                     return False
-                updated_run = await connection.fetchrow(
+                await connection.fetchrow(
                     """UPDATE creator_runs SET current_stage=$2, status=$3, version=version+1
                        WHERE id=$1 AND current_stage=ANY($4::text[])
                        AND status != ALL($5::text[]) RETURNING id""",
                     run_id, run_updates["current_stage"], run_updates["status"],
                     list(expected_stages), list(rejected_statuses),
                 )
-                if updated_run is None:
-                    return False
                 await connection.fetchrow(
                     """UPDATE creator_run_tasks SET status=$2, claim_token=NULL,
                        finished_at=NOW(), error_code=$3, error_message=$4
