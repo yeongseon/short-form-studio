@@ -32,6 +32,7 @@ from tests.worker_topology_runtime import (
     redis_available,
     row,
     send,
+    send_delayed_failure,
     sql,
     stop_run,
     wait_state,
@@ -220,29 +221,72 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
     redelivered = wait_task("active-redelivery", "running")
     assert redelivered["attempt"] == first_claim["attempt"]
     assert redelivered["claim_token"] != first_claim["claim_token"]
-    stale_update = anyio.run(
+    anyio.run(
         sql,
-        "UPDATE creator_run_tasks SET status='success' WHERE celery_task_id='active-redelivery' AND claim_token=$1",
-        (first_claim["claim_token"],),
+        """INSERT INTO workspace_quota_reservations(workspace_id, period_start, image_count)
+        VALUES(1, date_trunc('month', now()), 1)
+        ON CONFLICT (workspace_id, period_start) DO UPDATE
+        SET image_count = workspace_quota_reservations.image_count + 1;
+        INSERT INTO workspace_quota_reservation_owners
+        (owner_id, workspace_id, period_start, operation_type, status)
+        VALUES('active-redelivery', 1, date_trunc('month', now()), 'image_gen', 'reserved');""",
     )
-    assert stale_update == "UPDATE 0"
+    send_delayed_failure("active-redelivery", str(first_claim["claim_token"]))
+    successor = wait_task("active-redelivery", "running")
+    successor_run = anyio.run(row, "SELECT status FROM creator_runs WHERE id=103")
+    successor_quota = anyio.run(
+        row,
+        "SELECT status FROM workspace_quota_reservation_owners WHERE owner_id='active-redelivery'",
+    )
+    assert successor["claim_token"] == redelivered["claim_token"]
+    assert successor_run is not None and successor_run["status"] == "running"
+    assert successor_quota is not None and successor_quota["status"] == "reserved"
     persist_snapshot("redelivery-final-state.json", 103)
     capture_worker("topology-scaled-redelivery")
     docker("rm", "-f", "topology-scaled-redelivery")
     worker("topology-scaled-redelivered", command)
 
     new_run(106)
-    send(106, "timeout-delivery", "wait", timeout_state, queue="image", time_limit=2)
-    wait_state(timeout_state, "running")
-    wait_task("timeout-delivery", "failed")
+    anyio.run(
+        sql,
+        """INSERT INTO workspace_quota_reservations(workspace_id, period_start, image_count)
+        VALUES(1, date_trunc('month', now()), 1)
+        ON CONFLICT (workspace_id, period_start) DO UPDATE
+        SET image_count = workspace_quota_reservations.image_count + 1;
+        INSERT INTO workspace_quota_reservation_owners
+        (owner_id, workspace_id, period_start, operation_type, status)
+        VALUES('timeout-delivery', 1, date_trunc('month', now()), 'image_gen', 'reserved');""",
+    )
+    send(
+        106,
+        "timeout-delivery",
+        "timeout_resources",
+        timeout_state,
+        queue="image",
+        time_limit=2,
+    )
+    timeout_resources = wait_state(timeout_state, "resources_active")
+    timeout_pid = int(timeout_resources["child_pid"])
+    timeout_file = Path(str(timeout_resources["temporary_path"]))
+    assert timeout_file.is_file()
     docker("stop", "topology-redis")
     time.sleep(1)
     assert not redis_available()
     docker("start", "topology-redis")
+    wait_task("timeout-delivery", "failed")
     deadline = time.monotonic() + 10
     while not redis_available() and time.monotonic() < deadline:
         time.sleep(0.1)
     assert redis_available()
+    timeout_run = anyio.run(row, "SELECT status FROM creator_runs WHERE id=106")
+    timeout_quota = anyio.run(
+        row,
+        "SELECT status FROM workspace_quota_reservation_owners WHERE owner_id='timeout-delivery'",
+    )
+    assert timeout_run is not None and timeout_run["status"] == "failed"
+    assert timeout_quota is not None and timeout_quota["status"] == "cancelled"
+    assert not timeout_file.exists()
+    assert not Path(f"/proc/{timeout_pid}").exists()
     persist_snapshot("timeout-final-state.json", 106)
     capture_worker("topology-scaled-redelivered")
     docker("rm", "-f", "topology-scaled-redelivered")

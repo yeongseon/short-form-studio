@@ -19,7 +19,8 @@ from tasks.hard_timeout import finalize_hard_timeout
 from tasks.task_runner import TaskContext, TaskResult, TaskRunnerConfig, run_task
 
 type ProbeMode = Literal[
-    "boundaries", "complete", "cooperative", "ffmpeg_hang", "redelivery", "wait"
+    "boundaries", "complete", "cooperative", "ffmpeg_hang", "redelivery",
+    "timeout_resources", "wait"
 ]
 
 
@@ -45,6 +46,14 @@ class _TopologyRequest(Request):
             return
         run_id = self.args[0]
         if isinstance(run_id, int):
+            if self.args[1] == "timeout_resources" and isinstance(self.args[2], str):
+                state = json.loads(_evidence_file(self.args[2]).read_text(encoding="utf-8"))
+                child_pid = state.get("child_pid")
+                temporary_path = state.get("temporary_path")
+                if isinstance(child_pid, int):
+                    os.killpg(child_pid, signal.SIGKILL)
+                if isinstance(temporary_path, str):
+                    Path(temporary_path).unlink(missing_ok=True)
             finalize_hard_timeout(self.id, run_id, timeout)
 
 
@@ -160,6 +169,22 @@ def runtime_topology_probe(
                 while not kill_marker.exists():
                     time.sleep(0.05)
                 os.kill(os.getpid(), signal.SIGKILL)
+            case "timeout_resources":
+                temporary = _evidence_file(f"storage/{run_id}/timeout.tmp")
+                temporary.parent.mkdir(parents=True, exist_ok=True)
+                temporary.write_bytes(b"timeout-owned")
+                child = subprocess.Popen(
+                    ["python3", "-c", "import time; time.sleep(300)"],
+                    start_new_session=True,
+                )
+                _publish(
+                    evidence_path,
+                    "resources_active",
+                    task_id=ctx.task_id,
+                    child_pid=child.pid,
+                    temporary_path=str(temporary),
+                )
+                child.wait()
             case unreachable:
                 assert_never(unreachable)
         return TaskResult()
