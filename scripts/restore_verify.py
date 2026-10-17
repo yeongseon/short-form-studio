@@ -28,7 +28,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import NewType, TypedDict
 
-from restore_target import copy_tree_to_new_target
+from restore_target import SourceTreeChangedError, copy_tree_to_new_target
 
 
 Checksum = NewType("Checksum", str)
@@ -319,7 +319,17 @@ def restore_media(args: argparse.Namespace) -> None:
     if target.exists() or target.is_symlink():
         raise RestoreError("target must be absent")
     try:
-        copy_tree_to_new_target(bundle / manifest.media_root, target)
+        media_root = PurePosixPath(manifest.media_root)
+        expected_checksums = {
+            PurePosixPath(relative).relative_to(media_root).as_posix(): str(value)
+            for relative, value in manifest.files.items()
+            if PurePosixPath(relative).is_relative_to(media_root)
+        }
+        copy_tree_to_new_target(
+            bundle / manifest.media_root, target, expected_checksums
+        )
+    except SourceTreeChangedError as error:
+        raise RestoreError(str(error)) from error
     except (FileExistsError, FileNotFoundError, NotADirectoryError, OSError) as error:
         raise RestoreError(f"target ancestor must not be a symlink or target exists: {error}") from error
 
