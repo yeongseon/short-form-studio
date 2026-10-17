@@ -1,0 +1,5 @@
+{
+  "api": "ghcr.io/yeongseon/short-form-studio-api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "worker": "ghcr.io/yeongseon/short-form-studio-worker@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "web": "ghcr.io/yeongseon/short-form-studio-web@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+}

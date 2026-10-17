@@ -62,10 +62,13 @@ def mapped_postgres_url(container: str, password: str) -> str:
 
 def image_digest(image: str) -> str:
     docker("pull", image)
-    inspected = docker("image", "inspect", image, "--format={{.Id}}").stdout.strip()
-    if not inspected.startswith("sha256:"):
-        raise DrillError(f"image lacks immutable digest: {image}")
-    return f"{image.split(':', 1)[0]}@{inspected}"
+    repo_digests = docker(
+        "image", "inspect", image, "--format={{join .RepoDigests \"\\n\"}}"
+    ).stdout.splitlines()
+    digest = next((value for value in repo_digests if "@sha256:" in value), None)
+    if digest is None:
+        raise DrillError(f"image lacks registry RepoDigest: {image}")
+    return digest
 
 
 def seed_production_fixture(container: str, media: Path) -> RuntimeFixture:
