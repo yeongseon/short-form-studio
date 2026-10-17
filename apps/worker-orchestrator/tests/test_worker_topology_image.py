@@ -261,6 +261,7 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
     assert redis_available()
     capture_worker("topology-scaled-redelivered")
     docker("rm", "-f", "topology-scaled-redelivered")
+    docker("exec", "topology-redis", "redis-cli", "DEL", "image")
     worker("topology-scaled-timeout", command)
 
     new_run(106)
