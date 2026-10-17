@@ -8,6 +8,7 @@ import subprocess
 import time
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Literal
 from urllib.request import Request, urlopen
 
@@ -21,7 +22,10 @@ DATABASE_URL = os.getenv("DATABASE_URL", "")
 REDIS_URL = os.getenv("REDIS_URL", "")
 API_KEY = "topology-runtime-key"
 API_URL = "http://127.0.0.1:58064"
-type ProbeMode = Literal["complete", "cooperative", "ffmpeg_hang", "redelivery", "wait"]
+type ProbeMode = Literal[
+    "boundaries", "complete", "cooperative", "ffmpeg_hang", "redelivery",
+    "timeout_resources", "wait"
+]
 SCALED_IMAGE_COMMAND = [
     "celery",
     "-A",
@@ -159,6 +163,21 @@ async def recover_lost_claim(task_id: str) -> None:
         "The active prefork delivery lost its worker process",
     )
     assert recovered is not None
+
+
+def send_delayed_failure(task_id: str, claim_token: str) -> None:
+    from celery.signals import task_failure
+
+    sender = SimpleNamespace(
+        name="runtime_topology.probe",
+        max_retries=0,
+        request=SimpleNamespace(retries=0, claim_token=claim_token),
+    )
+    task_failure.send(
+        sender=sender,
+        task_id=task_id,
+        exception=RuntimeError("delayed old-delivery failure"),
+    )
 
 
 def send(
