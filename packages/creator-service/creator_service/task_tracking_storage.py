@@ -1,0 +1,69 @@
+from __future__ import annotations
+
+import os
+from typing import TYPE_CHECKING, Any, Protocol
+
+if TYPE_CHECKING:
+    from .run_service import RunStorageBackend
+
+
+class TaskTrackingStorageBackend(Protocol):
+    async def transition_run_and_create_pending(
+        self, run_storage: RunStorageBackend, run_id: int, updates: dict[str, Any],
+        expected_stages: frozenset[str], task_row: dict[str, Any],
+        workspace_id: int | None, rejected_statuses: frozenset[str],
+    ) -> tuple[bool, dict[str, Any] | None]: ...
+    async def create_task(self, row: dict[str, Any]) -> dict[str, Any] | None: ...
+    async def update_task_status(
+        self, task_id: int, status: str, **kwargs: Any
+    ) -> dict[str, Any] | None: ...
+    async def update_task_status_if_running(
+        self, task_id: int, status: str, **kwargs: Any
+    ) -> dict[str, Any] | None: ...
+    async def update_task_status_if_pending(
+        self, task_id: int, status: str, **kwargs: Any
+    ) -> dict[str, Any] | None: ...
+    async def get_by_celery_id(self, celery_task_id: str) -> dict[str, Any] | None: ...
+    async def list_by_run(self, run_id: int) -> list[dict[str, Any]]: ...
+    async def claim_running(self, task_id: int, **kwargs: Any) -> dict[str, Any] | None: ...
+    async def list_stuck_tasks(self, threshold_seconds: int) -> list[dict[str, Any]]: ...
+    async def list_stale_pending_tasks(self, threshold_seconds: int) -> list[dict[str, Any]]: ...
+    async def list_reconciliation_pending_tasks(
+        self, lease_seconds: int
+    ) -> list[dict[str, Any]]: ...
+    async def claim_reconciliation(
+        self, task_id: int, claim_token: str, lease_seconds: int
+    ) -> dict[str, Any] | None: ...
+    async def finish_reconciliation(
+        self, celery_task_id: str, claim_token: str, error_code: str, error_message: str
+    ) -> dict[str, Any] | None: ...
+    async def release_reconciliation(
+        self, celery_task_id: str, claim_token: str
+    ) -> dict[str, Any] | None: ...
+    async def rollback_run_if_task_owner(
+        self, celery_task_id: str, run_storage: RunStorageBackend,
+        run_id: int, eligible_task_types: frozenset[str],
+        expected_stages: frozenset[str], rejected_statuses: frozenset[str],
+    ) -> tuple[bool, dict[str, Any] | None]: ...
+    async def promote_pending_to_queued(self, celery_task_id: str) -> dict[str, Any] | None: ...
+    async def get_active_celery_ids(self, run_id: int) -> list[str]: ...
+    async def finish_if_claimed(
+        self, celery_task_id: str, token: str, status: str,
+        error_code: str | None = None, error_message: str | None = None,
+    ) -> dict[str, Any] | None: ...
+    async def finish_claimed_run(
+        self, celery_task_id: str, token: str, status: str, run_storage: RunStorageBackend,
+        run_id: int, run_updates: dict[str, str], expected_stages: frozenset[str],
+        rejected_statuses: frozenset[str], error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> bool: ...
+
+
+def create_task_tracking_storage() -> TaskTrackingStorageBackend:
+    if os.getenv("DATABASE_URL"):
+        from .postgres_task_tracking_storage import PostgresTaskTrackingStorage
+
+        return PostgresTaskTrackingStorage()
+    from .memory_task_tracking_storage import InMemoryTaskTrackingStorage
+
+    return InMemoryTaskTrackingStorage()

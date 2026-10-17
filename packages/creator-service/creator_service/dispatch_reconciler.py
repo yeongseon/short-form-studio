@@ -13,6 +13,7 @@ time limit of 660 s) are marked as failed via a CAS guard
 from __future__ import annotations
 
 import logging
+from uuid import uuid4
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -74,41 +75,71 @@ class DispatchReconciler:
         """
         result = ReconcileResult()
         stale_tasks = await self._tracking.find_stale_pending_tasks(self._threshold_seconds)
+        cleanup_tasks = await self._tracking.find_reconciliation_pending_tasks()
 
-        for task in stale_tasks:
+        for task in [*stale_tasks, *cleanup_tasks]:
             celery_task_id = task.celery_task_id
             task_type = task.task_type
             run_id = task.run_id
 
-            try:
-                ok = await self._enqueue_fn(celery_task_id, task_type, run_id)
-            except Exception as exc:
-                logger.warning(
-                    "Reconciler: enqueue failed for task %s (run %d): %s",
-                    celery_task_id,
-                    run_id,
-                    exc,
-                )
-                ok = False
+            cleanup_marker = (
+                task.error_message
+                if task.error_code == "reconciler_cleanup_claimed"
+                else task.error_code
+            )
+            retrying_cleanup = cleanup_marker in {
+                "reconciler_pending_cleanup",
+                "reconciler_stuck_cleanup",
+            }
+            ok = False
+            if not retrying_cleanup:
+                try:
+                    ok = await self._enqueue_fn(celery_task_id, task_type, run_id)
+                except Exception as exc:
+                    logger.warning(
+                        "Reconciler: enqueue failed for task %s (run %d): %s",
+                        celery_task_id,
+                        run_id,
+                        exc,
+                    )
 
             if ok:
-                # Promote to queued
                 try:
-                    await self._tracking.promote_pending_to_queued(celery_task_id)
+                    promoted = await self._tracking.promote_pending_to_queued(celery_task_id)
                 except Exception:
                     logger.warning(
                         "Reconciler: promote failed for %s, task may still be pending",
                         celery_task_id,
                         exc_info=True,
                     )
-                result.reenqueued += 1
+                    promoted = None
+                if promoted is not None:
+                    result.reenqueued += 1
                 logger.info(
                     "Reconciler: re-enqueued stale task %s (run %d)",
                     celery_task_id,
                     run_id,
                 )
             else:
-                # Roll back the run stage
+                if not retrying_cleanup:
+                    marked = await self._tracking.mark_failed_if_pending(
+                        celery_task_id,
+                        error_code="reconciler_pending_cleanup",
+                        error_message="Stale pending task requires compensation",
+                    )
+                    if marked is None:
+                        continue
+
+                    cleanup_marker = "reconciler_pending_cleanup"
+
+                cleanup_token = uuid4().hex
+                claimed = await self._tracking.claim_reconciliation(
+                    task.id, cleanup_token
+                )
+                if claimed is None:
+                    continue
+
+                cleanup_ok = True
                 if self._rollback_fn is not None:
                     try:
                         await self._rollback_fn(run_id, celery_task_id)
@@ -119,22 +150,55 @@ class DispatchReconciler:
                         )
                         logger.error(error_msg)
                         result.errors.append(error_msg)
+                        cleanup_ok = False
 
-                # Mark the task as failed so it's not retried again
                 try:
-                    await self._tracking.mark_failed(
-                        celery_task_id,
-                        error_code="reconciler_rollback",
-                        error_message="Stale pending task could not be re-enqueued",
-                    )
-                except Exception:
+                    from creator_service.usage_service import usage_service
+
+                    await usage_service.cancel_owned(celery_task_id)
+                except Exception as exc:
                     logger.warning(
-                        "Reconciler: failed to mark task %s as failed",
-                        celery_task_id,
+                        "Reconciler: failed to cancel owned reservation",
                         exc_info=True,
                     )
+                    result.errors.append(
+                        f"Reservation cleanup failed for task {celery_task_id}: {type(exc).__name__}"
+                    )
+                    cleanup_ok = False
 
-                result.rolled_back += 1
+                if cleanup_ok:
+                    final_code = (
+                        "stuck_running_timeout"
+                        if cleanup_marker == "reconciler_stuck_cleanup"
+                        else "reconciler_rollback"
+                    )
+                    try:
+                        finalized = await self._tracking.finish_reconciliation(
+                            celery_task_id,
+                            cleanup_token,
+                            error_code=final_code,
+                            error_message="Stale pending task could not be re-enqueued",
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Reconciler: failed to finalize stale task %s",
+                            celery_task_id,
+                            exc_info=True,
+                        )
+                        result.errors.append(
+                            f"Task finalization failed for {celery_task_id}: {type(exc).__name__}"
+                        )
+                        cleanup_ok = False
+                    else:
+                        cleanup_ok = finalized is not None
+
+                if not cleanup_ok:
+                    await self._tracking.release_reconciliation(
+                        celery_task_id, cleanup_token
+                    )
+
+                if cleanup_ok:
+                    result.rolled_back += 1
                 logger.info(
                     "Reconciler: rolled back stale task %s (run %d)",
                     celery_task_id,
@@ -156,7 +220,7 @@ class DispatchReconciler:
             try:
                 marked = await self._tracking.mark_failed_if_running(
                     celery_task_id,
-                    error_code="stuck_running_timeout",
+                    error_code="reconciler_stuck_cleanup",
                     error_message=(
                         f"Task stuck in running state for >{self._stuck_threshold_seconds}s"
                     ),
@@ -172,6 +236,13 @@ class DispatchReconciler:
 
             if marked is not None:
                 result.stuck_failed += 1
+                cleanup_token = uuid4().hex
+                claimed = await self._tracking.claim_reconciliation(
+                    task.id, cleanup_token
+                )
+                if claimed is None:
+                    continue
+                cleanup_ok = True
                 try:
                     from creator_service.usage_service import usage_service
 
@@ -179,6 +250,7 @@ class DispatchReconciler:
                 except Exception as exc:
                     logger.warning("Reconciler: failed to cancel owned reservation", exc_info=True)
                     result.errors.append(f"Reservation cleanup failed for task {celery_task_id}: {type(exc).__name__}")
+                    cleanup_ok = False
                 logger.info(
                     "Reconciler: marked stuck running task %s (run %d) as failed",
                     celery_task_id,
@@ -196,6 +268,31 @@ class DispatchReconciler:
                         )
                         logger.error(error_msg)
                         result.errors.append(error_msg)
+                        cleanup_ok = False
+                if cleanup_ok:
+                    try:
+                        await self._tracking.finish_reconciliation(
+                            celery_task_id,
+                            cleanup_token,
+                            error_code="stuck_running_timeout",
+                            error_message=(
+                                f"Task stuck in running state for >{self._stuck_threshold_seconds}s"
+                            ),
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Reconciler: failed to finalize stuck task %s",
+                            celery_task_id,
+                            exc_info=True,
+                        )
+                        result.errors.append(
+                            f"Task finalization failed for {celery_task_id}: {type(exc).__name__}"
+                        )
+                        cleanup_ok = False
+                if not cleanup_ok:
+                    await self._tracking.release_reconciliation(
+                        celery_task_id, cleanup_token
+                    )
             else:
                 logger.info(
                     "Reconciler: stuck task %s (run %d) already transitioned, skipped",

@@ -499,6 +499,7 @@ class TestReconcileStaleDispatchesIntegration:
         async def _run() -> None:
             mock_tracking = MagicMock()
             mock_tracking.find_stale_pending_tasks = AsyncMock(return_value=[])
+            mock_tracking.find_reconciliation_pending_tasks = AsyncMock(return_value=[])
             mock_tracking.find_stuck_tasks = AsyncMock(return_value=[])
 
             with patch("creator_service.task_tracking_service.task_tracking_service", mock_tracking), \
@@ -522,6 +523,7 @@ class TestReconcileStaleDispatchesIntegration:
         async def _run() -> None:
             mock_tracking = MagicMock()
             mock_tracking.find_stale_pending_tasks = AsyncMock(return_value=[])
+            mock_tracking.find_reconciliation_pending_tasks = AsyncMock(return_value=[])
             mock_tracking.find_stuck_tasks = AsyncMock(return_value=[])
 
             with patch("creator_service.task_tracking_service.task_tracking_service", mock_tracking):

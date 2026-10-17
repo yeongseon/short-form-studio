@@ -95,15 +95,26 @@ class DispatchCAS(DispatchRuntime):
         updates: dict[str, JsonValue] = {"current_stage": target_stage}
         if rollback_stage == (restart_from_stage or target_stage):
             updates["restart_from"] = target_stage
+        pending_id: str | None = None
+        if self._use_celery_dispatch() and task_type != "unknown":
+            pending_id = owner_id or str(uuid4())
         try:
-            try:
-                ok, row = await run_service.storage.conditional_update_run(
-                    run_id, updates, expected_stages=expected_stages,
-                    workspace_id=workspace_id, rejected_statuses=frozenset({"cancelled"}),
-                )
-            except TypeError:
-                ok, row = await run_service.storage.conditional_update_run(
-                    run_id, updates, expected_stages=expected_stages, workspace_id=workspace_id,
+            if pending_id is None:
+                try:
+                    ok, row = await run_service.storage.conditional_update_run(
+                        run_id, updates, expected_stages=expected_stages,
+                        workspace_id=workspace_id, rejected_statuses=frozenset({"cancelled"}),
+                    )
+                except TypeError:
+                    ok, row = await run_service.storage.conditional_update_run(
+                        run_id, updates, expected_stages=expected_stages,
+                        workspace_id=workspace_id,
+                    )
+            else:
+                ok, row = await task_tracking_service.transition_run_and_record_pending(
+                    run_service.storage, run_id, updates, expected_stages,
+                    task_type, pending_id, workspace_id=workspace_id,
+                    rejected_statuses=frozenset({"cancelled"}),
                 )
         except ServiceError:
             await cancel_quota(reserved_workspace, quota_operation_type, "during stage update", owner_id)
@@ -117,16 +128,6 @@ class DispatchCAS(DispatchRuntime):
                 raise NotFoundError("Run not found")
             raise ConflictError(f"Stage conflict: run is now in '{row.get('current_stage')}'")
 
-        pending_id: str | None = None
-        if self._use_celery_dispatch() and task_type != "unknown":
-            pending_id = owner_id or str(uuid4())
-            try:
-                await task_tracking_service.record_task_pending(run_id, task_type, pending_id)
-            except Exception:
-                logger.exception("Failed to record pending task", extra={"run_id": run_id})
-                await rollback.apply(run_service)
-                await cancel_quota(reserved_workspace, quota_operation_type, owner_id=owner_id)
-                raise ServiceUnavailableError(enqueue_error_detail) from None
         try:
             dispatch_kwargs = dict(dispatcher_args)
             if pending_id is not None or owner_id is not None:

@@ -439,7 +439,10 @@ class TestCasDispatchEndToEnd:
 
         # Fake run service
         class _FakeStorage:
-            async def conditional_update_run(self, run_id, updates, *,
+            async def get_run(self, run_id, workspace_id=None):
+                return {"id": run_id, "current_stage": "IDEA_REVIEW", "status": "running"}
+
+            async def conditional_update_run(self, run_id, updates,
                                              expected_stages, workspace_id=None,
                                              rejected_statuses=None):
                 return True, {"current_stage": updates.get("current_stage", "GENERATING_SCRIPT")}
@@ -525,7 +528,7 @@ class TestCasDispatchEndToEnd:
         monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
 
         class _FailingTrackingService:
-            async def record_task_pending(self, run_id, task_type, celery_task_id):
+            async def transition_run_and_record_pending(self, *args, **kwargs):
                 raise RuntimeError("DB connection lost")
 
         _real_import = __import__("importlib").import_module
@@ -556,9 +559,7 @@ class TestCasDispatchEndToEnd:
                 )
             assert exc_info.value.http_status_code == 503
             assert not dispatcher_called, "Dispatcher should not be called after pending failure"
-            # First call = CAS set target, second call = rollback
-            assert len(rollback_calls) == 2
-            assert rollback_calls[1]["updates"]["current_stage"] == "IDEA_REVIEW"
+            assert rollback_calls == []
 
         asyncio.run(_run())
 
@@ -895,6 +896,10 @@ class TestReconcilerDoesNotClobberAdvancedRun:
                 def side_effect(name):
                     if name == "creator_service.run_service":
                         return fake_module
+                    if name == "creator_service.task_tracking_service":
+                        tracking_module = MagicMock()
+                        tracking_module.task_tracking_service = service
+                        return tracking_module
                     return __import__("importlib").import_module(name)
                 mock_import.side_effect = side_effect
 
@@ -968,6 +973,10 @@ class TestReconcilerDoesNotClobberAdvancedRun:
                 def side_effect(name):
                     if name == "creator_service.run_service":
                         return fake_module
+                    if name == "creator_service.task_tracking_service":
+                        tracking_module = MagicMock()
+                        tracking_module.task_tracking_service = service
+                        return tracking_module
                     return __import__("importlib").import_module(name)
                 mock_import.side_effect = side_effect
 

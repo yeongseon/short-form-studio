@@ -1,9 +1,8 @@
 # pyright: reportMissingImports=false
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .run_service import RunStorageBackend
@@ -11,44 +10,7 @@ if TYPE_CHECKING:
 from creator_domain.models import RunTask
 
 from .memory_task_tracking_storage import InMemoryTaskTrackingStorage as InMemoryTaskTrackingStorage
-
-
-class TaskTrackingStorageBackend(Protocol):
-    async def create_task(self, row: dict[str, Any]) -> dict[str, Any] | None: ...
-
-    async def update_task_status(
-        self, task_id: int, status: str, **kwargs: Any
-    ) -> dict[str, Any] | None: ...
-
-    async def get_by_celery_id(self, celery_task_id: str) -> dict[str, Any] | None: ...
-
-    async def list_by_run(self, run_id: int) -> list[dict[str, Any]]: ...
-
-    async def claim_running(self, task_id: int, **kwargs: Any) -> dict[str, Any] | None: ...
-
-    async def list_stuck_tasks(self, threshold_seconds: int) -> list[dict[str, Any]]: ...
-
-    async def list_stale_pending_tasks(self, threshold_seconds: int) -> list[dict[str, Any]]: ...
-
-    async def promote_pending_to_queued(self, celery_task_id: str) -> dict[str, Any] | None: ...
-
-    async def get_active_celery_ids(self, run_id: int) -> list[str]: ...
-
-    async def update_task_status_if_running(
-        self, task_id: int, status: str, **kwargs: Any
-    ) -> dict[str, Any] | None: ...
-
-    async def finish_if_claimed(
-        self, celery_task_id: str, token: str, status: str,
-        error_code: str | None = None, error_message: str | None = None,
-    ) -> dict[str, Any] | None: ...
-
-    async def finish_claimed_run(
-        self, celery_task_id: str, token: str, status: str, run_storage: RunStorageBackend,
-        run_id: int, run_updates: dict[str, str], expected_stages: frozenset[str],
-        rejected_statuses: frozenset[str], error_code: str | None = None,
-        error_message: str | None = None,
-    ) -> bool: ...
+from .task_tracking_storage import TaskTrackingStorageBackend, create_task_tracking_storage
 
 
 class TaskTrackingService:
@@ -58,16 +20,7 @@ class TaskTrackingService:
     async def record_task_pending(
         self, run_id: int, task_type: str, celery_task_id: str
     ) -> RunTask:
-        """Record a task as 'pending' before broker enqueue.
-
-        This is the first step of the atomic dispatch pattern:
-        1. Record task as 'pending' (this method)
-        2. Enqueue to broker
-        3. Promote to 'queued' via promote_pending_to_queued()
-
-        Raises ValueError if the task already exists in a non-retriable state
-        (running, success).
-        """
+        """Record the durable pending state before broker enqueue."""
         row = await self.storage.create_task(
             {
                 "run_id": run_id,
@@ -84,13 +37,30 @@ class TaskTrackingService:
             )
         return RunTask.from_row(row)
 
-    async def promote_pending_to_queued(self, celery_task_id: str) -> RunTask | None:
-        """Atomically promote a pending task to queued after successful broker enqueue.
+    async def transition_run_and_record_pending(
+        self, run_storage: RunStorageBackend, run_id: int, updates: dict[str, Any],
+        expected_stages: frozenset[str], task_type: str, celery_task_id: str,
+        *, workspace_id: int | None = None,
+        rejected_statuses: frozenset[str] = frozenset(),
+    ) -> tuple[bool, dict[str, Any] | None]:
+        return await self.storage.transition_run_and_create_pending(
+            run_storage,
+            run_id,
+            updates,
+            expected_stages,
+            {
+                "run_id": run_id,
+                "task_type": task_type,
+                "celery_task_id": celery_task_id,
+                "status": "pending",
+                "attempt": 1,
+            },
+            workspace_id,
+            rejected_statuses,
+        )
 
-        Uses a CAS operation in storage to avoid TOCTOU race with claim_running.
-        Returns None if the task is no longer pending (e.g. worker already
-        claimed it via claim_running).
-        """
+    async def promote_pending_to_queued(self, celery_task_id: str) -> RunTask | None:
+        """Promote pending to queued without overwriting a worker claim."""
         row = await self.storage.promote_pending_to_queued(celery_task_id)
         return RunTask.from_row(row) if row is not None else None
 
@@ -261,6 +231,21 @@ class TaskTrackingService:
         )
         return RunTask.from_row(row) if row is not None else None
 
+    async def mark_failed_if_pending(
+        self, celery_task_id: str, error_code: str, error_message: str
+    ) -> RunTask | None:
+        task = await self.storage.get_by_celery_id(celery_task_id)
+        if task is None:
+            return None
+        row = await self.storage.update_task_status_if_pending(
+            task["id"],
+            "failed",
+            finished_at=datetime.now(timezone.utc),
+            error_code=error_code,
+            error_message=error_message,
+        )
+        return RunTask.from_row(row) if row is not None else None
+
     async def mark_revoked(self, celery_task_id: str) -> RunTask | None:
         """Called externally by admin API or monitoring tools when a task is manually revoked."""
         task = await self.storage.get_by_celery_id(celery_task_id)
@@ -298,6 +283,42 @@ class TaskTrackingService:
         rows = await self.storage.list_stale_pending_tasks(threshold_seconds)
         return [RunTask.from_row(row) for row in rows]
 
+    async def find_reconciliation_pending_tasks(
+        self, lease_seconds: int = 300
+    ) -> list[RunTask]:
+        rows = await self.storage.list_reconciliation_pending_tasks(lease_seconds)
+        return [RunTask.from_row(row) for row in rows]
+
+    async def claim_reconciliation(
+        self, task_id: int, claim_token: str, lease_seconds: int = 300
+    ) -> RunTask | None:
+        row = await self.storage.claim_reconciliation(task_id, claim_token, lease_seconds)
+        return RunTask.from_row(row) if row is not None else None
+
+    async def finish_reconciliation(
+        self, celery_task_id: str, claim_token: str, error_code: str, error_message: str
+    ) -> RunTask | None:
+        row = await self.storage.finish_reconciliation(
+            celery_task_id, claim_token, error_code, error_message
+        )
+        return RunTask.from_row(row) if row is not None else None
+
+    async def release_reconciliation(
+        self, celery_task_id: str, claim_token: str
+    ) -> RunTask | None:
+        row = await self.storage.release_reconciliation(celery_task_id, claim_token)
+        return RunTask.from_row(row) if row is not None else None
+
+    async def rollback_run_if_task_owner(
+        self, celery_task_id: str, run_storage: RunStorageBackend,
+        run_id: int, eligible_task_types: frozenset[str],
+        expected_stages: frozenset[str], rejected_statuses: frozenset[str],
+    ) -> tuple[bool, dict[str, Any] | None]:
+        return await self.storage.rollback_run_if_task_owner(
+            celery_task_id, run_storage, run_id, eligible_task_types,
+            expected_stages, rejected_statuses,
+        )
+
     async def list_run_tasks(self, run_id: int) -> list[RunTask]:
         rows = await self.storage.list_by_run(run_id)
         return [RunTask.from_row(row) for row in rows]
@@ -321,12 +342,4 @@ class TaskTrackingService:
             await self.mark_revoked(celery_id)
 
 
-def _create_storage() -> TaskTrackingStorageBackend:
-    if os.getenv("DATABASE_URL"):
-        from .postgres_task_tracking_storage import PostgresTaskTrackingStorage
-
-        return PostgresTaskTrackingStorage()
-    return InMemoryTaskTrackingStorage()
-
-
-task_tracking_service = TaskTrackingService(_create_storage())
+task_tracking_service = TaskTrackingService(create_task_tracking_storage())

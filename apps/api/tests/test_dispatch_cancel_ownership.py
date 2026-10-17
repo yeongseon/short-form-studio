@@ -21,8 +21,17 @@ async def test_cancel_during_publish_waits_then_revokes_before_releasing_quota(m
     monkeypatch.setattr(adapter, "_get_trace_headers", lambda: {})
     run = SimpleNamespace(status="running", project_id=1)
 
-    async def pending(*args):
+    async def pending(
+        run_storage, run_id, updates, expected_stages, task_type, task_id,
+        *, workspace_id, rejected_statuses,
+    ):
+        del task_type, task_id
+        ok, row = await run_storage.conditional_update_run(
+            run_id, updates, expected_stages=expected_stages,
+            workspace_id=workspace_id, rejected_statuses=rejected_statuses,
+        )
         events.append("pending")
+        return ok, row
 
     def publish(**kwargs):
         assert events == ["reserve", "stage", "pending"]
@@ -52,7 +61,7 @@ async def test_cancel_during_publish_waits_then_revokes_before_releasing_quota(m
     monkeypatch.setattr(adapter, "_load_task", lambda _: SimpleNamespace(apply_async=publish))
     monkeypatch.setattr(adapter, "cancel", lambda _: events.append("revoked"))
     tracking = task_tracking_service.task_tracking_service
-    monkeypatch.setattr(tracking, "record_task_pending", pending)
+    monkeypatch.setattr(tracking, "transition_run_and_record_pending", pending)
     monkeypatch.setattr(tracking, "promote_pending_to_queued", AsyncMock())
     monkeypatch.setattr(tracking, "mark_tasks_revoked", AsyncMock())
     errors = []
