@@ -61,4 +61,6 @@ def test_provider_usage_wiring_present_in_worker_tasks() -> None:
         assert "record_provider_call" in source
         for token in tokens:
             assert token in source
+        assert "authorize_owned_provider_attempt(" in source
+        assert "reservation_attempt_id=" in source
         assert 'logger.warning("Failed to record provider usage", exc_info=True)' in source
