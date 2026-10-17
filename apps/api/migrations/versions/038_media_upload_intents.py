@@ -26,7 +26,8 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         sa.CheckConstraint(
-            "state IN ('pending', 'uploaded', 'cleanup_pending', 'reclaiming', 'completed', 'reclaimed', 'exhausted')",
+            "state IN ('pending', 'uploaded', 'cleanup_pending', 'reclaiming', "
+            "'late_upload_watch', 'completed', 'reclaimed', 'exhausted')",
             name="ck_media_upload_intents_state",
         ),
         sa.CheckConstraint("retry_count >= 0", name="ck_media_upload_intents_retry_count"),
