@@ -38,6 +38,10 @@ try:
 except ImportError:
     redis = None
 from creator_service.production_checks import validate_production_config
+try:
+    import worker_release_identity as _worker_release_identity_module  # noqa: F401 — register signal handler
+except ImportError:
+    _worker_release_identity_module = None
 
 
 def _parse_int_env(name: str, default: int) -> int:
@@ -155,6 +159,8 @@ if _custom_routes_raw:
             "Invalid CELERY_TASK_ROUTES JSON; using defaults"
         )
 celery_app.conf.task_routes = _default_task_routes
+
+
 # DLQ Configuration: Controls message acknowledgment and failure handling
 # - task_acks_late=True ensures at-least-once delivery by acknowledging AFTER execution
 # - task_reject_on_worker_lost=True prevents message loss if worker dies

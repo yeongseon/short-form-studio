@@ -46,5 +46,6 @@ async def create_demo_short_run(
         "run": result.run.model_dump(mode="json"),
         "seeded_project_id": result.project_id,
         "timeline_id": result.timeline_id,
+        "asset_id_map": result.asset_id_map,
         "plan": asdict(build_demo_short_plan()),
     }
