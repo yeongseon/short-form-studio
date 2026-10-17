@@ -27,6 +27,8 @@ from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import NewType, TypedDict
 
+from restore_target import copy_tree_to_new_target
+
 
 Checksum = NewType("Checksum", str)
 SECRET_FINGERPRINT_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -274,21 +276,14 @@ def restore_media(args: argparse.Namespace) -> None:
         bundle, args.expected_alembic_revision, args.expected_secret_fingerprint
     )
     target = Path(args.target)
-    current = target
-    existing_ancestors: list[Path] = []
-    while not current.exists() and not current.is_symlink():
-        current = current.parent
-    while True:
-        existing_ancestors.append(current)
-        if current == current.parent:
-            break
-        current = current.parent
-    if any(path.is_symlink() for path in existing_ancestors):
+    if target.is_symlink():
         raise RestoreError("target ancestor must not be a symlink")
     if target.exists() or target.is_symlink():
         raise RestoreError("target must be absent")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(bundle / manifest.media_root, target)
+    try:
+        copy_tree_to_new_target(bundle / manifest.media_root, target)
+    except (FileExistsError, FileNotFoundError, NotADirectoryError, OSError) as error:
+        raise RestoreError(f"target ancestor must not be a symlink or target exists: {error}") from error
 
 
 def parser() -> argparse.ArgumentParser:
