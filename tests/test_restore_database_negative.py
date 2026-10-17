@@ -29,8 +29,8 @@ def test_checksummed_corrupt_dump_cannot_restore_to_fresh_database(
     manifest = {
         "format_version": 1,
         "created_at": "2026-10-16T00:00:00Z",
-        "release_sha": "abc123",
-        "image_digests": ["postgres@sha256:placeholder"],
+        "release_sha": "abc123def456",
+        "image_digests": ["postgres@sha256:" + "d" * 64],
         "alembic_revision": "revision-1",
         "secret_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "database_dump": "database.dump",
@@ -58,7 +58,10 @@ def test_checksummed_corrupt_dump_cannot_restore_to_fresh_database(
         )
         for _ in range(60):
             ready = subprocess.run(
-                ["docker", "exec", container, "pg_isready", "-U", "postgres"],
+                [
+                    "docker", "exec", container, "psql", "-U", "postgres",
+                    "-d", "postgres", "-At", "-c", "SELECT 1",
+                ],
                 capture_output=True,
                 check=False,
             )
