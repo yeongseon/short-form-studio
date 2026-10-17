@@ -28,8 +28,6 @@ def finalize_hard_timeout(task_id: str, run_id: int, timeout: float) -> None:
             f"The task exceeded its {timeout} second hard time limit",
         )
         await cancel_owned(task_id)
-        if outcome is None:
-            return
         run = await get_run(run_id)
         if run is None:
             return
