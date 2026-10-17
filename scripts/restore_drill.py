@@ -32,6 +32,8 @@ from restore_drill_runtime import (
     launch_provider_guard,
     mapped_postgres_url,
     recovery_states,
+    register_rendered_artifact,
+    restored_timeline,
     run,
     run_reconciler,
     seed_production_fixture,
@@ -53,6 +55,23 @@ def create_media(media: Path) -> None:
     docker("run", "--rm", "-v", mount, FFMPEG_IMAGE, "-f", "lavfi", "-i", "color=c=blue:s=320x240", "-frames:v", "1", "/media/image.png")
     docker("run", "--rm", "-v", mount, FFMPEG_IMAGE, "-f", "lavfi", "-i", "sine=frequency=440:duration=1", "/media/audio.wav")
     docker("run", "--rm", "-v", mount, FFMPEG_IMAGE, "-loop", "1", "-i", "/media/image.png", "-i", "/media/audio.wav", "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "/media/final.mp4")
+
+
+def render_restored_timeline(
+    restored: Path, timeline: list[dict[str, str | int]]
+) -> None:
+    segment = timeline[0]
+    image = segment["image_storage_key"]
+    audio = segment["audio_storage_key"]
+    duration = segment["duration_seconds"]
+    if not isinstance(image, str) or not isinstance(audio, str) or not isinstance(duration, int):
+        raise DrillError("restored Timeline segment is invalid")
+    docker(
+        "run", "--rm", "-v", f"{restored.resolve()}:/media", FFMPEG_IMAGE,
+        "-loop", "1", "-i", f"/media/{image}", "-i", f"/media/{audio}",
+        "-t", str(duration), "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "/media/final.mp4",
+    )
 
 
 def verify_http(runtime: RuntimeFixture, media: Path) -> None:
@@ -152,8 +171,12 @@ def main() -> int:
             docker("exec", target, "pg_restore", "-U", "restore", "-d", "restore", "--clean", "--if-exists", "/tmp/database.dump")
             run(sys.executable, "-m", "alembic", "upgrade", "head", cwd=ROOT / "apps/api", env={**os.environ, "DATABASE_URL": target_url})
             run(sys.executable, str(verifier), "restore-media", str(bundle), "--target", str(restored), "--expected-alembic-revision", alembic_head, "--expected-secret-fingerprint", FINGERPRINT)
+            timeline = restored_timeline(target, fixture.project_id)
             (restored / "final.mp4").unlink()
-            docker("run", "--rm", "-v", f"{restored.resolve()}:/media", FFMPEG_IMAGE, "-loop", "1", "-i", "/media/image.png", "-i", "/media/audio.wav", "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "/media/final.mp4")
+            render_restored_timeline(restored, timeline)
+            registered_artifact = register_rendered_artifact(
+                target, fixture, restored / "final.mp4"
+            )
             durations["restore_seconds"] = time.monotonic() - phase
             guard_process, guard_port = launch_provider_guard(root)
             api_process, fixture = launch_api(target_url, restored, fixture, root, guard_port)
@@ -173,7 +196,7 @@ def main() -> int:
             print("provider guard: armed and untouched")
             print("broker recovery: pending=failed queued=queued running=failed")
             print("provider calls: 0")
-            evidence = {"restore_head_sha": manifest["release_sha"], "release_image_digests": manifest["image_digests"], "phase_durations_seconds": {**durations, "total": time.monotonic() - started}, "reconciliation": reconciliation, "recovered_task_states": states.splitlines(), "credential_free": True}
+            evidence = {"restore_head_sha": manifest["release_sha"], "release_image_digests": manifest["image_digests"], "phase_durations_seconds": {**durations, "total": time.monotonic() - started}, "reconciliation": reconciliation, "recovered_task_states": states.splitlines(), "credential_free": True, "restored_timeline_segments": len(timeline), "registered_artifact": registered_artifact}
             print("RESTORE_EVIDENCE=" + json.dumps(evidence, sort_keys=True))
             print("RESTORE DRILL PASSED")
             return 0

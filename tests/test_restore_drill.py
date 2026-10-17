@@ -11,6 +11,8 @@ import pytest
 
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "restore_drill.py"
+sys.path.insert(0, str(SCRIPT.parent))
+from restore_drill import render_restored_timeline
 
 
 def test_disposable_restore_drill() -> None:
@@ -42,3 +44,36 @@ def test_disposable_restore_drill() -> None:
     assert all("@sha256:" in digest for digest in evidence["release_image_digests"])
     assert evidence["credential_free"] is True
     assert evidence["phase_durations_seconds"]["total"] > 0
+    assert evidence["restored_timeline_segments"] > 0
+    assert evidence["registered_artifact"]["size_bytes"] > 0
+    assert len(evidence["registered_artifact"]["checksum"]) == 64
+
+
+def test_render_uses_restored_timeline_media(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given
+    restored = tmp_path / "restored"
+    restored.mkdir()
+    (restored / "image.png").write_bytes(b"image")
+    (restored / "audio.wav").write_bytes(b"audio")
+    commands: list[tuple[str, ...]] = []
+
+    def record_docker(*arguments: str) -> subprocess.CompletedProcess[str]:
+        commands.append(arguments)
+        (restored / "final.mp4").write_bytes(b"rendered")
+        return subprocess.CompletedProcess(arguments, 0, "", "")
+
+    monkeypatch.setattr("restore_drill.docker", record_docker)
+    timeline = [
+        {"image_storage_key": "image.png", "audio_storage_key": "audio.wav", "duration_seconds": 1}
+    ]
+
+    # When
+    render_restored_timeline(restored, timeline)
+
+    # Then
+    command = commands[0]
+    assert "/media/image.png" in command
+    assert "/media/audio.wav" in command
+    assert (restored / "final.mp4").read_bytes() == b"rendered"
