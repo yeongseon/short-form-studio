@@ -294,6 +294,13 @@ def _should_record_to_dlq(sender: Any, exception: BaseException | None = None) -
     return True
 
 
+def _terminal_failure_services() -> tuple[Any, Any]:
+    from creator_service.task_tracking_service import task_tracking_service
+    from creator_service.usage_service import usage_service
+
+    return task_tracking_service.mark_failed_if_claimed, usage_service.cancel_owned
+
+
 @task_failure.connect
 def handle_task_failure(
     sender: Any = None,
@@ -309,18 +316,24 @@ def handle_task_failure(
         return
 
     if isinstance(task_id, str):
-        from creator_service.task_tracking_service import task_tracking_service
-        from creator_service.usage_service import usage_service
         from worker_loop import run_in_worker_loop
 
         failure = build_run_failure_summary(exception)
+        request = getattr(sender, "request", None)
+        claim_token = getattr(request, "claim_token", None)
         try:
-            run_in_worker_loop(
-                task_tracking_service.mark_failed_if_running(
-                    task_id, str(failure["code"]), str(failure["message"])
+            if isinstance(claim_token, str):
+                mark_failed, cancel_owned = _terminal_failure_services()
+                outcome = run_in_worker_loop(
+                    mark_failed(
+                        task_id,
+                        claim_token,
+                        str(failure["code"]),
+                        str(failure["message"]),
+                    )
                 )
-            )
-            run_in_worker_loop(usage_service.cancel_owned(task_id))
+                if outcome is not None:
+                    run_in_worker_loop(cancel_owned(task_id))
         except Exception:
             logging.getLogger(__name__).warning(
                 "Failed to finalize terminal task failure",

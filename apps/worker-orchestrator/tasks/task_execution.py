@@ -66,11 +66,12 @@ def run_task(
     claimed = False
     from creator_service.task_tracking_service import TaskTrackingService
 
-    claim_token = (
-        uuid4().hex
-        if not task_id.startswith("run-") and isinstance(runner._task_tracking_service, TaskTrackingService)
-        else None
-    )
+    claim_token = None
+    if not task_id.startswith("run-") and isinstance(
+        runner._task_tracking_service, TaskTrackingService
+    ):
+        claim_token = uuid4().hex
+        setattr(request, "claim_token", claim_token)
 
     def mark_claimed() -> None:
         nonlocal claimed
