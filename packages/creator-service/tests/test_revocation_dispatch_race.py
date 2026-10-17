@@ -11,6 +11,7 @@ import pytest_asyncio
 from creator_domain.exceptions import ConflictError, ServiceUnavailableError
 from creator_domain.models import RunTask
 from creator_service import db
+from creator_service.postgres_run_storage import PostgresRunStorage
 from creator_service.postgres_task_tracking_storage import PostgresTaskTrackingStorage
 from creator_service.run_service import InMemoryRunStorage, RunService
 from creator_service.task_dispatch_service import TaskDispatchService
@@ -78,8 +79,18 @@ async def test_dispatch_compensates_when_worker_claims_before_promotion(
     tracking: TaskTrackingService, monkeypatch: pytest.MonkeyPatch, cancel_run: bool,
 ) -> None:
     # Given real tracking/run storage and a recording broker port.
-    runs = RunService(InMemoryRunStorage())
-    run = await runs.create_run(1, None, "default", current_stage="SUBTITLE_GENERATING", workspace_id=1)
+    if isinstance(tracking.storage, PostgresTaskTrackingStorage):
+        runs = RunService(PostgresRunStorage())
+        await runs.storage.update_run(
+            1, {"current_stage": "SUBTITLE_GENERATING"}, workspace_id=1
+        )
+        run = await runs.get_run(1, workspace_id=1)
+        assert run is not None
+    else:
+        runs = RunService(InMemoryRunStorage())
+        run = await runs.create_run(
+            1, None, "default", current_stage="SUBTITLE_GENERATING", workspace_id=1
+        )
     port = RecordingDispatcher(queued=True)
     dispatch = TaskDispatchService(port)
     monkeypatch.setattr("creator_service.task_tracking_service.task_tracking_service", tracking)
