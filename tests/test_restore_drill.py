@@ -13,6 +13,7 @@ import pytest
 SCRIPT = Path(__file__).parents[1] / "scripts" / "restore_drill.py"
 sys.path.insert(0, str(SCRIPT.parent))
 from restore_drill import render_restored_timeline
+from restore_drill_runtime import DrillError, validate_release_manifest
 
 
 def test_disposable_restore_drill() -> None:
@@ -77,3 +78,18 @@ def test_render_uses_restored_timeline_media(
     assert "/media/image.png" in command
     assert "/media/audio.wav" in command
     assert (restored / "final.mp4").read_bytes() == b"rendered"
+
+
+@pytest.mark.parametrize("digest", ["a" * 64, "b" * 64, "c" * 64])
+def test_release_manifest_rejects_placeholder_digest(
+    tmp_path: Path, digest: str
+) -> None:
+    # Given
+    manifest = tmp_path / "release.json"
+    manifest.write_text(
+        json.dumps({"api": f"registry/api@sha256:{digest}", "worker": "registry/worker@sha256:" + "d" * 64, "web": "registry/web@sha256:" + "e" * 64})
+    )
+
+    # When / Then
+    with pytest.raises(DrillError, match="placeholder"):
+        validate_release_manifest(manifest)

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import socket
 import subprocess
 import time
@@ -13,6 +14,7 @@ from pathlib import Path
 
 
 TIMEOUT = 120
+IMAGE_DIGEST = re.compile(r"[^@]+@sha256:([0-9a-f]{64})\Z")
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +72,25 @@ def image_digest(image: str) -> str:
     if digest is None:
         raise DrillError(f"image lacks registry RepoDigest: {image}")
     return digest
+
+
+def validate_release_manifest(path: Path) -> list[str]:
+    raw = json.loads(path.read_text())
+    if not isinstance(raw, dict) or set(raw) != {"api", "worker", "web"}:
+        raise DrillError("release manifest must identify api, worker, and web images")
+    digests: list[str] = []
+    for name in ("api", "worker", "web"):
+        value = raw[name]
+        if not isinstance(value, str):
+            raise DrillError(f"release image digest is invalid: {name}")
+        match = IMAGE_DIGEST.fullmatch(value)
+        if match is None:
+            raise DrillError(f"release image digest is invalid: {name}")
+        hash_value = match.group(1)
+        if len(set(hash_value)) == 1:
+            raise DrillError(f"release image digest is a placeholder: {name}")
+        digests.append(value)
+    return digests
 
 
 def seed_production_fixture(container: str, media: Path) -> RuntimeFixture:

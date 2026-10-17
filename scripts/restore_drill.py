@@ -39,6 +39,7 @@ from restore_drill_runtime import (
     seed_production_fixture,
     wait_for_api,
     wait_for_postgres,
+    validate_release_manifest,
 )
 
 
@@ -158,7 +159,7 @@ def main() -> int:
             durations["backup_seconds"] = time.monotonic() - phase
             manifest = {
                 "format_version": 1, "created_at": "synthetic", "release_sha": os.environ.get("RESTORE_HEAD_SHA", run("git", "rev-parse", "HEAD", cwd=ROOT).stdout.strip()),
-                "image_digests": [image_digest(POSTGRES_IMAGE), image_digest(FFMPEG_IMAGE), *json.loads(Path(os.environ["RESTORE_RELEASE_MANIFEST"]).read_text()).values()],
+                "image_digests": [image_digest(POSTGRES_IMAGE), image_digest(FFMPEG_IMAGE), *validate_release_manifest(Path(os.environ["RESTORE_RELEASE_MANIFEST"]))],
                 "alembic_revision": alembic_head, "secret_fingerprint": FINGERPRINT,
                 "database_dump": "database.dump", "media_root": "media",
                 "files": {path.relative_to(bundle).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest() for path in (bundle / "database.dump", *sorted(media.iterdir()))},
