@@ -16,176 +16,33 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
-import re
 import shutil
 import stat
 import subprocess
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path, PurePosixPath
-from typing import NewType, TypedDict
-
+from restore_manifest import (
+    Manifest,
+    RestoreError,
+    SECRET_FINGERPRINT_PATTERN,
+    parse_manifest_json,
+)
+from restore_paths import checksum, require_contained_path, require_safe_tree
 from restore_target import SourceTreeChangedError, copy_tree_to_new_target
-
-
-Checksum = NewType("Checksum", str)
-SECRET_FINGERPRINT_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
-CHECKSUM_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
-IMAGE_DIGEST_PATTERN = re.compile(r"[^@]+@sha256:[0-9a-f]{64}\Z")
-RELEASE_SHA_PATTERN = re.compile(r"[0-9a-f]{6,64}\Z")
-
-
-class ManifestJson(TypedDict):
-    format_version: int
-    created_at: str
-    release_sha: str
-    image_digests: list[str]
-    alembic_revision: str
-    secret_fingerprint: str
-    database_dump: str
-    media_root: str
-    files: dict[str, str]
-
-
-@dataclass(frozen=True, slots=True)
-class Manifest:
-    created_at: str
-    release_sha: str
-    image_digests: tuple[str, ...]
-    alembic_revision: str
-    secret_fingerprint: str
-    files: dict[str, Checksum]
-    format_version: int = 1
-    database_dump: str = "database.dump"
-    media_root: str = "media"
-
-
-@dataclass(frozen=True, slots=True)
-class RestoreError(RuntimeError):
-    message: str
-
-    def __str__(self) -> str:
-        return self.message
-
-
-def checksum(path: Path) -> Checksum:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return Checksum(digest.hexdigest())
-
-
-def _require_contained_path(bundle: Path, path: Path, label: str) -> Path:
-    bundle_root = bundle.resolve(strict=True)
-    try:
-        bundle.lstat()
-    except OSError as error:
-        raise RestoreError(f"{label} is inaccessible: {error}") from error
-    if bundle.is_symlink():
-        raise RestoreError("bundle must not be a symlink")
-    try:
-        relative = path.relative_to(bundle)
-    except ValueError as error:
-        raise RestoreError(f"{label} escapes bundle") from error
-    current = bundle
-    for part in relative.parts:
-        current /= part
-        try:
-            current.lstat()
-        except OSError as error:
-            raise RestoreError(f"{label} is inaccessible: {error}") from error
-        if current.is_symlink():
-            raise RestoreError(f"{label} contains symlink: {relative}")
-    resolved = path.resolve(strict=True)
-    if not resolved.is_relative_to(bundle_root):
-        raise RestoreError(f"{label} escapes bundle: {relative}")
-    return resolved
-
-
-def _require_safe_tree(bundle: Path, root: Path, label: str) -> list[Path]:
-    safe_root = _require_contained_path(bundle, root, label)
-    entries: list[Path] = []
-    for directory, directory_names, file_names in os.walk(safe_root, followlinks=False):
-        directory_path = Path(directory)
-        for name in [*directory_names, *file_names]:
-            entry = directory_path / name
-            _require_contained_path(bundle, entry, label)
-            entries.append(entry)
-    return entries
 
 
 def parse_manifest(bundle: Path) -> Manifest:
     manifest_path = bundle / "manifest.json"
     try:
-        safe_manifest = _require_contained_path(bundle, manifest_path, "manifest")
+        safe_manifest = require_contained_path(bundle, manifest_path, "manifest")
     except RestoreError as error:
         if "inaccessible" not in str(error):
             raise
         raise RestoreError("manifest is missing")
-    try:
-        decoded = json.loads(safe_manifest.read_text())
-        if not isinstance(decoded, dict):
-            raise RestoreError("manifest is invalid: root must be an object")
-        required = set(ManifestJson.__required_keys__)
-        if set(decoded) != required:
-            raise RestoreError("manifest is invalid: fields do not match schema")
-        raw = decoded
-        string_fields = (
-            "created_at",
-            "release_sha",
-            "alembic_revision",
-            "secret_fingerprint",
-            "database_dump",
-            "media_root",
-        )
-        if any(not isinstance(raw[field], str) for field in string_fields):
-            raise RestoreError("manifest is invalid: string field has wrong type")
-        if not isinstance(raw["format_version"], int):
-            raise RestoreError("manifest is invalid: format_version must be an integer")
-        if not isinstance(raw["image_digests"], list) or not raw["image_digests"]:
-            raise RestoreError("manifest is invalid: image_digests must be a non-empty list")
-        if any(
-            not isinstance(value, str) or IMAGE_DIGEST_PATTERN.fullmatch(value) is None
-            for value in raw["image_digests"]
-        ):
-            raise RestoreError("manifest is invalid: image digest format")
-        if RELEASE_SHA_PATTERN.fullmatch(raw["release_sha"]) is None:
-            raise RestoreError("manifest is invalid: release_sha format")
-        if not isinstance(raw["files"], dict) or not raw["files"]:
-            raise RestoreError("manifest is invalid: files must be a non-empty object")
-        if any(
-            not isinstance(path, str)
-            or not isinstance(value, str)
-            or CHECKSUM_PATTERN.fullmatch(value) is None
-            for path, value in raw["files"].items()
-        ):
-            raise RestoreError("manifest is invalid: file checksum format")
-        if raw["format_version"] != 1:
-            raise RestoreError(
-                f"unsupported manifest format version: {raw['format_version']}"
-            )
-        for relative in (raw["database_dump"], raw["media_root"]):
-            _safe_relative_path(relative)
-        files = raw["files"]
-        for relative in files:
-            _safe_relative_path(relative)
-        return Manifest(
-            created_at=raw["created_at"],
-            release_sha=raw["release_sha"],
-            image_digests=tuple(raw["image_digests"]),
-            alembic_revision=raw["alembic_revision"],
-            secret_fingerprint=raw["secret_fingerprint"],
-            files={path: Checksum(value) for path, value in files.items()},
-            format_version=raw["format_version"],
-            database_dump=raw["database_dump"],
-            media_root=raw["media_root"],
-        )
-    except (json.JSONDecodeError, KeyError, TypeError) as error:
-        raise RestoreError(f"manifest is invalid: {error}") from error
+    return parse_manifest_json(safe_manifest.read_text())
 
 
 def _safe_relative_path(relative: str) -> PurePosixPath:
@@ -212,7 +69,7 @@ def verify_bundle(
         raise RestoreError("secret fingerprint mismatch")
     database_dump = bundle / manifest.database_dump
     try:
-        safe_database_dump = _require_contained_path(bundle, database_dump, "database dump")
+        safe_database_dump = require_contained_path(bundle, database_dump, "database dump")
     except RestoreError as error:
         if "inaccessible" not in str(error):
             raise
@@ -240,7 +97,7 @@ def verify_bundle(
     for relative, expected_checksum in manifest.files.items():
         path = bundle / relative
         try:
-            safe_path = _require_contained_path(bundle, path, "listed file")
+            safe_path = require_contained_path(bundle, path, "listed file")
         except RestoreError as error:
             if "inaccessible" not in str(error):
                 raise
@@ -255,7 +112,7 @@ def verify_bundle(
         for relative in manifest.files
         if PurePosixPath(relative).is_relative_to(media_root)
     }
-    safe_media_entries = _require_safe_tree(
+    safe_media_entries = require_safe_tree(
         bundle, bundle / manifest.media_root, "media tree"
     )
     actual_media = {
@@ -282,15 +139,15 @@ def create_manifest(args: argparse.Namespace) -> None:
             "secret fingerprint must be sha256 plus 64 lowercase hex characters"
         )
     try:
-        database_dump = _require_contained_path(
+        database_dump = require_contained_path(
             bundle, bundle / "database.dump", "database dump"
         )
         if not database_dump.is_file() or database_dump.stat().st_size == 0:
             raise RestoreError("database dump is missing or empty")
-        media = _require_contained_path(bundle, bundle / "media", "media tree")
+        media = require_contained_path(bundle, bundle / "media", "media tree")
         if not media.is_dir():
             raise RestoreError("media tree is missing")
-        media_entries = _require_safe_tree(bundle, media, "media tree")
+        media_entries = require_safe_tree(bundle, media, "media tree")
         files = [database_dump, *(path for path in media_entries if path.is_file())]
         manifest = Manifest(
             created_at=args.timestamp,
