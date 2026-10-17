@@ -68,15 +68,19 @@ def verify_http(runtime: RuntimeFixture, media: Path) -> None:
         raise DrillError("revoked key was accepted")
     if api_request(runtime.port, project_path, {})[0] != 401:
         raise DrillError("missing key was accepted")
+    timeline_path = f"{project_path}/timeline"
+    timeline_status, timeline_body = api_request(runtime.port, timeline_path, owner)
+    if timeline_status != 200 or json.loads(timeline_body)["timeline_id"] != "timeline-restored":
+        raise DrillError("owner could not open restored Timeline")
+    if api_request(runtime.port, timeline_path, foreign)[0] != 404:
+        raise DrillError("foreign user could open restored Timeline")
+    media_path = f"/api/creator/workspaces/{runtime.workspace_id}/assets/{runtime.media_id}/content"
+    video_path = f"/api/creator/runs/{runtime.run_id}/artifacts/{runtime.artifact_id}/download"
     media_status, media_body = api_request(
-        runtime.port,
-        f"/api/creator/workspaces/{runtime.workspace_id}/assets/{runtime.media_id}/content",
-        owner,
+        runtime.port, media_path, owner,
     )
     video_status, video_body = api_request(
-        runtime.port,
-        f"/api/creator/runs/{runtime.run_id}/artifacts/{runtime.artifact_id}/download",
-        owner,
+        runtime.port, video_path, owner,
     )
     if media_status != 200 or video_status != 200:
         raise DrillError("real API protected download failed")
@@ -84,11 +88,18 @@ def verify_http(runtime: RuntimeFixture, media: Path) -> None:
         raise DrillError("downloaded media checksum mismatch")
     if hashlib.sha256(video_body).digest() != hashlib.sha256((media / "final.mp4").read_bytes()).digest():
         raise DrillError("downloaded final MP4 checksum mismatch")
+    for path in (media_path, video_path):
+        if api_request(runtime.port, path, foreign)[0] != 404:
+            raise DrillError("foreign protected download was not hidden")
+        if api_request(runtime.port, path, revoked)[0] != 401:
+            raise DrillError("revoked key accessed protected download")
+        if api_request(runtime.port, path, {})[0] != 401:
+            raise DrillError("missing key accessed protected download")
     downloaded = media / "downloaded-final.mp4"
     downloaded.write_bytes(video_body)
     docker("run", "--rm", "-v", f"{media.resolve()}:/media:ro", FFMPEG_IMAGE, "-v", "error", "-i", "/media/downloaded-final.mp4", "-f", "null", "-")
-    print("real API auth: owner=200 workspace-b=404 revoked=401 missing=401")
-    print("real API downloads: media=200 final-mp4=200 checksum=verified ffprobe=verified")
+    print("real API auth: owner=200 workspace-b=404 revoked=401 missing=401 timeline=200/404")
+    print("real API downloads: media=200 final-mp4=200 foreign=404 revoked=401 missing=401 checksum=verified ffprobe=verified")
 
 
 def main() -> int:
@@ -141,6 +152,8 @@ def main() -> int:
             docker("exec", target, "pg_restore", "-U", "restore", "-d", "restore", "--clean", "--if-exists", "/tmp/database.dump")
             run(sys.executable, "-m", "alembic", "upgrade", "head", cwd=ROOT / "apps/api", env={**os.environ, "DATABASE_URL": target_url})
             run(sys.executable, str(verifier), "restore-media", str(bundle), "--target", str(restored), "--expected-alembic-revision", alembic_head, "--expected-secret-fingerprint", FINGERPRINT)
+            (restored / "final.mp4").unlink()
+            docker("run", "--rm", "-v", f"{restored.resolve()}:/media", FFMPEG_IMAGE, "-loop", "1", "-i", "/media/image.png", "-i", "/media/audio.wav", "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "/media/final.mp4")
             durations["restore_seconds"] = time.monotonic() - phase
             guard_process, guard_port = launch_provider_guard(root)
             api_process, fixture = launch_api(target_url, restored, fixture, root, guard_port)
@@ -156,6 +169,7 @@ def main() -> int:
             if (root / "provider-invoked").exists():
                 raise DrillError("provider-call guard detected an invocation")
             print("production schema: migrated")
+            print("post-restore render: restored Timeline image audio -> final.mp4")
             print("provider guard: armed and untouched")
             print("broker recovery: pending=failed queued=queued running=failed")
             print("provider calls: 0")
