@@ -5,6 +5,7 @@ import json
 import shutil
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -55,6 +56,30 @@ def test_checksummed_corrupt_dump_cannot_restore_to_fresh_database(
             text=True,
             check=True,
         )
+        for _ in range(60):
+            ready = subprocess.run(
+                ["docker", "exec", container, "pg_isready", "-U", "postgres"],
+                capture_output=True,
+                check=False,
+            )
+            if ready.returncode == 0:
+                break
+            time.sleep(1)
+        else:
+            pytest.fail("PostgreSQL did not become ready")
+        subprocess.run(
+            ["docker", "exec", container, "createdb", "-U", "postgres", "restore_target"],
+            capture_output=True,
+            check=True,
+        )
+        subprocess.run(
+            [
+                "docker", "exec", container, "psql", "-U", "postgres", "-d", "postgres",
+                "-c", "CREATE TABLE restore_sentinel(value text); INSERT INTO restore_sentinel VALUES ('preserve');",
+            ],
+            capture_output=True,
+            check=True,
+        )
 
         # When
         validation = subprocess.run(
@@ -64,7 +89,7 @@ def test_checksummed_corrupt_dump_cannot_restore_to_fresh_database(
             check=False,
         )
         restore = subprocess.run(
-            ["docker", "exec", "-i", container, "pg_restore", "-U", "postgres", "-d", "postgres"],
+            ["docker", "exec", "-i", container, "pg_restore", "-U", "postgres", "-d", "restore_target"],
             input=dump.read_bytes(),
             capture_output=True,
             check=False,
@@ -74,6 +99,17 @@ def test_checksummed_corrupt_dump_cannot_restore_to_fresh_database(
         assert validation.returncode != 0
         assert "database dump is not a valid custom-format archive" in validation.stderr
         assert restore.returncode != 0
+        assert b"input file is too short" in restore.stderr or b"unexpected end of file" in restore.stderr
+        sentinel = subprocess.run(
+            [
+                "docker", "exec", container, "psql", "-U", "postgres", "-d", "postgres",
+                "-At", "-c", "SELECT value FROM restore_sentinel",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert sentinel.stdout.strip() == "preserve"
     finally:
         subprocess.run(
             ["docker", "rm", "-f", container], capture_output=True, check=False
