@@ -322,7 +322,7 @@ jobs:
           curl --fail --silent "${{ vars.STAGING_STUDIO_URL }}/release-identity.json" > studio.json
           jq -n --slurpfile api api.json --slurpfile worker worker.json --slurpfile studio studio.json \
             --slurpfile platform platform-attestation.json \
-            '{api_source_sha:$api[0].source_sha,worker_source_shas:($worker[0]|map(.source_sha)),studio_source_sha:$studio[0].source_sha,api_digest:$platform[0].api_digest,worker_digest:$platform[0].worker_digest,studio_digest:$platform[0].studio_digest}' > runtime.json
+            '{api_source_sha:$api[0].source_sha,worker_source_shas:($worker[0]|map(.source_sha)),worker_replica_count:$platform[0].worker_replica_count,studio_source_sha:$studio[0].source_sha,api_digest:$platform[0].api_digest,worker_digest:$platform[0].worker_digest,studio_digest:$platform[0].studio_digest}' > runtime.json
           python scripts/release_manifest.py verify-runtime release.json runtime.json
           current="$(docker run --rm -e DATABASE_URL "$API_IMAGE@${{ needs.release-preflight.outputs.api_digest }}" python -c 'import os; from alembic.runtime.migration import MigrationContext; from sqlalchemy import create_engine; engine = create_engine(os.environ["DATABASE_URL"]); connection = engine.connect(); print(" ".join(MigrationContext.configure(connection).get_current_heads())); connection.close(); engine.dispose()')"
           if [ "$RELEASE_ACTION" = rollback ]; then
@@ -405,7 +405,7 @@ jobs:
           curl --fail --silent "${{ vars.PRODUCTION_STUDIO_URL }}/release-identity.json" > studio.json
           jq -n --slurpfile api api.json --slurpfile worker worker.json --slurpfile studio studio.json \
             --slurpfile platform platform-attestation.json \
-            '{api_source_sha:$api[0].source_sha,worker_source_shas:($worker[0]|map(.source_sha)),studio_source_sha:$studio[0].source_sha,api_digest:$platform[0].api_digest,worker_digest:$platform[0].worker_digest,studio_digest:$platform[0].studio_digest}' > runtime.json
+            '{api_source_sha:$api[0].source_sha,worker_source_shas:($worker[0]|map(.source_sha)),worker_replica_count:$platform[0].worker_replica_count,studio_source_sha:$studio[0].source_sha,api_digest:$platform[0].api_digest,worker_digest:$platform[0].worker_digest,studio_digest:$platform[0].studio_digest}' > runtime.json
           python scripts/release_manifest.py verify-runtime release.json runtime.json
           current="$(docker run --rm -e DATABASE_URL "$API_IMAGE@${{ needs.release-preflight.outputs.api_digest }}" python -c 'import os; from alembic.runtime.migration import MigrationContext; from sqlalchemy import create_engine; engine = create_engine(os.environ["DATABASE_URL"]); connection = engine.connect(); print(" ".join(MigrationContext.configure(connection).get_current_heads())); connection.close(); engine.dispose()')"
           if [ "$RELEASE_ACTION" = rollback ]; then
