@@ -18,6 +18,7 @@ from creator_service import db
 from creator_service.media_asset_service import MediaAssetService
 from creator_service.media_upload_reconciliation import (
     MediaAssetPersistenceFailed,
+    MediaUploadReconciler,
     UploadIntent,
     UploadIntentState,
 )
@@ -291,3 +292,37 @@ async def test_postgres_expired_claim_replacement_fences_stale_updates(media_dat
     with pytest.raises(MediaAssetPersistenceFailed):
         await storage.record_upload_cleanup_failure(intent.id, 5, first.claim_token)
     await storage.record_upload_reclaimed(intent.id, successor.claim_token)
+
+
+@pytest.mark.asyncio
+async def test_postgres_late_upload_after_absent_observation_is_reclaimed(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given PostgreSQL retains an expired pending intent after observing no object.
+    storage = MediaAssetService()._asset_storage
+    objects = LocalStorageBackend(str(tmp_path))
+    now = datetime.now(timezone.utc)
+    intent = await storage.create_upload_intent(UploadIntent(
+        id=0, owner_id=uuid.uuid4().hex, workspace_id=9101,
+        storage_key="workspaces/9101/assets/late-process-death.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now,
+    ))
+    first = await MediaUploadReconciler(objects, storage).sweep(now=now)
+
+    # When a dead uploader's object appears directly and a later sweep runs.
+    objects.upload(intent.storage_key, image_bytes(), content_type="image/png")
+    later = now + timedelta(hours=1)
+    await db.execute(
+        "UPDATE creator_media_upload_intents SET lease_expires_at = $2 WHERE id = $1",
+        intent.id, later,
+    )
+    second = await MediaUploadReconciler(objects, storage).sweep(now=later)
+
+    # Then the object is deleted and PostgreSQL records durable terminal recovery.
+    assert first.reclaimed == 0
+    assert second.reclaimed == 1
+    assert not (tmp_path / intent.storage_key).exists()
+    row = await db.fetch_one(
+        "SELECT state FROM creator_media_upload_intents WHERE id = $1", intent.id,
+    )
+    assert row == {"state": "reclaimed"}
