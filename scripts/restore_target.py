@@ -21,7 +21,7 @@ def copy_tree_to_new_target(
     """Create and populate target relative to a pinned, nofollow parent descriptor."""
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     source_descriptor = os.open(source, flags)
-    parent_descriptor = os.open(target.parent, flags)
+    parent_descriptor = _open_directory_path(target.parent, flags)
     try:
         os.mkdir(target.name, mode=0o700, dir_fd=parent_descriptor)
         target_descriptor = os.open(target.name, flags, dir_fd=parent_descriptor)
@@ -32,6 +32,20 @@ def copy_tree_to_new_target(
     finally:
         os.close(parent_descriptor)
         os.close(source_descriptor)
+
+
+def _open_directory_path(path: Path, flags: int) -> int:
+    absolute = path.absolute()
+    descriptor = os.open(absolute.anchor, flags)
+    try:
+        for component in absolute.parts[1:]:
+            child_descriptor = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child_descriptor
+    except OSError:
+        os.close(descriptor)
+        raise
+    return descriptor
 
 
 def _copy_directory(
