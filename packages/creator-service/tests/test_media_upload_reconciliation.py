@@ -219,14 +219,18 @@ async def test_late_upload_after_absent_observation_is_deleted_by_later_sweep() 
     ))
     first = await MediaUploadReconciler(objects, assets).sweep(now=now)
 
-    # When the object materializes without an uploader state update and retention elapses.
+    # When retention elapses while absent, then the object materializes without an uploader update.
+    retention = now + timedelta(hours=1)
+    await assets.expire_upload_intent(intent.id, retention)
+    absent = await MediaUploadReconciler(objects, assets).sweep(now=retention)
     objects.objects[intent.storage_key] = b"late upload"
-    later = now + timedelta(hours=1)
+    later = retention + timedelta(minutes=5)
     await assets.expire_upload_intent(intent.id, later)
     second = await MediaUploadReconciler(objects, assets).sweep(now=later)
 
-    # Then durable recovery deletes it and reaches the terminal reclaimed state.
+    # Then the absent sweep retains ownership and a later sweep deletes the object.
     assert first.reclaimed == 0
+    assert absent.reclaimed == 0
     assert second.reclaimed == 1
     assert objects.objects == {}
     assert (await assets.list_upload_intents())[0].state is UploadIntentState.RECLAIMED

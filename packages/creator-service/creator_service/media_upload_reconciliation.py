@@ -121,11 +121,10 @@ class MediaUploadReconciler:
                 failed += 1
                 exhausted += int(is_exhausted)
                 continue
-            if (
-                deleted
-                or intent.state is UploadIntentState.LATE_UPLOAD_WATCH
-                or intent.state is not UploadIntentState.PENDING
-            ):
+            if deleted or intent.state not in {
+                UploadIntentState.PENDING,
+                UploadIntentState.LATE_UPLOAD_WATCH,
+            }:
                 await self._intents.record_upload_reclaimed(intent.id, intent.claim_token)
                 reclaimed += 1
             else:

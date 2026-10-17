@@ -309,17 +309,24 @@ async def test_postgres_late_upload_after_absent_observation_is_reclaimed(
     ))
     first = await MediaUploadReconciler(objects, storage).sweep(now=now)
 
-    # When a dead uploader's object appears directly and a later sweep runs.
+    # When retention elapses while absent, then the object appears without an uploader update.
+    retention = now + timedelta(hours=1)
+    await db.execute(
+        "UPDATE creator_media_upload_intents SET lease_expires_at = $2 WHERE id = $1",
+        intent.id, retention,
+    )
+    absent = await MediaUploadReconciler(objects, storage).sweep(now=retention)
     objects.upload(intent.storage_key, image_bytes(), content_type="image/png")
-    later = now + timedelta(hours=1)
+    later = retention + timedelta(minutes=5)
     await db.execute(
         "UPDATE creator_media_upload_intents SET lease_expires_at = $2 WHERE id = $1",
         intent.id, later,
     )
     second = await MediaUploadReconciler(objects, storage).sweep(now=later)
 
-    # Then the object is deleted and PostgreSQL records durable terminal recovery.
+    # Then PostgreSQL retains ownership while absent and later deletes the object.
     assert first.reclaimed == 0
+    assert absent.reclaimed == 0
     assert second.reclaimed == 1
     assert not (tmp_path / intent.storage_key).exists()
     row = await db.fetch_one(
