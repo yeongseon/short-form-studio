@@ -105,9 +105,9 @@ def test_create_manifest_bundle_swap_does_not_redirect_output(
             "create",
             str(bundle),
             "--release-sha",
-            "abc123",
+            "abc123def456",
             "--image-digest",
-            "api=sha256:placeholder",
+            "registry/api@sha256:" + "d" * 64,
             "--alembic-revision",
             "revision-1",
             "--secret-fingerprint",
@@ -140,9 +140,9 @@ def _run(command: str, bundle: Path) -> subprocess.CompletedProcess[str]:
         arguments.extend(
             [
                 "--release-sha",
-                "abc123",
+                "abc123def456",
                 "--image-digest",
-                "api=sha256:placeholder",
+                "registry/api@sha256:" + "d" * 64,
                 "--alembic-revision",
                 "revision-1",
                 "--secret-fingerprint",

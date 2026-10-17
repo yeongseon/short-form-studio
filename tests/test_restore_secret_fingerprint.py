@@ -71,13 +71,13 @@ def test_verify_rejects_raw_secret_fingerprint(tmp_path: Path, field: str) -> No
     manifest = {
         "format_version": 1,
         "created_at": "2026-10-16T00:00:00Z",
-        "release_sha": "abc123",
-        "image_digests": ["api=sha256:placeholder"],
+            "release_sha": "abc123def456",
+            "image_digests": ["registry/api@sha256:" + "d" * 64],
         "alembic_revision": "revision-1",
         "secret_fingerprint": "RAW-PROVIDER-SECRET" if field == "manifest" else valid,
         "database_dump": "database.dump",
         "media_root": "media",
-        "files": {},
+            "files": {"database.dump": "d" * 64},
     }
     (bundle / "manifest.json").write_text(json.dumps(manifest))
     expected = "RAW-PROVIDER-SECRET" if field == "expected" else valid

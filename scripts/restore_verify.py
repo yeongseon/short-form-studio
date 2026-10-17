@@ -33,6 +33,9 @@ from restore_target import SourceTreeChangedError, copy_tree_to_new_target
 
 Checksum = NewType("Checksum", str)
 SECRET_FINGERPRINT_PATTERN = re.compile(r"sha256:[0-9a-f]{64}\Z")
+CHECKSUM_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
+IMAGE_DIGEST_PATTERN = re.compile(r"[^@]+@sha256:[0-9a-f]{64}\Z")
+RELEASE_SHA_PATTERN = re.compile(r"[0-9a-f]{6,64}\Z")
 
 
 class ManifestJson(TypedDict):
@@ -124,7 +127,43 @@ def parse_manifest(bundle: Path) -> Manifest:
             raise
         raise RestoreError("manifest is missing")
     try:
-        raw: ManifestJson = json.loads(safe_manifest.read_text())
+        decoded = json.loads(safe_manifest.read_text())
+        if not isinstance(decoded, dict):
+            raise RestoreError("manifest is invalid: root must be an object")
+        required = set(ManifestJson.__required_keys__)
+        if set(decoded) != required:
+            raise RestoreError("manifest is invalid: fields do not match schema")
+        raw = decoded
+        string_fields = (
+            "created_at",
+            "release_sha",
+            "alembic_revision",
+            "secret_fingerprint",
+            "database_dump",
+            "media_root",
+        )
+        if any(not isinstance(raw[field], str) for field in string_fields):
+            raise RestoreError("manifest is invalid: string field has wrong type")
+        if not isinstance(raw["format_version"], int):
+            raise RestoreError("manifest is invalid: format_version must be an integer")
+        if not isinstance(raw["image_digests"], list) or not raw["image_digests"]:
+            raise RestoreError("manifest is invalid: image_digests must be a non-empty list")
+        if any(
+            not isinstance(value, str) or IMAGE_DIGEST_PATTERN.fullmatch(value) is None
+            for value in raw["image_digests"]
+        ):
+            raise RestoreError("manifest is invalid: image digest format")
+        if RELEASE_SHA_PATTERN.fullmatch(raw["release_sha"]) is None:
+            raise RestoreError("manifest is invalid: release_sha format")
+        if not isinstance(raw["files"], dict) or not raw["files"]:
+            raise RestoreError("manifest is invalid: files must be a non-empty object")
+        if any(
+            not isinstance(path, str)
+            or not isinstance(value, str)
+            or CHECKSUM_PATTERN.fullmatch(value) is None
+            for path, value in raw["files"].items()
+        ):
+            raise RestoreError("manifest is invalid: file checksum format")
         if raw["format_version"] != 1:
             raise RestoreError(
                 f"unsupported manifest format version: {raw['format_version']}"
