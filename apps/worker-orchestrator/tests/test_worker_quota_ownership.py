@@ -242,6 +242,28 @@ def test_audio_generation_authorizes_attempt_before_provider(
     assert authorize.await_count >= case.provider.generate.await_count
 
 
+def test_each_owned_generation_authorizes_delivery_before_provider(
+    generation_case: GenerationCase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given an owned delivery at a billable provider boundary.
+    case = generation_case
+    authorize = AsyncMock(return_value=True)
+    monkeypatch.setattr(case.module, "authorize_owned_provider_attempt", authorize)
+    case.provider.generate.return_value = "generated"
+
+    # When the task invokes its provider.
+    case.task.push_request(id="validation-task", args=case.args, kwargs={}, retries=2)
+    try:
+        case.task.run(*case.args)
+    finally:
+        case.task.pop_request()
+
+    # Then authorization precedes every invocation and accounting links that attempt.
+    authorize.assert_awaited()
+    assert authorize.await_count >= case.provider.generate.await_count + case.provider.transcribe.await_count
+    assert case.usage.await_args.kwargs["reservation_attempt_id"]
+
+
 def test_paragraph_audio_timeout_cleans_only_its_delivery(
     generation_case: GenerationCase,
 ) -> None:

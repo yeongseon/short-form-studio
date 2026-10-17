@@ -16,7 +16,7 @@ from creator_provider.registry import get_default_registry
 from creator_service.cost_config import COST_VISUAL_PLAN
 from creator_service.script_service import script_service as _script_service
 from creator_service.telemetry import trace_task
-from creator_service.usage_service import record_provider_call
+from creator_service.usage_service import authorize_owned_provider_attempt, record_provider_call
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
 from tasks.task_runner import GpuLockContext, TaskContext, TaskResult, TaskRunnerConfig, run_task
 from tasks.task_execution import TaskInputError
@@ -152,6 +152,11 @@ def generate_visual_plan(
             full_prompt = f"{system_prompt}\n\n---\nScript sections:\n{sections_prompt}"
             params = dict(entry.default_params or {})
             try:
+                attempt_id = f"{ctx.task_id}:{ctx.delivery_attempt}:llm"
+                if not await authorize_owned_provider_attempt(
+                    ctx.reservation_owner_id, attempt_id, COST_VISUAL_PLAN,
+                ):
+                    raise ProviderError("Provider attempt exceeds approved spend")
                 ctx.mark_provider_started()
                 raw_response = await provider.generate(full_prompt, params)
             except ProviderError:
@@ -186,6 +191,7 @@ def generate_visual_plan(
                 project_id=ctx.project_id,
                 idempotency_key=ctx.task_id,
                 reservation_owner_id=ctx.reservation_owner_id,
+                reservation_attempt_id=attempt_id,
             )
             ctx.mark_provider_accounted()
         except Exception:
