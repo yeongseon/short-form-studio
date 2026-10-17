@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import socket
 import subprocess
@@ -76,6 +77,16 @@ def seed_production_fixture(container: str, media: Path) -> RuntimeFixture:
     hashes = [hashlib.sha256(value.encode()).hexdigest() for value in (owner, foreign, revoked)]
     image_hash = hashlib.sha256((media / "image.png").read_bytes()).hexdigest()
     video_hash = hashlib.sha256((media / "final.mp4").read_bytes()).hexdigest()
+    timeline = json.dumps(
+        [
+            {
+                "image_storage_key": "image.png",
+                "audio_storage_key": "audio.wav",
+                "duration_seconds": 1,
+            }
+        ],
+        separators=(",", ":"),
+    )
     sql = f"""
 INSERT INTO users(id,email,name,auth_provider,auth_subject) VALUES (101,'a@example.invalid','A','api_key','restore-a'),(102,'b@example.invalid','B','api_key','restore-b');
 INSERT INTO workspaces(id,name,slug,owner_id) VALUES (201,'A','restore-a',101),(202,'B','restore-b',102);
@@ -83,7 +94,7 @@ INSERT INTO workspace_members(workspace_id,user_id,role) VALUES (201,101,'owner'
 INSERT INTO api_keys(id,user_id,key_hash,name,revoked_at) VALUES (301,101,'{hashes[0]}','owner',NULL),(302,102,'{hashes[1]}','foreign',NULL),(303,101,'{hashes[2]}','revoked',NOW());
 INSERT INTO creator_projects(id,title,source_type,status,workspace_id) VALUES (401,'Restored project','idea','active',201);
 INSERT INTO creator_runs(id,project_id,current_stage,status,workspace_id,version,metadata_json) VALUES (501,401,'FINAL_REVIEW','paused',201,1,'{{"render_source":"timeline","render_timeline_revision":1}}');
-INSERT INTO creator_timelines(project_id,workspace_id,timeline_id,revision,segments_json) VALUES (401,201,'timeline-restored',1,'[]');
+INSERT INTO creator_timelines(project_id,workspace_id,timeline_id,revision,segments_json) VALUES (401,201,'timeline-restored',1,'{timeline}');
 INSERT INTO creator_stage_reviews(run_id,stage_name,review_status,reviewer,notes) VALUES (501,'TIMELINE_REVIEW','approved','101','{{"timeline_id":"timeline-restored","revision":1}}');
 INSERT INTO creator_media_assets(id,workspace_id,project_id,run_id,media_type,origin,storage_key,mime_type,metadata) VALUES (601,201,401,501,'IMAGE','UPLOADED','image.png','image/png','{{"sha256":"{image_hash}","storage_provider":"local"}}');
 INSERT INTO creator_artifacts(id,run_id,artifact_type,file_path,file_size_bytes,mime_type,storage_key,content_type,size_bytes,workspace_id,project_id,storage_provider,checksum) VALUES (701,501,'video','final.mp4',0,'video/mp4','final.mp4','video/mp4',0,201,401,'local','{video_hash}');
@@ -95,6 +106,46 @@ INSERT INTO creator_run_tasks(run_id,task_type,celery_task_id,status,started_at,
 """
     docker("exec", "-i", container, "psql", "-U", "restore", "-d", "restore", "-c", sql)
     return RuntimeFixture(owner, foreign, revoked, 201, 401, 501, 601, 701)
+
+
+def restored_timeline(container: str, project_id: int) -> list[dict[str, str | int]]:
+    payload = docker(
+        "exec",
+        container,
+        "psql",
+        "-U",
+        "restore",
+        "-d",
+        "restore",
+        "-At",
+        "-c",
+        f"SELECT segments_json FROM creator_timelines WHERE project_id={project_id} AND revision=1",
+    ).stdout.strip()
+    timeline = json.loads(payload)
+    if not isinstance(timeline, list) or not timeline:
+        raise DrillError("restored approved Timeline must contain segments")
+    return timeline
+
+
+def register_rendered_artifact(
+    container: str, fixture: RuntimeFixture, artifact: Path
+) -> dict[str, str | int]:
+    checksum = hashlib.sha256(artifact.read_bytes()).hexdigest()
+    size_bytes = artifact.stat().st_size
+    docker(
+        "exec",
+        container,
+        "psql",
+        "-U",
+        "restore",
+        "-d",
+        "restore",
+        "-c",
+        "UPDATE creator_artifacts "
+        f"SET checksum='{checksum}', file_size_bytes={size_bytes}, size_bytes={size_bytes} "
+        f"WHERE id={fixture.artifact_id}",
+    )
+    return {"checksum": checksum, "size_bytes": size_bytes}
 
 
 def run_reconciler(database_url: str) -> dict[str, int | list[str]]:
