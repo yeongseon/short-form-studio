@@ -52,7 +52,7 @@ def test_restore_requires_absent_target(
     assert "target must be absent" in result.stderr
 
 
-def test_restore_exclusive_create_rejects_concurrent_target(
+def test_restore_parent_swap_does_not_redirect_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Given
@@ -65,15 +65,21 @@ def test_restore_exclusive_create_rejects_concurrent_target(
     sys.modules[specification.name] = module
     specification.loader.exec_module(module)
     bundle = _bundle(tmp_path)
-    target = tmp_path / "restore"
-    original_copytree = module.shutil.copytree
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    target = parent / "restore"
+    moved_parent = tmp_path / "moved-parent"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    original_mkdir = module.copy_tree_to_new_target.__globals__["os"].mkdir
 
-    def concurrent_copytree(source: Path, destination: Path) -> Path:
-        destination.mkdir()
-        (destination / "concurrent.txt").write_text("preserve")
-        return original_copytree(source, destination)
+    def swap_parent(path: str, mode: int = 0o777, *, dir_fd: int | None = None) -> None:
+        if path == target.name and dir_fd is not None:
+            parent.rename(moved_parent)
+            parent.symlink_to(outside, target_is_directory=True)
+        original_mkdir(path, mode=mode, dir_fd=dir_fd)
 
-    monkeypatch.setattr(module.shutil, "copytree", concurrent_copytree)
+    monkeypatch.setattr(module.copy_tree_to_new_target.__globals__["os"], "mkdir", swap_parent)
     arguments = module.parser().parse_args(
         [
             "restore-media",
@@ -87,10 +93,12 @@ def test_restore_exclusive_create_rejects_concurrent_target(
         ]
     )
 
-    # When / Then
-    with pytest.raises(FileExistsError):
-        module.restore_media(arguments)
-    assert (target / "concurrent.txt").read_text() == "preserve"
+    # When
+    module.restore_media(arguments)
+
+    # Then
+    assert list(outside.iterdir()) == []
+    assert (moved_parent / "restore/workspace-a/image.png").read_bytes() == b"synthetic image"
 
 
 def _bundle(tmp_path: Path) -> Path:
