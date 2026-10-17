@@ -8,7 +8,9 @@ import pytest
 
 from creator_service.dispatch_reconciler import DispatchReconciler
 from creator_service.memory_task_tracking_storage import InMemoryTaskTrackingStorage
+from creator_service.postgres_run_storage import PostgresRunStorage
 from creator_service.postgres_task_tracking_storage import PostgresTaskTrackingStorage
+from creator_service.run_service import InMemoryRunStorage, RunService
 from creator_service.task_tracking_service import TaskTrackingService
 from creator_service.usage_service import InMemoryUsageStorage, UsageService
 
@@ -53,6 +55,89 @@ async def _run_id(pool: asyncpg.Pool | None) -> int:
            VALUES ($1, 1, 'AUDIO_GENERATING', 'pending', 'default') RETURNING id""",
         project_id,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("quota_pool", ["memory", "postgres"], indirect=True)
+async def test_retry_stage_and_pending_owner_are_published_atomically(
+    quota_pool: asyncpg.Pool | None,
+) -> None:
+    inserted = asyncio.Event()
+    resume = asyncio.Event()
+
+    if quota_pool is None:
+        run_storage = InMemoryRunStorage()
+
+        class BarrierStorage(InMemoryTaskTrackingStorage):
+            async def create_task(self, row):
+                if row.get("celery_task_id") == "attempt-b":
+                    inserted.set()
+                    await resume.wait()
+                return await super().create_task(row)
+
+        storage = BarrierStorage()
+        runs = RunService(run_storage)
+        run = await runs.create_run(
+            1, None, "default", current_stage="VISUAL_ASSET_REVIEW"
+        )
+        run_id = run.id
+    else:
+        run_storage = PostgresRunStorage()
+
+        class BarrierStorage(PostgresTaskTrackingStorage):
+            async def _insert_pending_task(self, connection, row):
+                inserted.set()
+                await resume.wait()
+                return await super()._insert_pending_task(connection, row)
+
+        storage = BarrierStorage()
+        run_id = await _run_id(quota_pool)
+        await quota_pool.execute(
+            "UPDATE creator_runs SET current_stage='VISUAL_ASSET_REVIEW' WHERE id=$1",
+            run_id,
+        )
+
+    tracking = TaskTrackingService(storage)
+    await tracking.record_task_pending(run_id, "generate_audio", "attempt-a")
+    await tracking.mark_failed_if_pending(
+        "attempt-a", "reconciler_pending_cleanup", "cleanup"
+    )
+
+    dispatch = asyncio.create_task(
+        tracking.transition_run_and_record_pending(
+            run_storage,
+            run_id,
+            {"current_stage": "AUDIO_GENERATING"},
+            frozenset({"VISUAL_ASSET_REVIEW"}),
+            "generate_audio",
+            "attempt-b",
+            rejected_statuses=frozenset({"cancelled"}),
+        )
+    )
+    await inserted.wait()
+    cleanup = asyncio.create_task(
+        tracking.rollback_run_if_task_owner(
+            "attempt-a",
+            run_storage,
+            run_id,
+            frozenset({"generate_audio"}),
+            frozenset({"AUDIO_GENERATING"}),
+            frozenset({"cancelled", "completed"}),
+        )
+    )
+    await asyncio.sleep(0)
+    assert not cleanup.done()
+
+    resume.set()
+    transition_ok, _ = await dispatch
+    rollback_ok, current = await cleanup
+    task_b = await tracking.promote_pending_to_queued("attempt-b")
+
+    assert transition_ok
+    assert not rollback_ok
+    assert current is not None and current["current_stage"] == "AUDIO_GENERATING"
+    assert current["status"] == "pending"
+    assert task_b is not None and task_b.status == "queued"
 
 
 @pytest.mark.asyncio
