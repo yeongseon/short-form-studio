@@ -4,6 +4,7 @@ import inspect
 from pathlib import Path
 
 import celery
+import pytest
 import yaml
 from celery.concurrency.solo import TaskPool
 
@@ -82,6 +83,21 @@ def test_runtime_probe_is_shipped_and_registered_with_the_ci_app(monkeypatch) ->
     assert "runtime_topology.probe" in celery_app.tasks
     assert "tasks.runtime_topology_probe" in _worker_task_modules()
     assert "tasks.revoked_quota" in _worker_task_modules()
+
+
+def test_runtime_probe_accepts_nested_evidence_but_rejects_escape(monkeypatch, tmp_path) -> None:
+    from tasks.runtime_topology_probe import _evidence_file
+
+    # Given a constrained runtime evidence root.
+    monkeypatch.setenv("WORKER_TOPOLOGY_EVIDENCE_DIR", str(tmp_path))
+
+    # When a production-style storage key is resolved below that root.
+    nested = _evidence_file("storage/100/artifact.bin")
+
+    # Then nested persistence remains allowed while traversal is rejected.
+    assert nested == tmp_path / "storage" / "100" / "artifact.bin"
+    with pytest.raises(ValueError, match="Invalid topology evidence path"):
+        _evidence_file("../escape.bin")
 
 
 def test_runtime_probe_is_disabled_without_explicit_ci_enablement(monkeypatch) -> None:

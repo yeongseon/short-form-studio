@@ -27,7 +27,7 @@ type ProbeMode = Literal[
 def _evidence_file(name: str) -> Path:
     root = Path(os.environ["WORKER_TOPOLOGY_EVIDENCE_DIR"]).resolve()
     candidate = (root / name).resolve()
-    if candidate.parent != root:
+    if not candidate.is_relative_to(root) or candidate == root:
         raise ValueError("Invalid topology evidence path")
     return candidate
 
