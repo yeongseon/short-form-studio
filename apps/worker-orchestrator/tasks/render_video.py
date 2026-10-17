@@ -42,16 +42,16 @@ async def execute_render(ctx: TaskContext, render_profile: str = "shorts_default
     audio: Path | None = None
     subtitles: Path | None = None
     attempt_id = f"{ctx.task_id}:{ctx.delivery_attempt}:render"
-    if not await authorize_owned_provider_attempt(
-        ctx.reservation_owner_id, attempt_id, COST_RENDER_VIDEO,
-    ):
-        raise ProviderError("Provider attempt exceeds approved spend")
-    ctx.mark_provider_started()
     if read_render_metadata(ctx).render_source == "timeline":
         narration = await _audio_service.get_latest(ctx.run_id)
         captions = await _subtitle_service.get_latest(ctx.run_id)
         audio = request.path(narration.path) if narration else None
         subtitles = request.path(captions.path) if captions else None
+        if not await authorize_owned_provider_attempt(
+            ctx.reservation_owner_id, attempt_id, COST_RENDER_VIDEO,
+        ):
+            raise ProviderError("Provider attempt exceeds approved spend")
+        ctx.mark_provider_started()
         scene_count = await render_saved_timeline(
             ctx, _resolve_profile(render_profile), output, layers=RenderLayers(audio, subtitles),
         )
@@ -64,6 +64,11 @@ async def execute_render(ctx: TaskContext, render_profile: str = "shorts_default
         audio, subtitles, scene_count = inputs.audio, inputs.subtitles, inputs.scene_count
         render_input = render_input_from_plan(inputs.plan, audio_path=audio, subtitle_path=subtitles)
         try:
+            if not await authorize_owned_provider_attempt(
+                ctx.reservation_owner_id, attempt_id, COST_RENDER_VIDEO,
+            ):
+                raise ProviderError("Provider attempt exceeds approved spend")
+            ctx.mark_provider_started()
             inputs.ffmpeg.render(render_input, output)
         except (TimeoutError, ConnectionError) as exc:
             raise ProviderTimeoutError(f"Provider timed out during video render for run {ctx.run_id}") from exc
