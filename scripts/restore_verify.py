@@ -21,6 +21,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 from dataclasses import asdict, dataclass
@@ -230,45 +231,75 @@ def verify_bundle(
 
 def create_manifest(args: argparse.Namespace) -> None:
     bundle = Path(args.bundle)
+    try:
+        bundle_descriptor = os.open(
+            bundle, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        )
+    except OSError as error:
+        raise RestoreError(f"bundle is inaccessible or unsafe: {error}") from error
     if SECRET_FINGERPRINT_PATTERN.fullmatch(args.secret_fingerprint) is None:
+        os.close(bundle_descriptor)
         raise RestoreError(
             "secret fingerprint must be sha256 plus 64 lowercase hex characters"
         )
-    database_dump = _require_contained_path(bundle, bundle / "database.dump", "database dump")
-    if not database_dump.is_file() or database_dump.stat().st_size == 0:
-        raise RestoreError("database dump is missing or empty")
-    media = _require_contained_path(bundle, bundle / "media", "media tree")
-    if not media.is_dir():
-        raise RestoreError("media tree is missing")
-    media_entries = _require_safe_tree(bundle, media, "media tree")
-    files = [database_dump, *(path for path in media_entries if path.is_file())]
-    manifest = Manifest(
-        created_at=args.timestamp,
-        release_sha=args.release_sha,
-        image_digests=tuple(args.image_digest),
-        alembic_revision=args.alembic_revision,
-        secret_fingerprint=args.secret_fingerprint,
-        files={path.relative_to(bundle).as_posix(): checksum(path) for path in sorted(files)},
-    )
-    payload = asdict(manifest)
-    payload["image_digests"] = list(manifest.image_digests)
-    manifest_path = bundle / "manifest.json"
-    if manifest_path.is_symlink():
-        raise RestoreError("manifest must not be a symlink")
-    temporary_path = bundle / f".manifest.{os.getpid()}.tmp"
     try:
-        descriptor = os.open(
-            temporary_path,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
-            0o600,
+        database_dump = _require_contained_path(
+            bundle, bundle / "database.dump", "database dump"
         )
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_path, manifest_path)
+        if not database_dump.is_file() or database_dump.stat().st_size == 0:
+            raise RestoreError("database dump is missing or empty")
+        media = _require_contained_path(bundle, bundle / "media", "media tree")
+        if not media.is_dir():
+            raise RestoreError("media tree is missing")
+        media_entries = _require_safe_tree(bundle, media, "media tree")
+        files = [database_dump, *(path for path in media_entries if path.is_file())]
+        manifest = Manifest(
+            created_at=args.timestamp,
+            release_sha=args.release_sha,
+            image_digests=tuple(args.image_digest),
+            alembic_revision=args.alembic_revision,
+            secret_fingerprint=args.secret_fingerprint,
+            files={
+                path.relative_to(bundle).as_posix(): checksum(path)
+                for path in sorted(files)
+            },
+        )
+        payload = asdict(manifest)
+        payload["image_digests"] = list(manifest.image_digests)
+        try:
+            manifest_status = os.stat(
+                "manifest.json", dir_fd=bundle_descriptor, follow_symlinks=False
+            )
+        except FileNotFoundError:
+            manifest_status = None
+        if manifest_status is not None and stat.S_ISLNK(manifest_status.st_mode):
+            raise RestoreError("manifest must not be a symlink")
+        temporary_name = f".manifest.{os.getpid()}.tmp"
+        try:
+            descriptor = os.open(
+                temporary_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=bundle_descriptor,
+            )
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(
+                temporary_name,
+                "manifest.json",
+                src_dir_fd=bundle_descriptor,
+                dst_dir_fd=bundle_descriptor,
+            )
+            os.fsync(bundle_descriptor)
+        finally:
+            try:
+                os.unlink(temporary_name, dir_fd=bundle_descriptor)
+            except FileNotFoundError:
+                pass
     finally:
-        temporary_path.unlink(missing_ok=True)
+        os.close(bundle_descriptor)
 
 
 def verify(args: argparse.Namespace) -> None:
