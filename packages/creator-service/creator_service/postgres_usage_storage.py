@@ -583,13 +583,17 @@ class PostgresUsageStorage:
                 status = "billable_unknown" if billable_unknown else "settled"
                 source = await connection.fetchrow(
                     """SELECT period_start, operation_type, estimated_cost_usd,
-                              reserved_units, status
+                              settled_estimated_cost_usd, reserved_units, status
                        FROM workspace_quota_reservation_owners WHERE owner_id = $1 FOR UPDATE""",
                     owner_id,
                 )
                 if source is None or source["status"] not in {"reserved", "consumed"}:
                     return False
-                if not billable_unknown and source["status"] == "reserved":
+                if (
+                    not billable_unknown
+                    and source["status"] == "reserved"
+                    and source["settled_estimated_cost_usd"] <= 0
+                ):
                     return False
                 settled = await connection.fetchrow(
                     """UPDATE workspace_quota_reservation_owners
