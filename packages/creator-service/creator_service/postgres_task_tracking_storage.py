@@ -118,7 +118,12 @@ class PostgresTaskTrackingStorage:
             row.get("error_code"),
             row.get("error_message"),
             row.get("claim_token"),
-            ["reconciler_pending_cleanup", "reconciler_stuck_cleanup", "reconciler_cleanup_claimed"],
+            [
+                "reconciler_pending_cleanup",
+                "reconciler_stuck_cleanup",
+                "reconciler_cleanup_claimed",
+                "broker_recovery_cleanup",
+            ],
         )
         return saved
 
@@ -219,7 +224,12 @@ class PostgresTaskTrackingStorage:
             task_id,
             kwargs.get("started_at"),
             kwargs.get("claim_token"),
-            ["reconciler_pending_cleanup", "reconciler_stuck_cleanup", "reconciler_cleanup_claimed"],
+            [
+                "reconciler_pending_cleanup",
+                "reconciler_stuck_cleanup",
+                "reconciler_cleanup_claimed",
+                "broker_recovery_cleanup",
+            ],
         )
         return claimed
 
