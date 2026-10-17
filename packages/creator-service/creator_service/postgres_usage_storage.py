@@ -469,6 +469,7 @@ class PostgresUsageStorage:
                     return False
                 if owner["status"] == "reserved":
                     operation_type = str(owner["operation_type"])
+                    reserved_units = int(owner["reserved_units"])
                     usage_column = {
                         "llm": "llm_count",
                         "image_gen": "image_count",
@@ -485,34 +486,37 @@ class PostgresUsageStorage:
                     }[operation_type]
                     admitted = await connection.fetchval(
                         f"""WITH current_usage AS (
-                               SELECT COUNT(*) FILTER (WHERE operation_type = $3) AS used
+                               SELECT CASE WHEN $3 = 'image_gen'
+                                 THEN COALESCE(SUM(CASE WHEN operation_type = $3
+                                   THEN GREATEST(COALESCE(image_count, 0), 1) ELSE 0 END), 0)
+                                 ELSE COUNT(*) FILTER (WHERE operation_type = $3) END AS used
                                FROM usage_events WHERE workspace_id = $1 AND created_at >= $2
                              )
                              SELECT COALESCE(current_usage.used, 0)
-                                    + COALESCE(reservations.{usage_column}, 0) + 1
+                                     + COALESCE(reservations.{usage_column}, 0) + $4
                                     <= quota.{quota_column}
                              FROM workspace_quotas quota
                              CROSS JOIN current_usage
                              LEFT JOIN workspace_quota_reservations reservations
                                ON reservations.workspace_id = $1 AND reservations.period_start = $2
                              WHERE quota.workspace_id = $1""",
-                        workspace_id, month_start, operation_type,
+                        workspace_id, month_start, operation_type, reserved_units,
                     )
                     if not admitted:
                         return False
                     await connection.execute(
                         f"""UPDATE workspace_quota_reservations
-                           SET {usage_column} = GREATEST({usage_column} - 1, 0), updated_at = NOW()
+                           SET {usage_column} = GREATEST({usage_column} - $3, 0), updated_at = NOW()
                            WHERE workspace_id = $1 AND period_start = $2""",
-                        workspace_id, owner["period_start"],
+                        workspace_id, owner["period_start"], reserved_units,
                     )
                     await connection.execute(
                         f"""INSERT INTO workspace_quota_reservations
-                           (workspace_id, period_start, {usage_column}) VALUES ($1, $2, 1)
+                           (workspace_id, period_start, {usage_column}) VALUES ($1, $2, $3)
                            ON CONFLICT (workspace_id, period_start) DO UPDATE
-                           SET {usage_column} = workspace_quota_reservations.{usage_column} + 1,
-                               updated_at = NOW()""",
-                        workspace_id, month_start,
+                           SET {usage_column} = workspace_quota_reservations.{usage_column} + $3,
+                                updated_at = NOW()""",
+                        workspace_id, month_start, reserved_units,
                     )
                 await connection.execute(
                     """UPDATE workspace_quota_reservation_owners SET period_start = $2
@@ -537,7 +541,8 @@ class PostgresUsageStorage:
                 owned = await connection.fetchrow(
                     """UPDATE workspace_quota_reservation_owners SET status = 'cancelled'
                        WHERE owner_id = $1 AND status = 'reserved'
-                       RETURNING period_start, operation_type, estimated_cost_usd, status""",
+                       RETURNING period_start, operation_type, estimated_cost_usd,
+                                 reserved_units, status""",
                     owner_id,
                 )
                 if owned is None:
@@ -551,10 +556,14 @@ class PostgresUsageStorage:
                        updated_at = NOW()
                        WHERE workspace_id = $1 AND period_start = $2""",
                     workspace_id, owned["period_start"],
-                    int(owned["operation_type"] == "llm"),
-                    int(owned["operation_type"] == "image_gen"),
-                    int(owned["operation_type"] in {"tts", "stt", "render"}),
+                    int(owned["reserved_units"]) * int(owned["operation_type"] == "llm"),
+                    int(owned["reserved_units"]) * int(owned["operation_type"] == "image_gen"),
+                    int(owned["reserved_units"]) * int(owned["operation_type"] in {"tts", "stt", "render"}),
                     owned["estimated_cost_usd"],
+                )
+                await connection.execute(
+                    "UPDATE workspace_quota_reservation_owners SET reserved_units = 0 WHERE owner_id = $1",
+                    owner_id,
                 )
                 return True
 
@@ -573,7 +582,8 @@ class PostgresUsageStorage:
                 await connection.execute("SELECT pg_advisory_xact_lock($1)", workspace_id)
                 status = "billable_unknown" if billable_unknown else "settled"
                 source = await connection.fetchrow(
-                    """SELECT period_start, operation_type, estimated_cost_usd, status
+                    """SELECT period_start, operation_type, estimated_cost_usd,
+                              reserved_units, status
                        FROM workspace_quota_reservation_owners WHERE owner_id = $1 FOR UPDATE""",
                     owner_id,
                 )
@@ -582,7 +592,8 @@ class PostgresUsageStorage:
                 if not billable_unknown and source["status"] == "reserved":
                     return False
                 settled = await connection.fetchrow(
-                    """UPDATE workspace_quota_reservation_owners SET status = $2
+                    """UPDATE workspace_quota_reservation_owners
+                       SET status = $2, reserved_units = 0
                        WHERE owner_id = $1 AND status IN ('reserved', 'consumed')
                        RETURNING period_start, operation_type, estimated_cost_usd""",
                     owner_id, status,
@@ -608,7 +619,7 @@ class PostgresUsageStorage:
                         "UPDATE workspace_quota_reservation_owners SET status = 'billable_unknown' WHERE owner_id = $1",
                         owner_id,
                     )
-                decrement_counts = source["status"] == "reserved"
+                remaining_units = int(source["reserved_units"])
                 await connection.execute(
                     """UPDATE workspace_quota_reservations SET
                        llm_count = GREATEST(llm_count - $3, 0),
@@ -618,9 +629,9 @@ class PostgresUsageStorage:
                          reserved_estimated_cost_usd - $6 + $7, 0), updated_at = NOW()
                        WHERE workspace_id = $1 AND period_start = $2""",
                     workspace_id, settled["period_start"],
-                    int(decrement_counts and settled["operation_type"] == "llm"),
-                    int(decrement_counts and settled["operation_type"] == "image_gen"),
-                    int(decrement_counts and settled["operation_type"] in {"tts", "stt", "render"}),
+                    remaining_units * int(settled["operation_type"] == "llm"),
+                    remaining_units * int(settled["operation_type"] == "image_gen"),
+                    remaining_units * int(settled["operation_type"] in {"tts", "stt", "render"}),
                     settled["estimated_cost_usd"], keep,
                 )
                 return True
@@ -639,7 +650,7 @@ class PostgresUsageStorage:
                 workspace_id = int(owner["workspace_id"])
                 await connection.execute("SELECT pg_advisory_xact_lock($1)", workspace_id)
                 owned = await connection.fetchrow(
-                    """SELECT period_start, operation_type, status
+                    """SELECT period_start, operation_type, reserved_units, status
                        FROM workspace_quota_reservation_owners WHERE owner_id = $1 FOR UPDATE""",
                     owner_id,
                 )
@@ -679,10 +690,14 @@ class PostgresUsageStorage:
                     )
                     if accounted != "UPDATE 1":
                         raise ValueError("Usage event references unknown provider attempt")
-                if owned["status"] == "reserved":
+                if owned["status"] == "reserved" and int(owned["reserved_units"]) > 0:
+                    remaining_units = int(owned["reserved_units"]) - 1
                     await connection.execute(
-                        "UPDATE workspace_quota_reservation_owners SET status = 'consumed' WHERE owner_id = $1",
-                        owner_id,
+                        """UPDATE workspace_quota_reservation_owners
+                           SET reserved_units = $2,
+                               status = CASE WHEN $2 = 0 THEN 'consumed' ELSE 'reserved' END
+                           WHERE owner_id = $1""",
+                        owner_id, remaining_units,
                     )
                     await connection.execute(
                         """UPDATE workspace_quota_reservations SET
