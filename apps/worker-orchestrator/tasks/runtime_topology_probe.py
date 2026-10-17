@@ -53,7 +53,7 @@ class _TopologyRequest(Request):
                 if isinstance(child_pid, int):
                     os.killpg(child_pid, signal.SIGKILL)
                 if isinstance(temporary_path, str):
-                    Path(temporary_path).unlink(missing_ok=True)
+                    _evidence_file(temporary_path).unlink(missing_ok=True)
             finalize_hard_timeout(self.id, run_id, timeout)
 
 
@@ -182,7 +182,7 @@ def runtime_topology_probe(
                     "resources_active",
                     task_id=ctx.task_id,
                     child_pid=child.pid,
-                    temporary_path=str(temporary),
+                    temporary_path=str(temporary.relative_to(_evidence_file("storage").parent)),
                 )
                 child.wait()
             case unreachable:

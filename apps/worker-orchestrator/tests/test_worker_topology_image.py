@@ -267,7 +267,7 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
     )
     timeout_resources = wait_state(timeout_state, "resources_active")
     timeout_pid = int(timeout_resources["child_pid"])
-    timeout_file = Path(str(timeout_resources["temporary_path"]))
+    timeout_file = EVIDENCE / str(timeout_resources["temporary_path"])
     assert timeout_file.is_file()
     docker("stop", "topology-redis")
     time.sleep(1)
