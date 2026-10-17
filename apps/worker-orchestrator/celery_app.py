@@ -39,7 +39,7 @@ try:
 except ImportError:
     redis = None
 from creator_service.production_checks import validate_production_config
-from celery_dlq_fallback import append_fallback_entry, read_fallback_entries
+from creator_service.celery_dlq_fallback import append_fallback_entry, read_fallback_entries
 from creator_service.broker_recovery import BrokerSnapshot
 
 
