@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import importlib.util
 from pathlib import Path
 
 import pytest
@@ -67,6 +68,61 @@ def test_verifier_rejects_every_symlink_boundary(
     # Then
     assert result.returncode != 0
     assert "symlink" in result.stderr.lower()
+
+
+def test_create_manifest_bundle_swap_does_not_redirect_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given
+    monkeypatch.syspath_prepend(str(SCRIPT.parent))
+    specification = importlib.util.spec_from_file_location("restore_verify", SCRIPT)
+    assert specification is not None
+    assert specification.loader is not None
+    module = importlib.util.module_from_spec(specification)
+    sys.modules[specification.name] = module
+    specification.loader.exec_module(module)
+    bundle = _bundle(tmp_path)
+    moved_bundle = tmp_path / "moved-bundle"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    original_open = module.os.open
+
+    def swap_bundle(
+        path: str | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if Path(path).name.startswith(".manifest."):
+            bundle.rename(moved_bundle)
+            bundle.symlink_to(outside, target_is_directory=True)
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(module.os, "open", swap_bundle)
+    arguments = module.parser().parse_args(
+        [
+            "create",
+            str(bundle),
+            "--release-sha",
+            "abc123",
+            "--image-digest",
+            "api=sha256:placeholder",
+            "--alembic-revision",
+            "revision-1",
+            "--secret-fingerprint",
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "--timestamp",
+            "2026-10-16T00:00:00Z",
+        ]
+    )
+
+    # When
+    module.create_manifest(arguments)
+
+    # Then
+    assert list(outside.iterdir()) == []
+    assert (moved_bundle / "manifest.json").is_file()
 
 
 def _bundle(tmp_path: Path) -> Path:
