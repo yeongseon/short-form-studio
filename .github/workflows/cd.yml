@@ -324,7 +324,7 @@ jobs:
             --slurpfile platform platform-attestation.json \
             '{api_source_sha:$api[0].source_sha,worker_source_shas:($worker[0]|map(.source_sha)),studio_source_sha:$studio[0].source_sha,api_digest:$platform[0].api_digest,worker_digest:$platform[0].worker_digest,studio_digest:$platform[0].studio_digest}' > runtime.json
           python scripts/release_manifest.py verify-runtime release.json runtime.json
-          current="$(docker run --rm -e DATABASE_URL "$API_IMAGE@${{ needs.release-preflight.outputs.api_digest }}" alembic current)"
+          current="$(docker run --rm -e DATABASE_URL "$API_IMAGE@${{ needs.release-preflight.outputs.api_digest }}" python -c 'import os; from alembic.runtime.migration import MigrationContext; from sqlalchemy import create_engine; engine = create_engine(os.environ["DATABASE_URL"]); connection = engine.connect(); print(" ".join(MigrationContext.configure(connection).get_current_heads())); connection.close(); engine.dispose()')"
           if [ "$RELEASE_ACTION" = rollback ]; then
             python scripts/release_manifest.py verify-db-compatible release.json "$current" "$SCHEMA_COMPATIBLE_DB_REVISIONS"
           else
@@ -407,7 +407,7 @@ jobs:
             --slurpfile platform platform-attestation.json \
             '{api_source_sha:$api[0].source_sha,worker_source_shas:($worker[0]|map(.source_sha)),studio_source_sha:$studio[0].source_sha,api_digest:$platform[0].api_digest,worker_digest:$platform[0].worker_digest,studio_digest:$platform[0].studio_digest}' > runtime.json
           python scripts/release_manifest.py verify-runtime release.json runtime.json
-          current="$(docker run --rm -e DATABASE_URL "$API_IMAGE@${{ needs.release-preflight.outputs.api_digest }}" alembic current)"
+          current="$(docker run --rm -e DATABASE_URL "$API_IMAGE@${{ needs.release-preflight.outputs.api_digest }}" python -c 'import os; from alembic.runtime.migration import MigrationContext; from sqlalchemy import create_engine; engine = create_engine(os.environ["DATABASE_URL"]); connection = engine.connect(); print(" ".join(MigrationContext.configure(connection).get_current_heads())); connection.close(); engine.dispose()')"
           if [ "$RELEASE_ACTION" = rollback ]; then
             python scripts/release_manifest.py verify-db-compatible release.json "$current" "$SCHEMA_COMPATIBLE_DB_REVISIONS"
           else
