@@ -2,6 +2,7 @@
 
 import logging
 import os
+import stat
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -16,10 +17,35 @@ from shorts_api.auth import (
     require_run_access,
     workspace_service,
 )
-from starlette.responses import FileResponse, RedirectResponse
+from starlette.background import BackgroundTask
+from starlette.responses import RedirectResponse, StreamingResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["runs"])
+
+
+def _open_artifact(root: str, components: list[str]) -> int:
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    directory_flags = flags | getattr(os, "O_DIRECTORY", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(root, directory_flags)
+    try:
+        for component in components[:-1]:
+            next_descriptor = os.open(component, directory_flags | nofollow, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = next_descriptor
+        file_descriptor = os.open(components[-1], flags | nofollow, dir_fd=descriptor)
+        if not stat.S_ISREG(os.fstat(file_descriptor).st_mode):
+            os.close(file_descriptor)
+            raise OSError("artifact is not a regular file")
+        return file_descriptor
+    finally:
+        os.close(descriptor)
+
+
+def _stream_descriptor(descriptor: int):
+    while block := os.read(descriptor, 1024 * 1024):
+        yield block
 
 
 @router.get("/runs/{run_id}/artifacts/{artifact_id}/download")
@@ -82,7 +108,7 @@ async def download_artifact(
 
     normalized = rel_path.replace("\\", "/")
     path_components = [c for c in normalized.split("/") if c not in {"", "."}]
-    if any(component in {".."} for component in path_components):
+    if not path_components or any(component in {".."} for component in path_components):
         raise HTTPException(status_code=404, detail="Artifact not found")
 
     try:
@@ -93,15 +119,14 @@ async def download_artifact(
     except UnsafePathComponent as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
-    resolved_path = os.path.realpath(os.path.join(artifact_root, *safe_components))
-    if os.path.commonpath([artifact_root, resolved_path]) != artifact_root:
-        raise HTTPException(status_code=404, detail="Artifact not found")
-    if not os.path.isfile(resolved_path):
+    try:
+        descriptor = _open_artifact(artifact_root, safe_components)
+    except OSError:
         raise HTTPException(status_code=404, detail="Artifact not found")
 
     raw_content_type = artifact.get("content_type") or artifact.get("mime_type")
     if not raw_content_type:
-        raw_content_type = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".srt": "application/x-subrip", ".vtt": "text/vtt"}.get(Path(resolved_path).suffix.lower())
+        raw_content_type = {".wav": "audio/wav", ".mp3": "audio/mpeg", ".srt": "application/x-subrip", ".vtt": "text/vtt"}.get(Path(safe_components[-1]).suffix.lower())
     # Defense in depth: only allow known artifact MIME types and force download.
     # Prevents the API origin from ever rendering HTML/SVG as a document.
     _ALLOWED_CONTENT_TYPES = frozenset({
@@ -127,8 +152,9 @@ async def download_artifact(
 
     filename_ascii = filename.encode("ascii", "replace").decode("ascii")
     filename_utf8 = quote(filename)
-    return FileResponse(
-        resolved_path,
+    return StreamingResponse(
+        _stream_descriptor(descriptor),
         media_type=content_type,
         headers={"Content-Disposition": f"attachment; filename=\"{filename_ascii}\"; filename*=UTF-8''{filename_utf8}"},
+        background=BackgroundTask(os.close, descriptor),
     )

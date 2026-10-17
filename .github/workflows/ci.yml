@@ -7,6 +7,36 @@ on:
     branches: [main]
 
 jobs:
+  restore-drill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PostgreSQL restore tooling
+        run: sudo apt-get update && sudo apt-get install --yes postgresql-client
+      - name: Install restore test dependency
+        run: python3 -m pip install -c constraints.txt -r apps/api/requirements.txt -r apps/worker-orchestrator/requirements.txt pytest
+      - name: Install restore runtime packages
+        run: |
+          pip install -c constraints.txt -e packages/creator-domain
+          pip install -c constraints.txt -e packages/creator-provider
+          pip install -c constraints.txt -e packages/creator-service
+      - name: Test backup manifest boundaries
+        run: python3 -m pytest tests/test_restore_verify.py tests/test_restore_verify_symlinks.py tests/test_restore_verify_target.py tests/test_restore_secret_fingerprint.py tests/test_restore_database_negative.py -v
+      - name: Build immutable application release manifest
+        run: |
+          docker run -d --name restore-registry -p 127.0.0.1:5000:5000 registry:2
+          python3 scripts/build_release_manifest.py /tmp/approved-release-manifest.json
+          cat /tmp/approved-release-manifest.json
+      - name: Run disposable database and media restore drill
+        env:
+          RESTORE_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          RESTORE_RELEASE_MANIFEST: /tmp/approved-release-manifest.json
+        run: python3 -m pytest tests/test_restore_drill.py -v -s
+
   lint:
     runs-on: ubuntu-latest
     steps:
