@@ -53,6 +53,9 @@ async def generate_visual_plan_trigger(
         )
 
     validate_model_key(request.model_key, expected_category="llm")
+    quote = ReservationQuote.bounded(
+        unit_cost_usd=Decimal("0.002"), units=1, internal_attempts=1, deliveries=6,
+    )
     return await cas_dispatch_with_rollback(
         run_id=run_id,
         expected_stages=allowed_stages,
@@ -70,6 +73,7 @@ async def generate_visual_plan_trigger(
         enqueue_error_detail="Failed to enqueue visual plan generation task",
         quota_operation_type="llm",
         workspace_id=user.workspace_id,
+        reservation_estimate_usd=quote.maximum_cost_usd,
     )
 
 
