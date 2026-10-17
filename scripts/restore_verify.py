@@ -159,6 +159,13 @@ def verify_bundle(
     bundle: Path, expected_alembic_revision: str, expected_secret_fingerprint: str
 ) -> Manifest:
     manifest = parse_manifest(bundle)
+    if (
+        SECRET_FINGERPRINT_PATTERN.fullmatch(manifest.secret_fingerprint) is None
+        or SECRET_FINGERPRINT_PATTERN.fullmatch(expected_secret_fingerprint) is None
+    ):
+        raise RestoreError(
+            "secret fingerprint must be sha256 plus 64 lowercase hex characters"
+        )
     if manifest.alembic_revision != expected_alembic_revision:
         raise RestoreError("alembic revision mismatch")
     if manifest.secret_fingerprint != expected_secret_fingerprint:
