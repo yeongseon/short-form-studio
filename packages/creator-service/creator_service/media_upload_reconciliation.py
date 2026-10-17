@@ -11,8 +11,11 @@ from .blocking_io import BlockingIO
 from .object_storage import StorageDeletionError
 
 logger = logging.getLogger(__name__)
-DEFAULT_UPLOAD_LEASE: Final = timedelta(minutes=30)
+UPLOAD_OPERATION_DEADLINE: Final = timedelta(minutes=30)
+DEFAULT_UPLOAD_LEASE: Final = UPLOAD_OPERATION_DEADLINE
 DEFAULT_SWEEP_LEASE: Final = timedelta(minutes=5)
+LATE_UPLOAD_WATCH_RETENTION: Final = timedelta(hours=1)
+assert DEFAULT_UPLOAD_LEASE < LATE_UPLOAD_WATCH_RETENTION
 
 
 class MediaAssetPersistenceFailed(RuntimeError):
@@ -28,6 +31,7 @@ class UploadIntentState(StrEnum):
     UPLOADED = "uploaded"
     CLEANUP_PENDING = "cleanup_pending"
     RECLAIMING = "reclaiming"
+    LATE_UPLOAD_WATCH = "late_upload_watch"
     COMPLETED = "completed"
     RECLAIMED = "reclaimed"
     EXHAUSTED = "exhausted"
@@ -65,6 +69,9 @@ class UploadIntentStorage(Protocol):
         self, *, now: datetime, lease_expires_at: datetime, limit: int,
     ) -> list[UploadIntent]: ...
     async def record_upload_reclaimed(self, intent_id: int, claim_token: str | None = None) -> None: ...
+    async def watch_for_late_upload(
+        self, intent_id: int, claim_token: str, watch_expires_at: datetime,
+    ) -> None: ...
     async def record_upload_cleanup_failure(
         self, intent_id: int, max_retries: int, claim_token: str | None = None,
     ) -> bool: ...
@@ -101,7 +108,7 @@ class MediaUploadReconciler:
                 preserved += 1
                 continue
             try:
-                await self._io.run(partial(self._objects.delete, intent.storage_key))
+                deleted = await self._io.run(partial(self._objects.delete, intent.storage_key))
             except StorageDeletionError:
                 is_exhausted = await self._intents.record_upload_cleanup_failure(
                     intent.id, self._max_retries,
@@ -114,6 +121,17 @@ class MediaUploadReconciler:
                 failed += 1
                 exhausted += int(is_exhausted)
                 continue
-            await self._intents.record_upload_reclaimed(intent.id, intent.claim_token)
-            reclaimed += 1
+            if (
+                deleted
+                or intent.state is UploadIntentState.LATE_UPLOAD_WATCH
+                or intent.state is not UploadIntentState.PENDING
+            ):
+                await self._intents.record_upload_reclaimed(intent.id, intent.claim_token)
+                reclaimed += 1
+            else:
+                await self._intents.watch_for_late_upload(
+                    intent.id,
+                    intent.claim_token or "",
+                    swept_at + LATE_UPLOAD_WATCH_RETENTION,
+                )
         return SweepResult(reclaimed, preserved, failed, exhausted)

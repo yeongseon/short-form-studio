@@ -44,6 +44,9 @@ class MediaAssetStorageBackend(Protocol):
         self, *, now: datetime, lease_expires_at: datetime, limit: int,
     ) -> list[UploadIntent]: ...
     async def record_upload_reclaimed(self, intent_id: int, claim_token: str | None = None) -> None: ...
+    async def watch_for_late_upload(
+        self, intent_id: int, claim_token: str, watch_expires_at: datetime,
+    ) -> None: ...
     async def record_upload_cleanup_failure(
         self, intent_id: int, max_retries: int, claim_token: str | None = None,
     ) -> bool: ...
@@ -170,6 +173,7 @@ class InMemoryMediaAssetStorage:
                     UploadIntentState.UPLOADED,
                     UploadIntentState.CLEANUP_PENDING,
                     UploadIntentState.RECLAIMING,
+                    UploadIntentState.LATE_UPLOAD_WATCH,
                 }
                 and intent.lease_expires_at <= now
             ][:limit]
@@ -178,7 +182,16 @@ class InMemoryMediaAssetStorage:
                     intent.id, UploadIntentState.RECLAIMING,
                     lease_expires_at=lease_expires_at, claim_token=uuid.uuid4().hex,
                 )
-            return [self._intents[intent.id] for intent in eligible]
+            return [
+                UploadIntent(
+                    id=intent.id, owner_id=intent.owner_id,
+                    workspace_id=intent.workspace_id, storage_key=intent.storage_key,
+                    state=intent.state, lease_expires_at=lease_expires_at,
+                    retry_count=intent.retry_count,
+                    claim_token=self._intents[intent.id].claim_token,
+                )
+                for intent in eligible
+            ]
 
     async def record_upload_reclaimed(self, intent_id: int, claim_token: str | None = None) -> None:
         async with self._lock:
@@ -188,6 +201,18 @@ class InMemoryMediaAssetStorage:
             ):
                 raise MediaAssetPersistenceFailed()
             self._set_intent(intent_id, UploadIntentState.RECLAIMED)
+
+    async def watch_for_late_upload(
+        self, intent_id: int, claim_token: str, watch_expires_at: datetime,
+    ) -> None:
+        async with self._lock:
+            intent = self._intents[intent_id]
+            if intent.state is not UploadIntentState.RECLAIMING or intent.claim_token != claim_token:
+                raise MediaAssetPersistenceFailed()
+            self._set_intent(
+                intent_id, UploadIntentState.LATE_UPLOAD_WATCH,
+                lease_expires_at=watch_expires_at,
+            )
 
     async def record_upload_cleanup_failure(
         self, intent_id: int, max_retries: int, claim_token: str | None = None,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import io
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import anyio
 import pytest
@@ -167,7 +167,7 @@ async def test_upload_losing_expired_lease_compensates_without_saving_metadata()
         objects.upload_allowed.set()
 
     # Then the fenced uploader compensates and never commits live metadata.
-    assert swept.reclaimed == 1
+    assert swept.reclaimed == 0
     assert len(failures) == 1
     assert objects.objects == {}
     assert (await assets.list_assets(7, limit=50, offset=0))[1] == 0
@@ -200,10 +200,36 @@ async def test_late_upload_failed_compensation_restores_cleanup_retry() -> None:
         objects.upload_allowed.set()
 
     # Then the owner restores durable cleanup ownership for a later sweep.
-    assert swept.reclaimed == 1
+    assert swept.reclaimed == 0
     assert len(failures) == 1
     assert len(objects.objects) == 1
     assert (await assets.list_upload_intents())[0].state is UploadIntentState.CLEANUP_PENDING
+
+
+@pytest.mark.asyncio
+async def test_late_upload_after_absent_observation_is_deleted_by_later_sweep() -> None:
+    # Given the first sweep observes no object after the upload operation deadline.
+    now = datetime.now(timezone.utc)
+    objects = _Objects()
+    assets = InMemoryMediaAssetStorage()
+    intent = await assets.create_upload_intent(UploadIntent(
+        id=0, owner_id="terminated-uploader", workspace_id=7,
+        storage_key="workspaces/7/assets/late.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now,
+    ))
+    first = await MediaUploadReconciler(objects, assets).sweep(now=now)
+
+    # When the object materializes without an uploader state update and retention elapses.
+    objects.objects[intent.storage_key] = b"late upload"
+    later = now + timedelta(hours=1)
+    await assets.expire_upload_intent(intent.id, later)
+    second = await MediaUploadReconciler(objects, assets).sweep(now=later)
+
+    # Then durable recovery deletes it and reaches the terminal reclaimed state.
+    assert first.reclaimed == 0
+    assert second.reclaimed == 1
+    assert objects.objects == {}
+    assert (await assets.list_upload_intents())[0].state is UploadIntentState.RECLAIMED
 
 
 @pytest.mark.asyncio

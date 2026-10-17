@@ -26,6 +26,7 @@ from .media_upload_reconciliation import (
     MediaAssetPersistenceIndeterminate,
     UploadIntent,
     UploadIntentState,
+    UPLOAD_OPERATION_DEADLINE,
 )
 from .object_storage import StorageDeletionError
 from .media_probe import (
@@ -181,7 +182,12 @@ class MediaAssetService:
                         return self._backend().upload(storage_key, stream, content_type=canonical_mime)
                 return self._backend().upload(storage_key, data, content_type=canonical_mime)
 
-            result = await self._io.run(upload_data)
+            try:
+                with anyio.fail_after(UPLOAD_OPERATION_DEADLINE.total_seconds()):
+                    result = await self._io.run(upload_data)
+            except TimeoutError:
+                await self._compensate_upload(intent, storage_key)
+                raise MediaAssetPersistenceFailed() from None
             try:
                 await self._asset_storage.mark_upload_intent_uploaded(intent.id)
             except MediaAssetPersistenceFailed:
