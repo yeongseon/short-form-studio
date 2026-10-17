@@ -117,6 +117,38 @@ async def test_cleanup_marker_cannot_be_reclaimed_by_worker_or_dispatch(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("quota_pool", ["memory", "postgres"], indirect=True)
+async def test_broker_recovery_marker_cannot_be_reclaimed_by_worker_or_dispatch(
+    quota_pool: asyncpg.Pool | None,
+) -> None:
+    # Given: broker recovery has fenced an active attempt for cleanup.
+    storage = (
+        PostgresTaskTrackingStorage()
+        if quota_pool is not None
+        else InMemoryTaskTrackingStorage()
+    )
+    tracking = TaskTrackingService(storage)
+    run_id = await _prepare_run(quota_pool)
+    await tracking.record_task_pending(run_id, "generate_audio", "attempt-a")
+    marked = await tracking.mark_failed_if_active(
+        "attempt-a", "broker_recovery_cleanup", "cleanup"
+    )
+    assert marked is not None
+
+    # When: a late worker delivery and a duplicate dispatch try to reclaim it.
+    worker_claim = await tracking.record_task_start(
+        run_id, "generate_audio", "attempt-a", claim_token="worker"
+    )
+
+    # Then: neither path can overwrite the recovery cleanup marker.
+    assert worker_claim is None
+    with pytest.raises(ValueError, match="Failed to record pending task"):
+        await tracking.record_task_pending(run_id, "generate_audio", "attempt-a")
+    task = await storage.get_by_celery_id("attempt-a")
+    assert task is not None and task["error_code"] == "broker_recovery_cleanup"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("quota_pool", ["memory", "postgres"], indirect=True)
 async def test_two_reconcilers_claim_discovered_cleanup_once(
     monkeypatch: pytest.MonkeyPatch,
     quota_pool: asyncpg.Pool | None,

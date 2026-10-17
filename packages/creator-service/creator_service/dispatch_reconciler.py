@@ -90,6 +90,7 @@ class DispatchReconciler:
             retrying_cleanup = cleanup_marker in {
                 "reconciler_pending_cleanup",
                 "reconciler_stuck_cleanup",
+                "broker_recovery_cleanup",
             }
             ok = False
             if not retrying_cleanup:
@@ -170,7 +171,11 @@ class DispatchReconciler:
                     final_code = (
                         "stuck_running_timeout"
                         if cleanup_marker == "reconciler_stuck_cleanup"
-                        else "reconciler_rollback"
+                        else (
+                            "broker_message_lost"
+                            if cleanup_marker == "broker_recovery_cleanup"
+                            else "reconciler_rollback"
+                        )
                     )
                     try:
                         finalized = await self._tracking.finish_reconciliation(
