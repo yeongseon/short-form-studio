@@ -172,6 +172,27 @@ async def test_failed_delivery_attempt_remains_reserved_after_later_success() ->
 
 
 @pytest.mark.asyncio
+async def test_invalid_attempt_does_not_partially_persist_in_memory_event() -> None:
+    # Given an owned reservation without the referenced provider attempt.
+    storage = InMemoryUsageStorage()
+    service = UsageService(storage)
+    await service.set_quota(1, monthly_cost_usd=Decimal("1"))
+    assert await service.reserve_owned(1, "llm", "owner", estimated_cost_usd=Decimal("1"))
+
+    # When usage references an attempt that was never authorized.
+    with pytest.raises(ValueError, match="unknown provider attempt"):
+        await service.record_usage(
+            1, 1, "fixture", "fixture", "llm", estimated_cost_usd=Decimal("1"),
+            idempotency_key="invalid-attempt", reservation_owner_id="owner",
+            reservation_attempt_id="missing",
+        )
+
+    # Then neither the event nor its idempotency entry was persisted.
+    assert await storage.list_by_run(1) == []
+    assert "invalid-attempt" not in storage._events_by_idempotency_key
+
+
+@pytest.mark.asyncio
 async def test_operator_kill_switch_blocks_new_billable_work(monkeypatch: pytest.MonkeyPatch) -> None:
     # Given the global billable-work switch is disabled.
     monkeypatch.setenv("BILLABLE_PROVIDER_CALLS_ENABLED", "false")
