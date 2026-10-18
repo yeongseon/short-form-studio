@@ -172,6 +172,15 @@ def verify_http(runtime: RuntimeFixture, media: Path) -> None:
     print("real API downloads: media=200 final-mp4=200 foreign=404 revoked=401 missing=401 checksum=verified ffprobe=verified")
 
 
+def stop_process(process: subprocess.Popen[bytes]) -> None:
+    process.terminate()
+    try:
+        process.wait(timeout=15)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=5)
+
+
 def main() -> int:
     if shutil.which("docker") is None:
         print("SKIP: docker is required", file=sys.stderr)
@@ -257,11 +266,9 @@ def main() -> int:
             return 0
         finally:
             if api_process is not None:
-                api_process.terminate()
-                api_process.wait(timeout=15)
+                stop_process(api_process)
             if guard_process is not None:
-                guard_process.terminate()
-                guard_process.wait(timeout=15)
+                stop_process(guard_process)
             subprocess.run(["docker", "rm", "-f", source, target], capture_output=True, check=False)
 
 

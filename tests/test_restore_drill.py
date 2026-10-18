@@ -12,7 +12,7 @@ import pytest
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "restore_drill.py"
 sys.path.insert(0, str(SCRIPT.parent))
-from restore_drill import render_restored_timeline
+from restore_drill import render_restored_timeline, stop_process
 from restore_drill_runtime import RuntimeFixture
 from restore_drill_runtime import DrillError, seed_production_fixture, validate_release_manifest
 
@@ -113,6 +113,37 @@ def test_fixture_seeds_production_safe_restored_asset_keys(
     # Then
     sql = commands[0][-1]
     assert "workspaces/201/assets/image.png" in sql
+
+
+def test_stop_process_kills_child_that_ignores_termination() -> None:
+    # Given
+    class StuckProcess:
+        def __init__(self) -> None:
+            self.terminated = False
+            self.killed = False
+            self.waits = 0
+
+        def terminate(self) -> None:
+            self.terminated = True
+
+        def kill(self) -> None:
+            self.killed = True
+
+        def wait(self, timeout: float) -> int:
+            self.waits += 1
+            if self.waits == 1:
+                raise subprocess.TimeoutExpired("guard", timeout)
+            return 0
+
+    process = StuckProcess()
+
+    # When
+    stop_process(process)
+
+    # Then
+    assert process.terminated is True
+    assert process.killed is True
+    assert process.waits == 2
 
 
 @pytest.mark.parametrize("digest", ["a" * 64, "b" * 64, "c" * 64])
