@@ -1,6 +1,7 @@
+import logging
 from unittest.mock import ANY, Mock
 
-import pytest
+from celery.signals import worker_ready
 
 import worker_release_identity
 
@@ -28,7 +29,10 @@ def test_ready_worker_publishes_its_runtime_identity(monkeypatch) -> None:
     )
 
 
-def test_ready_worker_fails_release_readiness_when_identity_store_is_unavailable(monkeypatch) -> None:
+def test_ready_worker_logs_identity_publication_failure_when_store_is_unavailable(
+    monkeypatch, caplog
+) -> None:
+    # Given release metadata and an unavailable identity store.
     monkeypatch.setenv("SOURCE_SHA", "b" * 40)
     monkeypatch.setenv("WORKER_IMAGE_DIGEST", "sha256:" + "c" * 64)
     monkeypatch.setattr(
@@ -37,8 +41,18 @@ def test_ready_worker_fails_release_readiness_when_identity_store_is_unavailable
         Mock(side_effect=ConnectionError("unavailable")),
     )
 
-    with pytest.raises(worker_release_identity.ReleaseIdentityRegistrationError):
-        worker_release_identity.publish_release_identity()
+    # When Celery dispatches the real worker-ready signal.
+    with caplog.at_level(logging.ERROR, logger=worker_release_identity.__name__):
+        responses = worker_ready.send(sender=Mock())
+
+    # Then publication failure is observable without pretending the signal aborts startup.
+    response = next(
+        result
+        for receiver, result in responses
+        if receiver is worker_release_identity.publish_release_identity
+    )
+    assert response is None
+    assert "Worker release identity publication failed" in caplog.messages
 
 
 def test_worker_heartbeat_refreshes_its_runtime_identity(monkeypatch) -> None:
@@ -54,12 +68,23 @@ def test_worker_heartbeat_refreshes_its_runtime_identity(monkeypatch) -> None:
     assert worker_release_identity.IDENTITY_TTL_SECONDS > worker_release_identity.HEARTBEAT_INTERVAL_SECONDS
 
 
-def test_ready_worker_rejects_partial_release_metadata(monkeypatch) -> None:
+def test_ready_worker_logs_partial_release_metadata(monkeypatch, caplog) -> None:
+    # Given only half of the required release metadata.
     monkeypatch.setenv("SOURCE_SHA", "b" * 40)
     monkeypatch.delenv("WORKER_IMAGE_DIGEST", raising=False)
 
-    with pytest.raises(worker_release_identity.ReleaseIdentityRegistrationError, match="incomplete"):
-        worker_release_identity.publish_release_identity()
+    # When Celery dispatches the real worker-ready signal.
+    with caplog.at_level(logging.ERROR, logger=worker_release_identity.__name__):
+        responses = worker_ready.send(sender=Mock())
+
+    # Then Celery reports the receiver failure instead of aborting worker startup.
+    response = next(
+        result
+        for receiver, result in responses
+        if receiver is worker_release_identity.publish_release_identity
+    )
+    assert response is None
+    assert "Worker release identity metadata is incomplete" in caplog.messages
 
 
 def test_ready_worker_skips_identity_publication_without_release_metadata(monkeypatch) -> None:

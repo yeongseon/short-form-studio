@@ -1,6 +1,6 @@
-import os
-import logging
 import json
+import logging
+import os
 from typing import Final
 
 import redis
@@ -9,10 +9,6 @@ from celery.signals import heartbeat_sent, worker_ready
 
 HEARTBEAT_INTERVAL_SECONDS: Final = 60
 IDENTITY_TTL_SECONDS: Final = HEARTBEAT_INTERVAL_SECONDS * 3
-
-
-class ReleaseIdentityRegistrationError(RuntimeError):
-    pass
 
 
 def _write_release_identity() -> None:
@@ -41,11 +37,12 @@ def publish_release_identity(**_kwargs: object) -> None:
     if source_sha is None and image_digest is None:
         return
     if source_sha is None or image_digest is None:
-        raise ReleaseIdentityRegistrationError("Worker release identity metadata is incomplete")
+        logging.getLogger(__name__).error("Worker release identity metadata is incomplete")
+        return
     try:
         _write_release_identity()
-    except (KeyError, redis.RedisError, OSError, ConnectionError) as error:
-        raise ReleaseIdentityRegistrationError("Worker release identity registration failed") from error
+    except (KeyError, redis.RedisError, OSError, ConnectionError):
+        logging.getLogger(__name__).exception("Worker release identity publication failed")
 
 
 @heartbeat_sent.connect
