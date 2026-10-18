@@ -62,7 +62,7 @@ def parse_manifest_json(payload: str) -> Manifest:
         )
         if any(not isinstance(raw[field], str) for field in string_fields):
             raise RestoreError("manifest is invalid: string field has wrong type")
-        if not isinstance(raw["format_version"], int):
+        if type(raw["format_version"]) is not int:
             raise RestoreError("manifest is invalid: format_version must be an integer")
         if not isinstance(raw["image_digests"], list) or not raw["image_digests"]:
             raise RestoreError("manifest is invalid: image_digests must be a non-empty list")

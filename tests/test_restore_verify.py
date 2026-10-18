@@ -234,6 +234,91 @@ def test_verify_rejects_unsupported_manifest_version(tmp_path: Path) -> None:
     assert "unsupported manifest format version: 2" in result.stderr
 
 
+def test_verify_rejects_boolean_manifest_version(tmp_path: Path) -> None:
+    # Given
+    bundle = _bundle(tmp_path)
+    assert _run("create", bundle).returncode == 0
+    manifest_path = bundle / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["format_version"] = True
+    manifest_path.write_text(json.dumps(manifest))
+
+    # When
+    result = _run(
+        "verify",
+        bundle,
+        "--expected-alembic-revision",
+        "revision-1",
+        "--expected-secret-fingerprint",
+        "sha256:" + "a" * 64,
+    )
+
+    # Then
+    assert result.returncode != 0
+    assert "format_version must be an integer" in result.stderr
+    assert "traceback" not in result.stderr.lower()
+
+
+def test_verify_rejects_non_utf8_manifest_without_traceback(tmp_path: Path) -> None:
+    # Given
+    bundle = _bundle(tmp_path)
+    (bundle / "manifest.json").write_bytes(b"\xff")
+
+    # When
+    result = _run(
+        "verify",
+        bundle,
+        "--expected-alembic-revision",
+        "revision-1",
+        "--expected-secret-fingerprint",
+        "sha256:" + "a" * 64,
+    )
+
+    # Then
+    assert result.returncode != 0
+    assert "manifest is invalid" in result.stderr
+    assert "traceback" not in result.stderr.lower()
+
+
+@pytest.mark.parametrize(
+    ("flag", "value"),
+    [
+        ("--release-sha", "NOT-A-SHA"),
+        ("--image-digest", "NOT-A-DIGEST"),
+    ],
+)
+def test_create_rejects_release_identity_before_writing_manifest(
+    tmp_path: Path, flag: str, value: str
+) -> None:
+    # Given
+    bundle = _bundle(tmp_path)
+    arguments = [
+        sys.executable,
+        str(SCRIPT),
+        "create",
+        str(bundle),
+        "--release-sha",
+        "abc123def456",
+        "--image-digest",
+        "registry/api@sha256:" + "d" * 64,
+        "--alembic-revision",
+        "revision-1",
+        "--secret-fingerprint",
+        "sha256:" + "a" * 64,
+        "--timestamp",
+        "2026-10-16T00:00:00Z",
+    ]
+    arguments[arguments.index(flag) + 1] = value
+
+    # When
+    result = subprocess.run(arguments, capture_output=True, text=True, check=False)
+
+    # Then
+    assert result.returncode != 0
+    assert "manifest is invalid" in result.stderr
+    assert not (bundle / "manifest.json").exists()
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

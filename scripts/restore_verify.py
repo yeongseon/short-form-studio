@@ -42,7 +42,11 @@ def parse_manifest(bundle: Path) -> Manifest:
         if "inaccessible" not in str(error):
             raise
         raise RestoreError("manifest is missing")
-    return parse_manifest_json(safe_manifest.read_text())
+    try:
+        payload = safe_manifest.read_text()
+    except (UnicodeDecodeError, OSError) as error:
+        raise RestoreError("manifest is invalid: unable to read UTF-8 JSON") from error
+    return parse_manifest_json(payload)
 
 
 def _safe_relative_path(relative: str) -> PurePosixPath:
@@ -162,6 +166,7 @@ def create_manifest(args: argparse.Namespace) -> None:
         )
         payload = asdict(manifest)
         payload["image_digests"] = list(manifest.image_digests)
+        parse_manifest_json(json.dumps(payload))
         try:
             manifest_status = os.stat(
                 "manifest.json", dir_fd=bundle_descriptor, follow_symlinks=False
