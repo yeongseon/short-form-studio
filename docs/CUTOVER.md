@@ -203,6 +203,10 @@ Flower is observability, not evidence of scheduler execution or pipeline success
 
 ## Rollback
 
+Before rollback, follow the coordinated database/media restore and verification procedure in [BACKUP_RESTORE.md](BACKUP_RESTORE.md). Application rollback uses the approved release manifest from #858; database downgrade is a separate approved data-change procedure.
+
+### Application Rollback
+
 ```bash
 docker compose down
 git checkout <previous-tag-or-commit>
