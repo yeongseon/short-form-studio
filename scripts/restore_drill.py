@@ -20,7 +20,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Protocol
 
@@ -55,6 +55,11 @@ class ChildProcess(Protocol):
     def terminate(self) -> None: ...
     def kill(self) -> None: ...
     def wait(self, timeout: float | None = None) -> int: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ChildShutdownError(DrillError):
+    pass
 
 
 def create_media(media: Path) -> None:
@@ -196,7 +201,7 @@ def stop_process(process: ChildProcess) -> None:
         try:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
-            return
+            raise ChildShutdownError("child process remained alive after kill escalation") from None
 
 
 def main() -> int:
@@ -285,11 +290,21 @@ def main() -> int:
             print("RESTORE DRILL PASSED")
             return 0
         finally:
+            cleanup_error: ChildShutdownError | None = None
             if api_process is not None:
-                stop_process(api_process)
+                try:
+                    stop_process(api_process)
+                except ChildShutdownError as exc:
+                    cleanup_error = exc
             if guard_process is not None:
-                stop_process(guard_process)
+                try:
+                    stop_process(guard_process)
+                except ChildShutdownError as exc:
+                    if cleanup_error is None:
+                        cleanup_error = exc
             subprocess.run(["docker", "rm", "-f", source, target], capture_output=True, check=False)
+            if sys.exception() is None and cleanup_error is not None:
+                raise cleanup_error
 
 
 if __name__ == "__main__":

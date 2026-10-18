@@ -12,7 +12,7 @@ import pytest
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "restore_drill.py"
 sys.path.insert(0, str(SCRIPT.parent))
-from restore_drill import render_restored_timeline, stop_process
+from restore_drill import ChildShutdownError, render_restored_timeline, stop_process
 from restore_drill_runtime import RuntimeFixture
 from restore_drill_runtime import DrillError, seed_production_fixture, validate_release_manifest
 
@@ -169,7 +169,7 @@ def test_stop_process_kills_child_that_ignores_termination() -> None:
     assert process.waits == 2
 
 
-def test_stop_process_returns_when_killed_child_does_not_exit() -> None:
+def test_stop_process_reports_failure_when_killed_child_does_not_exit() -> None:
     # Given
     class UnkillableProcess:
         def __init__(self) -> None:
@@ -187,10 +187,9 @@ def test_stop_process_returns_when_killed_child_does_not_exit() -> None:
 
     process = UnkillableProcess()
 
-    # When
-    stop_process(process)
-
-    # Then
+    # When / Then
+    with pytest.raises(ChildShutdownError, match="remained alive after kill"):
+        stop_process(process)
     assert process.waits == 2
 
 
