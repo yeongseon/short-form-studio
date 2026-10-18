@@ -73,6 +73,7 @@ class DispatchCAS(DispatchRuntime):
         quota_operation_type: str | None = None, workspace_id: int | None = None,
         reservation_estimate_usd: Decimal | None = None,
         reservation_units: int = 1,
+        reservation_owner_id: str | None = None,
     ) -> dict[str, JsonValue]:
         task_tracking_service = import_module("creator_service.task_tracking_service").task_tracking_service
 
@@ -87,7 +88,9 @@ class DispatchCAS(DispatchRuntime):
             raise ConflictError("Run is cancelled; cannot dispatch new tasks")
 
         task_type = _DISPATCH_TASK_TYPES.get(getattr(dispatcher, "__name__", ""), "unknown")
-        owner_id = str(uuid4()) if quota_operation_type is not None and task_type != "unknown" else None
+        owner_id = reservation_owner_id
+        if owner_id is None and quota_operation_type is not None and task_type != "unknown":
+            owner_id = str(uuid4())
         reserved_workspace = await reserve_quota(
             run_service, run_id, workspace_id=workspace_id, operation_type=quota_operation_type,
             owner_id=owner_id, estimated_cost_usd=reservation_estimate_usd,
