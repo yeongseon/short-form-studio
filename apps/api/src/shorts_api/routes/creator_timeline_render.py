@@ -1,6 +1,8 @@
 import json
+from decimal import Decimal
+from uuid import uuid4
 
-from creator_domain.exceptions import ConflictError
+from creator_domain.exceptions import ConflictError, QuotaExceededError
 from creator_domain.models import EncodingProfile, OutputSpec, PipelineRun, RunStage
 from creator_service.media_asset_service import media_asset_service
 from creator_service.run_service import run_service
@@ -8,6 +10,11 @@ from creator_service.stage_review_service import stage_review_service
 from creator_service.task_dispatch_service import cas_dispatch_with_rollback, dispatch_render_video
 from creator_service.timeline_compiler import compile_timeline_to_render_plan
 from creator_service.timeline_service import timeline_service
+from creator_service.usage_service import (
+    ReservationQuote,
+    cancel_owned_quota_reservation,
+    reserve_owned_quota,
+)
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -53,6 +60,16 @@ async def approve_timeline_render(
         **(run.metadata or {}), "render_source": "timeline",
         "render_timeline_revision": request.expected_revision,
     }
+    quote = ReservationQuote.bounded(
+        unit_cost_usd=Decimal("0.001"), units=1, internal_attempts=1, deliveries=4,
+    )
+    reservation_owner_id = str(uuid4())
+    allowed, reason = await reserve_owned_quota(
+        user.workspace_id, "render", reservation_owner_id, quote.maximum_cost_usd,
+    )
+    if not allowed:
+        raise QuotaExceededError(reason)
+    approval_completed = False
     try:
         await stage_review_service.approve_and_advance(
             run_service=run_service, run_id=run_id,
@@ -63,8 +80,12 @@ async def approve_timeline_render(
             workspace_id=user.workspace_id,
             extra_updates={"metadata_json": json.dumps(metadata)},
         )
+        approval_completed = True
     except ValueError as exc:
         raise ConflictError("Run changed during timeline approval") from exc
+    finally:
+        if not approval_completed:
+            await cancel_owned_quota_reservation(reservation_owner_id)
     return await cas_dispatch_with_rollback(
         run_id=run_id,
         expected_stages=frozenset({RunStage.RENDER_GENERATING.value}),
@@ -76,4 +97,7 @@ async def approve_timeline_render(
         rollback_restart_from=run.restart_from,
         enqueue_error_detail="Failed to enqueue timeline render",
         workspace_id=user.workspace_id,
+        quota_operation_type="render",
+        reservation_estimate_usd=quote.maximum_cost_usd,
+        reservation_owner_id=reservation_owner_id,
     )

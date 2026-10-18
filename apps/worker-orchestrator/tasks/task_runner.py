@@ -40,6 +40,7 @@ import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import StrEnum
 from typing import Any
 
 from celery.exceptions import Ignore, SoftTimeLimitExceeded
@@ -91,6 +92,12 @@ class TaskRunnerConfig:
     no_fail_transition_exceptions: tuple[type[Exception], ...] = (TaskInputError,)
 
 
+class BillingOutcome(StrEnum):
+    NOT_STARTED = "not_started"
+    ACCOUNTED = "accounted"
+    UNKNOWN = "unknown"
+
+
 @dataclass
 class TaskContext:
     """Context passed to the task execution function."""
@@ -102,6 +109,14 @@ class TaskContext:
     project_id: int | None
     start_time: datetime
     reservation_owner_id: str | None = None
+    delivery_attempt: int = 0
+    billing_outcome: BillingOutcome = field(default=BillingOutcome.NOT_STARTED, init=False)
+
+    def mark_provider_started(self) -> None:
+        self.billing_outcome = BillingOutcome.UNKNOWN
+
+    def mark_provider_accounted(self) -> None:
+        self.billing_outcome = BillingOutcome.ACCOUNTED
 
 
 @dataclass
@@ -265,6 +280,10 @@ async def _run_task_inner(
     from creator_service.usage_service import usage_service
 
     reservation_owner_id = await usage_service.reservation_owner_id(task_id)
+    if reservation_owner_id is not None and not await usage_service.readmit_owned(
+        reservation_owner_id
+    ):
+        raise StageGuardError(f"Reservation owner {reservation_owner_id} cannot be re-admitted")
     ctx = TaskContext(
         run_id=run_id,
         task_id=task_id,

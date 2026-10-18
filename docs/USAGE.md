@@ -190,6 +190,21 @@ Both local models and external API providers are supported. See [External API Pr
 
 You can use external APIs for higher-quality results instead of (or in addition to) local models.
 
+### Estimated-spend admission controls
+
+Before new provider work is dispatched, the service atomically reserves a conservative maximum
+estimate for the task, including bounded fan-out and retry allowance. Set
+`BILLABLE_PROVIDER_CALLS_ENABLED=false` to stop new billable calls while preserving usage reads and
+artifact downloads. `GLOBAL_MONTHLY_ESTIMATED_BUDGET_USD` adds an operator-wide monthly ceiling;
+workspace monthly cost quotas still apply independently. Operations without a configured bounded
+cost model are rejected rather than admitted without a ceiling.
+
+Failures known to occur before provider execution release their reservation. If provider execution
+may have started but its outcome is unknown, the estimate remains conservatively committed so a
+retry cannot silently exceed the approved maximum. These values are estimates for admission and
+operational safety only: they are **not invoices, billing-accuracy guarantees, or substitutes for
+provider-side spending limits and billing reports**.
+
 ### Supported Providers
 
 | Category | Provider | Model | Environment Variable |

@@ -159,6 +159,7 @@ jobs:
           python3 -m pytest packages/creator-service/tests/test_stale_pending_reconciler_fencing.py packages/creator-service/tests/test_reconciler_cleanup_claims.py -v --basetemp=/tmp/reconciler-fencing-runtime
           PYTHONPATH=tests/integration python3 -m pytest packages/creator-service/tests/test_postgres_media_asset_storage.py tests/integration/test_first_short_runtime.py tests/integration/test_studio_proxy_runtime.py -v --basetemp=/tmp/first-short-runtime
           PYTHONPATH=tests/integration python3 -m pytest tests/integration/test_studio_upload_browser.py -v --basetemp=/tmp/studio-browser-runtime
+          python3 -m pytest packages/creator-service/tests/test_spend_reservations.py packages/creator-service/tests/test_owned_quota_lifecycle.py packages/creator-service/tests/test_postgres_spend_lifecycle.py -v --basetemp=/tmp/spend-lifecycle-runtime
           PYTHONPATH=apps/worker-orchestrator python3 -m pytest apps/worker-orchestrator/tests/test_terminal_validation_guards.py apps/worker-orchestrator/tests/test_terminal_validation_failure.py apps/worker-orchestrator/tests/test_visual_plan_terminal_validation.py -v --basetemp=/tmp/terminal-validation-runtime
           PYTHONPATH=apps/worker-orchestrator python3 -m pytest apps/worker-orchestrator/tests/test_late_worker_outcomes.py apps/worker-orchestrator/tests/test_worker_outcome_claims.py packages/creator-service/tests/test_revocation_dispatch_race.py -v --basetemp=/tmp/late-worker-outcomes-runtime
           python3 -m pytest packages/creator-service/tests/test_quota_stage_compensation.py packages/creator-service/tests/test_postgres_quota_compensation.py -v --basetemp=/tmp/quota-compensation-runtime
@@ -252,13 +253,13 @@ jobs:
           lifecycle_n="origin/main"
           lifecycle_context="$(mktemp -d)"
           git archive "$lifecycle_n" | tar -x -C "$lifecycle_context"
-          cat > apps/api/migrations/versions/038_release_lifecycle_additive.py <<'PY'
+          cat > apps/api/migrations/versions/041_release_lifecycle_additive.py <<'PY'
           from collections.abc import Sequence
 
           from alembic import op
 
-          revision: str = "038_release_lifecycle_additive"
-          down_revision: str | None = "037"
+          revision: str = "041_release_lifecycle_additive"
+          down_revision: str | None = "040"
           branch_labels: str | Sequence[str] | None = None
           depends_on: str | Sequence[str] | None = None
 
@@ -271,7 +272,7 @@ jobs:
           docker build --target runtime -f "$lifecycle_context/apps/api/Dockerfile" -t release-lifecycle-n "$lifecycle_context"
           docker build --target runtime -f apps/api/Dockerfile -t release-lifecycle-n-plus-one .
           python -m pip install --disable-pip-version-check pydantic==2.12.3
-          LIFECYCLE_N_HEAD=037 LIFECYCLE_N_PLUS_ONE_HEAD=038_release_lifecycle_additive RELEASE_LIFECYCLE_EVIDENCE_DIR=/tmp/release-lifecycle-evidence scripts/release_lifecycle_acceptance.sh | tee /tmp/release-lifecycle-evidence.log
+          LIFECYCLE_N_HEAD=040 LIFECYCLE_N_PLUS_ONE_HEAD=041_release_lifecycle_additive RELEASE_LIFECYCLE_EVIDENCE_DIR=/tmp/release-lifecycle-evidence scripts/release_lifecycle_acceptance.sh | tee /tmp/release-lifecycle-evidence.log
           grep -Fx 'release_n_started=true' /tmp/release-lifecycle-evidence/result.txt
           grep -Fx 'release_n_plus_one_project_media=true' /tmp/release-lifecycle-evidence/result.txt
           grep -Fx 'release_n_rollback_project_media=true' /tmp/release-lifecycle-evidence/result.txt

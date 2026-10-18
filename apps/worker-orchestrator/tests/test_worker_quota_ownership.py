@@ -1,9 +1,11 @@
 import pytest
 from pathlib import Path
+from unittest.mock import AsyncMock
 from billiard.exceptions import SoftTimeLimitExceeded
 from creator_provider.exceptions import ProviderTimeoutError
 from creator_service.usage_service import InMemoryUsageStorage, UsageService
 from tasks import task_runner
+from tasks.task_execution import TaskInputError
 from worker_loop import run_in_worker_loop
 
 from .terminal_validation_support import RunnerCase, runner_case as runner_case  # noqa: F401
@@ -118,6 +120,42 @@ def test_cancelled_owner_rejects_worker_before_provider_execution(
     assert not run_in_worker_loop(quota_case.reserve_owned(1, "llm", "overflow"))
 
 
+def test_stage_guard_releases_not_started_reservation(
+    runner_case: RunnerCase, quota_case: UsageService,
+) -> None:
+    # Given an owned delivery whose run no longer accepts its stage.
+    run_in_worker_loop(runner_case.runs.storage.update_run(
+        runner_case.run_id, {"current_stage": "SCRIPT_REVIEW"},
+    ))
+
+    # When the stage guard rejects the delivery before provider execution.
+    with pytest.raises(task_runner.StageGuardError):
+        task_runner.run_task(
+            runner_case.delivery(), runner_case.run_id, runner_case.config,
+            lambda _ctx: None,
+        )
+
+    # Then its definitely unbilled reservation is released.
+    assert run_in_worker_loop(quota_case.reserve_owned(1, "llm", "replacement"))
+
+
+def test_input_failure_releases_not_started_reservation(
+    runner_case: RunnerCase, quota_case: UsageService,
+) -> None:
+    # Given an owned delivery whose task input cannot be resolved.
+    async def reject_input(_ctx: task_runner.TaskContext) -> task_runner.TaskResult:
+        raise TaskInputError("missing task input")
+
+    # When task validation fails inside execute before a provider starts.
+    with pytest.raises(TaskInputError):
+        task_runner.run_task(
+            runner_case.delivery(), runner_case.run_id, runner_case.config, reject_input,
+        )
+
+    # Then its definitely unbilled reservation is released.
+    assert run_in_worker_loop(quota_case.reserve_owned(1, "llm", "replacement"))
+
+
 def test_generation_records_verified_owner_separately_from_usage_key(
     generation_case: GenerationCase, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -134,7 +172,9 @@ def test_generation_records_verified_owner_separately_from_usage_key(
         "generate_paragraph_subtitles": "stt",
         "generate_scene_image": "image_gen",
     }[case.module.__name__.rsplit(".", 1)[-1]]
-    assert run_in_worker_loop(service.reserve_owned(1, operation, "validation-task"))
+    assert run_in_worker_loop(
+        service.reserve_owned(1, operation, "validation-task", estimated_cost_usd=20)
+    )
     case.provider.generate.return_value = "A useful generated script."
 
     # When the worker reaches its provider accounting call.
@@ -162,7 +202,9 @@ def test_owned_generation_does_not_succeed_when_usage_fails(
         "generate_subtitles": "stt", "generate_paragraph_subtitles": "stt",
         "generate_scene_image": "image_gen",
     }[case.module.__name__.rsplit(".", 1)[-1]]
-    assert run_in_worker_loop(service.reserve_owned(1, operation, "validation-task"))
+    assert run_in_worker_loop(
+        service.reserve_owned(1, operation, "validation-task", estimated_cost_usd=20)
+    )
     case.provider.generate.return_value = "A useful generated script."
     case.usage.side_effect = OSError("usage database unavailable")
 
@@ -176,6 +218,50 @@ def test_owned_generation_does_not_succeed_when_usage_fails(
 
     # Then the worker has not silently reported a successful delivery.
     case.usage.assert_awaited()
+
+
+def test_audio_generation_authorizes_attempt_before_provider(
+    generation_case: GenerationCase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given an owned audio delivery and an authorization boundary.
+    case = generation_case
+    name = case.module.__name__.rsplit(".", 1)[-1]
+    if name not in {"generate_audio", "generate_paragraph_audio"}:
+        pytest.skip("audio generation fixture only")
+    authorize = AsyncMock(return_value=True)
+    monkeypatch.setattr(case.module, "authorize_owned_provider_attempt", authorize)
+    case.provider.generate.return_value = "generated"
+
+    # When the provider is invoked, then approved capacity is consumed first.
+    case.task.push_request(id="validation-task", args=case.args, kwargs={}, retries=0)
+    try:
+        case.task.run(*case.args)
+    finally:
+        case.task.pop_request()
+    authorize.assert_awaited()
+    assert authorize.await_count >= case.provider.generate.await_count
+
+
+def test_each_owned_generation_authorizes_delivery_before_provider(
+    generation_case: GenerationCase, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given an owned delivery at a billable provider boundary.
+    case = generation_case
+    authorize = AsyncMock(return_value=True)
+    monkeypatch.setattr(case.module, "authorize_owned_provider_attempt", authorize)
+    case.provider.generate.return_value = "generated"
+
+    # When the task invokes its provider.
+    case.task.push_request(id="validation-task", args=case.args, kwargs={}, retries=2)
+    try:
+        case.task.run(*case.args)
+    finally:
+        case.task.pop_request()
+
+    # Then authorization precedes every invocation and accounting links that attempt.
+    authorize.assert_awaited()
+    assert authorize.await_count >= case.provider.generate.await_count + case.provider.transcribe.await_count
+    assert case.usage.await_args.kwargs["reservation_attempt_id"]
 
 
 def test_paragraph_audio_timeout_cleans_only_its_delivery(

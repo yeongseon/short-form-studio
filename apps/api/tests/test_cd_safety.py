@@ -191,8 +191,8 @@ def test_lifecycle_builds_additive_newer_head_and_runs_cd_rollback_verification(
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
     lifecycle = (ROOT / "scripts/release_lifecycle_acceptance.sh").read_text()
 
-    assert "038_release_lifecycle_additive" in workflow
-    assert "down_revision: str | None = \"037\"" in workflow
+    assert "041_release_lifecycle_additive" in workflow
+    assert "down_revision: str | None = \"040\"" in workflow
     assert "LIFECYCLE_N_HEAD" in workflow
     assert "LIFECYCLE_N_PLUS_ONE_HEAD" in workflow
     assert "MigrationContext.configure(connection).get_current_heads()" in lifecycle

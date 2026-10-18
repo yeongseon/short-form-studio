@@ -2,6 +2,7 @@
 
 from collections.abc import Iterator, Sequence
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Literal, cast
 
 import pytest
@@ -1465,6 +1466,14 @@ def stub_generate_visual_assets_services(
         "shorts_api.routes.creator_runs_visuals.dispatch_generate_scene_image", dispatcher
     )
 
+    async def _get_active_plan(_run_id: int):
+        return SimpleNamespace(scenes=[SimpleNamespace(scene_id="scene-1")])
+
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_visuals.visual_plan_service.get_active_plan",
+        _get_active_plan,
+    )
+
     async def _get_project(_project_id: int, workspace_id: int | None = None):
         _ = workspace_id
 
@@ -1709,7 +1718,10 @@ def stub_single_scene_services(
         "shorts_api.routes.scene_image_dispatch.dispatch_generate_scene_image", dispatcher
     )
 
-    async def _reserve_owned(_workspace_id: int, _operation_type: str, _task_id: str) -> tuple[bool, str]:
+    async def _reserve_owned(
+        _workspace_id: int, _operation_type: str, _task_id: str,
+        _estimated_cost_usd: object = None,
+    ) -> tuple[bool, str]:
         return True, "ok"
 
     async def _pending(_run_id: int, _task_type: str, _task_id: str) -> None:
@@ -2349,6 +2361,14 @@ def stub_generate_audio_services(
     monkeypatch.setattr("shorts_api.routes.creator_runs_scene_assets.run_service", run_svc)
     monkeypatch.setattr(
         "shorts_api.routes.creator_runs_scene_assets.dispatch_generate_audio", dispatcher
+    )
+
+    async def _get_active_draft(_run_id: int):
+        return SimpleNamespace(structured_script=[])
+
+    monkeypatch.setattr(
+        "shorts_api.routes.creator_runs_scene_assets.script_service.get_active_draft",
+        _get_active_draft,
     )
 
     async def _get_project(_project_id: int, workspace_id: int | None = None):

@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 import os
 import wave
+from decimal import Decimal
 from pathlib import Path
 
 from celery.exceptions import SoftTimeLimitExceeded
@@ -18,7 +19,8 @@ from creator_service.audio_service import audio_service as _audio_service
 from creator_service.cost_config import COST_PARAGRAPH_AUDIO
 from creator_service.script_service import script_service as _script_service
 from creator_service.telemetry import trace_task
-from creator_service.usage_service import record_provider_call
+from creator_service.usage_service import authorize_owned_provider_attempt, record_provider_call
+from creator_service.spend_quote import MAX_AUDIO_DURATION_SECONDS, audio_reservation_quote
 from tasks.task_runner import GpuLockContext, TaskContext, TaskResult, TaskRunnerConfig, run_task
 from tasks.task_execution import TaskInputError
 
@@ -80,6 +82,11 @@ def generate_paragraph_audio(
         registry = get_default_registry()
         entry = registry.resolve(tts_model)
         provider = registry.get_provider(tts_model)
+        delivery_cost = audio_reservation_quote(
+            duration_seconds=MAX_AUDIO_DURATION_SECONDS,
+            max_retries=0,
+            cost_per_second=Decimal("0.0003"),
+        )
         lock_id = f"para-{run_id}-{section_id}"
         gpu_lock = GpuLockContext(ctx.task_id)
         if entry.requires_gpu:
@@ -94,7 +101,15 @@ def generate_paragraph_audio(
             os.makedirs(os.path.dirname(audio_path), exist_ok=True)
             params = dict(entry.default_params or {})
             params["output_path"] = audio_path
+            attempt_id = f"{ctx.task_id}:{ctx.delivery_attempt}"
             try:
+                if not await authorize_owned_provider_attempt(
+                    ctx.reservation_owner_id,
+                    attempt_id,
+                    delivery_cost,
+                ):
+                    raise ProviderError("Provider attempt exceeds approved spend")
+                ctx.mark_provider_started()
                 await provider.generate(section_text, voice=voice, params=params)
             except ProviderError:
                 raise
@@ -126,19 +141,25 @@ def generate_paragraph_audio(
             if entry.requires_gpu:
                 gpu_lock.release(lock_id=lock_id)
 
+        audio_seconds = _get_wav_duration_seconds(audio_path)
         try:
             await record_provider_call(
                 run_id,
                 entry.provider_type,
                 tts_model,
                 "tts",
-                audio_seconds=_get_wav_duration_seconds(audio_path),
-                cost_usd=COST_PARAGRAPH_AUDIO,
+                audio_seconds=audio_seconds,
+                cost_usd=(
+                    Decimal(str(audio_seconds)) * Decimal("0.0003")
+                    if audio_seconds is not None else delivery_cost
+                ),
                 workspace_id=ctx.workspace_id,
                 project_id=ctx.project_id,
                 idempotency_key=ctx.task_id,
                 reservation_owner_id=ctx.reservation_owner_id,
+                reservation_attempt_id=attempt_id,
             )
+            ctx.mark_provider_accounted()
         except Exception:
             if ctx.reservation_owner_id is not None:
                 raise

@@ -62,7 +62,7 @@ def run_task(
     validated_run_id = validated_message["run_id"]
     task_id = str(getattr(request, "id", None) or f"run-{validated_run_id}")
     safe_failure_stages = config.safe_failure_stages or config.safe_stages
-    execution_started = False
+    billing_outcome = runner.BillingOutcome.NOT_STARTED
     claimed = False
     from creator_service.task_tracking_service import TaskTrackingService
 
@@ -84,18 +84,42 @@ def run_task(
         except Exception:
             runner.logger.warning("Failed to cancel owned quota reservation", exc_info=True)
 
+    async def settle_owned_in_worker_loop(*, billable_unknown: bool = False) -> None:
+        from creator_service.usage_service import usage_service
+
+        settlement = (
+            usage_service.settle_owned_unknown(task_id)
+            if billable_unknown
+            else usage_service.settle_owned(task_id)
+        )
+        await settlement
+
+    def settle_owned(*, billable_unknown: bool = False) -> None:
+        try:
+            runner.run_in_worker_loop(
+                settle_owned_in_worker_loop(billable_unknown=billable_unknown)
+            )
+        except Exception:
+            runner.logger.warning("Failed to settle owned quota reservation", exc_info=True)
+
     async def execute_owned(ctx: TaskContext) -> TaskResult:
-        nonlocal execution_started
-        execution_started = True
-        return await execute(ctx)
+        nonlocal billing_outcome
+        ctx.delivery_attempt = getattr(celery_self.request, "retries", 0)
+        try:
+            return await execute(ctx)
+        finally:
+            billing_outcome = ctx.billing_outcome
+
+    async def execute_and_settle() -> dict[str, object]:
+        result = await runner._run_task_inner(
+            validated_run_id, task_id, config, execute_owned,
+            claim_token=claim_token, on_claim=mark_claimed,
+        )
+        await settle_owned_in_worker_loop()
+        return result
 
     try:
-        return runner.run_in_worker_loop(
-            runner._run_task_inner(
-                validated_run_id, task_id, config, execute_owned,
-                claim_token=claim_token, on_claim=mark_claimed,
-            )
-        )
+        return runner.run_in_worker_loop(execute_and_settle())
     except runner.StageGuardError:
         try:
             if claim_token is not None:
@@ -106,6 +130,7 @@ def run_task(
                 runner.run_in_worker_loop(runner._task_tracking_service.mark_rejected(task_id, "stage_guard"))
         except Exception:
             runner.logger.warning("Failed to record task rejection", exc_info=True)
+        cancel_owned()
         if config.raise_on_stage_guard:
             raise
         raise Ignore()
@@ -124,7 +149,13 @@ def run_task(
                 raise
         elif not claimed:
             raise
-        cancel_owned()
+        match billing_outcome:
+            case runner.BillingOutcome.NOT_STARTED:
+                cancel_owned()
+            case runner.BillingOutcome.ACCOUNTED:
+                settle_owned()
+            case runner.BillingOutcome.UNKNOWN:
+                settle_owned(billable_unknown=True)
         try:
             runner.run_in_worker_loop(
                 runner._run_service.storage.conditional_update_run(
@@ -140,23 +171,10 @@ def run_task(
     except Ignore:
         raise
     except Exception as exc:
-        if not execution_started or isinstance(exc, config.no_fail_transition_exceptions):
-            try:
-                code, message = runner._safe_failure_record(exc)
-                if claim_token is not None:
-                    runner.run_in_worker_loop(
-                        runner._task_tracking_service.mark_failed_if_claimed(task_id, claim_token, code, message)
-                    )
-                else:
-                    runner.run_in_worker_loop(
-                        runner._task_tracking_service.mark_failed_if_running(task_id, code, message)
-                    )
-            except Exception:
-                runner.logger.warning("Failed to record task failure", exc_info=True)
-            raise
         if (
             isinstance(exc, (ProviderTimeoutError, RateLimitError))
-            and celery_self.request.retries < celery_self.max_retries
+            and getattr(celery_self.request, "retries", 0)
+            < getattr(celery_self, "max_retries", 0)
         ):
             # Failed tracking remains reclaimable by Celery's retried delivery.
             try:
@@ -172,6 +190,30 @@ def run_task(
             except Exception:
                 runner.logger.warning("Failed to mark task as failed before retry", exc_info=True)
             raise
+        if isinstance(exc, config.no_fail_transition_exceptions):
+            outcome: bool | None = True
+            try:
+                code, message = runner._safe_failure_record(exc)
+                if claim_token is not None:
+                    outcome = runner.run_in_worker_loop(
+                        runner._task_tracking_service.mark_failed_if_claimed(task_id, claim_token, code, message)
+                    )
+                else:
+                    outcome = runner.run_in_worker_loop(
+                        runner._task_tracking_service.mark_failed_if_running(task_id, code, message)
+                    )
+            except Exception:
+                runner.logger.warning("Failed to record task failure", exc_info=True)
+            if claim_token is not None and outcome is None:
+                raise
+            match billing_outcome:
+                case runner.BillingOutcome.NOT_STARTED:
+                    cancel_owned()
+                case runner.BillingOutcome.ACCOUNTED:
+                    settle_owned()
+                case runner.BillingOutcome.UNKNOWN:
+                    settle_owned(billable_unknown=True)
+            raise
         try:
             finalized = runner.run_in_worker_loop(
                 runner._handle_general_failure(
@@ -179,7 +221,13 @@ def run_task(
                 )
             )
             if claimed and finalized:
-                cancel_owned()
+                match billing_outcome:
+                    case runner.BillingOutcome.NOT_STARTED:
+                        cancel_owned()
+                    case runner.BillingOutcome.ACCOUNTED:
+                        settle_owned()
+                    case runner.BillingOutcome.UNKNOWN:
+                        settle_owned(billable_unknown=True)
         except Exception:
             runner.logger.exception("Failed error cleanup for run %d", validated_run_id)
         raise

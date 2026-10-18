@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -20,7 +21,7 @@ class UsageEvent(BaseModel):
     output_tokens: int | None = Field(default=None, ge=0)
     image_count: int | None = Field(default=None, ge=0)
     audio_seconds: float | None = Field(default=None, ge=0)
-    estimated_cost_usd: float | None = Field(default=None, ge=0)
+    estimated_cost_usd: Decimal | None = Field(default=None, ge=0, allow_inf_nan=False)
     created_at: datetime
 
     @classmethod
@@ -40,7 +41,7 @@ class WorkspaceQuota(BaseModel):
     monthly_llm_calls: int = Field(ge=0, default=1000)
     monthly_image_generations: int = Field(ge=0, default=200)
     monthly_tts_requests: int = Field(ge=0, default=3600)
-    monthly_cost_usd: float = Field(ge=0, default=50.0)
+    monthly_cost_usd: Decimal = Field(ge=0, default=Decimal("50"), allow_inf_nan=False)
     created_at: datetime
     updated_at: datetime
 
@@ -57,8 +58,8 @@ class UsageSummary(BaseModel):
     total_llm_calls: int = Field(ge=0)
     total_image_generations: int = Field(ge=0)
     total_tts_seconds: float = Field(ge=0)
-    total_estimated_cost_usd: float = Field(ge=0)
-    by_provider: dict[str, float]
+    total_estimated_cost_usd: Decimal = Field(ge=0, allow_inf_nan=False)
+    by_provider: dict[str, Decimal]
     by_operation: dict[str, int]
     period_start: datetime
     period_end: datetime

@@ -18,6 +18,7 @@ from creator_provider.registry import get_default_registry
 from creator_service.cost_config import COST_SCENE_IMAGE
 from creator_service.run_service import run_service as _run_service
 from creator_service.telemetry import trace_task
+from creator_service.usage_service import authorize_owned_provider_attempt
 from creator_service.usage_service import record_provider_call
 from creator_service.visual_asset_service import visual_asset_service as _visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
@@ -135,7 +136,16 @@ def generate_scene_image(
                     for _scene_attempt in range(_scene_max_attempts):
                         await batch.checkpoint()
                         try:
+                            attempt_id = (
+                                f"{ctx.task_id}:{ctx.delivery_attempt}:"
+                                f"{target_scene.scene_id}:{_scene_attempt}"
+                            )
                             try:
+                                if not await authorize_owned_provider_attempt(
+                                    ctx.reservation_owner_id, attempt_id, COST_SCENE_IMAGE,
+                                ):
+                                    raise ProviderError("Provider attempt exceeds approved spend")
+                                ctx.mark_provider_started()
                                 await provider.generate(effective_prompt, params)
                             finally:
                                 await batch.checkpoint()
@@ -202,7 +212,9 @@ def generate_scene_image(
                         project_id=ctx.project_id,
                         idempotency_key=f"{ctx.task_id}:{target_scene.scene_id}",
                         reservation_owner_id=ctx.reservation_owner_id,
+                        reservation_attempt_id=attempt_id,
                     )
+                    ctx.mark_provider_accounted()
                 except Exception as exc:
                     if ctx.reservation_owner_id is not None:
                         usage_error = exc

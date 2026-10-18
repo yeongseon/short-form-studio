@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from creator_domain.models import TRIGGER_POLICY
@@ -13,6 +14,7 @@ from creator_service.task_dispatch_service import (
     cas_dispatch_with_rollback,
     dispatch_generate_script,
 )
+from creator_service.usage_service import ReservationQuote
 from fastapi import APIRouter, Depends, HTTPException
 
 if TYPE_CHECKING:
@@ -254,6 +256,9 @@ async def generate_script_trigger(
 
     validate_model_key(request.model_key, expected_category="llm")
     idea_brief = project.idea_brief or project.title or ""
+    quote = ReservationQuote.bounded(
+        unit_cost_usd=Decimal("0.002"), units=1, internal_attempts=1, deliveries=6,
+    )
 
     return await cas_dispatch_with_rollback(
         run_id=run_id,
@@ -275,4 +280,5 @@ async def generate_script_trigger(
         restart_from_stage="SCRIPT_REVIEW",
         quota_operation_type="llm",
         workspace_id=user.workspace_id,
+        reservation_estimate_usd=quote.maximum_cost_usd,
     )
