@@ -427,3 +427,32 @@ async def test_expired_reclaiming_claim_is_replaced_and_stale_updates_are_fenced
     with pytest.raises(MediaAssetPersistenceFailed):
         await assets.record_upload_cleanup_failure(intent.id, 5, first.claim_token)
     await assets.record_upload_reclaimed(intent.id, successor.claim_token)
+
+
+@pytest.mark.asyncio
+async def test_successor_claim_retains_watch_for_object_materializing_after_worker_death() -> None:
+    # Given sweeper A claims a pending upload and dies before recording its observation.
+    now = datetime.now(timezone.utc)
+    objects = _Objects()
+    assets = InMemoryMediaAssetStorage()
+    intent = await assets.create_upload_intent(UploadIntent(
+        id=0, owner_id="blocked-uploader", workspace_id=7,
+        storage_key="workspaces/7/assets/claim-replacement.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now,
+    ))
+    await assets.claim_expired_upload_intents(
+        now=now, lease_expires_at=now, limit=1,
+    )
+
+    # When successor B replaces the expired claim before the object materializes.
+    replacement = await MediaUploadReconciler(objects, assets).sweep(now=now)
+    objects.objects[intent.storage_key] = b"late upload"
+    later = now + timedelta(hours=1)
+    await assets.expire_upload_intent(intent.id, later)
+    final = await MediaUploadReconciler(objects, assets).sweep(now=later)
+
+    # Then B retained a watch and the later sweep deletes the orphan.
+    assert replacement.reclaimed == 0
+    assert final.reclaimed == 0
+    assert objects.objects == {}
+    assert (await assets.list_upload_intents())[0].state is UploadIntentState.LATE_UPLOAD_WATCH

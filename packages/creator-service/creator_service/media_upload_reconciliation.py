@@ -124,6 +124,7 @@ class MediaUploadReconciler:
                 continue
             can_still_materialize = intent.state in {
                 UploadIntentState.PENDING,
+                UploadIntentState.RECLAIMING,
                 UploadIntentState.LATE_UPLOAD_WATCH,
             }
             if not can_still_materialize:
