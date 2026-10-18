@@ -24,6 +24,7 @@ from tests.worker_topology_runtime import (
     Provider,
     capture_worker,
     container_ffmpeg_host_pid,
+    container_process_host_pid,
     docker,
     initialize_database,
     new_run,
@@ -285,6 +286,7 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
     )
     timeout_resources = wait_state(timeout_state, "resources_active")
     timeout_pid = int(timeout_resources["child_pid"])
+    timeout_host_pid = container_process_host_pid("topology-scaled-timeout", "python3")
     timeout_file = EVIDENCE / str(timeout_resources["temporary_path"])
     assert timeout_file.is_file()
     wait_task("timeout-delivery", "failed")
@@ -296,7 +298,7 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
     assert timeout_run is not None and timeout_run["status"] == "failed"
     assert timeout_quota is not None and timeout_quota["status"] == "cancelled"
     assert not timeout_file.exists()
-    assert not Path(f"/proc/{timeout_pid}").exists()
+    assert not Path(f"/proc/{timeout_host_pid}").exists()
     persist_snapshot("timeout-final-state.json", 106)
     capture_worker("topology-scaled-timeout")
     docker("rm", "-f", "topology-scaled-timeout")

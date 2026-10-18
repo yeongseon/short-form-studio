@@ -135,11 +135,15 @@ def wait_task(task_id: str, status: str, timeout: float = 30) -> asyncpg.Record:
     pytest.fail(f"timed out waiting for task {task_id}={status}")
 
 
-def container_ffmpeg_host_pid(name: str) -> int:
+def container_process_host_pid(name: str, process_name: str) -> int:
     output = docker("top", name, "-eo", "pid,comm").stdout.splitlines()
-    ffmpeg = [line.split()[0] for line in output[1:] if line.split()[-1] == "ffmpeg"]
-    assert len(ffmpeg) == 1
-    return int(ffmpeg[0])
+    process = [line.split()[0] for line in output[1:] if line.split()[-1] == process_name]
+    assert len(process) == 1
+    return int(process[0])
+
+
+def container_ffmpeg_host_pid(name: str) -> int:
+    return container_process_host_pid(name, "ffmpeg")
 
 
 def redis_available() -> bool:

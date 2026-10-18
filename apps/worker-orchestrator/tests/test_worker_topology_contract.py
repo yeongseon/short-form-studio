@@ -204,6 +204,8 @@ def test_failure_scenario_uses_exact_scaled_command_and_container_process_namesp
         encoding="utf-8"
     )
     assert "active-redelivery" in scenario
+    assert "container_process_host_pid" in scenario
+    assert 'Path(f"/proc/{timeout_pid}")' not in scenario
 
 
 def test_provider_stub_and_runtime_artifacts_are_isolated_per_phase() -> None:
