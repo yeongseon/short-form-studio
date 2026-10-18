@@ -229,12 +229,28 @@ def test_workflow_has_no_reachable_placeholder_targets() -> None:
 
 def test_ci_executes_two_release_postgres_rollback_lifecycle() -> None:
     raw = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
-    commands = "\n".join(step.get("run", "") for step in raw["jobs"]["docker"]["steps"])
+    steps = raw["jobs"]["docker"]["steps"]
+    commands = "\n".join(step.get("run", "") for step in steps)
 
     assert "release-lifecycle-n" in commands
     assert "release-lifecycle-n-plus-one" in commands
     assert "scripts/release_lifecycle_acceptance.sh" in commands
-    uploads = [step for step in raw["jobs"]["docker"]["steps"] if step.get("uses") == "actions/upload-artifact@v4"]
+    lifecycle_step = next(
+        step for step in steps if "scripts/release_lifecycle_acceptance.sh" in step.get("run", "")
+    )
+    lifecycle_commands = lifecycle_step["run"]
+    assert "python -m pip install --disable-pip-version-check pydantic==2.12.3" in lifecycle_commands
+    assert lifecycle_commands.index("pydantic==2.12.3") < lifecycle_commands.index(
+        "scripts/release_lifecycle_acceptance.sh"
+    )
+    assert "set -euo pipefail" in lifecycle_commands
+    for marker in (
+        "release_n_started=true",
+        "release_n_plus_one_project_media=true",
+        "release_n_rollback_project_media=true",
+    ):
+        assert marker in lifecycle_commands
+    uploads = [step for step in steps if step.get("uses") == "actions/upload-artifact@v4"]
     assert any(step.get("with", {}).get("name") == "release-lifecycle-evidence" for step in uploads)
 
 

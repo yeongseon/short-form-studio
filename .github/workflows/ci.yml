@@ -217,6 +217,7 @@ jobs:
         run: docker build --target runtime -f apps/worker-orchestrator/Dockerfile .
       - name: Build two API releases and verify app-only rollback lifecycle
         run: |
+          set -euo pipefail
           git fetch origin main:refs/remotes/origin/main --depth=1
           lifecycle_n="origin/main"
           lifecycle_context="$(mktemp -d)"
@@ -239,7 +240,11 @@ jobs:
           PY
           docker build --target runtime -f "$lifecycle_context/apps/api/Dockerfile" -t release-lifecycle-n "$lifecycle_context"
           docker build --target runtime -f apps/api/Dockerfile -t release-lifecycle-n-plus-one .
+          python -m pip install --disable-pip-version-check pydantic==2.12.3
           LIFECYCLE_N_HEAD=037 LIFECYCLE_N_PLUS_ONE_HEAD=038_release_lifecycle_additive RELEASE_LIFECYCLE_EVIDENCE_DIR=/tmp/release-lifecycle-evidence scripts/release_lifecycle_acceptance.sh | tee /tmp/release-lifecycle-evidence.log
+          grep -Fx 'release_n_started=true' /tmp/release-lifecycle-evidence/result.txt
+          grep -Fx 'release_n_plus_one_project_media=true' /tmp/release-lifecycle-evidence/result.txt
+          grep -Fx 'release_n_rollback_project_media=true' /tmp/release-lifecycle-evidence/result.txt
       - name: Upload release lifecycle evidence
         if: always()
         uses: actions/upload-artifact@v4
