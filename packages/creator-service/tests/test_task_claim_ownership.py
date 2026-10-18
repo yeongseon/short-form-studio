@@ -85,7 +85,7 @@ async def test_claimed_task_finishes_when_run_stage_cas_misses(quota_pool: objec
     storage = PostgresTaskTrackingStorage() if quota_pool is not None else InMemoryTaskTrackingStorage()
     tracking = TaskTrackingService(storage)
     if quota_pool is not None:
-        from creator_service.run_service import PostgresRunStorage
+        from creator_service.postgres_run_storage import PostgresRunStorage
 
         pool = await db.get_pool()
         await pool.execute("INSERT INTO creator_projects (id, workspace_id) VALUES (1, 1)")
@@ -175,7 +175,7 @@ async def test_stale_atomic_failure_leaves_successor_task_run_and_quota_unchange
     tracking = TaskTrackingService(tracking_storage)
     if quota_pool is not None:
         from creator_service.postgres_usage_storage import PostgresUsageStorage
-        from creator_service.run_service import PostgresRunStorage
+        from creator_service.postgres_run_storage import PostgresRunStorage
 
         pool = await db.get_pool()
         await pool.execute("INSERT INTO creator_projects (id, workspace_id) VALUES (1, 1)")
@@ -225,7 +225,7 @@ async def test_postgres_atomic_failure_blocks_successor_claim_until_quota_cleanu
     if quota_pool is None:
         pytest.fail("PostgreSQL fixture required")
     from creator_service.postgres_usage_storage import PostgresUsageStorage
-    from creator_service.run_service import PostgresRunStorage
+    from creator_service.postgres_run_storage import PostgresRunStorage
 
     pool = await db.get_pool()
     await pool.execute("INSERT INTO creator_projects (id, workspace_id) VALUES (1, 1)")
