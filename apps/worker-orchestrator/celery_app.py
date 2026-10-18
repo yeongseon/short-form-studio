@@ -296,11 +296,10 @@ def _should_record_to_dlq(sender: Any, exception: BaseException | None = None) -
     return True
 
 
-def _terminal_failure_services() -> tuple[Any, Any]:
+def _terminal_failure_services() -> Any:
     from creator_service.task_tracking_service import task_tracking_service
-    from creator_service.usage_service import usage_service
 
-    return task_tracking_service.mark_failed_if_claimed, usage_service.cancel_owned
+    return task_tracking_service.fail_claimed_and_cancel_quota
 
 
 @task_failure.connect
@@ -325,17 +324,18 @@ def handle_task_failure(
         claim_token = getattr(request, "claim_token", None)
         try:
             if isinstance(claim_token, str):
-                mark_failed, cancel_owned = _terminal_failure_services()
-                outcome = run_in_worker_loop(
-                    mark_failed(
+                from creator_service.usage_service import usage_service
+
+                finalize_claimed = _terminal_failure_services()
+                run_in_worker_loop(
+                    finalize_claimed(
                         task_id,
                         claim_token,
+                        usage_service.storage,
                         str(failure["code"]),
                         str(failure["message"]),
                     )
                 )
-                if outcome is not None:
-                    run_in_worker_loop(cancel_owned(task_id))
         except Exception:
             logging.getLogger(__name__).warning(
                 "Failed to finalize terminal task failure",
