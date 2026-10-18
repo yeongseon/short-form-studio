@@ -114,7 +114,9 @@ async def _reconcile_once() -> dict[str, Any]:
     from creator_service.task_tracking_service import task_tracking_service
     from creator_service.broker_recovery import (
         BrokerSnapshot,
+        oldest_active_wait_seconds,
         recover_lost_tasks,
+        routed_queue_names,
         should_persist_observed_epoch,
     )
 
@@ -130,19 +132,15 @@ async def _reconcile_once() -> dict[str, Any]:
 
         epoch = ensure_broker_epoch()
         client = redis.Redis.from_url(redis_url)
-        queue_length = sum(
-            int(client.llen(queue))
-            for queue in ("creator", "script", "image", "audio", "render")
+        queue_names = routed_queue_names(
+            default_queue=celery_app.conf.task_default_queue,
+            routes=celery_app.conf.task_routes,
         )
+        queue_length = sum(int(client.llen(queue)) for queue in queue_names)
         ping = celery_app.control.inspect(timeout=2).ping() or {}
         candidates = await task_tracking_service.list_broker_recovery_tasks()
         now = datetime.now(timezone.utc)
-        pre_epoch_candidates = [task for task in candidates if task.created_at < epoch.started_at]
-        oldest_wait_seconds = (
-            max((now - task.created_at).total_seconds() for task in pre_epoch_candidates)
-            if pre_epoch_candidates
-            else None
-        )
+        oldest_wait_seconds = oldest_active_wait_seconds(candidates, now=now)
         snapshot = BrokerSnapshot(
             epoch=epoch.epoch,
             started_at=epoch.started_at,
@@ -150,11 +148,9 @@ async def _reconcile_once() -> dict[str, Any]:
             oldest_wait_seconds=oldest_wait_seconds,
             workers_online=len(ping),
         )
-        previous_epoch = (
-            _BROKER_EPOCH_STATE_PATH.read_text(encoding="utf-8").strip()
-            if _BROKER_EPOCH_STATE_PATH.exists()
-            else None
-        )
+        previous_epoch = await task_tracking_service.get_observed_broker_epoch()
+        if previous_epoch is None and _BROKER_EPOCH_STATE_PATH.exists():
+            previous_epoch = _BROKER_EPOCH_STATE_PATH.read_text(encoding="utf-8").strip()
         recovery_deferred = False
         if previous_epoch is not None:
             recovered = await recover_lost_tasks(
@@ -175,6 +171,7 @@ async def _reconcile_once() -> dict[str, Any]:
         if should_persist_observed_epoch(
             previous_epoch=previous_epoch, deferred=recovery_deferred
         ):
+            await task_tracking_service.set_observed_broker_epoch(epoch.epoch)
             _BROKER_EPOCH_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
             _BROKER_EPOCH_STATE_PATH.write_text(epoch.epoch, encoding="utf-8")
     except Exception:  # noqa: BLE001 - top-level recovery boundary must fail closed
