@@ -51,7 +51,12 @@ async def _revoke_and_mark(task_id: str) -> None:
 
 
 async def _publish_pending(run_id: int, task_type: str, dispatch: Callable[[str], str], task_id: str) -> str:
-    await task_tracking_service.record_task_pending(run_id, task_type, task_id)
+    broker_generation = await run_blocking(
+        task_dispatch_service.broker_generation
+    )
+    await task_tracking_service.record_task_pending(
+        run_id, task_type, task_id, broker_generation
+    )
     try:
         published_id = await run_blocking(partial(dispatch, task_id))
         if published_id != task_id:

@@ -19,11 +19,19 @@ class Tracking(TaskTrackingService):
         self.pending_attempts = 0
         self.before_promotion: str | None = None
 
-    async def record_task_pending(self, run_id: int, task_type: str, celery_task_id: str) -> RunTask:
+    async def record_task_pending(
+        self,
+        run_id: int,
+        task_type: str,
+        celery_task_id: str,
+        broker_generation: str | None = None,
+    ) -> RunTask:
         self.pending_attempts += 1
         if self.fail_pending:
             raise RuntimeError("pending unavailable")
-        task = await super().record_task_pending(run_id, task_type, celery_task_id)
+        task = await super().record_task_pending(
+            run_id, task_type, celery_task_id, broker_generation
+        )
         self.events.append(("pending", celery_task_id))
         return task
 
