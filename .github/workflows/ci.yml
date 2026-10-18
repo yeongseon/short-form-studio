@@ -255,13 +255,13 @@ jobs:
           lifecycle_n="origin/main"
           lifecycle_context="$(mktemp -d)"
           git archive "$lifecycle_n" | tar -x -C "$lifecycle_context"
-          cat > apps/api/migrations/versions/041_release_lifecycle_additive.py <<'PY'
+          cat > apps/api/migrations/versions/042_release_lifecycle_additive.py <<'PY'
           from collections.abc import Sequence
 
           from alembic import op
 
-          revision: str = "041_release_lifecycle_additive"
-          down_revision: str | None = "040"
+          revision: str = "042_release_lifecycle_additive"
+          down_revision: str | None = "041"
           branch_labels: str | Sequence[str] | None = None
           depends_on: str | Sequence[str] | None = None
 
@@ -274,7 +274,7 @@ jobs:
           docker build --target runtime -f "$lifecycle_context/apps/api/Dockerfile" -t release-lifecycle-n "$lifecycle_context"
           docker build --target runtime -f apps/api/Dockerfile -t release-lifecycle-n-plus-one .
           python -m pip install --disable-pip-version-check pydantic==2.12.3
-          LIFECYCLE_N_HEAD=040 LIFECYCLE_N_PLUS_ONE_HEAD=041_release_lifecycle_additive RELEASE_LIFECYCLE_EVIDENCE_DIR=/tmp/release-lifecycle-evidence scripts/release_lifecycle_acceptance.sh | tee /tmp/release-lifecycle-evidence.log
+          LIFECYCLE_N_HEAD=040 LIFECYCLE_N_PLUS_ONE_HEAD=042_release_lifecycle_additive RELEASE_LIFECYCLE_EVIDENCE_DIR=/tmp/release-lifecycle-evidence scripts/release_lifecycle_acceptance.sh | tee /tmp/release-lifecycle-evidence.log
           grep -Fx 'release_n_started=true' /tmp/release-lifecycle-evidence/result.txt
           grep -Fx 'release_n_plus_one_project_media=true' /tmp/release-lifecycle-evidence/result.txt
           grep -Fx 'release_n_rollback_project_media=true' /tmp/release-lifecycle-evidence/result.txt
