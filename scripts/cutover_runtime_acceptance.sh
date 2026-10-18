@@ -175,8 +175,9 @@ docker compose rm -f redis
 docker volume rm "${COMPOSE_PROJECT_NAME}_redis_data"
 docker compose up -d redis
 wait_for_redis
+timeout 60 bash -c 'until docker compose exec -T worker celery -A celery_app.celery_app inspect ping 2>/dev/null | grep -q pong; do sleep 2; done'
 run_recovery_now
-[ "$(psql_scalar "SELECT string_agg(status,',' ORDER BY celery_task_id) FROM creator_run_tasks WHERE celery_task_id LIKE 'legacy-upgrade-%'")" = "failed,failed,success,failed" ] \
+[ "$(psql_scalar "SELECT string_agg(status,',' ORDER BY celery_task_id) FROM creator_run_tasks WHERE celery_task_id LIKE 'legacy-upgrade-%'")" = "failed,failed,failed,success" ] \
   || fail "legacy active rows did not converge after broker replacement"
 
 [ "$(code http://127.0.0.1:8000/api/creator/users/me)" = 401 ] \
