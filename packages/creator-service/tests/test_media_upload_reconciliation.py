@@ -11,7 +11,6 @@ from PIL import Image
 from creator_service.media_asset_service import MediaAssetService
 from creator_service.media_asset_storage import InMemoryMediaAssetStorage
 from creator_service.media_upload_reconciliation import (
-    LATE_UPLOAD_WATCH_MAX_AGE,
     MediaAssetPersistenceFailed,
     MediaAssetPersistenceIndeterminate,
     MediaUploadReconciler,
@@ -259,17 +258,12 @@ async def test_late_upload_after_absent_observation_is_deleted_by_later_sweep() 
     later = retention + timedelta(minutes=5)
     await assets.expire_upload_intent(intent.id, later)
     second = await MediaUploadReconciler(objects, assets).sweep(now=later)
-    terminal = now + LATE_UPLOAD_WATCH_MAX_AGE
-    await assets.expire_upload_intent(intent.id, terminal)
-    final = await MediaUploadReconciler(objects, assets).sweep(now=terminal)
-
     # Then the absent sweep retains ownership and a later sweep deletes the object.
     assert first.reclaimed == 0
     assert absent.reclaimed == 0
     assert second.reclaimed == 0
-    assert final.reclaimed == 1
     assert objects.objects == {}
-    assert (await assets.list_upload_intents())[0].state is UploadIntentState.RECLAIMED
+    assert (await assets.list_upload_intents())[0].state is UploadIntentState.LATE_UPLOAD_WATCH
 
 
 @pytest.mark.asyncio
@@ -326,8 +320,8 @@ async def test_successful_delete_keeps_watch_until_rematerialized_upload_is_dele
 
 
 @pytest.mark.asyncio
-async def test_late_upload_watch_terminalizes_at_bounded_maximum_age() -> None:
-    # Given a watched pending upload remains absent until its maximum watch age.
+async def test_late_upload_after_former_maximum_age_is_deleted_by_later_sweep() -> None:
+    # Given a watched pending upload remains absent beyond the former 24-hour cutoff.
     now = datetime.now(timezone.utc)
     objects = _Objects()
     assets = InMemoryMediaAssetStorage()
@@ -338,15 +332,20 @@ async def test_late_upload_watch_terminalizes_at_bounded_maximum_age() -> None:
     ))
     first = await MediaUploadReconciler(objects, assets).sweep(now=now)
 
-    # When reconciliation reaches the enforced maximum age.
-    terminal = now + LATE_UPLOAD_WATCH_MAX_AGE
-    await assets.expire_upload_intent(intent.id, terminal)
-    final = await MediaUploadReconciler(objects, assets).sweep(now=terminal)
+    former_cutoff = now + timedelta(hours=24)
+    await assets.expire_upload_intent(intent.id, former_cutoff)
+    absent = await MediaUploadReconciler(objects, assets).sweep(now=former_cutoff)
+    objects.objects[intent.storage_key] = b"very late upload"
+    later = former_cutoff + timedelta(hours=1)
+    await assets.expire_upload_intent(intent.id, later)
+    final = await MediaUploadReconciler(objects, assets).sweep(now=later)
 
-    # Then the absent watch reaches a durable terminal state instead of growing forever.
+    # Then the tombstone survives the cutoff and removes the later materialization.
     assert first.reclaimed == 0
-    assert final.reclaimed == 1
-    assert (await assets.list_upload_intents())[0].state is UploadIntentState.RECLAIMED
+    assert absent.reclaimed == 0
+    assert final.reclaimed == 0
+    assert objects.objects == {}
+    assert (await assets.list_upload_intents())[0].state is UploadIntentState.LATE_UPLOAD_WATCH
 
 
 @pytest.mark.asyncio

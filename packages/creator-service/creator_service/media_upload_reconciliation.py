@@ -15,9 +15,7 @@ UPLOAD_OPERATION_DEADLINE: Final = timedelta(minutes=30)
 DEFAULT_UPLOAD_LEASE: Final = UPLOAD_OPERATION_DEADLINE
 DEFAULT_SWEEP_LEASE: Final = timedelta(minutes=5)
 LATE_UPLOAD_WATCH_RETENTION: Final = timedelta(hours=1)
-LATE_UPLOAD_WATCH_MAX_AGE: Final = timedelta(hours=24)
 assert DEFAULT_UPLOAD_LEASE < LATE_UPLOAD_WATCH_RETENTION
-assert UPLOAD_OPERATION_DEADLINE < LATE_UPLOAD_WATCH_MAX_AGE
 
 
 class MediaAssetPersistenceFailed(RuntimeError):
@@ -128,11 +126,7 @@ class MediaUploadReconciler:
                 UploadIntentState.PENDING,
                 UploadIntentState.LATE_UPLOAD_WATCH,
             }
-            watch_max_age_reached = (
-                intent.created_at is not None
-                and swept_at >= intent.created_at + LATE_UPLOAD_WATCH_MAX_AGE
-            )
-            if not can_still_materialize or watch_max_age_reached:
+            if not can_still_materialize:
                 await self._intents.record_upload_reclaimed(intent.id, intent.claim_token)
                 reclaimed += 1
             else:
