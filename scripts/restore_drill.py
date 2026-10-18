@@ -20,6 +20,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from restore_drill_runtime import (
@@ -32,7 +33,6 @@ from restore_drill_runtime import (
     launch_provider_guard,
     mapped_postgres_url,
     recovery_states,
-    register_rendered_artifact,
     restored_timeline,
     run,
     run_reconciler,
@@ -59,24 +59,70 @@ def create_media(media: Path) -> None:
 
 
 def render_restored_timeline(
-    restored: Path,
-    timeline: list[dict[str, str | int | float | None]],
-    asset_storage_keys: dict[int, str],
-) -> None:
-    segment = timeline[0]
-    asset_id = segment["asset_id"]
-    duration = segment["duration_seconds"]
-    if not isinstance(asset_id, int) or not isinstance(duration, (int, float)):
-        raise DrillError("restored Timeline segment is invalid")
-    image = asset_storage_keys.get(asset_id)
-    if image is None:
-        raise DrillError("restored Timeline references unavailable media")
-    docker(
-        "run", "--rm", "-v", f"{restored.resolve()}:/media", FFMPEG_IMAGE,
-        "-loop", "1", "-i", f"/media/{image}", "-i", "/media/audio.wav",
-        "-t", str(duration), "-c:v", "libx264", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "/media/final.mp4",
+    database_url: str, restored: Path, fixture: RuntimeFixture
+) -> tuple[int, RuntimeFixture, dict[str, str | int]]:
+    program = f"""
+import anyio, json
+from datetime import datetime, timezone
+from pathlib import Path
+from creator_service.render_profile import RenderProfile
+from creator_service.render_service import render_service
+from tasks.task_runner import TaskContext
+from tasks.timeline_render import RenderLayers, render_saved_timeline
+
+async def main():
+    artifact_root = Path({str(restored)!r})
+    output = artifact_root / 'final.mp4'
+    context = TaskContext(
+        run_id={fixture.run_id}, task_id='restore-drill-render',
+        run={{'metadata_json': {{'render_source': 'timeline', 'render_timeline_revision': 1}}}},
+        workspace_id={fixture.workspace_id}, project_id={fixture.project_id},
+        start_time=datetime.now(timezone.utc),
     )
+    count = await render_saved_timeline(
+        context, RenderProfile.fast_preview(), output,
+        layers=RenderLayers(audio=artifact_root / 'audio.wav'),
+    )
+    artifact = await render_service.create_artifact(
+        run_id={fixture.run_id}, path=str(output), render_profile='restore_drill',
+        storage_provider='local', storage_key='final.mp4',
+        idempotency_key='restore-drill-render',
+    )
+    print(json.dumps({{'count': count, 'artifact_id': artifact.id}}))
+
+anyio.run(main)
+"""
+    environment = {
+        **os.environ,
+        "DATABASE_URL": database_url,
+        "ARTIFACT_ROOT": str(restored),
+        "STORAGE_BACKEND": "local",
+        "PYTHONPATH": os.pathsep.join(
+            str(ROOT / path)
+            for path in (
+                "apps/worker-orchestrator",
+                "packages/creator-domain",
+                "packages/creator-service",
+                "packages/creator-provider",
+            )
+        ),
+    }
+    result = run(
+        sys.executable,
+        "-c",
+        program,
+        cwd=ROOT / "apps/worker-orchestrator",
+        env=environment,
+    )
+    rendered = json.loads(result.stdout.splitlines()[-1])
+    artifact = restored / "final.mp4"
+    evidence = {
+        "checksum": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+        "size_bytes": artifact.stat().st_size,
+    }
+    return int(rendered["count"]), replace(
+        fixture, artifact_id=int(rendered["artifact_id"])
+    ), evidence
 
 
 def verify_http(runtime: RuntimeFixture, media: Path) -> None:
@@ -178,10 +224,11 @@ def main() -> int:
             run(sys.executable, str(verifier), "restore-media", str(bundle), "--target", str(restored), "--expected-alembic-revision", alembic_head, "--expected-secret-fingerprint", FINGERPRINT)
             timeline = restored_timeline(target, fixture.project_id)
             (restored / "final.mp4").unlink()
-            render_restored_timeline(restored, timeline, {fixture.media_id: "image.png"})
-            registered_artifact = register_rendered_artifact(
-                target, fixture, restored / "final.mp4"
+            rendered_segments, fixture, registered_artifact = render_restored_timeline(
+                target_url, restored, fixture
             )
+            if rendered_segments != len(timeline):
+                raise DrillError("production renderer did not consume the complete Timeline")
             durations["restore_seconds"] = time.monotonic() - phase
             guard_process, guard_port = launch_provider_guard(root)
             api_process, fixture = launch_api(target_url, restored, fixture, root, guard_port)

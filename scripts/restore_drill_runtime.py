@@ -110,7 +110,18 @@ def seed_production_fixture(container: str, media: Path) -> RuntimeFixture:
                 "trim_end_seconds": None,
                 "fit_mode": "cover",
                 "transition": None,
-            }
+            },
+            {
+                "id": "segment-restored-second",
+                "scene_id": "scene-restored-second",
+                "asset_id": 602,
+                "timeline_start_seconds": 1,
+                "duration_seconds": 1,
+                "trim_start_seconds": None,
+                "trim_end_seconds": None,
+                "fit_mode": "cover",
+                "transition": "cut",
+            },
         ],
         separators=(",", ":"),
     )
@@ -123,7 +134,9 @@ INSERT INTO creator_projects(id,title,source_type,status,workspace_id) VALUES (4
 INSERT INTO creator_runs(id,project_id,current_stage,status,workspace_id,version,metadata_json) VALUES (501,401,'FINAL_REVIEW','paused',201,1,'{{"render_source":"timeline","render_timeline_revision":1}}');
 INSERT INTO creator_timelines(project_id,workspace_id,timeline_id,revision,segments_json) VALUES (401,201,'timeline-restored',1,'{timeline}');
 INSERT INTO creator_stage_reviews(run_id,stage_name,review_status,reviewer,notes) VALUES (501,'TIMELINE_REVIEW','approved','101','{{"timeline_id":"timeline-restored","revision":1}}');
-INSERT INTO creator_media_assets(id,workspace_id,project_id,run_id,media_type,origin,storage_key,mime_type,metadata) VALUES (601,201,401,501,'IMAGE','UPLOADED','image.png','image/png','{{"sha256":"{image_hash}","storage_provider":"local"}}');
+INSERT INTO creator_media_assets(id,workspace_id,project_id,run_id,media_type,origin,storage_key,mime_type,metadata) VALUES
+ (601,201,401,501,'IMAGE','UPLOADED','image.png','image/png','{{"sha256":"{image_hash}","storage_provider":"local"}}'),
+ (602,201,401,501,'IMAGE','UPLOADED','image.png','image/png','{{"sha256":"{image_hash}","storage_provider":"local"}}');
 INSERT INTO creator_artifacts(id,run_id,artifact_type,file_path,file_size_bytes,mime_type,storage_key,content_type,size_bytes,workspace_id,project_id,storage_provider,checksum) VALUES (701,501,'video','final.mp4',0,'video/mp4','final.mp4','video/mp4',0,201,401,'local','{video_hash}');
 INSERT INTO creator_runs(id,project_id,current_stage,status,workspace_id,version) VALUES (502,401,'SCRIPT_GENERATING','running',201,1),(503,401,'RENDER_GENERATING','running',201,1),(504,401,'FINAL_REVIEW','paused',201,1);
 INSERT INTO creator_run_tasks(run_id,task_type,celery_task_id,status,started_at,created_at,claim_token) VALUES

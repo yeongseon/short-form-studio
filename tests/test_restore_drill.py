@@ -13,6 +13,7 @@ import pytest
 SCRIPT = Path(__file__).parents[1] / "scripts" / "restore_drill.py"
 sys.path.insert(0, str(SCRIPT.parent))
 from restore_drill import render_restored_timeline
+from restore_drill_runtime import RuntimeFixture
 from restore_drill_runtime import DrillError, validate_release_manifest
 
 
@@ -50,33 +51,43 @@ def test_disposable_restore_drill() -> None:
     assert len(evidence["registered_artifact"]["checksum"]) == 64
 
 
-def test_render_uses_restored_timeline_media(
+def test_render_invokes_production_timeline_worker_with_restored_database_and_audio(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # Given
     restored = tmp_path / "restored"
     restored.mkdir()
-    (restored / "image.png").write_bytes(b"image")
-    (restored / "audio.wav").write_bytes(b"audio")
-    commands: list[tuple[str, ...]] = []
+    commands: list[tuple[tuple[str, ...], Path | None, dict[str, str] | None]] = []
 
-    def record_docker(*arguments: str) -> subprocess.CompletedProcess[str]:
-        commands.append(arguments)
+    def record_run(
+        *arguments: str, cwd: Path | None = None, env: dict[str, str] | None = None
+    ) -> subprocess.CompletedProcess[str]:
+        commands.append((arguments, cwd, env))
         (restored / "final.mp4").write_bytes(b"rendered")
-        return subprocess.CompletedProcess(arguments, 0, "", "")
+        return subprocess.CompletedProcess(
+            arguments, 0, '{"count": 2, "artifact_id": 702}\n', ""
+        )
 
-    monkeypatch.setattr("restore_drill.docker", record_docker)
-    timeline = [
-        {"asset_id": 601, "duration_seconds": 1}
-    ]
+    monkeypatch.setattr("restore_drill.run", record_run)
+    fixture = RuntimeFixture("owner", "foreign", "revoked", 201, 401, 501, 601, 701)
 
     # When
-    render_restored_timeline(restored, timeline, {601: "image.png"})
+    count, updated_fixture, evidence = render_restored_timeline(
+        "postgresql://restore:test@127.0.0.1:5432/restore", restored, fixture
+    )
 
     # Then
-    command = commands[0]
-    assert "/media/image.png" in command
-    assert "/media/audio.wav" in command
+    command, cwd, environment = commands[0]
+    assert command[:2] == (sys.executable, "-c")
+    assert "render_saved_timeline" in command[2]
+    assert "RenderLayers(audio=artifact_root / 'audio.wav')" in command[2]
+    assert cwd == SCRIPT.parents[1] / "apps/worker-orchestrator"
+    assert environment is not None
+    assert environment["DATABASE_URL"].startswith("postgresql://restore:")
+    assert environment["ARTIFACT_ROOT"] == str(restored)
+    assert count == 2
+    assert updated_fixture.artifact_id == 702
+    assert evidence["size_bytes"] == len(b"rendered")
     assert (restored / "final.mp4").read_bytes() == b"rendered"
 
 
