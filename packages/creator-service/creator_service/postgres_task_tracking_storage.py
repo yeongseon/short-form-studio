@@ -250,6 +250,59 @@ class PostgresTaskTrackingStorage:
                 )
                 return True
 
+    async def fail_claimed_and_cancel_quota(
+        self, celery_task_id: str, token: str, usage_storage: Any,
+        error_code: str, error_message: str, run_storage: PostgresRunStorage | None = None,
+        run_id: int | None = None, expected_stages: frozenset[str] = frozenset(),
+    ) -> bool:
+        pool = await db.get_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                claimed = await connection.fetchrow(
+                    """SELECT id, run_id FROM creator_run_tasks WHERE celery_task_id=$1
+                       AND claim_token=$2 AND status='running' FOR UPDATE""",
+                    celery_task_id, token,
+                )
+                if claimed is None:
+                    return False
+                if run_id is not None and int(claimed["run_id"]) == run_id:
+                    await connection.execute(
+                        """UPDATE creator_runs SET current_stage='FAILED', status='failed',
+                           version=version+1 WHERE id=$1 AND current_stage=ANY($2::text[])
+                           AND status != ALL($3::text[])""",
+                        run_id, list(expected_stages), ["failed", "cancelled", "completed"],
+                    )
+                owner = await connection.fetchrow(
+                    """SELECT workspace_id, period_start, operation_type
+                       FROM workspace_quota_reservation_owners
+                       WHERE owner_id=$1 AND status='reserved' FOR UPDATE""",
+                    celery_task_id,
+                )
+                if owner is not None:
+                    workspace_id = int(owner["workspace_id"])
+                    await connection.execute("SELECT pg_advisory_xact_lock($1)", workspace_id)
+                    await connection.execute(
+                        """UPDATE workspace_quota_reservation_owners SET status='cancelled'
+                           WHERE owner_id=$1 AND status='reserved'""",
+                        celery_task_id,
+                    )
+                    await connection.execute(
+                        """UPDATE workspace_quota_reservations SET
+                           llm_count=llm_count-$3, image_count=image_count-$4,
+                           tts_request_count=tts_request_count-$5, updated_at=NOW()
+                           WHERE workspace_id=$1 AND period_start=$2""",
+                        workspace_id, owner["period_start"],
+                        int(owner["operation_type"] == "llm"),
+                        int(owner["operation_type"] == "image_gen"),
+                        int(owner["operation_type"] in {"tts", "stt", "render"}),
+                    )
+                await connection.execute(
+                    """UPDATE creator_run_tasks SET status='failed', claim_token=NULL,
+                       finished_at=NOW(), error_code=$2, error_message=$3 WHERE id=$1""",
+                    claimed["id"], error_code, error_message,
+                )
+                return True
+
     async def get_by_celery_id(self, celery_task_id: str) -> dict[str, Any] | None:
         return await fetch_one(
             "SELECT * FROM creator_run_tasks WHERE celery_task_id = $1",
