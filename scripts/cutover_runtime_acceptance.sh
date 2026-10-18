@@ -117,6 +117,14 @@ trap cleanup EXIT
 cp .env.example .env
 printf '\nARTIFACT_ROOT=/tmp/cutover-artifacts\n' >> .env
 docker compose up -d postgres redis
+docker compose run --rm api alembic upgrade 037
+LEGACY_USER_ID="$(psql_scalar "INSERT INTO users (email,auth_provider,auth_subject) VALUES ('legacy-upgrade@example.com','api_key','legacy-upgrade') RETURNING id")"
+LEGACY_WORKSPACE_ID="$(psql_scalar "INSERT INTO workspaces (name,slug,owner_id) VALUES ('Legacy upgrade','legacy-upgrade-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}',${LEGACY_USER_ID}) RETURNING id")"
+LEGACY_PROJECT_ID="$(psql_scalar "INSERT INTO creator_projects (workspace_id,title) VALUES (${LEGACY_WORKSPACE_ID},'Legacy upgrade') RETURNING id")"
+LEGACY_RUN_ID="$(psql_scalar "INSERT INTO creator_runs (project_id,workspace_id,current_stage,status,style_preset) VALUES (${LEGACY_PROJECT_ID},${LEGACY_WORKSPACE_ID},'AUDIO_GENERATING','pending','default') RETURNING id")"
+for status in pending queued running success; do
+  psql_scalar "INSERT INTO creator_run_tasks (run_id,task_type,celery_task_id,status,attempt,started_at,finished_at) VALUES (${LEGACY_RUN_ID},'generate_audio','legacy-upgrade-${status}','${status}',1,CASE WHEN '${status}'='running' THEN NOW() END,CASE WHEN '${status}'='success' THEN NOW() END);"
+done
 docker compose run --rm api alembic upgrade head
 docker compose run --rm --no-deps beat sh -c \
   'printf %s beat > /var/lib/short-form-studio/dlq/observed-broker-epoch'
@@ -156,6 +164,20 @@ PY
 docker compose up -d api worker beat studio-web
 timeout 90 bash -c 'until curl -sf http://127.0.0.1:8000/healthz >/dev/null; do sleep 2; done'
 timeout 90 bash -c 'until curl -sf http://127.0.0.1:5174/ >/dev/null; do sleep 2; done'
+
+run_recovery_now
+[ "$(psql_scalar "SELECT count(*) FROM creator_run_tasks WHERE celery_task_id LIKE 'legacy-upgrade-%' AND status IN ('pending','queued','running') AND broker_generation IS NOT NULL")" = 3 ] \
+  || fail "first broker observation did not adopt all legacy active rows"
+[ "$(psql_scalar "SELECT broker_generation IS NULL FROM creator_run_tasks WHERE celery_task_id='legacy-upgrade-success'")" = t ] \
+  || fail "first broker observation changed completed legacy ownership"
+docker compose stop redis
+docker compose rm -f redis
+docker volume rm "${COMPOSE_PROJECT_NAME}_redis_data"
+docker compose up -d redis
+wait_for_redis
+run_recovery_now
+[ "$(psql_scalar "SELECT string_agg(status,',' ORDER BY celery_task_id) FROM creator_run_tasks WHERE celery_task_id LIKE 'legacy-upgrade-%'")" = "failed,failed,success,failed" ] \
+  || fail "legacy active rows did not converge after broker replacement"
 
 [ "$(code http://127.0.0.1:8000/api/creator/users/me)" = 401 ] \
   || fail "creator endpoint did not return 401 without a key"
