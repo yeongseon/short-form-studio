@@ -59,6 +59,25 @@ class _IdempotentDeleteObjects(_Objects):
         return True
 
 
+class _MissingClaimTokenAssets(InMemoryMediaAssetStorage):
+    async def claim_expired_upload_intents(
+        self, *, now: datetime, lease_expires_at: datetime, limit: int,
+    ) -> list[UploadIntent]:
+        claimed = await super().claim_expired_upload_intents(
+            now=now, lease_expires_at=lease_expires_at, limit=limit,
+        )
+        return [
+            UploadIntent(
+                id=intent.id, owner_id=intent.owner_id,
+                workspace_id=intent.workspace_id, storage_key=intent.storage_key,
+                state=intent.state, lease_expires_at=intent.lease_expires_at,
+                retry_count=intent.retry_count, claim_token=None,
+                created_at=intent.created_at,
+            )
+            for intent in claimed
+        ]
+
+
 class _PausedObjects(_Objects):
     def __init__(self) -> None:
         super().__init__()
@@ -69,6 +88,12 @@ class _PausedObjects(_Objects):
         self.upload_started.set()
         assert self.upload_allowed.wait(timeout=5)
         return super().upload(key, data, content_type)
+
+
+class _IdempotentDeletePausedObjects(_PausedObjects):
+    def delete(self, key: str) -> bool:
+        super().delete(key)
+        return True
 
 
 class _LateDeleteFailingPausedObjects(_PausedObjects):
@@ -321,6 +346,59 @@ async def test_late_upload_watch_terminalizes_at_bounded_maximum_age() -> None:
     # Then the absent watch reaches a durable terminal state instead of growing forever.
     assert first.reclaimed == 0
     assert final.reclaimed == 1
+    assert (await assets.list_upload_intents())[0].state is UploadIntentState.RECLAIMED
+
+
+@pytest.mark.asyncio
+async def test_missing_reconciliation_claim_token_fails_closed() -> None:
+    # Given a storage adapter violates the claimed-intent token contract.
+    now = datetime.now(timezone.utc)
+    objects = _Objects()
+    assets = _MissingClaimTokenAssets()
+    await assets.create_upload_intent(UploadIntent(
+        id=0, owner_id="uploader", workspace_id=7,
+        storage_key="workspaces/7/assets/missing-token.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now, created_at=now,
+    ))
+
+    # When reconciliation tries to retain the absent pending upload.
+    with pytest.raises(MediaAssetPersistenceFailed):
+        await MediaUploadReconciler(objects, assets).sweep(now=now)
+
+    # Then no empty token can transition the claimed row to a watch state.
+    assert (await assets.list_upload_intents())[0].state is UploadIntentState.RECLAIMING
+
+
+@pytest.mark.asyncio
+async def test_idempotent_delete_during_blocking_upload_retains_late_watch() -> None:
+    # Given object I/O remains blocked after its pending intent expires.
+    now = datetime.now(timezone.utc)
+    objects = _IdempotentDeletePausedObjects()
+    assets = InMemoryMediaAssetStorage()
+    service = MediaAssetService(objects, assets)
+    failures: list[BaseException] = []
+
+    async def upload() -> None:
+        try:
+            await service.create_image_asset(
+                workspace_id=7, filename="asset.png", data=_png(), content_type="image/png",
+            )
+        except MediaAssetPersistenceFailed as error:
+            failures.append(error)
+
+    # When S3-style absent deletion succeeds before the blocked upload materializes.
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(upload)
+        await anyio.to_thread.run_sync(objects.upload_started.wait, 5)
+        intent = (await assets.list_upload_intents())[0]
+        await assets.expire_upload_intent(intent.id, now)
+        first = await MediaUploadReconciler(objects, assets).sweep(now=now)
+        objects.upload_allowed.set()
+
+    # Then the owner compensates the late object and the watch was never terminalized early.
+    assert first.reclaimed == 0
+    assert len(failures) == 1
+    assert objects.objects == {}
     assert (await assets.list_upload_intents())[0].state is UploadIntentState.RECLAIMED
 
 

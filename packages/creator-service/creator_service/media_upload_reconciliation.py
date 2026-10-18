@@ -136,9 +136,11 @@ class MediaUploadReconciler:
                 await self._intents.record_upload_reclaimed(intent.id, intent.claim_token)
                 reclaimed += 1
             else:
+                if intent.claim_token is None:
+                    raise MediaAssetPersistenceFailed()
                 await self._intents.watch_for_late_upload(
                     intent.id,
-                    intent.claim_token or "",
+                    intent.claim_token,
                     swept_at + LATE_UPLOAD_WATCH_RETENTION,
                 )
         return SweepResult(reclaimed, preserved, failed, exhausted)
