@@ -65,4 +65,4 @@ def test_runtime_acceptance_recovers_redacted_dlq_fallback_after_recreate() -> N
     assert "_record_failed_task_to_dlq" in acceptance
     assert "read_dlq_fallback" in acceptance
     assert "--force-recreate --no-deps worker" in acceptance
-    assert '"password": "[REDACTED]"' in acceptance
+    assert '"password": "<redacted>"' in acceptance

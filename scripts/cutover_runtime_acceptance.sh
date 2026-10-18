@@ -27,7 +27,7 @@ assert_dlq_fallback_recovery() {
   docker compose up -d --force-recreate --no-deps worker
   timeout 60 bash -c 'until docker compose exec -T worker celery -A celery_app.celery_app inspect ping 2>/dev/null | grep -q pong; do sleep 2; done'
   docker compose exec -T worker python -c \
-    'from celery_app import read_dlq_fallback; entries = read_dlq_fallback(); entry = next(item for item in entries if item.get("task_id") == "fallback-acceptance"); assert entry["kwargs"] == {"password": "[REDACTED]"}'
+    'from celery_app import read_dlq_fallback; entries = read_dlq_fallback(); entry = next(item for item in entries if item.get("task_id") == "fallback-acceptance"); assert entry["kwargs"] == {"password": "<redacted>"}'
 }
 enqueue_lifecycle_marker() {
   local scenario="$1"
