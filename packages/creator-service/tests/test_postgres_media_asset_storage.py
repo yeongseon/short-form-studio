@@ -326,8 +326,9 @@ async def test_postgres_late_upload_after_absent_observation_is_deleted(
     second = await MediaUploadReconciler(objects, storage).sweep(now=later)
     terminal = now + LATE_UPLOAD_WATCH_MAX_AGE
     await db.execute(
-        "UPDATE creator_media_upload_intents SET lease_expires_at = $2 WHERE id = $1",
-        intent.id, terminal,
+        """UPDATE creator_media_upload_intents
+            SET created_at = $2, lease_expires_at = $3 WHERE id = $1""",
+        intent.id, now, terminal,
     )
     final = await MediaUploadReconciler(objects, storage).sweep(now=terminal)
 
