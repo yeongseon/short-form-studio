@@ -266,7 +266,11 @@ async def test_postgres_atomic_failure_blocks_successor_claim_until_quota_cleanu
                 ):
                     await anyio.lowlevel.checkpoint()
                 tasks.start_soon(claim_successor)
-                await anyio.lowlevel.checkpoint()
+                while await pool.fetchval(
+                    "SELECT COUNT(*) FROM pg_stat_activity "
+                    "WHERE datname=current_database() AND wait_event_type='Lock'"
+                ) < 2:
+                    await anyio.lowlevel.checkpoint()
                 await lock_transaction.commit()
         finally:
             if lock_connection.is_in_transaction():
