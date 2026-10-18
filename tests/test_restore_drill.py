@@ -49,6 +49,27 @@ def test_disposable_restore_drill() -> None:
     assert evidence["restored_timeline_segments"] > 0
     assert evidence["registered_artifact"]["size_bytes"] > 0
     assert len(evidence["registered_artifact"]["checksum"]) == 64
+    assert evidence["registered_artifact"]["audio_path"].endswith("/audio.wav")
+
+
+def test_disposable_restore_drill_fails_when_restored_audio_metadata_is_deleted() -> None:
+    # Given
+    if shutil.which("docker") is None:
+        pytest.skip("docker is required for the disposable restore drill")
+    environment = {**os.environ, "RESTORE_CORRUPT_AUDIO_METADATA": "delete"}
+
+    # When
+    result = subprocess.run(
+        [sys.executable, str(SCRIPT)],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=environment,
+    )
+
+    # Then
+    assert result.returncode != 0
+    assert "restored audio metadata did not resolve narration" in result.stderr
 
 
 def test_render_invokes_production_timeline_worker_with_restored_database_and_audio(
@@ -64,9 +85,7 @@ def test_render_invokes_production_timeline_worker_with_restored_database_and_au
     ) -> subprocess.CompletedProcess[str]:
         commands.append((arguments, cwd, env))
         (restored / "final.mp4").write_bytes(b"rendered")
-        return subprocess.CompletedProcess(
-            arguments, 0, '{"count": 2, "artifact_id": 702}\n', ""
-        )
+        return subprocess.CompletedProcess(arguments, 0, '{"count": 2, "artifact_id": 702, "audio_path": "' + str(restored / "audio.wav") + '"}\n', "")
 
     monkeypatch.setattr("restore_drill.run", record_run)
     fixture = RuntimeFixture("owner", "foreign", "revoked", 201, 401, 501, 601, 701)
@@ -79,8 +98,9 @@ def test_render_invokes_production_timeline_worker_with_restored_database_and_au
     # Then
     command, cwd, environment = commands[0]
     assert command[:2] == (sys.executable, "-c")
-    assert "render_saved_timeline" in command[2]
-    assert "RenderLayers(audio=artifact_root / 'audio.wav')" in command[2]
+    assert "audio_service.get_latest" in command[2]
+    assert "RenderLayers(audio=audio_path)" in command[2]
+    assert "artifact_root / 'audio.wav'" not in command[2]
     assert cwd == SCRIPT.parents[1] / "apps/worker-orchestrator"
     assert environment is not None
     assert environment["DATABASE_URL"].startswith("postgresql://restore:")
@@ -88,6 +108,7 @@ def test_render_invokes_production_timeline_worker_with_restored_database_and_au
     assert count == 2
     assert updated_fixture.artifact_id == 702
     assert evidence["size_bytes"] == len(b"rendered")
+    assert evidence["audio_path"] == str(restored / "audio.wav")
     assert (restored / "final.mp4").read_bytes() == b"rendered"
 
 
@@ -98,6 +119,7 @@ def test_fixture_seeds_production_safe_restored_asset_keys(
     media = tmp_path / "media"
     media.mkdir()
     (media / "image.png").write_bytes(b"image")
+    (media / "audio.wav").write_bytes(b"audio")
     (media / "final.mp4").write_bytes(b"video")
     commands: list[tuple[str, ...]] = []
 
@@ -113,6 +135,7 @@ def test_fixture_seeds_production_safe_restored_asset_keys(
     # Then
     sql = commands[0][-1]
     assert "workspaces/201/assets/image.png" in sql
+    assert "'audio','audio.wav'" in sql
 
 
 def test_stop_process_kills_child_that_ignores_termination() -> None:

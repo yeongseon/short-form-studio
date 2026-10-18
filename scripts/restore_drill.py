@@ -73,6 +73,7 @@ import anyio, json
 from datetime import datetime, timezone
 from pathlib import Path
 from creator_service.render_profile import RenderProfile
+from creator_service.audio_service import audio_service
 from creator_service.render_service import render_service
 from tasks.task_runner import TaskContext
 from tasks.timeline_render import RenderLayers, render_saved_timeline
@@ -86,16 +87,22 @@ async def main():
         workspace_id={fixture.workspace_id}, project_id={fixture.project_id},
         start_time=datetime.now(timezone.utc),
     )
+    narration = await audio_service.get_latest(context.run_id)
+    if narration is None:
+        raise RuntimeError('restored audio metadata did not resolve narration')
+    audio_path = artifact_root / narration.path
+    if not audio_path.is_file():
+        raise RuntimeError('restored audio metadata did not resolve narration')
     count = await render_saved_timeline(
         context, RenderProfile.fast_preview(), output,
-        layers=RenderLayers(audio=artifact_root / 'audio.wav'),
+        layers=RenderLayers(audio=audio_path),
     )
     artifact = await render_service.create_artifact(
         run_id={fixture.run_id}, path=str(output), render_profile='restore_drill',
         storage_provider='local', storage_key='final.mp4',
         idempotency_key='restore-drill-render',
     )
-    print(json.dumps({{'count': count, 'artifact_id': artifact.id}}))
+    print(json.dumps({{'count': count, 'artifact_id': artifact.id, 'audio_path': str(audio_path)}}))
 
 anyio.run(main)
 """
@@ -126,6 +133,7 @@ anyio.run(main)
     evidence = {
         "checksum": hashlib.sha256(artifact.read_bytes()).hexdigest(),
         "size_bytes": artifact.stat().st_size,
+        "audio_path": str(rendered["audio_path"]),
     }
     return int(rendered["count"]), replace(
         fixture, artifact_id=int(rendered["artifact_id"])
@@ -241,6 +249,8 @@ def main() -> int:
             docker("exec", target, "pg_restore", "-U", "restore", "-d", "restore", "--clean", "--if-exists", "/tmp/database.dump")
             run(sys.executable, "-m", "alembic", "upgrade", "head", cwd=ROOT / "apps/api", env={**os.environ, "DATABASE_URL": target_url})
             run(sys.executable, str(verifier), "restore-media", str(bundle), "--target", str(restored), "--expected-alembic-revision", alembic_head, "--expected-secret-fingerprint", FINGERPRINT)
+            if os.environ.get("RESTORE_CORRUPT_AUDIO_METADATA") == "delete":
+                docker("exec", target, "psql", "-U", "restore", "-d", "restore", "-c", "DELETE FROM creator_artifacts WHERE id=700")
             asset_directory = restored / "workspaces" / str(fixture.workspace_id) / "assets"
             asset_directory.mkdir(parents=True)
             shutil.copy2(restored / "image.png", asset_directory / "image.png")
