@@ -7,6 +7,7 @@ import anyio
 
 if TYPE_CHECKING:
     from .run_service import InMemoryRunStorage
+    from .usage_service import InMemoryUsageStorage
 
 
 class InMemoryTaskTrackingStorage:
@@ -176,6 +177,32 @@ class InMemoryTaskTrackingStorage:
         )
         await self.finish_if_claimed(celery_task_id, token, status, error_code, error_message)
         return True
+
+    async def fail_claimed_and_cancel_quota(
+        self, celery_task_id: str, token: str, usage_storage: InMemoryUsageStorage,
+        error_code: str, error_message: str, run_storage: InMemoryRunStorage | None = None,
+        run_id: int | None = None, expected_stages: frozenset[str] = frozenset(),
+    ) -> bool:
+        async with self._ownership_lock:
+            row_id = self._rows_by_celery_task_id.get(celery_task_id)
+            if row_id is None:
+                return False
+            row = self._rows[row_id]
+            if row.get("status") != "running" or row.get("claim_token") != token:
+                return False
+            if run_storage is not None and run_id is not None:
+                await run_storage.conditional_update_run(
+                    run_id,
+                    {"current_stage": "FAILED", "status": "failed"},
+                    expected_stages,
+                    rejected_statuses=frozenset({"failed", "cancelled", "completed"}),
+                )
+            await usage_storage.cancel_owned(celery_task_id)
+            row.update(
+                status="failed", claim_token=None, finished_at=datetime.now(timezone.utc),
+                error_code=error_code, error_message=error_message,
+            )
+            return True
 
     async def claim_running(self, task_id: int, **kwargs: Any) -> dict[str, Any] | None:
         """Atomically claim a task: only transition from pending/queued/failed to running."""

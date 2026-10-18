@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .run_service import RunStorageBackend
+    from .usage_service import UsageStorageBackend
 
 from creator_domain.models import RunTask
 
@@ -155,6 +156,16 @@ class TaskTrackingService:
         return await self.storage.finish_claimed_run(
             celery_task_id, token, status, run_storage, run_id,
             run_updates, expected_stages, rejected_statuses, error_code, error_message,
+        )
+
+    async def fail_claimed_and_cancel_quota(
+        self, celery_task_id: str, token: str, usage_storage: UsageStorageBackend,
+        error_code: str, error_message: str, run_storage: RunStorageBackend | None = None,
+        run_id: int | None = None, expected_stages: frozenset[str] = frozenset(),
+    ) -> bool:
+        return await self.storage.fail_claimed_and_cancel_quota(
+            celery_task_id, token, usage_storage, error_code, error_message,
+            run_storage, run_id, expected_stages,
         )
 
     async def mark_running(self, celery_task_id: str) -> RunTask | None:
