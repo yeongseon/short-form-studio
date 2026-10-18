@@ -233,11 +233,15 @@ async def test_real_tracking_adapter_fences_late_success_after_recovery() -> Non
         rollback=lambda run_id, task_id: _append_rollback([], run_id, task_id),
     )
     late_success = await tracking.mark_success_if_running("lost-a")
+    late_claim = await tracking.record_task_start(
+        1, "generate_audio", "lost-a", claim_token="late-worker"
+    )
 
     # Then
     row = await storage.get_by_celery_id("lost-a")
     assert result.failed == 1
     assert late_success is None
+    assert late_claim is None
     assert row is not None and row["status"] == "failed"
     assert row["error_code"] == "broker_message_lost"
 

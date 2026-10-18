@@ -55,6 +55,7 @@ class InMemoryTaskTrackingStorage:
                     "reconciler_stuck_cleanup",
                     "reconciler_cleanup_claimed",
                     "broker_recovery_cleanup",
+                    "broker_message_lost",
                 }:
                     return None
                 incoming_status = row.get("status", "queued")
@@ -253,6 +254,7 @@ class InMemoryTaskTrackingStorage:
             "reconciler_stuck_cleanup",
             "reconciler_cleanup_claimed",
             "broker_recovery_cleanup",
+            "broker_message_lost",
         }:
             return None
         row["status"] = "running"

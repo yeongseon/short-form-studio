@@ -130,6 +130,7 @@ class PostgresTaskTrackingStorage:
                 "reconciler_stuck_cleanup",
                 "reconciler_cleanup_claimed",
                 "broker_recovery_cleanup",
+                "broker_message_lost",
             ],
         )
         return saved
@@ -232,6 +233,7 @@ class PostgresTaskTrackingStorage:
                     "reconciler_stuck_cleanup",
                     "reconciler_cleanup_claimed",
                     "broker_recovery_cleanup",
+                    "broker_message_lost",
                 }:
                     return None
                 claimed = await connection.fetchrow(
