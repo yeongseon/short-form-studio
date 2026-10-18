@@ -114,6 +114,42 @@ async def test_broker_epoch_witness_survives_recovery_process_state_loss(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("quota_pool", ["memory", "postgres"], indirect=True)
+async def test_first_broker_observation_adopts_legacy_active_tasks_atomically(
+    quota_pool: asyncpg.Pool | None,
+) -> None:
+    # Given legacy NULL-generation rows in every active state and one completed row.
+    storage = (
+        PostgresTaskTrackingStorage()
+        if quota_pool is not None
+        else InMemoryTaskTrackingStorage()
+    )
+    tracking = TaskTrackingService(storage)
+    run_id = await _prepare_run(quota_pool)
+    for status in ("pending", "queued", "running", "success"):
+        await storage.create_task(
+            {
+                "run_id": run_id,
+                "task_type": "generate_audio",
+                "celery_task_id": f"legacy-{status}",
+                "status": status,
+                "attempt": 1,
+            }
+        )
+
+    # When the process establishes its first durable broker observation.
+    await tracking.set_observed_broker_epoch("epoch-a")
+
+    # Then all active legacy rows belong to that generation; success stays unowned.
+    tasks = {task.status: task for task in await tracking.list_run_tasks(run_id)}
+    assert tasks["pending"].broker_generation == "epoch-a"
+    assert tasks["queued"].broker_generation == "epoch-a"
+    assert tasks["running"].broker_generation == "epoch-a"
+    assert tasks["success"].broker_generation is None
+    assert await tracking.get_observed_broker_epoch() == "epoch-a"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("quota_pool", ["memory", "postgres"], indirect=True)
 async def test_cleanup_marker_cannot_be_reclaimed_by_worker_or_dispatch(
     quota_pool: asyncpg.Pool | None,
 ) -> None:

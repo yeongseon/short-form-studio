@@ -484,14 +484,30 @@ class PostgresTaskTrackingStorage:
         return str(row["epoch"]) if row is not None else None
 
     async def set_observed_broker_epoch(self, epoch: str) -> None:
-        await fetch_one(
-            """INSERT INTO creator_broker_state (singleton, epoch, observed_at)
-               VALUES (TRUE, $1, NOW())
-               ON CONFLICT (singleton) DO UPDATE
-               SET epoch=EXCLUDED.epoch, observed_at=EXCLUDED.observed_at
-               RETURNING epoch""",
-            epoch,
-        )
+        pool = await db.get_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                inserted = await connection.fetchrow(
+                    """INSERT INTO creator_broker_state (singleton, epoch, observed_at)
+                       VALUES (TRUE, $1, NOW())
+                       ON CONFLICT (singleton) DO NOTHING
+                       RETURNING epoch""",
+                    epoch,
+                )
+                if inserted is not None:
+                    await connection.execute(
+                        """UPDATE creator_run_tasks SET broker_generation=$1
+                           WHERE broker_generation IS NULL
+                             AND status IN ('pending', 'queued', 'running')""",
+                        epoch,
+                    )
+                else:
+                    await connection.fetchrow(
+                        """UPDATE creator_broker_state
+                           SET epoch=$1, observed_at=NOW()
+                           WHERE singleton=TRUE RETURNING epoch""",
+                        epoch,
+                    )
 
     async def promote_pending_to_queued(self, celery_task_id: str) -> dict[str, Any] | None:
         """Atomically promote a task from 'pending' to 'queued'.
