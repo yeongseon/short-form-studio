@@ -205,6 +205,7 @@ def test_failure_scenario_uses_exact_scaled_command_and_container_process_namesp
     )
     assert "active-redelivery" in scenario
     assert "container_process_host_pid" in scenario
+    assert "wait_host_process_exit(timeout_host_pid)" in scenario
     assert 'Path(f"/proc/{timeout_pid}")' not in scenario
 
 

@@ -37,6 +37,7 @@ from tests.worker_topology_runtime import (
     sql,
     stop_run,
     wait_state,
+    wait_host_process_exit,
     wait_task,
     worker,
 )
@@ -298,7 +299,7 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
     assert timeout_run is not None and timeout_run["status"] == "failed"
     assert timeout_quota is not None and timeout_quota["status"] == "cancelled"
     assert not timeout_file.exists()
-    assert not Path(f"/proc/{timeout_host_pid}").exists()
+    wait_host_process_exit(timeout_host_pid)
     persist_snapshot("timeout-final-state.json", 106)
     capture_worker("topology-scaled-timeout")
     docker("rm", "-f", "topology-scaled-timeout")

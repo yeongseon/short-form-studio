@@ -146,6 +146,14 @@ def container_ffmpeg_host_pid(name: str) -> int:
     return container_process_host_pid(name, "ffmpeg")
 
 
+def wait_host_process_exit(pid: int, timeout: float = 10) -> None:
+    deadline = time.monotonic() + timeout
+    process = Path(f"/proc/{pid}")
+    while process.exists() and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert not process.exists()
+
+
 def redis_available() -> bool:
     _, address = REDIS_URL.split("//", maxsplit=1)
     host_port = address.split("/", maxsplit=1)[0]
