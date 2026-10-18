@@ -70,6 +70,7 @@ class TaskTrackingService:
         return RunTask.from_row(row) if row is not None else None
 
     async def record_task_queued(self, run_id: int, task_type: str, celery_task_id: str) -> RunTask:
+        """Record compatibility deliveries that did not use DB-first pending dispatch."""
         row = await self.storage.create_task(
             {
                 "run_id": run_id,

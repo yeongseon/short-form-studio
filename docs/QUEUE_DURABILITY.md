@@ -71,7 +71,8 @@ redaction tests. Rotation/write failures are logged as
 ## Observability
 
 - `worker.queue.length` records routed Redis queue length.
-- `worker.queue.oldest_wait_seconds` records the oldest active `pending` or `queued` database wait.
+- `worker.queue.oldest_wait_seconds` records the oldest active `pending` or `queued`
+  database wait across all runs and routed queues.
 - `worker.queue.recovery_failures` counts compensation failures.
 - recovery summaries include `failed`, `deferred`, queue length, oldest wait, and
   recovery failure fields.
