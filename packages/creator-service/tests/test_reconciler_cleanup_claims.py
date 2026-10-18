@@ -149,6 +149,45 @@ async def test_first_broker_observation_adopts_legacy_active_tasks_atomically(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("quota_pool", ["postgres"], indirect=True)
+async def test_concurrent_first_broker_observers_adopt_one_generation(
+    quota_pool: asyncpg.Pool | None,
+) -> None:
+    # Given PostgreSQL legacy rows and two simultaneous first observations.
+    assert quota_pool is not None
+    storage = PostgresTaskTrackingStorage()
+    run_id = await _prepare_run(quota_pool)
+    for status in ("pending", "queued", "running", "success"):
+        await storage.create_task(
+            {
+                "run_id": run_id,
+                "task_type": "generate_audio",
+                "celery_task_id": f"concurrent-legacy-{status}",
+                "status": status,
+                "attempt": 1,
+            }
+        )
+
+    # When both observers race to establish different current epochs.
+    await asyncio.gather(
+        storage.set_observed_broker_epoch("epoch-a"),
+        storage.set_observed_broker_epoch("epoch-b"),
+    )
+
+    # Then every active row adopts the same winning first epoch and success stays NULL.
+    rows = await storage.list_by_run(run_id)
+    active_generations = {
+        row["broker_generation"]
+        for row in rows
+        if row["status"] in ("pending", "queued", "running")
+    }
+    success = next(row for row in rows if row["status"] == "success")
+    assert active_generations in ({"epoch-a"}, {"epoch-b"})
+    assert success["broker_generation"] is None
+    assert await storage.get_observed_broker_epoch() in {"epoch-a", "epoch-b"}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("quota_pool", ["memory", "postgres"], indirect=True)
 async def test_cleanup_marker_cannot_be_reclaimed_by_worker_or_dispatch(
     quota_pool: asyncpg.Pool | None,
