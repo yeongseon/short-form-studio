@@ -146,6 +146,31 @@ def test_stop_process_kills_child_that_ignores_termination() -> None:
     assert process.waits == 2
 
 
+def test_stop_process_returns_when_killed_child_does_not_exit() -> None:
+    # Given
+    class UnkillableProcess:
+        def __init__(self) -> None:
+            self.waits = 0
+
+        def terminate(self) -> None:
+            return
+
+        def kill(self) -> None:
+            return
+
+        def wait(self, timeout: float | None = None) -> int:
+            self.waits += 1
+            raise subprocess.TimeoutExpired("guard", timeout)
+
+    process = UnkillableProcess()
+
+    # When
+    stop_process(process)
+
+    # Then
+    assert process.waits == 2
+
+
 @pytest.mark.parametrize("digest", ["a" * 64, "b" * 64, "c" * 64])
 def test_release_manifest_rejects_placeholder_digest(
     tmp_path: Path, digest: str

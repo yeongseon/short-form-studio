@@ -22,6 +22,7 @@ import tempfile
 import time
 from dataclasses import replace
 from pathlib import Path
+from typing import Protocol
 
 from restore_drill_runtime import (
     DrillError,
@@ -48,6 +49,12 @@ POSTGRES_IMAGE = "postgres:16.6-alpine"
 FFMPEG_IMAGE = "jrottenberg/ffmpeg:7.1-alpine"
 PASSWORD = "synthetic-local-only"
 FINGERPRINT = "sha256:" + "a" * 64
+
+
+class ChildProcess(Protocol):
+    def terminate(self) -> None: ...
+    def kill(self) -> None: ...
+    def wait(self, timeout: float | None = None) -> int: ...
 
 
 def create_media(media: Path) -> None:
@@ -172,13 +179,16 @@ def verify_http(runtime: RuntimeFixture, media: Path) -> None:
     print("real API downloads: media=200 final-mp4=200 foreign=404 revoked=401 missing=401 checksum=verified ffprobe=verified")
 
 
-def stop_process(process: subprocess.Popen[bytes]) -> None:
+def stop_process(process: ChildProcess) -> None:
     process.terminate()
     try:
         process.wait(timeout=15)
     except subprocess.TimeoutExpired:
         process.kill()
-        process.wait(timeout=5)
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            return
 
 
 def main() -> int:
