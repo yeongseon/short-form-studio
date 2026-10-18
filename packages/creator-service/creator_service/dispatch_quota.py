@@ -64,7 +64,7 @@ async def cancel_quota(
     workspace_id: int | None, operation_type: str | None, context: str = "",
     owner_id: str | None = None,
 ) -> None:
-    if workspace_id is None or operation_type is None:
+    if operation_type is None or (workspace_id is None and owner_id is None):
         return
     usage = import_module("creator_service.usage_service")
 
@@ -72,6 +72,7 @@ async def cancel_quota(
         if owner_id is not None:
             await usage.cancel_owned_quota_reservation(owner_id)
         else:
+            assert workspace_id is not None
             await usage.cancel_workspace_quota_reservation(workspace_id, operation_type)
     except Exception:
         logger.warning(

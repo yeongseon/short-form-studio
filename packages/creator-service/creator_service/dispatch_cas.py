@@ -76,26 +76,38 @@ class DispatchCAS(DispatchRuntime):
         reservation_owner_id: str | None = None,
     ) -> dict[str, JsonValue]:
         task_tracking_service = import_module("creator_service.task_tracking_service").task_tracking_service
+        rollback = StageRollback(
+            run_id, target_stage, rollback_stage, rollback_restart_from, workspace_id,
+        )
+        dispatch_prepared = False
 
         try:
-            pre_run = await read_run(run_service, run_id, workspace_id)
-        except Exception:
-            logger.exception("Pre-dispatch run check failed", extra={"run_id": run_id})
-            raise ServiceUnavailableError("Unable to verify run status; dispatch blocked") from None
-        if pre_run is None:
-            raise NotFoundError("Run not found")
-        if getattr(pre_run, "status", None) == "cancelled":
-            raise ConflictError("Run is cancelled; cannot dispatch new tasks")
+            try:
+                pre_run = await read_run(run_service, run_id, workspace_id)
+            except Exception:
+                logger.exception("Pre-dispatch run check failed", extra={"run_id": run_id})
+                raise ServiceUnavailableError("Unable to verify run status; dispatch blocked") from None
+            if pre_run is None:
+                raise NotFoundError("Run not found")
+            if getattr(pre_run, "status", None) == "cancelled":
+                raise ConflictError("Run is cancelled; cannot dispatch new tasks")
 
-        task_type = _DISPATCH_TASK_TYPES.get(getattr(dispatcher, "__name__", ""), "unknown")
-        owner_id = reservation_owner_id
-        if owner_id is None and quota_operation_type is not None and task_type != "unknown":
-            owner_id = str(uuid4())
-        reserved_workspace = await reserve_quota(
-            run_service, run_id, workspace_id=workspace_id, operation_type=quota_operation_type,
-            owner_id=owner_id, estimated_cost_usd=reservation_estimate_usd,
-            units=reservation_units,
-        )
+            task_type = _DISPATCH_TASK_TYPES.get(getattr(dispatcher, "__name__", ""), "unknown")
+            owner_id = reservation_owner_id
+            if owner_id is None and quota_operation_type is not None and task_type != "unknown":
+                owner_id = str(uuid4())
+            reserved_workspace = await reserve_quota(
+                run_service, run_id, workspace_id=workspace_id, operation_type=quota_operation_type,
+                owner_id=owner_id, estimated_cost_usd=reservation_estimate_usd,
+                units=reservation_units,
+            )
+            dispatch_prepared = True
+        finally:
+            if reservation_owner_id is not None and not dispatch_prepared:
+                await cancel_quota(
+                    workspace_id, quota_operation_type, "before stage update", reservation_owner_id,
+                )
+                await rollback.apply(run_service)
         if reserved_workspace is not None:
             workspace_id = reserved_workspace
         rollback = StageRollback(run_id, target_stage, rollback_stage, rollback_restart_from, workspace_id)
