@@ -15,10 +15,12 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import BinaryIO, Protocol, cast
+from typing import BinaryIO, Final, Protocol, cast
 
 logger = logging.getLogger(__name__)
 _STREAM_CHUNK_SIZE = 64 * 1024
+PROVIDER_CONNECT_TIMEOUT_SECONDS: Final = 30
+PROVIDER_READ_TIMEOUT_SECONDS: Final = 600
 
 
 def _normalize_content_type(content_type: str) -> str:
@@ -191,6 +193,7 @@ class S3StorageBackend:
     def __init__(self) -> None:
         try:
             import boto3  # type: ignore[import-untyped]
+            from botocore.config import Config  # type: ignore[import-untyped]
         except ImportError as error:
             raise ImportError(
                 "S3StorageBackend requires boto3. Install with: pip install boto3"
@@ -199,7 +202,16 @@ class S3StorageBackend:
         self._bucket = os.environ["AWS_S3_BUCKET"]
         self._region = os.getenv("AWS_S3_REGION", "us-east-1")
         self._prefix = os.getenv("AWS_S3_PREFIX", "")
-        self._client = boto3.client("s3", region_name=self._region)
+        self._client = boto3.client(
+            "s3",
+            region_name=self._region,
+            config=Config(
+                connect_timeout=PROVIDER_CONNECT_TIMEOUT_SECONDS,
+                read_timeout=PROVIDER_READ_TIMEOUT_SECONDS,
+                retries={"mode": "standard", "total_max_attempts": 3},
+                tcp_keepalive=True,
+            ),
+        )
 
     def _full_key(self, key: str) -> str:
         return f"{self._prefix}/{key}" if self._prefix else key
@@ -295,7 +307,11 @@ class AzureBlobStorageBackend:
         self._connection_string = os.environ["AZURE_STORAGE_CONNECTION_STRING"]
         self._container = os.getenv("AZURE_STORAGE_CONTAINER", "artifacts")
         self._prefix = os.getenv("AZURE_STORAGE_PREFIX", "")
-        self._client = BlobServiceClient.from_connection_string(self._connection_string)
+        self._client = BlobServiceClient.from_connection_string(
+            self._connection_string,
+            connection_timeout=PROVIDER_CONNECT_TIMEOUT_SECONDS,
+            read_timeout=PROVIDER_READ_TIMEOUT_SECONDS,
+        )
         self._container_client = self._client.get_container_client(self._container)
         self._content_settings_cls = ContentSettings
         self._blob_sas_permissions_cls = BlobSasPermissions
@@ -321,6 +337,7 @@ class AzureBlobStorageBackend:
                 body,
                 overwrite=True,
                 content_settings=self._content_settings_cls(content_type=normalized_content_type),
+                timeout=PROVIDER_READ_TIMEOUT_SECONDS,
             )
         else:
             body, size, checksum = _spool_and_hash_stream(data)
@@ -332,6 +349,7 @@ class AzureBlobStorageBackend:
                     content_settings=self._content_settings_cls(
                         content_type=normalized_content_type
                     ),
+                    timeout=PROVIDER_READ_TIMEOUT_SECONDS,
                 )
             finally:
                 body.close()
