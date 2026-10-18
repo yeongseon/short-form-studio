@@ -19,7 +19,8 @@ class TaskTrackingService:
         self.storage = storage
 
     async def record_task_pending(
-        self, run_id: int, task_type: str, celery_task_id: str
+        self, run_id: int, task_type: str, celery_task_id: str,
+        broker_generation: str | None = None,
     ) -> RunTask:
         """Record the durable pending state before broker enqueue."""
         row = await self.storage.create_task(
@@ -27,6 +28,7 @@ class TaskTrackingService:
                 "run_id": run_id,
                 "task_type": task_type,
                 "celery_task_id": celery_task_id,
+                "broker_generation": broker_generation,
                 "status": "pending",
                 "attempt": 1,
             }
@@ -42,6 +44,7 @@ class TaskTrackingService:
         self, run_storage: RunStorageBackend, run_id: int, updates: dict[str, Any],
         expected_stages: frozenset[str], task_type: str, celery_task_id: str,
         *, workspace_id: int | None = None,
+        broker_generation: str | None = None,
         rejected_statuses: frozenset[str] = frozenset(),
     ) -> tuple[bool, dict[str, Any] | None]:
         return await self.storage.transition_run_and_create_pending(
@@ -53,6 +56,7 @@ class TaskTrackingService:
                 "run_id": run_id,
                 "task_type": task_type,
                 "celery_task_id": celery_task_id,
+                "broker_generation": broker_generation,
                 "status": "pending",
                 "attempt": 1,
             },

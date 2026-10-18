@@ -60,6 +60,8 @@ class InMemoryTaskTrackingStorage:
                     return None
                 incoming_status = row.get("status", "queued")
                 existing["status"] = incoming_status
+                if row.get("broker_generation") is not None:
+                    existing["broker_generation"] = row["broker_generation"]
                 if incoming_status == "queued":
                     existing["claim_token"] = None
                     existing["attempt"] = int(existing.get("attempt", 0)) + 1

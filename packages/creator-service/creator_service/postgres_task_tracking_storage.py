@@ -21,11 +21,12 @@ class PostgresTaskTrackingStorage:
     async def _insert_pending_task(self, connection: Any, row: dict[str, Any]) -> dict[str, Any] | None:
         saved = await connection.fetchrow(
             """INSERT INTO creator_run_tasks
-               (run_id, task_type, celery_task_id, status, attempt)
-               VALUES ($1, $2, $3, 'pending', $4)
+               (run_id, task_type, celery_task_id, status, attempt, broker_generation)
+               VALUES ($1, $2, $3, 'pending', $4, $5)
                ON CONFLICT (celery_task_id) DO NOTHING RETURNING *""",
             row.get("run_id"), row.get("task_type"), row.get("celery_task_id"),
             row.get("attempt", 1),
+            row.get("broker_generation"),
         )
         return dict(saved) if saved is not None else None
 
@@ -78,9 +79,9 @@ class PostgresTaskTrackingStorage:
                 started_at,
                 finished_at,
                 error_code,
-                error_message, claim_token
+                error_message, claim_token, broker_generation
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             ON CONFLICT (celery_task_id) DO UPDATE
             SET status = EXCLUDED.status,
                 attempt = CASE
@@ -107,11 +108,14 @@ class PostgresTaskTrackingStorage:
                 END,
                 claim_token = CASE WHEN EXCLUDED.status = 'running' THEN EXCLUDED.claim_token
                                    WHEN EXCLUDED.status = 'queued' THEN NULL
-                                   ELSE creator_run_tasks.claim_token END
+                                   ELSE creator_run_tasks.claim_token END,
+                broker_generation = COALESCE(
+                    EXCLUDED.broker_generation, creator_run_tasks.broker_generation
+                )
             WHERE creator_run_tasks.status NOT IN ('success', 'running')
               AND (
                   creator_run_tasks.error_code IS NULL
-                  OR NOT (creator_run_tasks.error_code = ANY($11::text[]))
+                   OR NOT (creator_run_tasks.error_code = ANY($12::text[]))
               )
             RETURNING *
             """,
@@ -125,6 +129,7 @@ class PostgresTaskTrackingStorage:
             row.get("error_code"),
             row.get("error_message"),
             row.get("claim_token"),
+            row.get("broker_generation"),
             [
                 "reconciler_pending_cleanup",
                 "reconciler_stuck_cleanup",
