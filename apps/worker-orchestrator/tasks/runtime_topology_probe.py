@@ -42,13 +42,13 @@ def _provider_url(candidate: str) -> str:
 class _TopologyRequest(Request):
     def on_timeout(self, soft: bool, timeout: float) -> None:
         super().on_timeout(soft, timeout)
-        if soft or not isinstance(self.id, str) or len(self.args) < 5:
+        if soft or not isinstance(self.id, str) or not self.args:
             return
         run_id = self.args[0]
-        claim_token = getattr(self, "claim_token", None)
-        if not isinstance(claim_token, str):
-            claim_token = self.args[4]
-        if isinstance(run_id, int) and isinstance(claim_token, str):
+        claim_token = (
+            f"{self.id}:{self.worker_pid}" if isinstance(self.worker_pid, int) else None
+        )
+        if isinstance(run_id, int) and claim_token is not None:
             finalize_hard_timeout(self.id, claim_token, run_id, timeout)
             if self.args[1] == "timeout_resources" and isinstance(self.args[2], str):
                 state = json.loads(_evidence_file(self.args[2]).read_text(encoding="utf-8"))
@@ -78,10 +78,8 @@ def runtime_topology_probe(
     mode: ProbeMode,
     evidence_path: str,
     provider_url: str = "",
-    delivery_claim_token: str = "",
 ) -> dict[str, object]:
-    if delivery_claim_token:
-        self.request.claim_token = delivery_claim_token
+    self.request.claim_token = f"{self.request.id}:{os.getpid()}"
     config = TaskRunnerConfig(
         task_name="runtime_topology_probe",
         allowed_stages=frozenset({RunStage.RENDER_GENERATING}),

@@ -60,7 +60,9 @@ def test_hard_timeout_finalizes_before_releasing_blocked_resources(
     monkeypatch.setattr(
         runtime_topology_probe,
         "finalize_hard_timeout",
-        lambda *_args: events.append("finalized"),
+        lambda task_id, claim_token, run_id, timeout: events.append(
+            f"finalized:{task_id}:{claim_token}:{run_id}:{timeout}"
+        ),
     )
     monkeypatch.setattr(
         runtime_topology_probe.os,
@@ -69,13 +71,18 @@ def test_hard_timeout_finalizes_before_releasing_blocked_resources(
     )
     request = object.__new__(runtime_topology_probe._TopologyRequest)
     request.id = "timeout-delivery"
-    request._args = (103, "timeout_resources", "timeout.json", "", "timeout-claim")
+    request._args = (103, "timeout_resources", "timeout.json", "")
+    request.worker_pid = 123
 
     # When the prefork parent handles the hard limit.
     request.on_timeout(False, 2.0)
 
     # Then durable failure wins before cleanup can unblock a late success result.
-    assert events == ["celery-timeout", "finalized", "child-killed"]
+    assert events == [
+        "celery-timeout",
+        "finalized:timeout-delivery:timeout-delivery:123:103:2.0",
+        "child-killed",
+    ]
     assert not temporary.exists()
 
 
