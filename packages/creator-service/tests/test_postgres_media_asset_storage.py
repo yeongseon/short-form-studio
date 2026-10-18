@@ -17,6 +17,7 @@ from creator_domain.models import MediaAsset, MediaOrigin, MediaType
 from creator_service import db
 from creator_service.media_asset_service import MediaAssetService
 from creator_service.media_upload_reconciliation import (
+    LATE_UPLOAD_WATCH_MAX_AGE,
     MediaAssetPersistenceFailed,
     MediaUploadReconciler,
     UploadIntent,
@@ -295,7 +296,7 @@ async def test_postgres_expired_claim_replacement_fences_stale_updates(media_dat
 
 
 @pytest.mark.asyncio
-async def test_postgres_late_upload_after_absent_observation_is_reclaimed(
+async def test_postgres_late_upload_after_absent_observation_is_deleted(
     media_database: None, tmp_path: Path,
 ) -> None:
     # Given PostgreSQL retains an expired pending intent after observing no object.
@@ -323,12 +324,70 @@ async def test_postgres_late_upload_after_absent_observation_is_reclaimed(
         intent.id, later,
     )
     second = await MediaUploadReconciler(objects, storage).sweep(now=later)
+    terminal = now + LATE_UPLOAD_WATCH_MAX_AGE
+    await db.execute(
+        "UPDATE creator_media_upload_intents SET lease_expires_at = $2 WHERE id = $1",
+        intent.id, terminal,
+    )
+    final = await MediaUploadReconciler(objects, storage).sweep(now=terminal)
 
     # Then PostgreSQL retains ownership while absent and later deletes the object.
     assert first.reclaimed == 0
     assert absent.reclaimed == 0
-    assert second.reclaimed == 1
+    assert second.reclaimed == 0
+    assert final.reclaimed == 1
     assert not (tmp_path / intent.storage_key).exists()
+    row = await db.fetch_one(
+        "SELECT state FROM creator_media_upload_intents WHERE id = $1", intent.id,
+    )
+    assert row == {"state": "reclaimed"}
+
+
+@pytest.mark.asyncio
+async def test_postgres_successful_delete_keeps_watch_for_rematerialized_upload(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given an expired pending upload whose object already exists in local storage.
+    storage = MediaAssetService()._asset_storage
+    objects = LocalStorageBackend(str(tmp_path))
+    now = datetime.now(timezone.utc)
+    intent = await storage.create_upload_intent(UploadIntent(
+        id=0, owner_id=uuid.uuid4().hex, workspace_id=9101,
+        storage_key="workspaces/9101/assets/rematerialized.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now,
+    ))
+    objects.upload(intent.storage_key, image_bytes(), content_type="image/png")
+
+    # When a sweep deletes it, then a still-running uploader rewrites the same key.
+    first = await MediaUploadReconciler(objects, storage).sweep(now=now)
+    objects.upload(intent.storage_key, image_bytes(), content_type="image/png")
+    later = now + timedelta(hours=1)
+    await db.execute(
+        "UPDATE creator_media_upload_intents SET lease_expires_at = $2 WHERE id = $1",
+        intent.id, later,
+    )
+    second = await MediaUploadReconciler(objects, storage).sweep(now=later)
+
+    # Then PostgreSQL retains the watch and the later sweep removes the rewrite.
+    assert first.reclaimed == 0
+    assert second.reclaimed == 0
+    assert not (tmp_path / intent.storage_key).exists()
+    row = await db.fetch_one(
+        "SELECT state FROM creator_media_upload_intents WHERE id = $1", intent.id,
+    )
+    assert row == {"state": "late_upload_watch"}
+
+    # When the bounded watch age elapses after the provider timeout.
+    terminal = now + LATE_UPLOAD_WATCH_MAX_AGE
+    await db.execute(
+        """UPDATE creator_media_upload_intents
+            SET created_at = $2, lease_expires_at = $3 WHERE id = $1""",
+        intent.id, now, terminal,
+    )
+    final = await MediaUploadReconciler(objects, storage).sweep(now=terminal)
+
+    # Then PostgreSQL terminalizes the watched row after one final deletion attempt.
+    assert final.reclaimed == 1
     row = await db.fetch_one(
         "SELECT state FROM creator_media_upload_intents WHERE id = $1", intent.id,
     )

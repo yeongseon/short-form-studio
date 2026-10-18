@@ -11,6 +11,7 @@ from PIL import Image
 from creator_service.media_asset_service import MediaAssetService
 from creator_service.media_asset_storage import InMemoryMediaAssetStorage
 from creator_service.media_upload_reconciliation import (
+    LATE_UPLOAD_WATCH_MAX_AGE,
     MediaAssetPersistenceFailed,
     MediaAssetPersistenceIndeterminate,
     MediaUploadReconciler,
@@ -50,6 +51,12 @@ class _Objects:
         if self.fail_delete:
             raise StorageDeletionError(key=key)
         return self.objects.pop(key, None) is not None
+
+
+class _IdempotentDeleteObjects(_Objects):
+    def delete(self, key: str) -> bool:
+        super().delete(key)
+        return True
 
 
 class _PausedObjects(_Objects):
@@ -215,7 +222,7 @@ async def test_late_upload_after_absent_observation_is_deleted_by_later_sweep() 
     intent = await assets.create_upload_intent(UploadIntent(
         id=0, owner_id="terminated-uploader", workspace_id=7,
         storage_key="workspaces/7/assets/late.png",
-        state=UploadIntentState.PENDING, lease_expires_at=now,
+        state=UploadIntentState.PENDING, lease_expires_at=now, created_at=now,
     ))
     first = await MediaUploadReconciler(objects, assets).sweep(now=now)
 
@@ -227,12 +234,93 @@ async def test_late_upload_after_absent_observation_is_deleted_by_later_sweep() 
     later = retention + timedelta(minutes=5)
     await assets.expire_upload_intent(intent.id, later)
     second = await MediaUploadReconciler(objects, assets).sweep(now=later)
+    terminal = now + LATE_UPLOAD_WATCH_MAX_AGE
+    await assets.expire_upload_intent(intent.id, terminal)
+    final = await MediaUploadReconciler(objects, assets).sweep(now=terminal)
 
     # Then the absent sweep retains ownership and a later sweep deletes the object.
     assert first.reclaimed == 0
     assert absent.reclaimed == 0
-    assert second.reclaimed == 1
+    assert second.reclaimed == 0
+    assert final.reclaimed == 1
     assert objects.objects == {}
+    assert (await assets.list_upload_intents())[0].state is UploadIntentState.RECLAIMED
+
+
+@pytest.mark.asyncio
+async def test_idempotent_absent_delete_keeps_watch_until_late_upload_is_deleted() -> None:
+    # Given an S3-style delete reports success while an expired pending key is absent.
+    now = datetime.now(timezone.utc)
+    objects = _IdempotentDeleteObjects()
+    assets = InMemoryMediaAssetStorage()
+    intent = await assets.create_upload_intent(UploadIntent(
+        id=0, owner_id="terminated-uploader", workspace_id=7,
+        storage_key="workspaces/7/assets/idempotent-late.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now,
+    ))
+
+    # When the first sweep succeeds, then the upload materializes before a later sweep.
+    first = await MediaUploadReconciler(objects, assets).sweep(now=now)
+    objects.objects[intent.storage_key] = b"late upload"
+    later = now + timedelta(hours=1)
+    await assets.expire_upload_intent(intent.id, later)
+    second = await MediaUploadReconciler(objects, assets).sweep(now=later)
+
+    # Then durable ownership survives the idempotent delete and removes the late object.
+    assert first.reclaimed == 0
+    assert second.reclaimed == 0
+    assert objects.objects == {}
+    assert (await assets.list_upload_intents())[0].state is UploadIntentState.LATE_UPLOAD_WATCH
+
+
+@pytest.mark.asyncio
+async def test_successful_delete_keeps_watch_until_rematerialized_upload_is_deleted() -> None:
+    # Given an expired pending upload already has an object that can be deleted.
+    now = datetime.now(timezone.utc)
+    objects = _Objects()
+    assets = InMemoryMediaAssetStorage()
+    intent = await assets.create_upload_intent(UploadIntent(
+        id=0, owner_id="blocked-uploader", workspace_id=7,
+        storage_key="workspaces/7/assets/rematerialized.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now,
+    ))
+    objects.objects[intent.storage_key] = b"first materialization"
+
+    # When deletion succeeds, then the still-running upload rewrites the key.
+    first = await MediaUploadReconciler(objects, assets).sweep(now=now)
+    objects.objects[intent.storage_key] = b"second materialization"
+    later = now + timedelta(hours=1)
+    await assets.expire_upload_intent(intent.id, later)
+    second = await MediaUploadReconciler(objects, assets).sweep(now=later)
+
+    # Then the watch remains live long enough to remove the rewritten object too.
+    assert first.reclaimed == 0
+    assert second.reclaimed == 0
+    assert objects.objects == {}
+    assert (await assets.list_upload_intents())[0].state is UploadIntentState.LATE_UPLOAD_WATCH
+
+
+@pytest.mark.asyncio
+async def test_late_upload_watch_terminalizes_at_bounded_maximum_age() -> None:
+    # Given a watched pending upload remains absent until its maximum watch age.
+    now = datetime.now(timezone.utc)
+    objects = _Objects()
+    assets = InMemoryMediaAssetStorage()
+    intent = await assets.create_upload_intent(UploadIntent(
+        id=0, owner_id="terminated-uploader", workspace_id=7,
+        storage_key="workspaces/7/assets/never-materialized.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now, created_at=now,
+    ))
+    first = await MediaUploadReconciler(objects, assets).sweep(now=now)
+
+    # When reconciliation reaches the enforced maximum age.
+    terminal = now + LATE_UPLOAD_WATCH_MAX_AGE
+    await assets.expire_upload_intent(intent.id, terminal)
+    final = await MediaUploadReconciler(objects, assets).sweep(now=terminal)
+
+    # Then the absent watch reaches a durable terminal state instead of growing forever.
+    assert first.reclaimed == 0
+    assert final.reclaimed == 1
     assert (await assets.list_upload_intents())[0].state is UploadIntentState.RECLAIMED
 
 

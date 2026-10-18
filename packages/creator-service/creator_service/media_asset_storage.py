@@ -116,6 +116,7 @@ class InMemoryMediaAssetStorage:
                 id=self._next_intent_id, owner_id=intent.owner_id,
                 workspace_id=intent.workspace_id, storage_key=intent.storage_key,
                 state=intent.state, lease_expires_at=intent.lease_expires_at,
+                created_at=intent.created_at,
             )
             self._intents[saved.id] = saved
             self._next_intent_id += 1
@@ -127,6 +128,7 @@ class InMemoryMediaAssetStorage:
             id=intent.id, owner_id=intent.owner_id, workspace_id=intent.workspace_id,
             storage_key=intent.storage_key, state=state,
             lease_expires_at=changes.get("lease_expires_at", intent.lease_expires_at),
+            created_at=intent.created_at,
             retry_count=changes.get("retry_count", intent.retry_count),
             claim_token=changes.get("claim_token", intent.claim_token),
         )
@@ -187,6 +189,7 @@ class InMemoryMediaAssetStorage:
                     id=intent.id, owner_id=intent.owner_id,
                     workspace_id=intent.workspace_id, storage_key=intent.storage_key,
                     state=intent.state, lease_expires_at=lease_expires_at,
+                    created_at=intent.created_at,
                     retry_count=intent.retry_count,
                     claim_token=self._intents[intent.id].claim_token,
                 )

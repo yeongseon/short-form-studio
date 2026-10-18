@@ -98,7 +98,7 @@ class PostgresUploadIntentStorage:
                 workspace_id=int(row["workspace_id"]), storage_key=str(row["storage_key"]),
                 state=UploadIntentState(str(row["state"])),
                 lease_expires_at=lease_expires_at, retry_count=int(row["retry_count"]),
-                claim_token=claims_by_id[int(row["id"])],
+                claim_token=claims_by_id[int(row["id"])], created_at=row["created_at"],
             )
             for row in rows
         ]
@@ -158,4 +158,5 @@ def _decode_intent(row: dict[str, object]) -> UploadIntent:
         state=UploadIntentState(str(row["state"])),
         lease_expires_at=lease_expires_at, retry_count=int(row["retry_count"]),
         claim_token=str(row["claim_token"]) if row.get("claim_token") is not None else None,
+        created_at=row["created_at"],
     )

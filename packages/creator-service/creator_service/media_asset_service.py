@@ -171,7 +171,7 @@ class MediaAssetService:
         intent = await self._asset_storage.create_upload_intent(UploadIntent(
             id=0, owner_id=uuid.uuid4().hex, workspace_id=workspace_id,
             storage_key=storage_key, state=UploadIntentState.PENDING,
-            lease_expires_at=now + DEFAULT_UPLOAD_LEASE,
+            lease_expires_at=now + DEFAULT_UPLOAD_LEASE, created_at=now,
         ))
         await anyio.lowlevel.checkpoint()
         # Once upload starts, retain ownership through the async metadata save.
