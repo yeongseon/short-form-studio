@@ -21,6 +21,24 @@ assert_dlq_write() {
   docker compose "$@" run --rm --no-deps "$service" python -c \
     'from pathlib import Path; from creator_service.celery_dlq_fallback import append_fallback_entry; append_fallback_entry(Path("/var/lib/short-form-studio/dlq/failures.jsonl"), {"source": "container-acceptance"}, max_bytes=4096)'
 }
+assert_dlq_fallback_recovery() {
+  docker compose exec -T worker python -c \
+    'import celery_app; celery_app.redis.Redis.from_url = lambda _url: (_ for _ in ()).throw(ConnectionError("forced Redis failure")); celery_app._record_failed_task_to_dlq("fallback-acceptance", "acceptance.marker", (), {"password": "secret-value"}, RuntimeError("marker failure"))'
+  docker compose up -d --force-recreate --no-deps worker
+  timeout 60 bash -c 'until docker compose exec -T worker celery -A celery_app.celery_app inspect ping 2>/dev/null | grep -q pong; do sleep 2; done'
+  docker compose exec -T worker python -c \
+    'from celery_app import read_dlq_fallback; entries = read_dlq_fallback(); entry = next(item for item in entries if item.get("task_id") == "fallback-acceptance"); assert entry["kwargs"] == {"password": "[REDACTED]"}'
+}
+enqueue_lifecycle_marker() {
+  local scenario="$1"
+  docker compose exec -T beat python -c \
+    "from celery_app import celery_app; celery_app.send_task('acceptance.marker', args=['${scenario}-durability-marker'], queue='durability-marker')"
+}
+assert_lifecycle_marker() {
+  local scenario="$1"
+  [ "$(docker compose exec -T redis redis-cli LLEN durability-marker | tr -d '\r')" = 1 ] \
+    || fail "${scenario} did not preserve routed durability marker"
+}
 wait_for_redis() {
   timeout 60 bash -c 'until docker compose exec -T redis redis-cli ping 2>/dev/null | grep -q PONG; do sleep 1; done'
 }
@@ -31,9 +49,12 @@ run_recovery_now() {
 seed_lifecycle_rows() {
   local scenario="$1"
   local run_id
+  local broker_generation
+  broker_generation="$(docker compose exec -T redis redis-cli GET queue:recovery_epoch | tr -d '\r' | cut -d'|' -f1)"
+  [ -n "$broker_generation" ] || fail "broker generation unavailable before ${scenario} seed"
   run_id="$(psql_scalar "INSERT INTO creator_runs (project_id,workspace_id,current_stage,status,style_preset) SELECT id,${WORKSPACE_ID},'AUDIO_GENERATING','pending','default' FROM creator_projects WHERE workspace_id=${WORKSPACE_ID} ORDER BY id LIMIT 1 RETURNING id")"
   for status in pending queued running success; do
-    psql_scalar "INSERT INTO creator_run_tasks (run_id,task_type,celery_task_id,status,attempt,created_at,started_at,finished_at,claim_token) VALUES (${run_id},CASE '${status}' WHEN 'pending' THEN 'generate_script' WHEN 'queued' THEN 'generate_visual_plan' WHEN 'running' THEN 'generate_audio' ELSE 'render_video' END,'${scenario}-lifecycle-${status}','${status}',1,NOW(),CASE WHEN '${status}'='running' THEN NOW() END,CASE WHEN '${status}'='success' THEN NOW() END,CASE WHEN '${status}'='running' THEN 'late-worker' END);"
+    psql_scalar "INSERT INTO creator_run_tasks (run_id,task_type,celery_task_id,status,attempt,created_at,started_at,finished_at,claim_token,broker_generation) VALUES (${run_id},CASE '${status}' WHEN 'pending' THEN 'generate_script' WHEN 'queued' THEN 'generate_visual_plan' WHEN 'running' THEN 'generate_audio' ELSE 'render_video' END,'${scenario}-lifecycle-${status}','${status}',1,NOW(),CASE WHEN '${status}'='running' THEN NOW() END,CASE WHEN '${status}'='success' THEN NOW() END,CASE WHEN '${status}'='running' THEN 'late-worker' END,'${broker_generation}');"
   done
   for status in pending queued running; do
     psql_scalar "INSERT INTO workspace_quota_reservation_owners (owner_id,workspace_id,period_start,operation_type,status) VALUES ('${scenario}-lifecycle-${status}',${WORKSPACE_ID},date_trunc('month',NOW()),'tts','reserved');"
@@ -50,6 +71,9 @@ run_redis_lifecycle() {
   local scenario="$1"
   local run_id
   run_id="$(seed_lifecycle_rows "$scenario")"
+  if [ "$scenario" != redis_fresh_volume_replacement ]; then
+    enqueue_lifecycle_marker "$scenario"
+  fi
   case "$scenario" in
     redis_process_restart)
       docker compose restart redis
@@ -66,6 +90,10 @@ run_redis_lifecycle() {
     *) fail "unknown Redis lifecycle scenario: ${scenario}" ;;
   esac
   wait_for_redis
+  if [ "$scenario" != redis_fresh_volume_replacement ]; then
+    assert_lifecycle_marker "$scenario"
+    docker compose exec -T redis redis-cli DEL durability-marker >/dev/null
+  fi
   timeout 60 bash -c 'until docker compose exec -T worker celery -A celery_app.celery_app inspect ping 2>/dev/null | grep -q pong; do sleep 2; done'
   run_recovery_now
   if [ "$scenario" = redis_fresh_volume_replacement ]; then
@@ -99,6 +127,7 @@ assert_dlq_write "worker-script" -f docker-compose.yml -f docker-compose.scaled-
 assert_dlq_write "worker-image" -f docker-compose.yml -f docker-compose.scaled-workers.yml
 assert_dlq_write "worker-audio" -f docker-compose.yml -f docker-compose.scaled-workers.yml
 assert_dlq_write "worker-render" -f docker-compose.yml -f docker-compose.scaled-workers.yml
+assert_dlq_fallback_recovery
 
 docker compose run --rm api python scripts/create_api_key.py \
   --email cutover@example.com --workspace cutover --name cutover-ci --json > "$STATE_DIR/cutover-key.json"
