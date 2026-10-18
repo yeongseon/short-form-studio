@@ -54,7 +54,9 @@ async def test_scene_dispatch_keeps_loop_alive_until_tracking(monkeypatch):
             release.set()
     assert UUID(results[0]["task_id"]).version == 4
     assert owners == [results[0]["task_id"]]
-    tracking.assert_awaited_once_with(1, "generate_scene_image", results[0]["task_id"])
+    tracking.assert_awaited_once_with(
+        1, "generate_scene_image", results[0]["task_id"], None
+    )
 
 
 @pytest.mark.asyncio

@@ -58,7 +58,12 @@ async def _dispatch_image(
     pending_created = False
     published = False
     try:
-        await task_tracking_service.record_task_pending(run_id, "generate_scene_image", task_id)
+        broker_generation = await run_blocking(
+            task_dispatch_service.broker_generation
+        )
+        await task_tracking_service.record_task_pending(
+            run_id, "generate_scene_image", task_id, broker_generation
+        )
         pending_created = True
         returned_id = await run_blocking(partial(dispatch_generate_scene_image, run_id=run_id, task_id=task_id, **kwargs))
         published = True

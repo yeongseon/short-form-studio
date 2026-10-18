@@ -1724,7 +1724,12 @@ def stub_single_scene_services(
     ) -> tuple[bool, str]:
         return True, "ok"
 
-    async def _pending(_run_id: int, _task_type: str, _task_id: str) -> None:
+    async def _pending(
+        _run_id: int,
+        _task_type: str,
+        _task_id: str,
+        _broker_generation: str | None = None,
+    ) -> None:
         return None
 
     async def _promote(_task_id: str) -> None:

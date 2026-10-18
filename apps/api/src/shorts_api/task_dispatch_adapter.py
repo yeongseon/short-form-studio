@@ -33,6 +33,13 @@ class ApplicationTaskDispatcher:
     def uses_queue(self) -> bool:
         return bool(os.environ.get("REDIS_URL"))
 
+    def broker_generation(self) -> str | None:
+        if not self.uses_queue():
+            return None
+        from celery_app import ensure_broker_epoch
+
+        return ensure_broker_epoch().epoch
+
     def _get_trace_headers(self) -> dict[str, str]:
         from creator_service.telemetry import get_trace_headers
 
