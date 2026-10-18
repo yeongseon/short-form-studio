@@ -69,6 +69,11 @@ async def _dispatch_image(
         published = True
         if returned_id != task_id:
             raise RuntimeError("Dispatch task ID mismatch")
+        observed_generation = await run_blocking(
+            task_dispatch_service.broker_generation
+        )
+        if observed_generation != broker_generation:
+            raise RuntimeError("Broker generation changed during dispatch")
         await task_tracking_service.promote_pending_to_queued(task_id)
         run = await run_service.get_run(run_id, workspace_id=workspace_id)
         if run is None or run.status == "cancelled":
