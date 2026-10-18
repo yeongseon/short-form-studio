@@ -5,7 +5,7 @@ from celery.signals import task_failure
 from tasks import generate_audio as generate_audio_module
 
 import celery_app
-from tasks import hard_timeout
+from tasks import hard_timeout, runtime_topology_probe
 
 
 def test_hard_timeout_request_finalizes_task_run_and_quota(monkeypatch) -> None:
@@ -36,6 +36,52 @@ def test_hard_timeout_request_finalizes_task_run_and_quota(monkeypatch) -> None:
         expected_stages=frozenset({"RENDER_GENERATING"}),
         rejected_statuses=frozenset({"failed", "cancelled", "completed"}),
     )
+
+
+def test_hard_timeout_finalizes_before_releasing_blocked_resources(
+    monkeypatch, tmp_path,
+) -> None:
+    # Given a hard-timeout request whose child completion would unblock the delivery.
+    events: list[str] = []
+    evidence = tmp_path / "timeout.json"
+    temporary = tmp_path / "storage" / "103" / "timeout.tmp"
+    temporary.parent.mkdir(parents=True)
+    temporary.write_text("owned", encoding="utf-8")
+    evidence.write_text(
+        json.dumps(
+            {
+                "child_pid": 123,
+                "temporary_path": "storage/103/timeout.tmp",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("WORKER_TOPOLOGY_EVIDENCE_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        runtime_topology_probe.Request,
+        "on_timeout",
+        lambda *_args: events.append("celery-timeout"),
+    )
+    monkeypatch.setattr(
+        runtime_topology_probe,
+        "finalize_hard_timeout",
+        lambda *_args: events.append("finalized"),
+    )
+    monkeypatch.setattr(
+        runtime_topology_probe.os,
+        "killpg",
+        lambda *_args: events.append("child-killed"),
+    )
+    request = object.__new__(runtime_topology_probe._TopologyRequest)
+    request.id = "timeout-delivery"
+    request._args = (103, "timeout_resources", "timeout.json", "")
+
+    # When the prefork parent handles the hard limit.
+    request.on_timeout(False, 2.0)
+
+    # Then durable failure wins before cleanup can unblock a late success result.
+    assert events == ["celery-timeout", "finalized", "child-killed"]
+    assert not temporary.exists()
 
 
 def test_task_failure_signal_fences_terminal_cleanup_to_delivery_claim(monkeypatch) -> None:

@@ -46,6 +46,7 @@ class _TopologyRequest(Request):
             return
         run_id = self.args[0]
         if isinstance(run_id, int):
+            finalize_hard_timeout(self.id, run_id, timeout)
             if self.args[1] == "timeout_resources" and isinstance(self.args[2], str):
                 state = json.loads(_evidence_file(self.args[2]).read_text(encoding="utf-8"))
                 child_pid = state.get("child_pid")
@@ -54,7 +55,6 @@ class _TopologyRequest(Request):
                     os.killpg(child_pid, signal.SIGKILL)
                 if isinstance(temporary_path, str):
                     _evidence_file(temporary_path).unlink(missing_ok=True)
-            finalize_hard_timeout(self.id, run_id, timeout)
 
 
 class _TopologyTask(Task):
