@@ -223,6 +223,7 @@ def worker(name: str, command: list[str] | None = None) -> None:
     args = [
         "run",
         "-d",
+        "--init",
         "--name",
         name,
         "--network",

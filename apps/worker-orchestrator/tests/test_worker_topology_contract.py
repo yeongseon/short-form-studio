@@ -199,6 +199,7 @@ def test_failure_scenario_uses_exact_scaled_command_and_container_process_namesp
     # Then the exact command is used and FFmpeg is observed through Docker's namespace mapping.
     assert all(f'"{argument}"' in source for argument in scaled_command)
     assert '"top"' in source
+    assert '"--init"' in source
     assert '"ps", "-p"' not in source
     scenario = (ROOT / "apps/worker-orchestrator/tests/test_worker_topology_image.py").read_text(
         encoding="utf-8"
