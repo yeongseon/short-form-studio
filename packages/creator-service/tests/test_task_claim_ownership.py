@@ -274,14 +274,14 @@ async def test_postgres_atomic_failure_blocks_successor_claim_until_quota_cleanu
 
     # Then releasing the lock commits one terminal task/run/quota outcome.
     assert finalization == [True]
-    assert successor == [None]
+    assert len(successor) == 1 and successor[0] is not None
     task = await tracking_storage.get_by_celery_id("delivery-1")
     run = await PostgresRunStorage().get_run(1)
     owner_status = await pool.fetchval(
         "SELECT status FROM workspace_quota_reservation_owners WHERE owner_id=$1",
         "delivery-1",
     )
-    assert task is not None and task["status"] == "failed"
+    assert task is not None and (task["status"], task["claim_token"]) == ("running", "owner-b")
     assert run is not None and (run["status"], run["current_stage"]) == ("failed", "FAILED")
     assert owner_status == "cancelled"
     assert not await usage.cancel_owned("delivery-1")
