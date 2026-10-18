@@ -33,6 +33,9 @@ class UnconfiguredDispatcher:
     def uses_queue(self) -> bool:
         return False
 
+    def broker_generation(self) -> str | None:
+        return None
+
     def dispatch(self, submission: TaskSubmission) -> str:
         raise ServiceUnavailableError("Task dispatcher is not configured")
 
@@ -49,3 +52,8 @@ class DispatchRuntime:
 
     def _use_celery_dispatch(self) -> bool:
         return self.dispatcher.uses_queue()
+
+    def broker_generation(self) -> str | None:
+        if not self._use_celery_dispatch():
+            return None
+        return self.dispatcher.broker_generation()
