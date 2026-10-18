@@ -22,7 +22,7 @@ assert_dlq_write() {
     'from pathlib import Path; from creator_service.celery_dlq_fallback import append_fallback_entry; append_fallback_entry(Path("/var/lib/short-form-studio/dlq/failures.jsonl"), {"source": "container-acceptance"}, max_bytes=4096)'
 }
 assert_dlq_fallback_recovery() {
-  docker compose exec -T worker python -c \
+  docker compose run --rm --no-deps worker python -c \
     'import celery_app; celery_app.redis.Redis.from_url = lambda _url: (_ for _ in ()).throw(ConnectionError("forced Redis failure")); celery_app._record_failed_task_to_dlq("fallback-acceptance", "acceptance.marker", (), {"password": "secret-value"}, RuntimeError("marker failure"))'
   docker compose up -d --force-recreate --no-deps worker
   timeout 60 bash -c 'until docker compose exec -T worker celery -A celery_app.celery_app inspect ping 2>/dev/null | grep -q pong; do sleep 2; done'
