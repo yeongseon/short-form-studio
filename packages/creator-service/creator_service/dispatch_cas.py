@@ -168,6 +168,19 @@ class DispatchCAS(DispatchRuntime):
             task_id = await run_blocking(partial(dispatcher, **dispatch_kwargs))
             if owner_id is not None and task_id != owner_id:
                 raise ServiceUnavailableError("Task identity changed during dispatch")
+            if broker_generation is not None:
+                observed_generation = await run_blocking(self.broker_generation)
+                if observed_generation != broker_generation:
+                    await self._cancel_task_safe(task_id)
+                    try:
+                        await task_tracking_service.mark_revoked(task_id)
+                    except Exception:
+                        logger.warning(
+                            "Failed to mark uncertain task revoked",
+                            extra={"task_id": task_id},
+                            exc_info=True,
+                        )
+                    raise ServiceUnavailableError("Broker generation changed during dispatch")
         except SynchronousTaskExecutionError:
             await cancel_quota(reserved_workspace, quota_operation_type, owner_id=owner_id)
             raise ServiceError("Task execution failed") from None
