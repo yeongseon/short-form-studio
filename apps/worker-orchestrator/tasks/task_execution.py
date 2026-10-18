@@ -142,9 +142,20 @@ def run_task(
         runner.logger.error("Task %s timed out for run %s", config.task_name, validated_run_id)
         if claim_token is not None:
             try:
+                from creator_service.usage_service import usage_service
+
                 code, message = runner._safe_failure_record(exc)
                 outcome = runner.run_in_worker_loop(
-                    runner._task_tracking_service.mark_failed_if_claimed(task_id, claim_token, code, message)
+                    runner._task_tracking_service.fail_claimed_and_cancel_quota(
+                        task_id,
+                        claim_token,
+                        usage_service.storage,
+                        code,
+                        message,
+                        runner._run_service.storage,
+                        validated_run_id,
+                        safe_failure_stages,
+                    )
                 )
             except Exception:
                 runner.logger.warning("Failed to record task timeout", exc_info=True)
@@ -155,22 +166,11 @@ def run_task(
             raise
         match billing_outcome:
             case runner.BillingOutcome.NOT_STARTED:
-                cancel_owned()
+                pass
             case runner.BillingOutcome.ACCOUNTED:
                 settle_owned()
             case runner.BillingOutcome.UNKNOWN:
                 settle_owned(billable_unknown=True)
-        try:
-            runner.run_in_worker_loop(
-                runner._run_service.storage.conditional_update_run(
-                    validated_run_id,
-                    {"current_stage": RunStage.FAILED.value, "status": "failed"},
-                    expected_stages=safe_failure_stages,
-                    rejected_statuses=runner._TERMINAL_STATUSES,
-                )
-            )
-        except Exception:
-            runner.logger.exception("Failed to mark run %d as FAILED after timeout", validated_run_id)
         raise
     except Ignore:
         raise
@@ -219,15 +219,23 @@ def run_task(
                     settle_owned(billable_unknown=True)
             raise
         try:
+            from creator_service.usage_service import usage_service
+
             finalized = runner.run_in_worker_loop(
                 runner._handle_general_failure(
-                    task_id, validated_run_id, config.task_name, safe_failure_stages, exc, claim_token,
+                    task_id,
+                    validated_run_id,
+                    config.task_name,
+                    safe_failure_stages,
+                    exc,
+                    usage_service.storage,
+                    claim_token,
                 )
             )
             if claimed and finalized:
                 match billing_outcome:
                     case runner.BillingOutcome.NOT_STARTED:
-                        cancel_owned()
+                        pass
                     case runner.BillingOutcome.ACCOUNTED:
                         settle_owned()
                     case runner.BillingOutcome.UNKNOWN:

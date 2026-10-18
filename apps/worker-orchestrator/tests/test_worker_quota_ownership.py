@@ -59,6 +59,32 @@ def test_terminal_failure_cancels_only_claimed_owner(
     assert not run_in_worker_loop(quota_case.reserve_owned(1, "llm", "overflow"))
 
 
+@pytest.mark.parametrize("failure", [SoftTimeLimitExceeded(), RuntimeError("failure")])
+def test_terminal_failure_uses_atomic_claim_run_and_quota_finalizer(
+    runner_case: RunnerCase,
+    quota_case: UsageService,
+    failure: Exception,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a claimed delivery whose terminal cleanup can be observed.
+    finalize = AsyncMock(return_value=True)
+    monkeypatch.setattr(runner_case.tracking, "fail_claimed_and_cancel_quota", finalize)
+
+    async def execute(_ctx: task_runner.TaskContext) -> task_runner.TaskResult:
+        raise failure
+
+    # When the delivery reaches either terminal exception path.
+    with pytest.raises(type(failure)):
+        task_runner.run_task(runner_case.delivery(), runner_case.run_id, runner_case.config, execute)
+
+    # Then ownership, run failure, and quota cancellation share one storage operation.
+    finalize.assert_awaited_once()
+    assert finalize.await_args.args[2] is quota_case.storage
+    assert finalize.await_args.args[5] is runner_case.runs.storage
+    assert finalize.await_args.args[6] == runner_case.run_id
+    assert finalize.await_args.args[7] == frozenset({"SCRIPT_GENERATING"})
+
+
 def test_retryable_failure_keeps_reservation(
     runner_case: RunnerCase, quota_case: UsageService,
 ) -> None:

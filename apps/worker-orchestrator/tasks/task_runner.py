@@ -43,6 +43,8 @@ from datetime import datetime, timezone
 from enum import StrEnum
 from typing import Any
 
+from creator_service.usage_service import UsageStorageBackend
+
 from celery.exceptions import Ignore, SoftTimeLimitExceeded
 from creator_domain.models.stage import REVIEW_STAGES, RunStage
 from creator_provider.gpu_lock import (
@@ -398,15 +400,23 @@ async def _handle_general_failure(
     config_task_name: str,
     safe_failure_stages: frozenset[str],
     exc: Exception,
+    usage_storage: UsageStorageBackend,
     claim_token: str | None = None,
 ) -> bool:
     """Consolidate error-handler async work into a single coroutine."""
     try:
         code, message = _safe_failure_record(exc)
         if claim_token is not None:
-            outcome = await _task_tracking_service.mark_failed_if_claimed(task_id, claim_token, code, message)
-            if outcome is None:
-                return False
+            return await _task_tracking_service.fail_claimed_and_cancel_quota(
+                task_id,
+                claim_token,
+                usage_storage,
+                code,
+                message,
+                _run_service.storage,
+                run_id,
+                safe_failure_stages,
+            )
         else:
             outcome = await _task_tracking_service.mark_failed_if_running(task_id, code, message)
     except Exception:
