@@ -3,8 +3,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "038"
-down_revision: str | None = "037"
+revision: str = "041"
+down_revision: str | None = "040"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
