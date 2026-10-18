@@ -491,6 +491,7 @@ class TestCasDispatchEndToEnd:
             task_row = await tracking_storage.get_by_celery_id(task_id_used)
             assert task_row is not None
             assert task_row["status"] == "queued", f"Expected queued, got {task_row['status']}"
+            assert task_row["broker_generation"] == "test-generation"
 
             # Verify result
             assert result["task_id"] == task_id_used

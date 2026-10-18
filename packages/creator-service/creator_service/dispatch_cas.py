@@ -115,8 +115,10 @@ class DispatchCAS(DispatchRuntime):
         if rollback_stage == (restart_from_stage or target_stage):
             updates["restart_from"] = target_stage
         pending_id: str | None = None
+        broker_generation: str | None = None
         if self._use_celery_dispatch() and task_type != "unknown":
             pending_id = owner_id or str(uuid4())
+            broker_generation = await run_blocking(self.broker_generation)
         try:
             if pending_id is None:
                 try:
@@ -133,6 +135,7 @@ class DispatchCAS(DispatchRuntime):
                 ok, row = await task_tracking_service.transition_run_and_record_pending(
                     run_service.storage, run_id, updates, expected_stages,
                     task_type, pending_id, workspace_id=workspace_id,
+                    broker_generation=broker_generation,
                     rejected_statuses=frozenset({"cancelled"}),
                 )
         except ServiceError:
