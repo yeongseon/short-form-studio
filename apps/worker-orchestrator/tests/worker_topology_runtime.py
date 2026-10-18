@@ -6,6 +6,7 @@ import os
 import socket
 import subprocess
 import time
+from uuid import uuid4
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Literal
@@ -22,7 +23,7 @@ REDIS_URL = os.getenv("REDIS_URL", "")
 API_KEY = "topology-runtime-key"
 API_URL = "http://127.0.0.1:58064"
 type ProbeMode = Literal[
-    "boundaries", "complete", "cooperative", "ffmpeg_hang", "redelivery",
+    "cancellation_gate", "complete", "ffmpeg_hang", "redelivery",
     "timeout_resources", "wait"
 ]
 SCALED_IMAGE_COMMAND = [
@@ -212,7 +213,7 @@ def send(
     delivery_options = {"time_limit": time_limit} if time_limit is not None else {}
     celery_app.send_task(
         "runtime_topology.probe",
-        args=[run_id, mode, state.name, provider_url],
+        args=[run_id, mode, state.name, provider_url, uuid4().hex],
         task_id=task_id,
         queue=queue,
         **delivery_options,

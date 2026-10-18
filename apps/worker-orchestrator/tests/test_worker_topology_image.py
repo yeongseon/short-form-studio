@@ -127,10 +127,12 @@ def test_shipped_image_runs_production_claims_redelivery_and_fairness() -> None:
     send(
         100,
         "boundary-delivery",
-        "boundaries",
+        "cancellation_gate",
         boundaries,
         provider_url=os.environ["TOPOLOGY_PROVIDER_URL"],
     )
+    wait_state(boundaries, "provider_done")
+    boundaries.with_suffix(".continue").touch()
     wait_state(boundaries, "boundaries_completed")
     boundary_artifacts = anyio.run(
         row, "SELECT count(*) AS count FROM creator_artifacts WHERE run_id=100"
@@ -144,7 +146,7 @@ def test_shipped_image_runs_production_claims_redelivery_and_fairness() -> None:
     send(
         101,
         "blocked-delivery",
-        "cooperative",
+        "cancellation_gate",
         blocked,
         provider_url=os.environ["TOPOLOGY_PROVIDER_URL"],
     )

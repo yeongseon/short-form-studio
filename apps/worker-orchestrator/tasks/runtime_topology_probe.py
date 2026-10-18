@@ -19,7 +19,7 @@ from tasks.hard_timeout import finalize_hard_timeout
 from tasks.task_runner import TaskContext, TaskResult, TaskRunnerConfig, run_task
 
 type ProbeMode = Literal[
-    "boundaries", "complete", "cooperative", "ffmpeg_hang", "redelivery",
+    "cancellation_gate", "complete", "ffmpeg_hang", "redelivery",
     "timeout_resources", "wait"
 ]
 
@@ -42,11 +42,12 @@ def _provider_url(candidate: str) -> str:
 class _TopologyRequest(Request):
     def on_timeout(self, soft: bool, timeout: float) -> None:
         super().on_timeout(soft, timeout)
-        if soft or not isinstance(self.id, str) or not self.args:
+        if soft or not isinstance(self.id, str) or len(self.args) < 5:
             return
         run_id = self.args[0]
-        if isinstance(run_id, int):
-            finalize_hard_timeout(self.id, run_id, timeout)
+        claim_token = self.args[4]
+        if isinstance(run_id, int) and isinstance(claim_token, str):
+            finalize_hard_timeout(self.id, claim_token, run_id, timeout)
             if self.args[1] == "timeout_resources" and isinstance(self.args[2], str):
                 state = json.loads(_evidence_file(self.args[2]).read_text(encoding="utf-8"))
                 child_pid = state.get("child_pid")
@@ -75,7 +76,10 @@ def runtime_topology_probe(
     mode: ProbeMode,
     evidence_path: str,
     provider_url: str = "",
+    delivery_claim_token: str = "",
 ) -> dict[str, object]:
+    if delivery_claim_token:
+        self.request.claim_token = delivery_claim_token
     config = TaskRunnerConfig(
         task_name="runtime_topology_probe",
         allowed_stages=frozenset({RunStage.RENDER_GENERATING}),
@@ -84,12 +88,24 @@ def runtime_topology_probe(
 
     async def execute(ctx: TaskContext) -> TaskResult:
         match mode:
-            case "boundaries":
+            case "cancellation_gate":
                 from creator_service.render_service import render_service
 
-                for _ in range(2):
-                    with urlopen(f"{_provider_url(provider_url)}/provider", timeout=5) as response:
-                        response.read()
+                with urlopen(f"{_provider_url(provider_url)}/provider", timeout=5) as response:
+                    response.read()
+                _publish(evidence_path, "provider_done", task_id=ctx.task_id)
+                continue_marker = _evidence_file(evidence_path).with_suffix(".continue")
+                while not continue_marker.exists():
+                    current = await run_service.storage.get_run(run_id)
+                    if current is not None and current.get("status") == "cancelled":
+                        from creator_service.usage_service import usage_service
+
+                        await usage_service.cancel_owned(ctx.task_id)
+                        _publish(evidence_path, "cancelled", task_id=ctx.task_id)
+                        return TaskResult(status="cancelled")
+                    time.sleep(0.05)
+                with urlopen(f"{_provider_url(provider_url)}/provider", timeout=5) as response:
+                    response.read()
                 storage = _evidence_file(f"storage/{run_id}/artifact.bin")
                 storage.parent.mkdir(parents=True, exist_ok=True)
                 storage.write_bytes(b"topology-artifact")
@@ -103,23 +119,6 @@ def runtime_topology_probe(
                 _publish(evidence_path, "boundaries_completed", task_id=ctx.task_id)
             case "complete":
                 _publish(evidence_path, "completed", task_id=ctx.task_id)
-            case "cooperative":
-                with urlopen(f"{_provider_url(provider_url)}/provider", timeout=5) as response:
-                    response.read()
-                _publish(evidence_path, "provider_done", task_id=ctx.task_id)
-                while True:
-                    current = await run_service.storage.get_run(run_id)
-                    if current is not None and current.get("status") == "cancelled":
-                        from creator_service.usage_service import usage_service
-
-                        await usage_service.cancel_owned(ctx.task_id)
-                        _publish(
-                            evidence_path,
-                            "cancelled",
-                            task_id=ctx.task_id,
-                        )
-                        return TaskResult(status="cancelled")
-                    time.sleep(0.05)
             case "ffmpeg_hang":
                 child = subprocess.Popen(
                     [
