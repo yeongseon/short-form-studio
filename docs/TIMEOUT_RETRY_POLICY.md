@@ -31,9 +31,11 @@ the blocking provider call has returned: S3 deletion is idempotent, and an
 in-flight local or Azure upload can rewrite the key. Such intents therefore stay
 in `late_upload_watch` and are retried hourly even after successful deletion.
 
-To bound durable row retention, an absent watch becomes `reclaimed` after 24
-hours from intent creation, following one final deletion attempt. This maximum is
-well beyond both the provider read timeout and the service operation deadline.
+The local write and stream-spooling paths cannot enforce the service deadline
+while blocking I/O is active. A `pending` or `late_upload_watch` intent therefore
+cannot become terminal based on elapsed wall time alone. Its sweepable tombstone
+remains until the uploader durably records completion or compensation, so a key
+that materializes after an arbitrarily delayed blocking call is still reclaimed.
 
 ### Soft Time Limit (`soft_time_limit`)
 Raises `SoftTimeLimitExceeded` inside the task. The task can catch this and
