@@ -231,7 +231,56 @@ def test_restore_rejects_source_file_swapped_after_verification(
     # When / Then
     with pytest.raises(module.RestoreError, match="source changed during restore"):
         module.restore_media(arguments)
-    assert not (target / "workspace-a/image.png").exists()
+    assert not target.exists()
+
+
+@pytest.mark.parametrize("deleted_relative", ["workspace-a/image.png", "workspace-a"])
+def test_restore_rejects_source_deleted_after_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, deleted_relative: str
+) -> None:
+    # Given
+    import importlib.util
+    import shutil
+
+    monkeypatch.syspath_prepend(str(SCRIPT.parent))
+    specification = importlib.util.spec_from_file_location("restore_verify", SCRIPT)
+    assert specification is not None
+    assert specification.loader is not None
+    module = importlib.util.module_from_spec(specification)
+    sys.modules[specification.name] = module
+    specification.loader.exec_module(module)
+    bundle = _bundle(tmp_path)
+    deleted = bundle / "media" / deleted_relative
+    target = tmp_path / "restore"
+    original_copy = module.copy_tree_to_new_target
+
+    def delete_source(
+        source_root: Path, target_root: Path, expected_checksums: dict[str, str]
+    ) -> None:
+        if deleted.is_dir():
+            shutil.rmtree(deleted)
+        else:
+            deleted.unlink()
+        original_copy(source_root, target_root, expected_checksums)
+
+    monkeypatch.setattr(module, "copy_tree_to_new_target", delete_source)
+    arguments = module.parser().parse_args(
+        [
+            "restore-media",
+            str(bundle),
+            "--target",
+            str(target),
+            "--expected-alembic-revision",
+            "revision-1",
+            "--expected-secret-fingerprint",
+            "sha256:" + "a" * 64,
+        ]
+    )
+
+    # When / Then
+    with pytest.raises(module.RestoreError, match="source changed during restore"):
+        module.restore_media(arguments)
+    assert not target.exists()
 
 
 def _bundle(tmp_path: Path) -> Path:

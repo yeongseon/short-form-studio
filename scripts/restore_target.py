@@ -26,9 +26,26 @@ def copy_tree_to_new_target(
         os.mkdir(target.name, mode=0o700, dir_fd=parent_descriptor)
         target_descriptor = os.open(target.name, flags, dir_fd=parent_descriptor)
         try:
-            _copy_directory(source_descriptor, target_descriptor, expected_checksums, Path())
-        finally:
+            copied_paths: set[str] = set()
+            _copy_directory(
+                source_descriptor,
+                target_descriptor,
+                expected_checksums,
+                Path(),
+                copied_paths,
+            )
+            if copied_paths != set(expected_checksums):
+                missing = sorted(set(expected_checksums) - copied_paths)
+                raise SourceTreeChangedError(missing[0] if missing else ".")
+        except OSError:
+            _remove_directory_contents(target_descriptor)
             os.close(target_descriptor)
+            os.rmdir(target.name, dir_fd=parent_descriptor)
+            target_descriptor = -1
+            raise
+        finally:
+            if target_descriptor >= 0:
+                os.close(target_descriptor)
     finally:
         os.close(parent_descriptor)
         os.close(source_descriptor)
@@ -53,6 +70,7 @@ def _copy_directory(
     destination_descriptor: int,
     expected_checksums: dict[str, str],
     relative_root: Path,
+    copied_paths: set[str],
 ) -> None:
     for name in os.listdir(source_descriptor):
         relative_path = relative_root / name
@@ -75,6 +93,7 @@ def _copy_directory(
                     child_descriptor,
                     expected_checksums,
                     relative_path,
+                    copied_paths,
                 )
             finally:
                 os.close(child_descriptor)
@@ -101,3 +120,22 @@ def _copy_directory(
         expected_checksum = expected_checksums.get(relative_path.as_posix())
         if expected_checksum is None or digest.hexdigest() != expected_checksum:
             raise SourceTreeChangedError(relative_path.as_posix())
+        copied_paths.add(relative_path.as_posix())
+
+
+def _remove_directory_contents(directory_descriptor: int) -> None:
+    for name in os.listdir(directory_descriptor):
+        status = os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
+        if stat.S_ISDIR(status.st_mode):
+            child_descriptor = os.open(
+                name,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=directory_descriptor,
+            )
+            try:
+                _remove_directory_contents(child_descriptor)
+            finally:
+                os.close(child_descriptor)
+            os.rmdir(name, dir_fd=directory_descriptor)
+        else:
+            os.unlink(name, dir_fd=directory_descriptor)
