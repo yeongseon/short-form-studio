@@ -242,7 +242,9 @@ async def test_postgres_atomic_failure_blocks_successor_claim_until_quota_cleanu
     successor: list[object] = []
 
     async with pool.acquire() as lock_connection:
-        async with lock_connection.transaction():
+        lock_transaction = lock_connection.transaction()
+        await lock_transaction.start()
+        try:
             await lock_connection.execute("SELECT pg_advisory_xact_lock($1)", 1)
 
             async def finalize() -> None:
@@ -265,6 +267,10 @@ async def test_postgres_atomic_failure_blocks_successor_claim_until_quota_cleanu
                     await anyio.lowlevel.checkpoint()
                 tasks.start_soon(claim_successor)
                 await anyio.lowlevel.checkpoint()
+                await lock_transaction.commit()
+        finally:
+            if lock_connection.is_in_transaction():
+                await lock_transaction.rollback()
 
     # Then releasing the lock commits one terminal task/run/quota outcome.
     assert finalization == [True]
