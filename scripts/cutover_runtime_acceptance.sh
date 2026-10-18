@@ -13,7 +13,7 @@ fail() { printf 'ACCEPTANCE FAIL: %s\n' "$*" >&2; exit 1; }
 code() { curl -sS -o /dev/null -w '%{http_code}' "$@"; }
 psql_scalar() {
   docker compose exec -T postgres sh -c \
-    'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -Atc "$1"' _ "$1"
+    'psql -q -U "$POSTGRES_USER" -d "$POSTGRES_DB" -v ON_ERROR_STOP=1 -Atc "$1"' _ "$1"
 }
 assert_dlq_write() {
   local service="$1"
