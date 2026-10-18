@@ -273,14 +273,21 @@ class PostgresTaskTrackingStorage:
                         run_id, list(expected_stages), ["failed", "cancelled", "completed"],
                     )
                 owner = await connection.fetchrow(
-                    """SELECT workspace_id, period_start, operation_type
+                    """SELECT workspace_id
                        FROM workspace_quota_reservation_owners
-                       WHERE owner_id=$1 AND status='reserved' FOR UPDATE""",
+                       WHERE owner_id=$1 AND status='reserved'""",
                     celery_task_id,
                 )
                 if owner is not None:
                     workspace_id = int(owner["workspace_id"])
                     await connection.execute("SELECT pg_advisory_xact_lock($1)", workspace_id)
+                    owner = await connection.fetchrow(
+                        """SELECT period_start, operation_type
+                           FROM workspace_quota_reservation_owners
+                           WHERE owner_id=$1 AND status='reserved' FOR UPDATE""",
+                        celery_task_id,
+                    )
+                if owner is not None:
                     await connection.execute(
                         """UPDATE workspace_quota_reservation_owners SET status='cancelled'
                            WHERE owner_id=$1 AND status='reserved'""",

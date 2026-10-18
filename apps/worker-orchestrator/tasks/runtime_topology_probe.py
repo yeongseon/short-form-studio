@@ -45,7 +45,9 @@ class _TopologyRequest(Request):
         if soft or not isinstance(self.id, str) or len(self.args) < 5:
             return
         run_id = self.args[0]
-        claim_token = self.args[4]
+        claim_token = getattr(self, "claim_token", None)
+        if not isinstance(claim_token, str):
+            claim_token = self.args[4]
         if isinstance(run_id, int) and isinstance(claim_token, str):
             finalize_hard_timeout(self.id, claim_token, run_id, timeout)
             if self.args[1] == "timeout_resources" and isinstance(self.args[2], str):
