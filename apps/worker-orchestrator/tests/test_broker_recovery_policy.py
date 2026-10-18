@@ -7,6 +7,8 @@ import pytest
 
 from creator_service.broker_recovery import (
     BrokerSnapshot,
+    oldest_active_wait_seconds,
+    routed_queue_names,
     recover_lost_tasks,
     should_persist_observed_epoch,
 )
@@ -56,6 +58,34 @@ class _Usage:
     async def cancel_owned(self, task_id: str) -> bool:
         self.cancelled.append(task_id)
         return True
+
+
+def test_routed_queue_names_include_effective_custom_routes() -> None:
+    # Given / When
+    queues = routed_queue_names(
+        default_queue="creator",
+        routes={
+            "tasks.generate_script.*": {"queue": "priority-script"},
+            "tasks.render_video.*": {"queue": "render"},
+        },
+    )
+
+    # Then
+    assert queues == ("creator", "priority-script", "render")
+
+
+def test_oldest_wait_includes_all_active_rows_independent_of_broker_epoch() -> None:
+    # Given
+    now = datetime.now(timezone.utc)
+    tasks = [
+        _Task("pending-a", 1, "pending", now - timedelta(minutes=7)),
+        _Task("queued-a", 2, "queued", now - timedelta(minutes=3)),
+        _Task("running-a", 3, "running", now - timedelta(hours=1)),
+        _Task("success-a", 4, "success", now - timedelta(hours=2)),
+    ]
+
+    # When / Then
+    assert oldest_active_wait_seconds(tasks, now=now) == 420.0
 
 
 @pytest.mark.asyncio

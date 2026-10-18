@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
@@ -21,6 +21,10 @@ class RecoverableTask(Protocol):
     created_at: datetime
 
 
+class TaskRoute(Protocol):
+    def get(self, key: str) -> str | None: ...
+
+
 class RecoveryTracking(Protocol):
     async def list_broker_recovery_tasks(self) -> list[RecoverableTask]: ...
 
@@ -35,6 +39,29 @@ class RecoveryTracking(Protocol):
 
 class OwnedUsage(Protocol):
     async def cancel_owned(self, task_id: str) -> bool: ...
+
+
+def routed_queue_names(
+    *, default_queue: str, routes: Mapping[str, TaskRoute]
+) -> tuple[str, ...]:
+    queues = {default_queue}
+    queues.update(
+        queue
+        for route in routes.values()
+        if (queue := route.get("queue")) is not None
+    )
+    return tuple(sorted(queues))
+
+
+def oldest_active_wait_seconds(
+    tasks: list[RecoverableTask], *, now: datetime
+) -> float | None:
+    waiting = [
+        (now - task.created_at).total_seconds()
+        for task in tasks
+        if task.status in {"pending", "queued"}
+    ]
+    return max(waiting) if waiting else None
 
 
 @dataclass(frozen=True, slots=True)
