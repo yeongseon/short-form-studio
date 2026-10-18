@@ -222,6 +222,9 @@ def main() -> int:
             docker("exec", target, "pg_restore", "-U", "restore", "-d", "restore", "--clean", "--if-exists", "/tmp/database.dump")
             run(sys.executable, "-m", "alembic", "upgrade", "head", cwd=ROOT / "apps/api", env={**os.environ, "DATABASE_URL": target_url})
             run(sys.executable, str(verifier), "restore-media", str(bundle), "--target", str(restored), "--expected-alembic-revision", alembic_head, "--expected-secret-fingerprint", FINGERPRINT)
+            asset_directory = restored / "workspaces" / str(fixture.workspace_id) / "assets"
+            asset_directory.mkdir(parents=True)
+            shutil.copy2(restored / "image.png", asset_directory / "image.png")
             timeline = restored_timeline(target, fixture.project_id)
             (restored / "final.mp4").unlink()
             rendered_segments, fixture, registered_artifact = render_restored_timeline(

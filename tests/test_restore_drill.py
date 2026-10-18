@@ -14,7 +14,7 @@ SCRIPT = Path(__file__).parents[1] / "scripts" / "restore_drill.py"
 sys.path.insert(0, str(SCRIPT.parent))
 from restore_drill import render_restored_timeline
 from restore_drill_runtime import RuntimeFixture
-from restore_drill_runtime import DrillError, validate_release_manifest
+from restore_drill_runtime import DrillError, seed_production_fixture, validate_release_manifest
 
 
 def test_disposable_restore_drill() -> None:
@@ -89,6 +89,30 @@ def test_render_invokes_production_timeline_worker_with_restored_database_and_au
     assert updated_fixture.artifact_id == 702
     assert evidence["size_bytes"] == len(b"rendered")
     assert (restored / "final.mp4").read_bytes() == b"rendered"
+
+
+def test_fixture_seeds_production_safe_restored_asset_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Given
+    media = tmp_path / "media"
+    media.mkdir()
+    (media / "image.png").write_bytes(b"image")
+    (media / "final.mp4").write_bytes(b"video")
+    commands: list[tuple[str, ...]] = []
+
+    def record_docker(*arguments: str) -> subprocess.CompletedProcess[str]:
+        commands.append(arguments)
+        return subprocess.CompletedProcess(arguments, 0, "", "")
+
+    monkeypatch.setattr("restore_drill_runtime.docker", record_docker)
+
+    # When
+    seed_production_fixture("source", media)
+
+    # Then
+    sql = commands[0][-1]
+    assert "workspaces/201/assets/image.png" in sql
 
 
 @pytest.mark.parametrize("digest", ["a" * 64, "b" * 64, "c" * 64])
