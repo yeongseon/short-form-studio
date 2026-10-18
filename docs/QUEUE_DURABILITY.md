@@ -17,20 +17,29 @@ finalizing another attempt.
 ## Broker Replacement Recovery
 
 Redis owns a durable `queue:recovery_epoch`. The beat reconciler remembers the
-last observed epoch on the mounted DLQ volume. It considers broker messages lost
+last observed epoch in PostgreSQL, with the mounted DLQ-volume file as a secondary
+witness. It considers broker messages lost
 only when all of these signals agree:
 
 1. the broker epoch changed;
 2. all routed queues are empty;
 3. at least one worker answers Celery inspect ping; and
-4. the database task was created before the new epoch.
+4. the database task is owned by the previously observed broker generation.
 
 If any signal is unavailable, recovery is deferred. Queue age alone never fails
 work, so a slow healthy backlog remains queued. With complete replacement
-evidence, pre-epoch `pending`, `queued`, and `running` rows are fenced to
+evidence, previous-generation `pending`, `queued`, and `running` rows are fenced to
 `failed` with `broker_message_lost`, their owned quota is released, and eligible
 runs use the existing ownership-fenced rollback. `success` rows and post-epoch
-manual retries are untouched.
+manual retries owned by the current generation are untouched.
+
+Deployments upgraded from revisions before generation tracking can initially have
+active rows with `broker_generation = NULL`. On the first broker observation, the
+storage adapter assigns the observed generation to every legacy NULL `pending`,
+`queued`, and `running` row and persists `creator_broker_state` in the same
+PostgreSQL transaction. Terminal rows remain NULL. A later verified broker
+replacement therefore converges those adopted active rows under the same
+previous-generation policy instead of leaving legacy queued work indefinitely.
 
 Original broker arguments are not durably recorded. Recovery therefore never
 guesses arguments or automatically re-executes work. The user must retry through
