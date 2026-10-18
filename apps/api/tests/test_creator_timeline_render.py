@@ -1,7 +1,9 @@
 import json
+from decimal import Decimal
 
 import pytest
 from creator_domain.models import Timeline
+from creator_service.usage_service import InMemoryUsageStorage, UsageService
 from .timeline_demo_support import environment
 
 
@@ -24,6 +26,69 @@ async def test_explicit_approval_dispatches_persisted_revision(tmp_path, monkeyp
     review = await env.reviews.get_latest_review(run_id, "TIMELINE_REVIEW")
     assert review is not None and review["reviewer"] == "17"
     assert review["review_status"] == "approved"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rejection", ["kill_switch", "budget"])
+async def test_spend_rejection_does_not_approve_or_dispatch_and_run_stays_retryable(
+    tmp_path, monkeypatch, rejection,
+):
+    # Given timeline rendering is blocked by an operator or exhausted budget.
+    usage = UsageService(InMemoryUsageStorage())
+    if rejection == "kill_switch":
+        monkeypatch.setenv("BILLABLE_PROVIDER_CALLS_ENABLED", "false")
+    else:
+        await usage.set_quota(1, monthly_cost_usd=Decimal("0"))
+    monkeypatch.setattr("creator_service.usage_service.usage_service", usage)
+    env = await environment(tmp_path, monkeypatch)
+    async with env.client as client:
+        seeded = await client.post("/api/creator/workspaces/1/demo-short/runs")
+        run_id = seeded.json()["run"]["id"]
+
+        # When approval would enqueue the billable timeline render.
+        response = await client.post(
+            f"/api/creator/runs/{run_id}/approve-timeline-render",
+            json={"expected_revision": 1},
+        )
+
+    # Then admission rejects before approval or dispatch, preserving a retryable run.
+    assert response.status_code == 429
+    assert env.dispatches == []
+    run = await env.runs.get_run(run_id, workspace_id=1)
+    assert run is not None and run.current_stage == "TIMELINE_REVIEW"
+    assert await env.reviews.get_latest_review(run_id, "TIMELINE_REVIEW") is None
+
+
+@pytest.mark.asyncio
+async def test_dispatch_failure_releases_render_reservation_and_restores_retryable_stage(
+    tmp_path, monkeypatch,
+):
+    # Given a timeline render whose enqueue operation fails after approval.
+    usage = UsageService(InMemoryUsageStorage())
+    await usage.set_quota(1, monthly_cost_usd=Decimal("0.004"))
+    monkeypatch.setattr("creator_service.usage_service.usage_service", usage)
+    env = await environment(tmp_path, monkeypatch)
+
+    def fail_dispatch(run_id, render_profile, task_id=None):
+        raise ConnectionError("broker unavailable")
+
+    fail_dispatch.__name__ = "dispatch_render_video"
+    monkeypatch.setattr("shorts_api.routes.creator_timeline_render.dispatch_render_video", fail_dispatch)
+    async with env.client as client:
+        seeded = await client.post("/api/creator/workspaces/1/demo-short/runs")
+        run_id = seeded.json()["run"]["id"]
+
+        # When the approved render cannot be dispatched.
+        response = await client.post(
+            f"/api/creator/runs/{run_id}/approve-timeline-render",
+            json={"expected_revision": 1},
+        )
+
+    # Then dispatch rollback restores the stage and releases the full reservation.
+    assert response.status_code == 503
+    run = await env.runs.get_run(run_id, workspace_id=1)
+    assert run is not None and run.current_stage == "TIMELINE_REVIEW"
+    assert await usage.reserve_owned(1, "render", "replacement", Decimal("0.004"))
 
 
 @pytest.mark.asyncio

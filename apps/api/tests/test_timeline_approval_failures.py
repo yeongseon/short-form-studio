@@ -103,8 +103,12 @@ async def test_cancel_before_approval_cas_cannot_advance_or_record_review(tmp_pa
 async def test_enqueue_failure_returns_to_review_with_approval_audit(tmp_path, monkeypatch):
     env = await environment(tmp_path, monkeypatch)
 
-    def unavailable(run_id: int, render_profile: str) -> str:
+    def unavailable(
+        run_id: int, render_profile: str, task_id: str | None = None,
+    ) -> str:
         raise ConnectionError("broker unavailable")
+
+    unavailable.__name__ = "dispatch_render_video"
 
     monkeypatch.setattr("shorts_api.routes.creator_timeline_render.dispatch_render_video", unavailable)
     async with env.client as client:

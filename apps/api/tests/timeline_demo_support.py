@@ -49,9 +49,11 @@ async def environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> DemoEn
     app.exception_handlers.update(create_app().exception_handlers)
     dispatches: list[tuple[int, str]] = []
 
-    def dispatch_render_video(run_id: int, render_profile: str) -> str:
+    def dispatch_render_video(
+        run_id: int, render_profile: str, task_id: str | None = None,
+    ) -> str:
         dispatches.append((run_id, render_profile))
-        return "sync-test-render"
+        return task_id or "sync-test-render"
 
     app.include_router(creator_timeline_render.router, prefix="/api/creator")
     for name, service in (("run_service", runs), ("media_asset_service", media),
