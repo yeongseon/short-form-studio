@@ -235,7 +235,7 @@ class PostgresTaskTrackingStorage:
                 )
                 if claimed is None:
                     return False
-                await connection.fetchrow(
+                run_updated = await connection.fetchrow(
                     """UPDATE creator_runs SET current_stage=$2, status=$3, version=version+1
                        WHERE id=$1 AND current_stage=ANY($4::text[])
                        AND status != ALL($5::text[]) RETURNING id""",
@@ -248,7 +248,7 @@ class PostgresTaskTrackingStorage:
                        WHERE id=$1 RETURNING id""",
                     claimed["id"], status, error_code, error_message,
                 )
-                return True
+                return run_updated is not None
 
     async def fail_claimed_and_cancel_quota(
         self, celery_task_id: str, token: str, usage_storage: Any,

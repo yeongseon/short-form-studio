@@ -172,11 +172,11 @@ class InMemoryTaskTrackingStorage:
         row = self._rows[row_id]
         if row.get("status") != "running" or row.get("claim_token") != token or row.get("run_id") != run_id:
             return False
-        await run_storage.conditional_update_run(
+        applied, _ = await run_storage.conditional_update_run(
             run_id, run_updates, expected_stages, rejected_statuses=rejected_statuses,
         )
         await self.finish_if_claimed(celery_task_id, token, status, error_code, error_message)
-        return True
+        return applied
 
     async def fail_claimed_and_cancel_quota(
         self, celery_task_id: str, token: str, usage_storage: InMemoryUsageStorage,

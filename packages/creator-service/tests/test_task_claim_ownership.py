@@ -79,6 +79,46 @@ async def test_stale_failure_cannot_finalize_newer_claim(quota_pool: object) -> 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("quota_pool", ["memory", "postgres"], indirect=True)
+async def test_claimed_task_finishes_when_run_stage_cas_misses(quota_pool: object) -> None:
+    # Given a claimed task whose run has already advanced beyond its expected stage.
+    storage = PostgresTaskTrackingStorage() if quota_pool is not None else InMemoryTaskTrackingStorage()
+    tracking = TaskTrackingService(storage)
+    if quota_pool is not None:
+        from creator_service.run_service import PostgresRunStorage
+
+        pool = await db.get_pool()
+        await pool.execute("INSERT INTO creator_projects (id, workspace_id) VALUES (1, 1)")
+        await pool.execute(
+            "INSERT INTO creator_runs (id, project_id, workspace_id, current_stage) "
+            "VALUES (1, 1, 1, 'RENDER_GENERATING')"
+        )
+        run_storage = PostgresRunStorage()
+    else:
+        from creator_service.run_service import InMemoryRunStorage
+
+        run_storage = InMemoryRunStorage()
+        await run_storage.create_run(
+            {"id": 1, "project_id": 1, "workspace_id": 1, "current_stage": "RENDER_GENERATING"}
+        )
+    assert await tracking.record_task_start(1, "generate_audio", "delivery-1", claim_token="owner-a")
+
+    # When the owner finishes against the stale expected stage.
+    accepted = await tracking.finish_claimed_run(
+        "delivery-1", "owner-a", "success", run_storage, 1,
+        {"current_stage": "AUDIO_REVIEW", "status": "paused"},
+        frozenset({"AUDIO_GENERATING"}), frozenset({"failed", "cancelled", "completed"}),
+    )
+
+    # Then the run CAS reports a miss while the owned task still reaches terminal state.
+    task = await storage.get_by_celery_id("delivery-1")
+    run = await run_storage.get_run(1)
+    assert not accepted
+    assert task is not None and task["status"] == "success"
+    assert run is not None and run["current_stage"] == "RENDER_GENERATING"
+
+
+@pytest.mark.asyncio
 async def test_failure_finalization_prevents_successor_claim_during_quota_cleanup() -> None:
     # Given an old delivery whose atomic finalizer pauses while holding ownership.
     storage = InMemoryTaskTrackingStorage()
