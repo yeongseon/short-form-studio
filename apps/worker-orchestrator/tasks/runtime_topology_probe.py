@@ -4,12 +4,12 @@ import json
 import os
 import signal
 import subprocess
-import time
 from pathlib import Path
 from typing import Literal, assert_never
 from urllib.parse import urlsplit
 from urllib.request import urlopen
 
+import anyio
 from celery import Task
 from celery_app import celery_app
 from celery.worker.request import Request
@@ -105,7 +105,7 @@ def runtime_topology_probe(
                         await usage_service.cancel_owned(ctx.task_id)
                         _publish(evidence_path, "cancelled", task_id=ctx.task_id)
                         return TaskResult(status="cancelled")
-                    time.sleep(0.05)
+                    await anyio.sleep(0.05)
                 with urlopen(f"{_provider_url(provider_url)}/provider", timeout=5) as response:
                     response.read()
                 storage = _evidence_file(f"storage/{run_id}/artifact.bin")
@@ -141,7 +141,7 @@ def runtime_topology_probe(
             case "wait":
                 _publish(evidence_path, "running", task_id=ctx.task_id)
                 while True:
-                    time.sleep(0.1)
+                    await anyio.sleep(0.1)
             case "redelivery":
                 state = _evidence_file(evidence_path)
                 if state.exists():
@@ -157,7 +157,7 @@ def runtime_topology_probe(
                         if current is not None and current.get("status") == "cancelled":
                             _publish(evidence_path, "cancelled", task_id=ctx.task_id)
                             return TaskResult(status="cancelled")
-                        time.sleep(0.05)
+                        await anyio.sleep(0.05)
                     _publish(evidence_path, "cancelled", task_id=ctx.task_id)
                     return TaskResult(status="cancelled")
                 _publish(
@@ -168,7 +168,7 @@ def runtime_topology_probe(
                 )
                 kill_marker = state.with_suffix(".kill")
                 while not kill_marker.exists():
-                    time.sleep(0.05)
+                    await anyio.sleep(0.05)
                 os.kill(os.getpid(), signal.SIGKILL)
             case "timeout_resources":
                 temporary = _evidence_file(f"storage/{run_id}/timeout.tmp")
