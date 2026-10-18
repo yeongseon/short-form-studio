@@ -67,11 +67,11 @@ def test_render_uses_restored_timeline_media(
 
     monkeypatch.setattr("restore_drill.docker", record_docker)
     timeline = [
-        {"image_storage_key": "image.png", "audio_storage_key": "audio.wav", "duration_seconds": 1}
+        {"asset_id": 601, "duration_seconds": 1}
     ]
 
     # When
-    render_restored_timeline(restored, timeline)
+    render_restored_timeline(restored, timeline, {601: "image.png"})
 
     # Then
     command = commands[0]

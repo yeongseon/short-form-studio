@@ -101,9 +101,15 @@ def seed_production_fixture(container: str, media: Path) -> RuntimeFixture:
     timeline = json.dumps(
         [
             {
-                "image_storage_key": "image.png",
-                "audio_storage_key": "audio.wav",
+                "id": "segment-restored",
+                "scene_id": "scene-restored",
+                "asset_id": 601,
+                "timeline_start_seconds": 0,
                 "duration_seconds": 1,
+                "trim_start_seconds": None,
+                "trim_end_seconds": None,
+                "fit_mode": "cover",
+                "transition": None,
             }
         ],
         separators=(",", ":"),
@@ -129,7 +135,7 @@ INSERT INTO creator_run_tasks(run_id,task_type,celery_task_id,status,started_at,
     return RuntimeFixture(owner, foreign, revoked, 201, 401, 501, 601, 701)
 
 
-def restored_timeline(container: str, project_id: int) -> list[dict[str, str | int]]:
+def restored_timeline(container: str, project_id: int) -> list[dict[str, str | int | float | None]]:
     payload = docker(
         "exec",
         container,

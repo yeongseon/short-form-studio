@@ -59,17 +59,21 @@ def create_media(media: Path) -> None:
 
 
 def render_restored_timeline(
-    restored: Path, timeline: list[dict[str, str | int]]
+    restored: Path,
+    timeline: list[dict[str, str | int | float | None]],
+    asset_storage_keys: dict[int, str],
 ) -> None:
     segment = timeline[0]
-    image = segment["image_storage_key"]
-    audio = segment["audio_storage_key"]
+    asset_id = segment["asset_id"]
     duration = segment["duration_seconds"]
-    if not isinstance(image, str) or not isinstance(audio, str) or not isinstance(duration, int):
+    if not isinstance(asset_id, int) or not isinstance(duration, (int, float)):
         raise DrillError("restored Timeline segment is invalid")
+    image = asset_storage_keys.get(asset_id)
+    if image is None:
+        raise DrillError("restored Timeline references unavailable media")
     docker(
         "run", "--rm", "-v", f"{restored.resolve()}:/media", FFMPEG_IMAGE,
-        "-loop", "1", "-i", f"/media/{image}", "-i", f"/media/{audio}",
+        "-loop", "1", "-i", f"/media/{image}", "-i", "/media/audio.wav",
         "-t", str(duration), "-c:v", "libx264", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "/media/final.mp4",
     )
@@ -174,7 +178,7 @@ def main() -> int:
             run(sys.executable, str(verifier), "restore-media", str(bundle), "--target", str(restored), "--expected-alembic-revision", alembic_head, "--expected-secret-fingerprint", FINGERPRINT)
             timeline = restored_timeline(target, fixture.project_id)
             (restored / "final.mp4").unlink()
-            render_restored_timeline(restored, timeline)
+            render_restored_timeline(restored, timeline, {fixture.media_id: "image.png"})
             registered_artifact = register_rendered_artifact(
                 target, fixture, restored / "final.mp4"
             )
