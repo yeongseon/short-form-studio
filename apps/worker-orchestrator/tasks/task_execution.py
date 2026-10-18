@@ -70,7 +70,10 @@ def run_task(
     if not task_id.startswith("run-") and isinstance(
         runner._task_tracking_service, TaskTrackingService
     ):
-        claim_token = uuid4().hex
+        delivery_claim_token = getattr(request, "claim_token", None)
+        claim_token = (
+            delivery_claim_token if isinstance(delivery_claim_token, str) else uuid4().hex
+        )
         setattr(request, "claim_token", claim_token)
 
     def mark_claimed() -> None:
