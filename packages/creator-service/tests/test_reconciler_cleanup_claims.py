@@ -89,6 +89,31 @@ async def _prepare_run(pool: asyncpg.Pool | None) -> int:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("quota_pool", ["memory", "postgres"], indirect=True)
+async def test_broker_epoch_witness_survives_recovery_process_state_loss(
+    quota_pool: asyncpg.Pool | None,
+) -> None:
+    # Given: the recovery process records a broker generation in durable tracking storage.
+    first_storage = (
+        PostgresTaskTrackingStorage()
+        if quota_pool is not None
+        else InMemoryTaskTrackingStorage()
+    )
+    await first_storage.set_observed_broker_epoch("epoch-a")
+    second_storage = (
+        PostgresTaskTrackingStorage()
+        if quota_pool is not None
+        else first_storage
+    )
+
+    # When
+    observed = await second_storage.get_observed_broker_epoch()
+
+    # Then
+    assert observed == "epoch-a"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("quota_pool", ["memory", "postgres"], indirect=True)
 async def test_cleanup_marker_cannot_be_reclaimed_by_worker_or_dispatch(
     quota_pool: asyncpg.Pool | None,
 ) -> None:

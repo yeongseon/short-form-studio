@@ -17,6 +17,7 @@ class InMemoryTaskTrackingStorage:
         self._rows: dict[int, dict[str, Any]] = {}
         self._rows_by_celery_task_id: dict[str, int] = {}
         self._next_id = 1
+        self._observed_broker_epoch: str | None = None
         self._ownership_lock = anyio.Lock()
 
     async def transition_run_and_create_pending(
@@ -428,6 +429,12 @@ class InMemoryTaskTrackingStorage:
         ]
         rows.sort(key=lambda row: row.get("created_at"))
         return rows
+
+    async def get_observed_broker_epoch(self) -> str | None:
+        return self._observed_broker_epoch
+
+    async def set_observed_broker_epoch(self, epoch: str) -> None:
+        self._observed_broker_epoch = epoch
 
     async def promote_pending_to_queued(self, celery_task_id: str) -> dict[str, Any] | None:
         """Atomically promote a task from 'pending' to 'queued'. Returns None if not pending."""

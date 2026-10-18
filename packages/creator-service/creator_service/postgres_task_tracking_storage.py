@@ -470,6 +470,22 @@ class PostgresTaskTrackingStorage:
                ORDER BY created_at ASC"""
         )
 
+    async def get_observed_broker_epoch(self) -> str | None:
+        row = await fetch_one(
+            "SELECT epoch FROM creator_broker_state WHERE singleton = TRUE"
+        )
+        return str(row["epoch"]) if row is not None else None
+
+    async def set_observed_broker_epoch(self, epoch: str) -> None:
+        await fetch_one(
+            """INSERT INTO creator_broker_state (singleton, epoch, observed_at)
+               VALUES (TRUE, $1, NOW())
+               ON CONFLICT (singleton) DO UPDATE
+               SET epoch=EXCLUDED.epoch, observed_at=EXCLUDED.observed_at
+               RETURNING epoch""",
+            epoch,
+        )
+
     async def promote_pending_to_queued(self, celery_task_id: str) -> dict[str, Any] | None:
         """Atomically promote a task from 'pending' to 'queued'.
 
