@@ -12,7 +12,12 @@ import pytest
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "restore_drill.py"
 sys.path.insert(0, str(SCRIPT.parent))
-from restore_drill import ChildShutdownError, render_restored_timeline, stop_process
+from restore_drill import (
+    ChildShutdownError,
+    raise_cleanup_error,
+    render_restored_timeline,
+    stop_process,
+)
 from restore_drill_runtime import RuntimeFixture
 from restore_drill_runtime import DrillError, seed_production_fixture, validate_release_manifest
 
@@ -191,6 +196,19 @@ def test_stop_process_reports_failure_when_killed_child_does_not_exit() -> None:
     with pytest.raises(ChildShutdownError, match="remained alive after kill"):
         stop_process(process)
     assert process.waits == 2
+
+
+def test_cleanup_failure_does_not_mask_primary_exception() -> None:
+    # Given
+    primary = RuntimeError("primary failure")
+    cleanup = ChildShutdownError("cleanup failure")
+
+    # When / Then
+    with pytest.raises(RuntimeError, match="primary failure"):
+        try:
+            raise primary
+        finally:
+            raise_cleanup_error(cleanup)
 
 
 @pytest.mark.parametrize("digest", ["a" * 64, "b" * 64, "c" * 64])

@@ -204,6 +204,11 @@ def stop_process(process: ChildProcess) -> None:
             raise ChildShutdownError("child process remained alive after kill escalation") from None
 
 
+def raise_cleanup_error(cleanup_error: ChildShutdownError | None) -> None:
+    if sys.exc_info()[0] is None and cleanup_error is not None:
+        raise cleanup_error
+
+
 def main() -> int:
     if shutil.which("docker") is None:
         print("SKIP: docker is required", file=sys.stderr)
@@ -303,8 +308,7 @@ def main() -> int:
                     if cleanup_error is None:
                         cleanup_error = exc
             subprocess.run(["docker", "rm", "-f", source, target], capture_output=True, check=False)
-            if sys.exception() is None and cleanup_error is not None:
-                raise cleanup_error
+            raise_cleanup_error(cleanup_error)
 
 
 if __name__ == "__main__":
