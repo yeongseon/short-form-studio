@@ -22,6 +22,7 @@ class _Task:
     run_id: int
     status: str
     created_at: datetime
+    broker_generation: str | None = None
 
 
 class _Tracking:
@@ -123,9 +124,9 @@ async def test_new_empty_broker_fails_unknown_work_and_releases_owned_quota() ->
     now = datetime.now(timezone.utc)
     tracking = _Tracking(
         [
-            _Task("pending-a", 1, "pending", now - timedelta(hours=1)),
-            _Task("queued-a", 2, "queued", now - timedelta(hours=1)),
-            _Task("running-a", 3, "running", now - timedelta(hours=1)),
+            _Task("pending-a", 1, "pending", now - timedelta(hours=1), "epoch-a"),
+            _Task("queued-a", 2, "queued", now - timedelta(hours=1), "epoch-a"),
+            _Task("running-a", 3, "running", now - timedelta(hours=1), "epoch-a"),
             _Task("success-a", 4, "success", now - timedelta(hours=1)),
         ]
     )
@@ -186,8 +187,8 @@ async def test_new_attempt_created_after_recovery_epoch_is_preserved() -> None:
     now = datetime.now(timezone.utc)
     tracking = _Tracking(
         [
-            _Task("lost-a", 1, "queued", now - timedelta(hours=1)),
-            _Task("retry-a", 1, "running", now + timedelta(seconds=1)),
+            _Task("lost-a", 1, "queued", now - timedelta(hours=1), "epoch-a"),
+            _Task("retry-a", 1, "running", now + timedelta(seconds=1), "epoch-b"),
         ]
     )
     usage = _Usage()
@@ -213,12 +214,65 @@ async def test_new_attempt_created_after_recovery_epoch_is_preserved() -> None:
 
 
 @pytest.mark.asyncio
+async def test_reserved_task_from_current_generation_survives_first_recovery_pass() -> None:
+    # Given: replacement Redis accepted and reserved work before the reconciler observed it.
+    now = datetime.now(timezone.utc)
+    tracking = _Tracking(
+        [
+            _Task(
+                "lost-a",
+                1,
+                "queued",
+                now - timedelta(minutes=5),
+                broker_generation="epoch-a",
+            ),
+            _Task(
+                "reserved-b",
+                2,
+                "running",
+                now - timedelta(seconds=1),
+                broker_generation="epoch-b",
+            ),
+        ]
+    )
+    usage = _Usage()
+    rollbacks: list[tuple[int, str]] = []
+
+    # When: the first pass sees an empty queue because the current task is reserved.
+    result = await recover_lost_tasks(
+        previous_epoch="epoch-a",
+        snapshot=BrokerSnapshot(
+            epoch="epoch-b",
+            started_at=now,
+            queue_length=0,
+            oldest_wait_seconds=None,
+            workers_online=1,
+        ),
+        tracking=tracking,
+        usage=usage,
+        rollback=lambda run_id, task_id: _append_rollback(
+            rollbacks, run_id, task_id
+        ),
+    )
+
+    # Then: only work owned by the replaced generation is compensated.
+    assert result.failed == 1
+    assert tracking.tasks[0].status == "failed"
+    assert tracking.tasks[1].status == "running"
+    assert usage.cancelled == ["lost-a"]
+    assert rollbacks == [(1, "lost-a")]
+
+
+@pytest.mark.asyncio
 async def test_real_tracking_adapter_fences_late_success_after_recovery() -> None:
     # Given
     storage = InMemoryTaskTrackingStorage()
     tracking = TaskTrackingService(storage)
     now = datetime.now(timezone.utc)
-    await tracking.record_task_queued(1, "generate_audio", "lost-a")
+    await tracking.record_task_pending(
+        1, "generate_audio", "lost-a", broker_generation="epoch-a"
+    )
+    await tracking.promote_pending_to_queued("lost-a")
     usage = _Usage()
 
     # When

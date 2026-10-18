@@ -19,6 +19,7 @@ class RecoverableTask(Protocol):
     run_id: int
     status: str
     created_at: datetime
+    broker_generation: str | None
 
 
 class TaskRoute(Protocol):
@@ -103,7 +104,7 @@ async def recover_lost_tasks(
     failed = 0
     recovery_failures = 0
     for task in await tracking.list_broker_recovery_tasks():
-        if task.created_at >= snapshot.started_at:
+        if task.broker_generation != previous_epoch:
             continue
         marked = await tracking.mark_failed_if_active(
             task.celery_task_id,
