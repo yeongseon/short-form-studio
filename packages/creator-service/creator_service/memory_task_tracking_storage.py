@@ -197,6 +197,8 @@ class InMemoryTaskTrackingStorage:
                     expected_stages,
                     rejected_statuses=frozenset({"failed", "cancelled", "completed"}),
                 )
+                if row.get("status") != "running" or row.get("claim_token") != token:
+                    return False
             await usage_storage.cancel_owned(celery_task_id)
             row.update(
                 status="failed", claim_token=None, finished_at=datetime.now(timezone.utc),

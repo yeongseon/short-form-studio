@@ -214,3 +214,68 @@ async def test_stale_atomic_failure_leaves_successor_task_run_and_quota_unchange
     assert run is not None
     assert run["current_stage"] == "AUDIO_GENERATING"
     assert await usage.cancel_owned("delivery-1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("quota_pool", ["postgres"], indirect=True)
+async def test_postgres_atomic_failure_blocks_successor_claim_until_quota_cleanup(
+    quota_pool: object,
+) -> None:
+    # Given PostgreSQL cleanup is blocked on the workspace quota advisory lock.
+    if quota_pool is None:
+        pytest.fail("PostgreSQL fixture required")
+    from creator_service.postgres_usage_storage import PostgresUsageStorage
+    from creator_service.run_service import PostgresRunStorage
+
+    pool = await db.get_pool()
+    await pool.execute("INSERT INTO creator_projects (id, workspace_id) VALUES (1, 1)")
+    await pool.execute(
+        "INSERT INTO creator_runs (id, project_id, workspace_id, current_stage) "
+        "VALUES (1, 1, 1, 'AUDIO_GENERATING')"
+    )
+    tracking_storage = PostgresTaskTrackingStorage()
+    tracking = TaskTrackingService(tracking_storage)
+    usage = UsageService(PostgresUsageStorage())
+    assert await tracking.record_task_start(1, "generate_audio", "delivery-1", claim_token="owner-a")
+    assert await usage.reserve_owned(1, "image_gen", "delivery-1")
+    finalization: list[bool] = []
+    successor: list[object] = []
+
+    async with pool.acquire() as lock_connection:
+        async with lock_connection.transaction():
+            await lock_connection.execute("SELECT pg_advisory_xact_lock($1)", 1)
+
+            async def finalize() -> None:
+                finalization.append(await tracking.fail_claimed_and_cancel_quota(
+                    "delivery-1", "owner-a", usage.storage, "TIMEOUT", "failed",
+                    PostgresRunStorage(), 1, frozenset({"AUDIO_GENERATING"}),
+                ))
+
+            async def claim_successor() -> None:
+                successor.append(await tracking.record_task_start(
+                    1, "generate_audio", "delivery-1", claim_token="owner-b",
+                ))
+
+            # When finalization owns the task row and another worker attempts a claim.
+            async with anyio.create_task_group() as tasks:
+                tasks.start_soon(finalize)
+                while not await pool.fetchval(
+                    "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted)"
+                ):
+                    await anyio.lowlevel.checkpoint()
+                tasks.start_soon(claim_successor)
+                await anyio.lowlevel.checkpoint()
+
+    # Then releasing the lock commits one terminal task/run/quota outcome.
+    assert finalization == [True]
+    assert successor == [None]
+    task = await tracking_storage.get_by_celery_id("delivery-1")
+    run = await PostgresRunStorage().get_run(1)
+    owner_status = await pool.fetchval(
+        "SELECT status FROM workspace_quota_reservation_owners WHERE owner_id=$1",
+        "delivery-1",
+    )
+    assert task is not None and task["status"] == "failed"
+    assert run is not None and (run["status"], run["current_stage"]) == ("failed", "FAILED")
+    assert owner_status == "cancelled"
+    assert not await usage.cancel_owned("delivery-1")
