@@ -118,7 +118,18 @@ class DispatchCAS(DispatchRuntime):
         broker_generation: str | None = None
         if self._use_celery_dispatch() and task_type != "unknown":
             pending_id = owner_id or str(uuid4())
-            broker_generation = await run_blocking(self.broker_generation)
+            try:
+                broker_generation = await run_blocking(self.broker_generation)
+            except Exception:
+                await cancel_quota(
+                    reserved_workspace,
+                    quota_operation_type,
+                    "while reading broker generation",
+                    owner_id,
+                )
+                raise ServiceUnavailableError(
+                    "Unable to verify broker generation; dispatch blocked"
+                ) from None
         try:
             if pending_id is None:
                 try:

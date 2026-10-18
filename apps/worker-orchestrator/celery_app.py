@@ -14,6 +14,7 @@ import logging
 import os
 import json
 import signal
+import time
 from datetime import datetime, timezone
 import resource
 from pathlib import Path
@@ -118,6 +119,7 @@ BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
 }
 dlq_fallback_max_bytes = _parse_int_env("DLQ_FALLBACK_MAX_BYTES", 10 * 1024 * 1024)
 broker_recovery_epoch_key = os.getenv("BROKER_RECOVERY_EPOCH_KEY", "queue:recovery_epoch")
+broker_epoch_read_attempts = _parse_int_env("BROKER_EPOCH_READ_ATTEMPTS", 3)
 
 def _worker_task_modules() -> list[str]:
     modules = [
@@ -303,10 +305,18 @@ def ensure_broker_epoch() -> BrokerSnapshot:
     if redis is None:
         raise RuntimeError("Redis client unavailable")
     client = redis.Redis.from_url(redis_url)
-    started_at = datetime.now(timezone.utc)
-    generated = f"{os.urandom(16).hex()}|{started_at.isoformat()}"
-    client.set(broker_recovery_epoch_key, generated, nx=True)
-    stored = client.get(broker_recovery_epoch_key)
+    stored = None
+    for attempt in range(broker_epoch_read_attempts):
+        try:
+            started_at = datetime.now(timezone.utc)
+            generated = f"{os.urandom(16).hex()}|{started_at.isoformat()}"
+            client.set(broker_recovery_epoch_key, generated, nx=True)
+            stored = client.get(broker_recovery_epoch_key)
+            break
+        except redis.exceptions.RedisError:
+            if attempt + 1 == broker_epoch_read_attempts:
+                raise
+            time.sleep(0.05 * (attempt + 1))
     if not isinstance(stored, (bytes, str)):
         raise RuntimeError("Broker recovery epoch unavailable")
     decoded = stored.decode() if isinstance(stored, bytes) else stored

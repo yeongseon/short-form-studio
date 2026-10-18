@@ -15,6 +15,7 @@ import asyncio
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 from creator_domain.task_dispatch import TaskSubmission
@@ -563,6 +564,76 @@ class TestCasDispatchEndToEnd:
             assert rollback_calls == []
 
         asyncio.run(_run())
+
+    def test_broker_generation_failure_cancels_quota_before_pending_creation(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Given
+        from creator_domain.exceptions import ServiceUnavailableError
+        from creator_service import dispatch_cas
+        from creator_service.task_dispatch_service import TaskDispatchService
+
+        port = RecordingDispatcher(queued=True)
+        service = TaskDispatchService(port)
+        tracking = SimpleNamespace(
+            transition_run_and_record_pending=AsyncMock()
+        )
+        cancelled: list[str | None] = []
+
+        async def reserve(*_args: Any, **_kwargs: Any) -> int:
+            return 1
+
+        async def cancel(
+            _workspace_id: int | None,
+            _operation_type: str | None,
+            _reason: str | None = None,
+            owner_id: str | None = None,
+        ) -> None:
+            cancelled.append(owner_id)
+
+        async def get_run(*_args: Any, **_kwargs: Any) -> SimpleNamespace:
+            return SimpleNamespace(status="running", project_id=1)
+
+        monkeypatch.setattr(dispatch_cas, "reserve_quota", reserve)
+        monkeypatch.setattr(dispatch_cas, "cancel_quota", cancel)
+        monkeypatch.setattr(
+            service,
+            "broker_generation",
+            lambda: (_ for _ in ()).throw(ConnectionError("broker unavailable")),
+        )
+        monkeypatch.setattr(
+            dispatch_cas,
+            "import_module",
+            lambda _name: SimpleNamespace(task_tracking_service=tracking),
+        )
+        def fake_dispatcher(**_kwargs: Any) -> str:
+            return "unreachable"
+
+        fake_dispatcher.__name__ = "dispatch_generate_script"
+
+        # When / Then
+        with pytest.raises(ServiceUnavailableError):
+            asyncio.run(
+                service.cas_dispatch_with_rollback(
+                    run_id=1,
+                    expected_stages=frozenset({"IDEA_REVIEW"}),
+                    target_stage="GENERATING_SCRIPT",
+                    dispatcher=fake_dispatcher,
+                    dispatcher_args={},
+                    run_service=SimpleNamespace(
+                        get_run=get_run,
+                        storage=SimpleNamespace(),
+                    ),
+                    rollback_stage="IDEA_REVIEW",
+                    rollback_restart_from=None,
+                    enqueue_error_detail="dispatch failed",
+                    quota_operation_type="llm",
+                    workspace_id=1,
+                )
+            )
+        tracking.transition_run_and_record_pending.assert_not_awaited()
+        assert len(cancelled) == 1
+        assert cancelled[0] is not None
 
 
 # ---------------------------------------------------------------------------
