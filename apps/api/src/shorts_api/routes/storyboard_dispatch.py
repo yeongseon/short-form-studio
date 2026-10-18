@@ -61,6 +61,11 @@ async def _publish_pending(run_id: int, task_type: str, dispatch: Callable[[str]
         published_id = await run_blocking(partial(dispatch, task_id))
         if published_id != task_id:
             raise RuntimeError("Dispatch task ID mismatch")
+        observed_generation = await run_blocking(
+            task_dispatch_service.broker_generation
+        )
+        if observed_generation != broker_generation:
+            raise RuntimeError("Broker generation changed during dispatch")
         await task_tracking_service.promote_pending_to_queued(task_id)
     except Exception:
         await _revoke_and_mark(task_id)

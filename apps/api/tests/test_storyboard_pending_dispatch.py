@@ -254,3 +254,50 @@ async def test_storyboard_dispatch_reserves_and_cancels_only_task_owner(
     assert len(reserved) == 1
     assert cancelled == reserved
     assert tracking.events == [("pending", reserved[0]), ("promote", reserved[0])]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bulk", [False, True])
+@pytest.mark.parametrize("replacement_phase", ["before_publish", "after_publish"])
+async def test_storyboard_dispatch_rejects_broker_replacement_around_publish(
+    boundary, monkeypatch: pytest.MonkeyPatch, bulk: bool, replacement_phase: str,
+) -> None:
+    # Given a broker generation that changes immediately around publish.
+    tracking, cancellation, quota = boundary
+    generation = ["epoch-a"]
+    published = False
+
+    def observe_generation() -> str:
+        nonlocal published
+        if replacement_phase == "after_publish" and published:
+            generation[0] = "epoch-b"
+        return generation[0]
+
+    def publish(task_id: str) -> str:
+        nonlocal published
+        if replacement_phase == "before_publish":
+            generation[0] = "epoch-b"
+        published = True
+        return task_id
+
+    monkeypatch.setattr(
+        dispatch_module.task_dispatch_service, "broker_generation", observe_generation,
+    )
+
+    # When dispatch crosses the replacement boundary.
+    result = None
+    if bulk:
+        result = await invoke(True, publish)
+    else:
+        with pytest.raises(HTTPException) as error:
+            await invoke(False, publish)
+        assert error.value.status_code == 503
+
+    # Then the uncertain attempt is revoked, compensated, and never promoted.
+    if bulk:
+        assert result == {"section_id": "section-1", "task_id": "", "error": "dispatch_failed"}
+    tasks = await tracking.list_run_tasks(4)
+    assert [(task.status, task.broker_generation) for task in tasks] == [("revoked", "epoch-a")]
+    assert len(cancellation.calls) == 1
+    assert quota == [(8, "tts")]
+    assert all(event[0] != "promote" for event in tracking.events)
