@@ -523,6 +523,63 @@ async def test_postgres_concurrent_admission_stays_within_budget(media_database:
 
 
 @pytest.mark.asyncio
+async def test_postgres_completion_waits_for_workspace_admission_lock(
+    media_database: None,
+) -> None:
+    # Given admission is paused after observing usage while holding its workspace lock.
+    storage = MediaAssetService()._asset_storage
+    now = datetime.now(timezone.utc)
+    intent = await storage.create_upload_intent(UploadIntent(
+        id=0, owner_id="completion-race", workspace_id=9101,
+        storage_key="workspaces/9101/assets/completion-race.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now,
+        reserved_bytes=6,
+    ))
+    await storage.mark_upload_intent_uploaded(intent.id)
+    row = {
+        "workspace_id": 9101, "project_id": None, "run_id": None,
+        "media_type": MediaType.IMAGE.value, "origin": MediaOrigin.UPLOADED.value,
+        "storage_key": intent.storage_key, "mime_type": "image/png",
+        "width": 8, "height": 12, "duration_seconds": None, "source_url": None,
+        "metadata": {"size_bytes": 6}, "created_at": now,
+    }
+    pool = await db.get_pool()
+
+    async with pool.acquire() as admission:
+        transaction = admission.transaction()
+        await transaction.start()
+        await admission.execute("SELECT pg_advisory_xact_lock($1)", 9101)
+        completion_finished = anyio.Event()
+
+        async def complete() -> None:
+            await storage.save_uploaded_asset(row, intent)
+            completion_finished.set()
+
+        # When completion reaches the conversion while admission is paused.
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(complete)
+            with anyio.fail_after(5):
+                while True:
+                    waiting = await admission.fetchval(
+                        "SELECT EXISTS (SELECT 1 FROM pg_locks "
+                        "WHERE locktype = 'advisory' AND NOT granted)",
+                    )
+                    if waiting:
+                        break
+                    if completion_finished.is_set():
+                        pytest.fail("completion bypassed the workspace admission lock")
+                    await anyio.lowlevel.checkpoint()
+            # Then conversion cannot make admission miss both reservation and stored bytes.
+            assert not completion_finished.is_set()
+            await transaction.commit()
+
+    assert completion_finished.is_set()
+    usage = await storage.get_storage_usage(9101)
+    assert usage.stored_bytes == 6
+    assert usage.reserved_bytes == 0
+
+
+@pytest.mark.asyncio
 async def test_postgres_crash_claim_remains_reserved_until_terminal_reclaim(
     media_database: None,
 ) -> None:

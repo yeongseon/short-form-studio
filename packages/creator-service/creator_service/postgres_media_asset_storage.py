@@ -111,6 +111,9 @@ class PostgresMediaAssetStorage(PostgresUploadIntentStorage, PostgresMediaRetent
         try:
             pool = await db.get_pool()
             async with pool.acquire() as connection, connection.transaction():
+                await connection.execute(
+                    "SELECT pg_advisory_xact_lock($1)", intent.workspace_id,
+                )
                 claimed = await connection.fetchval(
                     """UPDATE creator_media_upload_intents
                         SET state = 'completed', updated_at = NOW()
@@ -180,27 +183,28 @@ class PostgresMediaAssetStorage(PostgresUploadIntentStorage, PostgresMediaRetent
             await connection.execute("SELECT pg_advisory_xact_lock($1)", intent.workspace_id)
             usage_row = await connection.fetchrow(
                 """SELECT
-                    COALESCE(SUM((metadata->>'size_bytes')::bigint), 0) AS stored_bytes,
-                    COUNT(*) AS stored_assets
-                    FROM creator_media_assets WHERE workspace_id = $1""",
-                intent.workspace_id,
-            )
-            reserved_row = await connection.fetchrow(
-                """SELECT COALESCE(SUM(reserved_bytes), 0) AS reserved_bytes,
-                    COUNT(*) AS reserved_assets
-                    FROM creator_media_upload_intents
-                    WHERE workspace_id = $1
-                    AND state IN (
-                        'pending', 'uploaded', 'cleanup_pending', 'reclaiming',
-                        'late_upload_watch', 'exhausted'
-                    )""",
+                    COALESCE((SELECT SUM((metadata->>'size_bytes')::bigint)
+                        FROM creator_media_assets WHERE workspace_id = $1), 0) AS stored_bytes,
+                    (SELECT COUNT(*) FROM creator_media_assets
+                        WHERE workspace_id = $1) AS stored_assets,
+                    COALESCE((SELECT SUM(reserved_bytes)
+                        FROM creator_media_upload_intents
+                        WHERE workspace_id = $1 AND state IN (
+                            'pending', 'uploaded', 'cleanup_pending', 'reclaiming',
+                            'late_upload_watch', 'exhausted'
+                        )), 0) AS reserved_bytes,
+                    (SELECT COUNT(*) FROM creator_media_upload_intents
+                        WHERE workspace_id = $1 AND state IN (
+                            'pending', 'uploaded', 'cleanup_pending', 'reclaiming',
+                            'late_upload_watch', 'exhausted'
+                        )) AS reserved_assets""",
                 intent.workspace_id,
             )
             usage = StorageUsage(
                 stored_bytes=int(usage_row["stored_bytes"]),
                 stored_asset_count=int(usage_row["stored_assets"]),
-                reserved_bytes=int(reserved_row["reserved_bytes"]),
-                reserved_asset_count=int(reserved_row["reserved_assets"]),
+                reserved_bytes=int(usage_row["reserved_bytes"]),
+                reserved_asset_count=int(usage_row["reserved_assets"]),
                 max_stored_bytes=active_policy.max_stored_bytes,
                 max_asset_count=active_policy.max_asset_count,
                 max_reserved_bytes=active_policy.max_reserved_bytes,
