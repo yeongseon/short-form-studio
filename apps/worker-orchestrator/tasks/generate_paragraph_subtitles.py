@@ -26,6 +26,7 @@ from tasks.task_runner import (
     run_task,
     validate_artifact_path,
 )
+from tasks.hard_timeout import production_task
 from tasks.task_execution import TaskInputError
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
 
 @celery_app.task(
     bind=True,
+    base=production_task(frozenset({RunStage.AUDIO_GENERATING.value, RunStage.SUBTITLE_GENERATING.value})),
     autoretry_for=(ProviderTimeoutError, RateLimitError),
     retry_backoff=True,
     retry_jitter=True,
