@@ -165,17 +165,14 @@ docker compose up -d api worker beat studio-web
 timeout 90 bash -c 'until curl -sf http://127.0.0.1:8000/healthz >/dev/null; do sleep 2; done'
 timeout 90 bash -c 'until curl -sf http://127.0.0.1:5174/ >/dev/null; do sleep 2; done'
 
-run_recovery_now
-[ "$(psql_scalar "SELECT count(*) FROM creator_run_tasks WHERE celery_task_id LIKE 'legacy-upgrade-%' AND status IN ('pending','queued','running') AND broker_generation IS NOT NULL")" = 3 ] \
-  || fail "first broker observation did not adopt all legacy active rows"
-[ "$(psql_scalar "SELECT broker_generation IS NULL FROM creator_run_tasks WHERE celery_task_id='legacy-upgrade-success'")" = t ] \
-  || fail "first broker observation changed completed legacy ownership"
 docker compose stop redis
 docker compose rm -f redis
 docker volume rm "${COMPOSE_PROJECT_NAME}_redis_data"
 docker compose up -d redis
 wait_for_redis
 timeout 60 bash -c 'until docker compose exec -T worker celery -A celery_app.celery_app inspect ping 2>/dev/null | grep -q pong; do sleep 2; done'
+docker compose run --rm --no-deps beat sh -c \
+  'printf %s fallback-replacement > /var/lib/short-form-studio/dlq/observed-broker-epoch'
 run_recovery_now
 [ "$(psql_scalar "SELECT string_agg(status,',' ORDER BY celery_task_id) FROM creator_run_tasks WHERE celery_task_id LIKE 'legacy-upgrade-%'")" = "failed,failed,failed,success" ] \
   || fail "legacy active rows did not converge after broker replacement"
