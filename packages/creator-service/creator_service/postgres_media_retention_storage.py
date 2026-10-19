@@ -188,7 +188,7 @@ class PostgresMediaRetentionStorage:
 
     async def finalize_retained_asset(
         self, asset_id: int, workspace_id: int, claim_token: str,
-        delete_object: Callable[[], Awaitable[bool]],
+        delete_object: Callable[[], Awaitable[None]],
     ) -> bool:
         pool = await db.get_pool()
         async with pool.acquire() as connection, connection.transaction():

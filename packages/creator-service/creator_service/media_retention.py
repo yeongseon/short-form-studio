@@ -79,7 +79,7 @@ class RetentionStorage(Protocol):
     ) -> None: ...
     async def finalize_retained_asset(
         self, asset_id: int, workspace_id: int, claim_token: str,
-        delete_object: Callable[[], Awaitable[bool]],
+        delete_object: Callable[[], Awaitable[None]],
     ) -> bool: ...
 
 
@@ -141,8 +141,8 @@ class MediaRetentionService:
             if claim_token is None:
                 continue
 
-            async def delete_object() -> bool:
-                return await self._io.run(lambda: self._objects.delete(asset.storage_key))
+            async def delete_object() -> None:
+                await self._io.run(lambda: self._objects.delete(asset.storage_key))
 
             try:
                 finalized = await self._storage.finalize_retained_asset(

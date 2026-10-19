@@ -1179,8 +1179,8 @@ async def test_postgres_expired_retention_claim_yields_to_timeline_approval(
     })
     assert asset.storage_key is not None
 
-    async def delete_object() -> bool:
-        return await anyio.to_thread.run_sync(objects.delete, asset.storage_key)
+    async def delete_object() -> None:
+        await anyio.to_thread.run_sync(objects.delete, asset.storage_key)
 
     # When the stale claimant resumes final object and metadata deletion.
     deleted = await storage.finalize_retained_asset(
