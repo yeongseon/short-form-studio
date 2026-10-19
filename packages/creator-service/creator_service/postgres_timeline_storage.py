@@ -40,7 +40,10 @@ class PostgresTimelineStorage:
                   ON a.id = (segment->>'asset_id')::bigint
                  AND a.workspace_id = $2
                  AND a.project_id = $1
-                 AND a.deleting = FALSE
+                 AND NOT EXISTS (
+                    SELECT 1 FROM creator_media_asset_deletion_claims deletion
+                    WHERE deletion.asset_id = a.id
+                 )
             ),
             updated AS (
                 UPDATE creator_timelines

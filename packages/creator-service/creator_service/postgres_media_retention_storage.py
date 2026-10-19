@@ -18,7 +18,11 @@ class PostgresMediaRetentionStorage:
         rows = await db.fetch_all(
             """SELECT id, workspace_id, storage_key, origin, media_type, created_at
                 FROM creator_media_assets
-                WHERE workspace_id = $1 AND storage_key IS NOT NULL AND deleting = FALSE
+                WHERE workspace_id = $1 AND storage_key IS NOT NULL
+                AND NOT EXISTS (
+                    SELECT 1 FROM creator_media_asset_deletion_claims deletion
+                    WHERE deletion.asset_id = creator_media_assets.id
+                )
                 ORDER BY created_at, id LIMIT $2""",
             workspace_id, limit,
         )
@@ -58,7 +62,11 @@ class PostgresMediaRetentionStorage:
     async def delete_retained_asset(self, asset_id: int, workspace_id: int) -> None:
         await db.execute(
             """DELETE FROM creator_media_assets
-                WHERE id = $1 AND workspace_id = $2 AND deleting = TRUE""",
+                WHERE id = $1 AND workspace_id = $2
+                AND EXISTS (
+                    SELECT 1 FROM creator_media_asset_deletion_claims deletion
+                    WHERE deletion.asset_id = creator_media_assets.id
+                )""",
             asset_id, workspace_id,
         )
 
@@ -67,8 +75,13 @@ class PostgresMediaRetentionStorage:
         async with pool.acquire() as connection, connection.transaction():
             await connection.execute("SELECT pg_advisory_xact_lock($1)", workspace_id)
             claimed = await connection.fetchval(
-                """UPDATE creator_media_assets a SET deleting = TRUE
-                    WHERE a.id = $1 AND a.workspace_id = $2 AND a.deleting = FALSE
+                """INSERT INTO creator_media_asset_deletion_claims (asset_id, workspace_id)
+                    SELECT a.id, a.workspace_id FROM creator_media_assets a
+                    WHERE a.id = $1 AND a.workspace_id = $2
+                    AND NOT EXISTS (
+                        SELECT 1 FROM creator_media_asset_deletion_claims deletion
+                        WHERE deletion.asset_id = a.id
+                    )
                     AND NOT EXISTS (
                         SELECT 1 FROM creator_timelines t
                         CROSS JOIN LATERAL jsonb_array_elements(t.segments_json::jsonb) segment
@@ -78,14 +91,14 @@ class PostgresMediaRetentionStorage:
                     AND NOT EXISTS (
                         SELECT 1 FROM creator_approved_timeline_assets approved
                         WHERE approved.workspace_id = $2 AND approved.asset_id = a.id
-                    ) RETURNING a.id""",
+                    ) RETURNING asset_id""",
                 asset_id, workspace_id,
             )
         return claimed is not None
 
     async def release_retained_asset(self, asset_id: int, workspace_id: int) -> None:
         await db.execute(
-            """UPDATE creator_media_assets SET deleting = FALSE
-                WHERE id = $1 AND workspace_id = $2 AND deleting = TRUE""",
+            """DELETE FROM creator_media_asset_deletion_claims
+                WHERE asset_id = $1 AND workspace_id = $2""",
             asset_id, workspace_id,
         )

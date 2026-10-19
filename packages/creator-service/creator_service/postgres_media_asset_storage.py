@@ -20,7 +20,10 @@ _FILTER = """
     workspace_id = $1
     AND ($2::text IS NULL OR media_type = $2)
     AND ($3::integer IS NULL OR project_id = $3)
-    AND deleting = FALSE
+    AND NOT EXISTS (
+        SELECT 1 FROM creator_media_asset_deletion_claims deletion
+        WHERE deletion.asset_id = creator_media_assets.id
+    )
 """
 _ORDER = """
     CASE origin WHEN 'UPLOADED' THEN 0 WHEN 'IMPORTED' THEN 1
@@ -38,8 +41,7 @@ def _decode_asset(row: dict[str, object]) -> dict[str, object]:
     metadata = row["metadata"]
     if isinstance(metadata, str):
         metadata = _METADATA.validate_json(metadata)
-    domain_row = {key: value for key, value in row.items() if key != "deleting"}
-    return MediaAsset.model_validate({**domain_row, "metadata": metadata}).model_dump()
+    return MediaAsset.model_validate({**row, "metadata": metadata}).model_dump()
 
 
 class PostgresMediaAssetStorage(PostgresUploadIntentStorage, PostgresMediaRetentionStorage):
@@ -156,7 +158,11 @@ class PostgresMediaAssetStorage(PostgresUploadIntentStorage, PostgresMediaRetent
     async def get_asset(self, asset_id: int, workspace_id: int) -> dict[str, object] | None:
         row = await db.fetch_one(
             """SELECT * FROM creator_media_assets
-                WHERE id = $1 AND workspace_id = $2 AND deleting = FALSE""",
+                WHERE id = $1 AND workspace_id = $2
+                AND NOT EXISTS (
+                    SELECT 1 FROM creator_media_asset_deletion_claims deletion
+                    WHERE deletion.asset_id = creator_media_assets.id
+                )""",
             asset_id, workspace_id,
         )
         return _decode_asset(row) if row is not None else None

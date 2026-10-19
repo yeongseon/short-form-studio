@@ -78,7 +78,7 @@ def test_save_sql_is_scoped_by_project_workspace_and_revision(monkeypatch) -> No
     assert "creator_projects" in query
     assert "workspace_id = $2" in query
     assert "revision = $5" in query
-    assert "deleting = FALSE" in query
+    assert "creator_media_asset_deletion_claims" in query
     assert pool.connection.executed == [("SELECT pg_advisory_xact_lock($1)", (9,))]
     # update-first CTE + guarded first-write insert (not insert-only)
     assert "UPDATE creator_timelines" in query

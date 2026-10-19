@@ -141,23 +141,6 @@ async def test_generated_metadata_roundtrips_json(media_database: None, tmp_path
     assert restored is not None and restored.origin is MediaOrigin.GENERATED
 
 
-def test_decode_ignores_retention_claim_marker() -> None:
-    # Given a persisted asset row contains the storage-only deletion claim marker.
-    now = datetime.now(timezone.utc)
-    row = {
-        "id": 1, "workspace_id": 9101, "project_id": None, "run_id": None,
-        "media_type": "IMAGE", "origin": "UPLOADED", "storage_key": "key",
-        "mime_type": "image/png", "width": 8, "height": 12,
-        "duration_seconds": None, "source_url": None, "metadata": {},
-        "created_at": now, "deleting": False,
-    }
-
-    # When PostgreSQL metadata is decoded into the domain model.
-    decoded = _decode_asset(row)
-
-    # Then the persistence-only field is omitted without changing the asset.
-    assert decoded["id"] == 1
-    assert "deleting" not in decoded
 
 
 @pytest.mark.asyncio
