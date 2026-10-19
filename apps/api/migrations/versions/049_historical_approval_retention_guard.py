@@ -55,7 +55,14 @@ def upgrade() -> None:
                       AND timeline.workspace_id = approved_review.workspace_id
                       AND timeline.timeline_id = parsed_timeline_id
                       AND timeline.revision = parsed_revision;
-                    IF FOUND THEN
+                    IF FOUND AND NOT EXISTS (
+                        SELECT 1
+                        FROM jsonb_array_elements(approved_timeline.segments_json::jsonb) segment
+                        JOIN creator_media_asset_deletion_claims deletion
+                          ON deletion.asset_id = (segment->>'asset_id')::bigint
+                         AND deletion.workspace_id = approved_review.workspace_id
+                         AND deletion.lease_expires_at > now()
+                    ) THEN
                         INSERT INTO creator_approved_timeline_assets (
                             review_id, workspace_id, timeline_id, revision, asset_id
                         )

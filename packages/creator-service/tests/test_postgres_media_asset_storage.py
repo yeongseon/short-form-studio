@@ -1140,3 +1140,26 @@ async def test_postgres_claimed_asset_rejects_concurrent_timeline_approval(
     )
     assert reviews == []
     assert mappings == []
+
+
+@pytest.mark.asyncio
+async def test_postgres_empty_approved_revision_is_resolved(
+    media_database: None,
+) -> None:
+    # Given an exact Timeline revision with no MediaAsset segments.
+    await db.execute(
+        """INSERT INTO creator_timelines (
+                project_id, workspace_id, timeline_id, revision, segments_json
+            ) VALUES ($1, $2, $3, $4, $5::jsonb)""",
+        9101, 9101, "empty-approved", 1, "[]",
+    )
+    await PostgresStageReviewStorage().create_review({
+        "run_id": 9101, "stage_name": "TIMELINE_REVIEW", "review_status": "approved",
+        "reviewer": "human", "notes": '{"timeline_id":"empty-approved","revision":1}',
+    })
+
+    # When retention checks the explicit approval-resolution marker.
+    resolved = await PostgresMediaAssetStorage().retention_approvals_resolved(9101)
+
+    # Then a valid empty approval does not quarantine the workspace.
+    assert resolved is True

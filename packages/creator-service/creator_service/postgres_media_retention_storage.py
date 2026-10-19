@@ -96,8 +96,8 @@ class PostgresMediaRetentionStorage:
                   AND review.stage_name = 'TIMELINE_REVIEW'
                   AND review.review_status = 'approved'
                   AND NOT EXISTS (
-                      SELECT 1 FROM creator_approved_timeline_assets mapped
-                      WHERE mapped.review_id = review.id
+                      SELECT 1 FROM creator_resolved_timeline_approvals resolved
+                      WHERE resolved.review_id = review.id
                   ) LIMIT 1""",
             workspace_id,
         )
