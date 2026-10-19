@@ -170,18 +170,29 @@ def test_typed_failure_preserves_concurrent_transition(
     case.provider.released.set()
     error = ProviderError("unavailable")
     case.provider.error = error
-    original = case.runner.runs.storage.conditional_update_run
+    atomic_failure = case.runner.tracking.fail_claimed_and_cancel_quota
+    conditional_update = case.runner.runs.storage.conditional_update_run
 
-    async def advance_before_cas(*args, **kwargs):
+    async def advance() -> None:
         if cancelled:
             await case.cancel()
         else:
             await case.runner.runs.storage.update_run(case.runner.run_id, {
                 "current_stage": "AUDIO_GENERATING",
             })
-        return await original(*args, **kwargs)
 
-    monkeypatch.setattr(case.runner.runs.storage, "conditional_update_run", advance_before_cas)
+    async def advance_before_atomic(*args, **kwargs):
+        await advance()
+        return await atomic_failure(*args, **kwargs)
+
+    async def advance_before_cas(*args, **kwargs):
+        await advance()
+        return await conditional_update(*args, **kwargs)
+
+    if case.task_id.startswith("run-"):
+        monkeypatch.setattr(case.runner.runs.storage, "conditional_update_run", advance_before_cas)
+    else:
+        monkeypatch.setattr(case.runner.tracking, "fail_claimed_and_cancel_quota", advance_before_atomic)
     with pytest.raises(ProviderError) as raised:
         case.invoke()
     assert raised.value is error
