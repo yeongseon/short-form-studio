@@ -980,3 +980,34 @@ async def test_postgres_legacy_approval_without_mapping_remains_protected(
 
     # Then the legacy approved revision remains protected without a mapping row.
     assert asset.id in approved
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("notes", [None, "human approval", "{broken", '{"timeline_id":"legacy","revision":"old"}'])
+async def test_postgres_malformed_legacy_approval_fails_closed(
+    media_database: None, tmp_path: Path, notes: str | None,
+) -> None:
+    # Given an approved legacy review has notes that cannot identify a revision.
+    service = MediaAssetService(LocalStorageBackend(str(tmp_path)))
+    asset = await service.create_image_asset(
+        workspace_id=9101, project_id=9101, filename="legacy-fail-closed.png",
+        data=image_bytes(), content_type="image/png",
+    )
+    await db.execute(
+        """INSERT INTO creator_timelines (
+                project_id, workspace_id, timeline_id, revision, segments_json
+            ) VALUES ($1, $2, $3, $4, $5::jsonb)""",
+        9101, 9101, "legacy", 2, json.dumps([{"id": "only", "asset_id": asset.id}]),
+    )
+    await db.execute(
+        """INSERT INTO creator_stage_reviews (
+                run_id, stage_name, review_status, reviewer, notes
+            ) VALUES ($1, 'TIMELINE_REVIEW', 'approved', 'legacy', $2)""",
+        9101, notes,
+    )
+
+    # When retention resolves approved assets.
+    approved = await PostgresMediaAssetStorage().approved_asset_ids(9101)
+
+    # Then malformed historical data does not abort and the asset remains protected.
+    assert asset.id in approved

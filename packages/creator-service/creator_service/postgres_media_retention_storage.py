@@ -61,31 +61,54 @@ class PostgresMediaRetentionStorage:
 
     async def approved_asset_ids(self, workspace_id: int) -> frozenset[int]:
         rows = await db.fetch_all(
-            """SELECT DISTINCT asset_id FROM (
-                    SELECT asset_id
-                    FROM creator_approved_timeline_assets WHERE workspace_id = $1
-                    UNION ALL
-                    SELECT (segment->>'asset_id')::bigint AS asset_id
-                    FROM creator_stage_reviews review
-                    JOIN creator_runs run ON run.id = review.run_id
-                    JOIN creator_timelines timeline
-                      ON timeline.project_id = run.project_id
-                     AND timeline.workspace_id = run.workspace_id
-                     AND timeline.timeline_id = review.notes::jsonb->>'timeline_id'
-                     AND timeline.revision = (review.notes::jsonb->>'revision')::integer
-                    CROSS JOIN LATERAL
-                        jsonb_array_elements(timeline.segments_json::jsonb) segment
-                    WHERE run.workspace_id = $1
-                      AND review.stage_name = 'TIMELINE_REVIEW'
-                      AND review.review_status = 'approved'
-                      AND NOT EXISTS (
-                          SELECT 1 FROM creator_approved_timeline_assets mapped
-                          WHERE mapped.review_id = review.id
-                      )
-                ) approved""",
+            "SELECT asset_id FROM creator_approved_timeline_assets WHERE workspace_id = $1",
             workspace_id,
         )
-        return frozenset(int(row["asset_id"]) for row in rows)
+        approved = {int(row["asset_id"]) for row in rows}
+        legacy_reviews = await db.fetch_all(
+            """SELECT review.notes
+                FROM creator_stage_reviews review
+                JOIN creator_runs run ON run.id = review.run_id
+                WHERE run.workspace_id = $1
+                  AND review.stage_name = 'TIMELINE_REVIEW'
+                  AND review.review_status = 'approved'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM creator_approved_timeline_assets mapped
+                      WHERE mapped.review_id = review.id
+                  )""",
+            workspace_id,
+        )
+        for review in legacy_reviews:
+            timeline = await self._legacy_approved_timeline(workspace_id, review["notes"])
+            if timeline is None:
+                return approved | await self._timeline_asset_ids(workspace_id)
+            approved.update(timeline)
+        return frozenset(approved)
+
+    async def _legacy_approved_timeline(
+        self, workspace_id: int, notes: str | None,
+    ) -> frozenset[int] | None:
+        if notes is None:
+            return None
+        try:
+            payload = json.loads(notes)
+            timeline_id = payload["timeline_id"]
+            revision = int(payload["revision"])
+        except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+            return None
+        if not isinstance(timeline_id, str):
+            return None
+        rows = await db.fetch_all(
+            """SELECT segments_json FROM creator_timelines
+                WHERE workspace_id = $1 AND timeline_id = $2 AND revision = $3""",
+            workspace_id, timeline_id, revision,
+        )
+        asset_ids: set[int] = set()
+        for row in rows:
+            for segment in json.loads(str(row["segments_json"])):
+                if isinstance(segment, dict) and isinstance(segment.get("asset_id"), int):
+                    asset_ids.add(segment["asset_id"])
+        return frozenset(asset_ids)
 
     async def _timeline_asset_ids(self, workspace_id: int) -> frozenset[int]:
         rows = await db.fetch_all(
