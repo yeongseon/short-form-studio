@@ -1011,3 +1011,90 @@ async def test_postgres_malformed_legacy_approval_fails_closed(
 
     # Then malformed historical data does not abort and the asset remains protected.
     assert asset.id in approved
+
+
+@pytest.mark.asyncio
+async def test_postgres_replaced_historical_approval_forces_dry_run(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given revision N was approved before the mutable Timeline advanced to N+1.
+    objects = LocalStorageBackend(str(tmp_path))
+    service = MediaAssetService(objects)
+    approved_asset = await service.create_image_asset(
+        workspace_id=9101, project_id=9101, filename="historical-approved.png",
+        data=image_bytes(), content_type="image/png",
+    )
+    current_asset = await service.create_image_asset(
+        workspace_id=9101, project_id=9101, filename="current.png",
+        data=image_bytes(), content_type="image/png",
+    )
+    await db.execute(
+        """INSERT INTO creator_timelines (
+                project_id, workspace_id, timeline_id, revision, segments_json
+            ) VALUES ($1, $2, $3, $4, $5::jsonb)""",
+        9101, 9101, "advanced", 1,
+        json.dumps([{"id": "approved", "asset_id": approved_asset.id}]),
+    )
+    await db.execute(
+        """INSERT INTO creator_stage_reviews (
+                run_id, stage_name, review_status, reviewer, notes
+            ) VALUES ($1, 'TIMELINE_REVIEW', 'approved', 'legacy', $2)""",
+        9101, '{"timeline_id":"advanced","revision":1}',
+    )
+    await db.execute(
+        """UPDATE creator_timelines SET revision = 2, segments_json = $2::jsonb
+            WHERE project_id = $1""",
+        9101, json.dumps([{"id": "current", "asset_id": current_asset.id}]),
+    )
+    await db.execute(
+        """UPDATE creator_media_assets SET created_at = now() - interval '30 days'
+            WHERE id = $1""",
+        approved_asset.id,
+    )
+
+    # When destructive retention encounters the unresolved historical approval.
+    result = await MediaRetentionService(
+        PostgresMediaAssetStorage(), objects,
+        MediaRetentionPolicy(original_days=1, grace_days=0, enabled=True, dry_run=False),
+    ).sweep_workspace(9101, now=datetime.now(timezone.utc))
+
+    # Then it reports only: the historical asset remains physically and logically present.
+    assert result.dry_run is True
+    assert result.candidates == 1
+    assert result.deleted == 0
+    assert await service.get_asset(approved_asset.id, 9101) is not None
+
+
+@pytest.mark.asyncio
+async def test_postgres_malformed_historical_approval_protects_noncurrent_asset(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given malformed approval notes may refer to an old asset absent from the current Timeline.
+    objects = LocalStorageBackend(str(tmp_path))
+    service = MediaAssetService(objects)
+    historical_asset = await service.create_image_asset(
+        workspace_id=9101, project_id=9101, filename="unknown-approved.png",
+        data=image_bytes(), content_type="image/png",
+    )
+    await db.execute(
+        """INSERT INTO creator_stage_reviews (
+                run_id, stage_name, review_status, reviewer, notes
+            ) VALUES ($1, 'TIMELINE_REVIEW', 'approved', 'legacy', $2)""",
+        9101, f'{{"asset_id":{historical_asset.id},"revision":"broken"}}',
+    )
+    await db.execute(
+        """UPDATE creator_media_assets SET created_at = now() - interval '30 days'
+            WHERE id = $1""",
+        historical_asset.id,
+    )
+
+    # When destructive retention encounters the unresolvable approval.
+    result = await MediaRetentionService(
+        PostgresMediaAssetStorage(), objects,
+        MediaRetentionPolicy(original_days=1, grace_days=0, enabled=True, dry_run=False),
+    ).sweep_workspace(9101, now=datetime.now(timezone.utc))
+
+    # Then the workspace is report-only and the possibly approved asset remains protected.
+    assert result.dry_run is True
+    assert result.deleted == 0
+    assert await service.get_asset(historical_asset.id, 9101) is not None
