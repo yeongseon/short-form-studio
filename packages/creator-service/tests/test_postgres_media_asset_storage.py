@@ -765,7 +765,7 @@ async def test_postgres_retention_claim_fences_timeline_save(
         workspace_id=9101, project_id=9101, filename="race.png",
         data=image_bytes(), content_type="image/png",
     )
-    claimed = await storage.claim_retained_asset(asset.id, 9101)
+    claim_token = await storage.claim_retained_asset(asset.id, 9101)
     timeline = Timeline.model_validate({
         "id": "retention-race", "project_id": 9101, "revision": 0,
         "segments": [{
@@ -781,7 +781,42 @@ async def test_postgres_retention_claim_fences_timeline_save(
         )
 
     # Then lookup rejects the deleting asset and the claim can be rolled back safely.
-    assert claimed
+    assert claim_token is not None
     assert await service.get_asset(asset.id, 9101) is None
-    await storage.release_retained_asset(asset.id, 9101)
+    await storage.release_retained_asset(asset.id, 9101, claim_token)
     assert await service.get_asset(asset.id, 9101) is not None
+
+
+@pytest.mark.asyncio
+async def test_postgres_retention_successor_reclaims_expired_claim_once(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given a worker dies after claiming an eligible asset.
+    storage = PostgresMediaAssetStorage()
+    service = MediaAssetService(LocalStorageBackend(str(tmp_path)), storage)
+    asset = await service.create_image_asset(
+        workspace_id=9101, project_id=9101, filename="orphaned-claim.png",
+        data=image_bytes(), content_type="image/png",
+    )
+    abandoned_token = await storage.claim_retained_asset(asset.id, 9101)
+    assert abandoned_token is not None
+    await db.execute(
+        """UPDATE creator_media_asset_deletion_claims
+            SET lease_expires_at = now() - interval '1 second' WHERE asset_id = $1""",
+        asset.id,
+    )
+
+    # When a successor enumerates candidates and claims the restored asset.
+    candidates = await storage.list_retention_assets(9101, 100)
+    successor_token = await storage.claim_retained_asset(asset.id, 9101)
+
+    # Then the stale owner cannot release/delete, while the successor completes once.
+    assert [candidate.id for candidate in candidates] == [asset.id]
+    assert successor_token is not None and successor_token != abandoned_token
+    await storage.release_retained_asset(asset.id, 9101, abandoned_token)
+    assert await service.get_asset(asset.id, 9101) is None
+    await storage.delete_retained_asset(asset.id, 9101, abandoned_token)
+    assert await service.get_asset(asset.id, 9101) is None
+    await storage.delete_retained_asset(asset.id, 9101, successor_token)
+    assert await service.get_asset(asset.id, 9101) is None
+    assert await storage.claim_retained_asset(asset.id, 9101) is None

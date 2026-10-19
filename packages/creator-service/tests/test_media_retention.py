@@ -73,12 +73,12 @@ async def test_storage_delete_failure_keeps_metadata_accounted() -> None:
             return frozenset()
 
         async def claim_retained_asset(self, asset_id: int, workspace_id: int):
-            return True
+            return "claim-token"
 
-        async def release_retained_asset(self, asset_id: int, workspace_id: int):
+        async def release_retained_asset(self, asset_id: int, workspace_id: int, claim_token: str):
             self.deleted.append(-asset_id)
 
-        async def delete_retained_asset(self, asset_id: int, workspace_id: int):
+        async def delete_retained_asset(self, asset_id: int, workspace_id: int, claim_token: str):
             self.deleted.append(asset_id)
 
     class Objects:
@@ -114,12 +114,12 @@ async def test_storage_delete_error_keeps_metadata_accounted() -> None:
             return frozenset()
 
         async def claim_retained_asset(self, asset_id: int, workspace_id: int):
-            return True
+            return "claim-token"
 
-        async def release_retained_asset(self, asset_id: int, workspace_id: int):
+        async def release_retained_asset(self, asset_id: int, workspace_id: int, claim_token: str):
             self.deleted.append(-asset_id)
 
-        async def delete_retained_asset(self, asset_id: int, workspace_id: int):
+        async def delete_retained_asset(self, asset_id: int, workspace_id: int, claim_token: str):
             self.deleted.append(asset_id)
 
     class Objects:

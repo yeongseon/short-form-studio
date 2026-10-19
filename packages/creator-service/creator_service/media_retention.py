@@ -70,9 +70,13 @@ class RetentionStorage(Protocol):
     async def list_retention_assets(self, workspace_id: int, limit: int) -> list[RetentionAsset]: ...
     async def referenced_asset_ids(self, workspace_id: int) -> frozenset[int]: ...
     async def approved_asset_ids(self, workspace_id: int) -> frozenset[int]: ...
-    async def claim_retained_asset(self, asset_id: int, workspace_id: int) -> bool: ...
-    async def release_retained_asset(self, asset_id: int, workspace_id: int) -> None: ...
-    async def delete_retained_asset(self, asset_id: int, workspace_id: int) -> None: ...
+    async def claim_retained_asset(self, asset_id: int, workspace_id: int) -> str | None: ...
+    async def release_retained_asset(
+        self, asset_id: int, workspace_id: int, claim_token: str,
+    ) -> None: ...
+    async def delete_retained_asset(
+        self, asset_id: int, workspace_id: int, claim_token: str,
+    ) -> None: ...
 
 
 class DeletableObjects(Protocol):
@@ -115,16 +119,17 @@ class MediaRetentionService:
             return RetentionSweepResult(len(candidates), 0, True, True)
         deleted = 0
         for asset in candidates:
-            if not await self._storage.claim_retained_asset(asset.id, workspace_id):
+            claim_token = await self._storage.claim_retained_asset(asset.id, workspace_id)
+            if claim_token is None:
                 continue
             try:
                 object_deleted = await self._io.run(partial(self._objects.delete, asset.storage_key))
             except BaseException:
-                await self._storage.release_retained_asset(asset.id, workspace_id)
+                await self._storage.release_retained_asset(asset.id, workspace_id, claim_token)
                 raise
             if not object_deleted:
-                await self._storage.release_retained_asset(asset.id, workspace_id)
+                await self._storage.release_retained_asset(asset.id, workspace_id, claim_token)
                 continue
-            await self._storage.delete_retained_asset(asset.id, workspace_id)
+            await self._storage.delete_retained_asset(asset.id, workspace_id, claim_token)
             deleted += 1
         return RetentionSweepResult(len(candidates), deleted, False, True)
