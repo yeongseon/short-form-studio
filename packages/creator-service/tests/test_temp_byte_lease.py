@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import tempfile
 import io
+import os
+import signal
+import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Barrier, Event, get_ident
@@ -17,6 +21,63 @@ from creator_service.object_storage import LocalStorageBackend
 from creator_service.storage_policy import StoragePolicy
 from creator_service.storage_policy import StorageLowWatermark
 from creator_service.temp_byte_lease import temp_byte_lease
+
+
+def _lease_holder(tmp_path: Path) -> subprocess.Popen[str]:
+    root = Path(__file__).resolve().parents[3]
+    package_paths = os.pathsep.join(str(root / "packages" / name) for name in (
+        "creator-domain", "creator-service", "creator-provider",
+    ))
+    process = subprocess.Popen(
+        [sys.executable, "-c", """
+import time
+from creator_service.temp_byte_lease import temp_byte_lease
+with temp_byte_lease(1, 1):
+    print("acquired", flush=True)
+    time.sleep(30)
+"""],
+        stdout=subprocess.PIPE, text=True,
+        env={**os.environ, "PYTHONPATH": package_paths, "TMPDIR": str(tmp_path)},
+    )
+    assert process.stdout is not None
+    assert process.stdout.readline().strip() == "acquired"
+    return process
+
+
+def test_dead_process_byte_lease_is_reclaimed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a subprocess is killed while holding a staging byte lease.
+    process = _lease_holder(tmp_path)
+    process.send_signal(signal.SIGKILL)
+    process.wait(timeout=5)
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    disk_usage = type("DiskUsage", (), {"free": 100})()
+    monkeypatch.setattr("creator_service.temp_byte_lease.shutil.disk_usage", lambda _: disk_usage)
+
+    # When a successor requests all otherwise available capacity.
+    with temp_byte_lease(80, 20):
+        lease_count = len(list((tmp_path / ".media-byte-leases").glob("*.lease")))
+
+    # Then the orphan is reclaimed and only the successor lease was present.
+    assert lease_count == 1
+
+
+def test_live_process_byte_lease_remains_reserved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given a live subprocess owns a staging byte lease.
+    process = _lease_holder(tmp_path)
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+    disk_usage = type("DiskUsage", (), {"free": 100})()
+    monkeypatch.setattr("creator_service.temp_byte_lease.shutil.disk_usage", lambda _: disk_usage)
+    try:
+        # When another worker requests capacity that overlaps the live lease.
+        with pytest.raises(StorageLowWatermark), temp_byte_lease(80, 20):
+            pass
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
 
 
 def test_shared_byte_lease_allows_only_one_concurrent_writer(
