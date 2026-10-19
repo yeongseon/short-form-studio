@@ -191,14 +191,14 @@ def test_lifecycle_builds_additive_newer_head_and_runs_cd_rollback_verification(
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
     lifecycle = (ROOT / "scripts/release_lifecycle_acceptance.sh").read_text()
 
-    assert "043_release_lifecycle_additive" in workflow
-    assert "down_revision: str | None = \"042\"" in workflow
+    assert "044_release_lifecycle_additive" in workflow
+    assert "down_revision: str | None = \"043\"" in workflow
     lifecycle_step = workflow[workflow.index("Build two API releases"):]
     assert lifecycle_step.count("ScriptDirectory.from_config") == 2
     assert 'LIFECYCLE_N_HEAD="$lifecycle_n_head"' in workflow
     assert 'LIFECYCLE_N_PLUS_ONE_HEAD="$lifecycle_n_plus_one_head"' in workflow
     assert '[ "$lifecycle_n_head" = 041 ]' in workflow
-    assert '[ "$lifecycle_n_plus_one_head" = 043_release_lifecycle_additive ]' in workflow
+    assert '[ "$lifecycle_n_plus_one_head" = 044_release_lifecycle_additive ]' in workflow
     assert "MigrationContext.configure(connection).get_current_heads()" in lifecycle
     assert "verify-db-compatible" in lifecycle
 
@@ -209,11 +209,11 @@ def test_cutover_upgrades_legacy_null_generations_before_broker_replacement() ->
     upgrade_037 = acceptance.index("alembic upgrade 037")
     seed_legacy = acceptance.index("'legacy-upgrade-${status}'")
     upgrade_head = acceptance.index("alembic upgrade head", upgrade_037)
-    adopt_legacy = acceptance.index("first broker observation did not adopt")
-    replace_broker = acceptance.index('docker volume rm "${COMPOSE_PROJECT_NAME}_redis_data"', adopt_legacy)
-    converge = acceptance.index("legacy active rows did not converge", replace_broker)
+    replace_broker = acceptance.index('docker volume rm "${COMPOSE_PROJECT_NAME}_redis_data"', upgrade_head)
+    fallback_witness = acceptance.index("fallback-replacement", replace_broker)
+    converge = acceptance.index("legacy active rows did not converge", fallback_witness)
 
-    assert upgrade_037 < seed_legacy < upgrade_head < adopt_legacy < replace_broker < converge
+    assert upgrade_037 < seed_legacy < upgrade_head < replace_broker < fallback_witness < converge
 
 
 def test_deploy_production_condition_references_only_direct_needs() -> None:
