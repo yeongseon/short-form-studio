@@ -71,12 +71,6 @@ async def settle_owned_on_connection(
         return False
     if not billable_unknown and source["status"] == "reserved" and source["settled_estimated_cost_usd"] <= 0:
         return False
-    status = "billable_unknown" if billable_unknown else "settled"
-    await connection.execute(
-        """UPDATE workspace_quota_reservation_owners
-           SET status = $2, reserved_units = 0 WHERE owner_id = $1""",
-        owner_id, status,
-    )
     unknown = await connection.fetchval(
         """UPDATE workspace_quota_reservation_attempts SET status = 'unknown'
            WHERE owner_id = $1 AND status = 'authorized'
@@ -89,12 +83,19 @@ async def settle_owned_on_connection(
            WHERE owner_id = $1 AND status = 'unknown'""",
         owner_id,
     )
+    status = "billable_unknown" if billable_unknown or unknown is not None else "settled"
+    retained_estimate = (
+        source["estimated_cost_usd"]
+        if billable_unknown
+        else source["settled_estimated_cost_usd"] + unknown_total
+    )
     keep = source["estimated_cost_usd"] if billable_unknown else unknown_total
-    if unknown is not None and not billable_unknown:
-        await connection.execute(
-            "UPDATE workspace_quota_reservation_owners SET status = 'billable_unknown' WHERE owner_id = $1",
-            owner_id,
-        )
+    await connection.execute(
+        """UPDATE workspace_quota_reservation_owners
+           SET status = $2, estimated_cost_usd = $3, reserved_units = 0
+           WHERE owner_id = $1""",
+        owner_id, status, retained_estimate,
+    )
     remaining_units = int(source["reserved_units"])
     await connection.execute(
         """UPDATE workspace_quota_reservations SET
@@ -126,13 +127,11 @@ async def finalize_revoked_owned_on_connection(
     await connection.execute("SELECT pg_advisory_xact_lock($1)", int(workspace_id))
     attempted = await connection.fetchval(
         "SELECT EXISTS (SELECT 1 FROM workspace_quota_reservation_attempts "
-        "WHERE owner_id = $1)",
+        "WHERE owner_id = $1 AND status IN ('authorized', 'accounted'))",
         owner_id,
     )
     if attempted:
-        return await settle_owned_on_connection(
-            connection, owner_id, billable_unknown=True,
-        )
+        return await settle_owned_on_connection(connection, owner_id)
     return await cancel_owned_on_connection(connection, owner_id)
 
 
