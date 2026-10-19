@@ -117,6 +117,31 @@ class _FailingAssets(InMemoryMediaAssetStorage):
 
 
 @pytest.mark.asyncio
+async def test_memory_failed_uploaded_asset_validation_remains_reconcilable() -> None:
+    # Given an uploaded object and intent with invalid metadata.
+    now = datetime.now(timezone.utc)
+    objects = _Objects()
+    assets = InMemoryMediaAssetStorage()
+    intent = await assets.create_upload_intent(UploadIntent(
+        id=0, owner_id="uploader", workspace_id=7,
+        storage_key="workspaces/7/assets/invalid.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now,
+    ))
+    objects.objects[intent.storage_key] = _png()
+    await assets.mark_upload_intent_uploaded(intent.id)
+
+    # When metadata construction fails inside the atomic save operation.
+    with pytest.raises(ValueError):
+        await assets.save_uploaded_asset({"workspace_id": 7}, intent)
+
+    # Then the intent remains uploaded and a later sweep deletes the orphan.
+    assert (await assets.list_upload_intents())[0].state is UploadIntentState.UPLOADED
+    await assets.expire_upload_intent(intent.id, now)
+    await MediaUploadReconciler(objects, assets).sweep(now=now)
+    assert objects.objects == {}
+
+
+@pytest.mark.asyncio
 async def test_definite_metadata_failure_compensates_uploaded_object() -> None:
     # Given an upload backend and metadata persistence that definitely rejects.
     objects = _Objects()

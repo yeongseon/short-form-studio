@@ -183,6 +183,64 @@ async def test_postgres_rejects_foreign_associations(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"project_id": 9999},
+        {"project_id": 9102},
+        {"run_id": 9999},
+        {"run_id": 9102},
+    ],
+)
+async def test_failed_uploaded_asset_association_remains_reconcilable(
+    media_database: None, tmp_path: Path, overrides: dict[str, int],
+) -> None:
+    # Given an uploaded object and intent whose project or run association is unavailable.
+    storage = MediaAssetService()._asset_storage
+    objects = LocalStorageBackend(str(tmp_path))
+    now = datetime.now(timezone.utc)
+    intent = await storage.create_upload_intent(UploadIntent(
+        id=0, owner_id=uuid.uuid4().hex, workspace_id=9101,
+        storage_key=f"workspaces/9101/assets/{uuid.uuid4().hex}.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now,
+    ))
+    objects.upload(intent.storage_key, image_bytes(), content_type="image/png")
+    await storage.mark_upload_intent_uploaded(intent.id)
+    row = {
+        "workspace_id": 9101,
+        "project_id": 9101,
+        "run_id": None,
+        "media_type": MediaType.IMAGE.value,
+        "origin": MediaOrigin.UPLOADED.value,
+        "storage_key": intent.storage_key,
+        "mime_type": "image/png",
+        "width": 8,
+        "height": 12,
+        "duration_seconds": None,
+        "source_url": None,
+        "metadata": {},
+        "created_at": now,
+        **overrides,
+    }
+
+    # When atomic metadata persistence rejects the association.
+    with pytest.raises(MediaAssetPersistenceFailed):
+        await storage.save_uploaded_asset(row, intent)
+
+    # Then the intent remains sweepable and reconciliation deletes the orphan.
+    persisted = await db.fetch_one(
+        "SELECT state FROM creator_media_upload_intents WHERE id = $1", intent.id,
+    )
+    assert persisted == {"state": "uploaded"}
+    await db.execute(
+        "UPDATE creator_media_upload_intents SET lease_expires_at = $2 WHERE id = $1",
+        intent.id, now,
+    )
+    await MediaUploadReconciler(objects, storage).sweep(now=now)
+    assert not (tmp_path / intent.storage_key).exists()
+
+
+@pytest.mark.asyncio
 async def test_additive_migration_retains_legacy_assets(media_database: None) -> None:
     # Given a legacy scene asset inserted before the new migration.
     # When reading the old storage table after upgrading.

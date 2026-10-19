@@ -102,14 +102,14 @@ class PostgresMediaAssetStorage(PostgresUploadIntentStorage):
                     asset.height, asset.duration_seconds, asset.source_url,
                     json.dumps(asset.metadata, allow_nan=False), asset.created_at,
                 )
+                if saved is None:
+                    raise MediaAssetPersistenceFailed()
         except MediaAssetPersistenceFailed:
             raise
         except (OSError, asyncpg.PostgresConnectionError, asyncpg.InterfaceError) as error:
             raise MediaAssetPersistenceIndeterminate() from error
         except asyncpg.PostgresError as error:
             raise MediaAssetPersistenceFailed() from error
-        if saved is None:
-            raise MediaAssetPersistenceFailed()
         return _decode_asset(dict(saved))
 
     async def get_asset(self, asset_id: int, workspace_id: int) -> dict[str, object] | None:
