@@ -68,11 +68,6 @@ class MediaAssetStorageBackend(Protocol):
     async def release_retained_asset(
         self, asset_id: int, workspace_id: int, claim_token: str,
     ) -> None: ...
-    async def delete_retained_asset(
-        self, asset_id: int, workspace_id: int, claim_token: str,
-    ) -> None: ...
-
-
 _ORIGIN_SORT_RANK = {
     MediaOrigin.UPLOADED: 0, MediaOrigin.IMPORTED: 1, MediaOrigin.EXTERNAL_URL: 2,
     MediaOrigin.STOCK: 3, MediaOrigin.GENERATED: 4,
@@ -358,18 +353,6 @@ class InMemoryMediaAssetStorage:
 
     async def retention_approvals_resolved(self, workspace_id: int) -> bool:
         return True
-
-    async def delete_retained_asset(
-        self, asset_id: int, workspace_id: int, claim_token: str,
-    ) -> None:
-        async with self._lock:
-            if self._deleting_asset_ids.get(asset_id) != claim_token:
-                return
-            self._assets = [
-                asset for asset in self._assets
-                if not (asset["id"] == asset_id and asset["workspace_id"] == workspace_id)
-            ]
-            self._deleting_asset_ids.pop(asset_id, None)
 
     async def finalize_retained_asset(
         self, asset_id: int, workspace_id: int, claim_token: str,

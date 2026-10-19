@@ -50,7 +50,7 @@ class PostgresStageReviewStorage:
                             SELECT 1 FROM creator_media_asset_deletion_claims deletion
                             WHERE deletion.asset_id = (segment->>'asset_id')::bigint
                               AND deletion.workspace_id = exact.workspace_id
-                              AND deletion.lease_expires_at > now()
+                              AND (deletion.object_deleting OR deletion.lease_expires_at > now())
                         )
                         RETURNING review_id
                     )
@@ -62,7 +62,7 @@ class PostgresStageReviewStorage:
                         JOIN creator_media_asset_deletion_claims deletion
                           ON deletion.asset_id = (segment->>'asset_id')::bigint
                          AND deletion.workspace_id = exact.workspace_id
-                         AND deletion.lease_expires_at > now()
+                         AND (deletion.object_deleting OR deletion.lease_expires_at > now())
                     ) RETURNING review_id""",
                     int(saved["id"]), int(saved["run_id"]), timeline_id, revision,
                 )

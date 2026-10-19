@@ -29,11 +29,6 @@ class PostgresMediaRetentionStorage:
     ) -> list[RetentionAsset]:
         pool = await db.get_pool()
         async with pool.acquire() as connection, connection.transaction():
-            await connection.execute(
-                """DELETE FROM creator_media_asset_deletion_claims
-                    WHERE workspace_id = $1 AND lease_expires_at <= now()""",
-                workspace_id,
-            )
             rows = await connection.fetch(
                 """SELECT id, workspace_id, storage_key, origin, media_type, created_at
                 FROM creator_media_assets
@@ -42,6 +37,7 @@ class PostgresMediaRetentionStorage:
                 AND NOT EXISTS (
                     SELECT 1 FROM creator_media_asset_deletion_claims deletion
                     WHERE deletion.asset_id = creator_media_assets.id
+                      AND deletion.lease_expires_at > now()
                 )
                 ORDER BY created_at, id LIMIT $2""",
                 workspace_id, limit,
@@ -142,21 +138,6 @@ class PostgresMediaRetentionStorage:
                     asset_ids.add(segment["asset_id"])
         return frozenset(asset_ids)
 
-    async def delete_retained_asset(
-        self, asset_id: int, workspace_id: int, claim_token: str,
-    ) -> None:
-        await db.execute(
-            """DELETE FROM creator_media_assets
-                WHERE id = $1 AND workspace_id = $2
-                AND EXISTS (
-                    SELECT 1 FROM creator_media_asset_deletion_claims deletion
-                    WHERE deletion.asset_id = creator_media_assets.id
-                    AND deletion.claim_token = $3
-                    AND deletion.lease_expires_at > now()
-                )""",
-            asset_id, workspace_id, claim_token,
-        )
-
     async def claim_retained_asset(self, asset_id: int, workspace_id: int) -> str | None:
         claim_token = uuid.uuid4().hex
         pool = await db.get_pool()
@@ -164,14 +145,11 @@ class PostgresMediaRetentionStorage:
             await connection.execute("SELECT pg_advisory_xact_lock($1)", workspace_id)
             claimed = await connection.fetchval(
                 """INSERT INTO creator_media_asset_deletion_claims (
-                        asset_id, workspace_id, claim_token, lease_expires_at
+                        asset_id, workspace_id, claim_token, lease_expires_at, object_deleting
                     )
-                    SELECT a.id, a.workspace_id, $3, now() + $4 FROM creator_media_assets a
+                    SELECT a.id, a.workspace_id, $3, now() + $4, false
+                    FROM creator_media_assets a
                     WHERE a.id = $1 AND a.workspace_id = $2
-                    AND NOT EXISTS (
-                        SELECT 1 FROM creator_media_asset_deletion_claims deletion
-                        WHERE deletion.asset_id = a.id
-                    )
                     AND NOT EXISTS (
                         SELECT 1 FROM creator_timelines t
                         CROSS JOIN LATERAL jsonb_array_elements(t.segments_json::jsonb) segment
@@ -181,7 +159,13 @@ class PostgresMediaRetentionStorage:
                     AND NOT EXISTS (
                         SELECT 1 FROM creator_approved_timeline_assets approved
                         WHERE approved.workspace_id = $2 AND approved.asset_id = a.id
-                    ) RETURNING asset_id""",
+                    )
+                    ON CONFLICT (asset_id) DO UPDATE
+                    SET claim_token = EXCLUDED.claim_token,
+                        lease_expires_at = EXCLUDED.lease_expires_at
+                    WHERE creator_media_asset_deletion_claims.workspace_id = EXCLUDED.workspace_id
+                      AND creator_media_asset_deletion_claims.lease_expires_at <= now()
+                    RETURNING asset_id""",
                 asset_id, workspace_id, claim_token, _CLAIM_LEASE,
             )
         return claim_token if claimed is not None else None
@@ -191,41 +175,57 @@ class PostgresMediaRetentionStorage:
         delete_object: Callable[[], Awaitable[None]],
     ) -> bool:
         pool = await db.get_pool()
-        async with pool.acquire() as connection, connection.transaction():
-            await connection.execute("SELECT pg_advisory_xact_lock($1)", workspace_id)
-            claim_is_valid = await connection.fetchval(
-                """SELECT EXISTS (
-                    SELECT 1 FROM creator_media_asset_deletion_claims deletion
-                    WHERE deletion.asset_id = $1 AND deletion.workspace_id = $2
-                      AND deletion.claim_token = $3 AND deletion.lease_expires_at > now()
-                      AND NOT EXISTS (
-                          SELECT 1 FROM creator_timelines timeline
-                          CROSS JOIN LATERAL
-                              jsonb_array_elements(timeline.segments_json::jsonb) segment
-                          WHERE timeline.workspace_id = $2
-                            AND (segment->>'asset_id')::bigint = deletion.asset_id
-                      )
-                      AND NOT EXISTS (
-                          SELECT 1 FROM creator_approved_timeline_assets approved
-                          WHERE approved.workspace_id = $2
-                            AND approved.asset_id = deletion.asset_id
-                      )
-                )""",
-                asset_id, workspace_id, claim_token,
-            )
-            if not claim_is_valid:
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                await connection.execute("SELECT pg_advisory_xact_lock($1)", workspace_id)
+                claim_is_valid = await connection.fetchval(
+                    """SELECT EXISTS (
+                        SELECT 1 FROM creator_media_asset_deletion_claims deletion
+                        WHERE deletion.asset_id = $1 AND deletion.workspace_id = $2
+                          AND deletion.claim_token = $3 AND deletion.lease_expires_at > now()
+                          AND NOT EXISTS (
+                              SELECT 1 FROM creator_timelines timeline
+                              CROSS JOIN LATERAL
+                                  jsonb_array_elements(timeline.segments_json::jsonb) segment
+                              WHERE timeline.workspace_id = $2
+                                AND (segment->>'asset_id')::bigint = deletion.asset_id
+                          )
+                          AND NOT EXISTS (
+                              SELECT 1 FROM creator_approved_timeline_assets approved
+                              WHERE approved.workspace_id = $2
+                                AND approved.asset_id = deletion.asset_id
+                          )
+                    )""",
+                    asset_id, workspace_id, claim_token,
+                )
+                if not claim_is_valid:
+                    await connection.execute(
+                        """DELETE FROM creator_media_asset_deletion_claims
+                            WHERE asset_id = $1 AND workspace_id = $2 AND claim_token = $3
+                              AND object_deleting = false""",
+                        asset_id, workspace_id, claim_token,
+                    )
+                    return False
                 await connection.execute(
-                    """DELETE FROM creator_media_asset_deletion_claims
+                    """UPDATE creator_media_asset_deletion_claims
+                        SET object_deleting = true
                         WHERE asset_id = $1 AND workspace_id = $2 AND claim_token = $3""",
                     asset_id, workspace_id, claim_token,
                 )
-                return False
             await delete_object()
-            result = await connection.execute(
-                """DELETE FROM creator_media_assets
-                    WHERE id = $1 AND workspace_id = $2""",
-                asset_id, workspace_id,
-            )
+            async with connection.transaction():
+                await connection.execute("SELECT pg_advisory_xact_lock($1)", workspace_id)
+                result = await connection.execute(
+                    """DELETE FROM creator_media_assets asset
+                        WHERE asset.id = $1 AND asset.workspace_id = $2
+                          AND EXISTS (
+                            SELECT 1 FROM creator_media_asset_deletion_claims deletion
+                            WHERE deletion.asset_id = asset.id
+                              AND deletion.claim_token = $3
+                              AND deletion.object_deleting = true
+                          )""",
+                    asset_id, workspace_id, claim_token,
+                )
         return result == "DELETE 1"
 
     async def release_retained_asset(
@@ -233,6 +233,7 @@ class PostgresMediaRetentionStorage:
     ) -> None:
         await db.execute(
             """DELETE FROM creator_media_asset_deletion_claims
-                WHERE asset_id = $1 AND workspace_id = $2 AND claim_token = $3""",
+                WHERE asset_id = $1 AND workspace_id = $2 AND claim_token = $3
+                  AND object_deleting = false""",
             asset_id, workspace_id, claim_token,
         )

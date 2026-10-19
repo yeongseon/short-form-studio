@@ -822,14 +822,10 @@ async def test_postgres_retention_successor_reclaims_expired_claim_once(
     candidates = await storage.list_retention_assets(9101, 100)
     successor_token = await storage.claim_retained_asset(asset.id, 9101)
 
-    # Then the stale owner cannot release/delete, while the successor completes once.
+    # Then the stale owner cannot release while only finalization can remove metadata.
     assert [candidate.id for candidate in candidates] == [asset.id]
     assert successor_token is not None and successor_token != abandoned_token
     await storage.release_retained_asset(asset.id, 9101, abandoned_token)
-    assert await service.get_asset(asset.id, 9101) is None
-    await storage.delete_retained_asset(asset.id, 9101, abandoned_token)
-    assert await service.get_asset(asset.id, 9101) is None
-    await storage.delete_retained_asset(asset.id, 9101, successor_token)
     assert await service.get_asset(asset.id, 9101) is None
     assert await storage.claim_retained_asset(asset.id, 9101) is None
 
@@ -875,6 +871,80 @@ async def test_postgres_retention_successor_finalizes_already_deleted_object(
     usage = await storage.get_storage_usage(9101)
     assert usage.stored_asset_count == 0
     assert usage.stored_bytes == 0
+
+
+@pytest.mark.asyncio
+async def test_postgres_objectless_asset_stays_fenced_until_successor_finalizes(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given finalization deletes the object, then fails before metadata can commit.
+    objects = LocalStorageBackend(str(tmp_path))
+    storage = PostgresMediaAssetStorage()
+    service = MediaAssetService(objects, storage)
+    asset = await service.create_image_asset(
+        workspace_id=9101, project_id=9101, filename="ambiguous-finalize.png",
+        data=image_bytes(), content_type="image/png",
+    )
+    await db.execute(
+        "UPDATE creator_media_assets SET created_at = now() - interval '30 days' WHERE id = $1",
+        asset.id,
+    )
+    assert asset.storage_key is not None
+    claim_token = await storage.claim_retained_asset(asset.id, 9101)
+    assert claim_token is not None
+
+    async def delete_then_fail() -> None:
+        objects.delete(asset.storage_key)
+        raise OSError("database unavailable after object deletion")
+
+    with pytest.raises(OSError, match="database unavailable"):
+        await storage.finalize_retained_asset(
+            asset.id, 9101, claim_token, delete_then_fail,
+        )
+    assert not (tmp_path / asset.storage_key).exists()
+
+    timeline = Timeline.model_validate({
+        "id": "objectless-fenced", "project_id": 9101, "revision": 0,
+        "segments": [{
+            "id": "segment", "scene_id": "scene", "asset_id": asset.id,
+            "timeline_start_seconds": 0, "duration_seconds": 1,
+        }],
+    })
+
+    # When Timeline save and exact-revision approval encounter the surviving fence.
+    with pytest.raises(ValidationError):
+        await TimelineService(PostgresTimelineStorage()).save_timeline(
+            project_id=9101, workspace_id=9101, timeline=timeline, expected_revision=0,
+        )
+    await db.execute(
+        """INSERT INTO creator_timelines (
+                project_id, workspace_id, timeline_id, revision, segments_json
+            ) VALUES ($1, $2, $3, $4, $5::jsonb)""",
+        9101, 9101, "objectless-fenced", 1,
+        json.dumps([{"id": "segment", "asset_id": asset.id}]),
+    )
+    await db.execute(
+        """UPDATE creator_media_asset_deletion_claims
+            SET lease_expires_at = now() - interval '1 second' WHERE asset_id = $1""",
+        asset.id,
+    )
+    with pytest.raises(ValueError, match="Approved Timeline revision not found"):
+        await PostgresStageReviewStorage().create_review({
+            "run_id": 9101, "stage_name": "TIMELINE_REVIEW", "review_status": "approved",
+            "reviewer": "human", "notes": '{"timeline_id":"objectless-fenced","revision":1}',
+        })
+
+    # Then a successor takes over the expired lease and idempotently removes metadata.
+    await db.execute("DELETE FROM creator_timelines WHERE project_id = $1", 9101)
+    successor = MediaRetentionService(
+        storage, LocalStorageBackend(str(tmp_path)),
+        MediaRetentionPolicy(original_days=1, grace_days=0, enabled=True, dry_run=False),
+    )
+    result = await successor.sweep_workspace(9101, now=datetime.now(timezone.utc))
+    assert result.deleted == 1
+    assert await db.fetch_one(
+        "SELECT id FROM creator_media_assets WHERE id = $1", asset.id,
+    ) is None
 
 
 @pytest.mark.asyncio
