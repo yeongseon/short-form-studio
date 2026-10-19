@@ -99,8 +99,10 @@ windows are configured independently with `MEDIA_RETENTION_ORIGINAL_DAYS`,
 `MEDIA_RETENTION_INTERMEDIATE_DAYS`, and `MEDIA_RETENTION_FINAL_VIDEO_DAYS`.
 
 Candidates must also pass `MEDIA_RETENTION_GRACE_DAYS` (default 7), exact
-workspace-key ownership, current Timeline references, and approved-review
-references. Dry-run reports candidates without deleting. In destructive mode,
+workspace-key ownership, current Timeline asset references, and normalized
+asset mappings for approved Timeline revisions. A workspace with any unresolved
+historical Timeline approval remains report-only until repaired. Dry-run reports
+candidates without deleting. In destructive mode,
 object deletion happens before metadata deletion; a storage deletion failure
 therefore leaves both metadata and accounted capacity intact. Deletion is
 irreversible once the object backend confirms removal, so operators should review
