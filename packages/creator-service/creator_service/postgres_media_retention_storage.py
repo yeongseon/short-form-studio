@@ -214,6 +214,11 @@ class PostgresMediaRetentionStorage:
                 asset_id, workspace_id, claim_token,
             )
             if not claim_is_valid:
+                await connection.execute(
+                    """DELETE FROM creator_media_asset_deletion_claims
+                        WHERE asset_id = $1 AND workspace_id = $2 AND claim_token = $3""",
+                    asset_id, workspace_id, claim_token,
+                )
                 return False
             await delete_object()
             result = await connection.execute(
