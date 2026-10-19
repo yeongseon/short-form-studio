@@ -205,6 +205,36 @@ async def test_memory_failed_uploaded_asset_validation_remains_reconcilable() ->
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["workspace_id", "storage_key"])
+async def test_memory_uploaded_asset_rejects_intent_binding_mismatch(field: str) -> None:
+    # Given an uploaded intent and asset row with mismatched ownership.
+    now = datetime.now(timezone.utc)
+    assets = InMemoryMediaAssetStorage()
+    intent = await assets.create_upload_intent(UploadIntent(
+        id=0, owner_id="binding", workspace_id=7,
+        storage_key="workspaces/7/assets/binding.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now,
+    ))
+    await assets.mark_upload_intent_uploaded(intent.id)
+    row = {
+        "workspace_id": 7, "project_id": None, "run_id": None,
+        "media_type": "IMAGE", "origin": "UPLOADED",
+        "storage_key": intent.storage_key, "mime_type": "image/png",
+        "width": 4, "height": 6, "duration_seconds": None,
+        "source_url": None, "metadata": {}, "created_at": now,
+    }
+    row[field] = 8 if field == "workspace_id" else "workspaces/7/assets/other.png"
+
+    # When the internal caller attempts completion with the forged row.
+    with pytest.raises(MediaAssetPersistenceFailed):
+        await assets.save_uploaded_asset(row, intent)
+
+    # Then the intent remains uploaded and no asset is persisted.
+    assert (await assets.list_upload_intents())[0].state is UploadIntentState.UPLOADED
+    assert (await assets.list_assets(7, limit=10, offset=0))[1] == 0
+
+
+@pytest.mark.asyncio
 async def test_definite_metadata_failure_compensates_uploaded_object() -> None:
     # Given an upload backend and metadata persistence that definitely rejects.
     objects = _Objects()

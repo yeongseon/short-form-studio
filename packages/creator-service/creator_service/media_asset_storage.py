@@ -98,7 +98,12 @@ class InMemoryMediaAssetStorage:
     ) -> dict[str, object]:
         async with self._lock:
             current = self._intents[intent.id]
-            if current.state is not UploadIntentState.UPLOADED or current.owner_id != intent.owner_id:
+            if (
+                current.state is not UploadIntentState.UPLOADED
+                or current.owner_id != intent.owner_id
+                or current.workspace_id != row.get("workspace_id")
+                or current.storage_key != row.get("storage_key")
+            ):
                 raise MediaAssetPersistenceFailed()
             saved = MediaAsset.model_validate({**row, "id": self._next_id})
             self._next_id += 1
