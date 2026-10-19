@@ -878,6 +878,45 @@ async def test_postgres_retention_successor_finalizes_already_deleted_object(
 
 
 @pytest.mark.asyncio
+async def test_postgres_retention_scans_past_protected_page(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given 101 old assets where the first 100 are protected by one Timeline.
+    objects = LocalStorageBackend(str(tmp_path))
+    storage = PostgresMediaAssetStorage()
+    service = MediaAssetService(objects, storage)
+    assets = [
+        await service.create_image_asset(
+            workspace_id=9101, project_id=9101, filename=f"asset-{index}.png",
+            data=image_bytes(), content_type="image/png",
+        )
+        for index in range(101)
+    ]
+    await db.execute(
+        "UPDATE creator_media_assets SET created_at = now() - interval '30 days'",
+    )
+    await db.execute(
+        """INSERT INTO creator_timelines (
+                project_id, workspace_id, timeline_id, revision, segments_json
+            ) VALUES ($1, $2, $3, $4, $5::jsonb)""",
+        9101, 9101, "protected-page", 1,
+        json.dumps([{"id": str(asset.id), "asset_id": asset.id} for asset in assets[:100]]),
+    )
+
+    # When retention requests one deletion.
+    result = await MediaRetentionService(
+        storage,
+        objects,
+        MediaRetentionPolicy(original_days=1, grace_days=0, enabled=True, dry_run=False),
+    ).sweep_workspace(9101, now=datetime.now(timezone.utc), limit=1)
+
+    # Then keyset scanning reaches and removes the eligible 101st asset.
+    assert result.deleted == 1
+    assert await service.get_asset(assets[-1].id, 9101) is None
+    assert await service.get_asset(assets[0].id, 9101) is not None
+
+
+@pytest.mark.asyncio
 async def test_postgres_approval_deduplicates_reused_timeline_asset(
     media_database: None, tmp_path: Path,
 ) -> None:

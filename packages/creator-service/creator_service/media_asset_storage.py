@@ -58,7 +58,9 @@ class MediaAssetStorageBackend(Protocol):
     async def get_storage_usage(
         self, workspace_id: int, *, policy: StoragePolicy | None = None,
     ) -> StorageUsage: ...
-    async def list_retention_assets(self, workspace_id: int, limit: int) -> list[RetentionAsset]: ...
+    async def list_retention_assets(
+        self, workspace_id: int, limit: int, *, after: RetentionAsset | None = None,
+    ) -> list[RetentionAsset]: ...
     async def referenced_asset_ids(self, workspace_id: int) -> frozenset[int]: ...
     async def approved_asset_ids(self, workspace_id: int) -> frozenset[int]: ...
     async def claim_retained_asset(self, asset_id: int, workspace_id: int) -> str | None: ...
@@ -320,18 +322,31 @@ class InMemoryMediaAssetStorage:
             intent = self._intents[intent_id]
             self._set_intent(intent_id, intent.state, lease_expires_at=now)
 
-    async def list_retention_assets(self, workspace_id: int, limit: int) -> list[RetentionAsset]:
+    async def list_retention_assets(
+        self, workspace_id: int, limit: int, *, after: RetentionAsset | None = None,
+    ) -> list[RetentionAsset]:
         async with self._lock:
-            rows = [
-                dict(asset) for asset in self._assets if asset["workspace_id"] == workspace_id
-            ][:limit]
+            rows = sorted(
+                (
+                    dict(asset) for asset in self._assets
+                    if asset["workspace_id"] == workspace_id
+                    and asset.get("storage_key") is not None
+                ),
+                key=lambda row: (row["created_at"], row["id"]),
+            )
+            if after is not None:
+                rows = [
+                    row for row in rows
+                    if (row["created_at"], row["id"]) > (after.created_at, after.id)
+                ]
+            rows = rows[:limit]
         return [
             RetentionAsset(
                 id=int(row["id"]), workspace_id=workspace_id,
                 storage_key=str(row["storage_key"]), origin=str(row["origin"]),
                 media_type=str(row["media_type"]), created_at=row["created_at"],
             )
-            for row in rows if row.get("storage_key") is not None
+            for row in rows
         ]
 
     async def referenced_asset_ids(self, workspace_id: int) -> frozenset[int]:

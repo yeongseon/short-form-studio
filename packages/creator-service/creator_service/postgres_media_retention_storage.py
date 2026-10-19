@@ -19,7 +19,9 @@ class PostgresMediaRetentionStorage:
         )
         return [int(row["workspace_id"]) for row in rows]
 
-    async def list_retention_assets(self, workspace_id: int, limit: int) -> list[RetentionAsset]:
+    async def list_retention_assets(
+        self, workspace_id: int, limit: int, *, after: RetentionAsset | None = None,
+    ) -> list[RetentionAsset]:
         pool = await db.get_pool()
         async with pool.acquire() as connection, connection.transaction():
             await connection.execute(
@@ -31,12 +33,15 @@ class PostgresMediaRetentionStorage:
                 """SELECT id, workspace_id, storage_key, origin, media_type, created_at
                 FROM creator_media_assets
                 WHERE workspace_id = $1 AND storage_key IS NOT NULL
+                AND ($3::timestamptz IS NULL OR (created_at, id) > ($3, $4))
                 AND NOT EXISTS (
                     SELECT 1 FROM creator_media_asset_deletion_claims deletion
                     WHERE deletion.asset_id = creator_media_assets.id
                 )
                 ORDER BY created_at, id LIMIT $2""",
                 workspace_id, limit,
+                after.created_at if after is not None else None,
+                after.id if after is not None else None,
             )
         return [
             RetentionAsset(

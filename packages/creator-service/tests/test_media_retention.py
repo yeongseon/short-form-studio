@@ -63,7 +63,7 @@ async def test_storage_absent_object_removes_claimed_metadata() -> None:
     class Storage:
         deleted: list[int] = []
 
-        async def list_retention_assets(self, workspace_id: int, limit: int):
+        async def list_retention_assets(self, workspace_id: int, limit: int, *, after=None):
             return [asset]
 
         async def referenced_asset_ids(self, workspace_id: int):
@@ -104,7 +104,7 @@ async def test_storage_delete_error_keeps_metadata_accounted() -> None:
     class Storage:
         deleted: list[int] = []
 
-        async def list_retention_assets(self, workspace_id: int, limit: int):
+        async def list_retention_assets(self, workspace_id: int, limit: int, *, after=None):
             return [asset]
 
         async def referenced_asset_ids(self, workspace_id: int):
@@ -138,3 +138,48 @@ async def test_storage_delete_error_keeps_metadata_accounted() -> None:
 
     # Then metadata remains accounted because its deletion was never attempted.
     assert storage.deleted == [-1]
+
+
+@pytest.mark.anyio
+async def test_retention_scans_past_full_page_of_protected_assets() -> None:
+    # Given one eligible asset follows a full page of protected assets.
+    assets = [_asset(asset_id, 7, origin="GENERATED", media_type="IMAGE") for asset_id in range(1, 102)]
+
+    class Storage:
+        deleted: list[int] = []
+
+        async def list_retention_assets(self, workspace_id, limit, *, after=None):
+            start = 0 if after is None else after.id
+            return assets[start:start + limit]
+
+        async def referenced_asset_ids(self, workspace_id):
+            return frozenset(range(1, 101))
+
+        async def approved_asset_ids(self, workspace_id):
+            return frozenset()
+
+        async def claim_retained_asset(self, asset_id, workspace_id):
+            return "claim-token"
+
+        async def release_retained_asset(self, asset_id, workspace_id, claim_token):
+            raise AssertionError
+
+        async def delete_retained_asset(self, asset_id, workspace_id, claim_token):
+            self.deleted.append(asset_id)
+
+    class Objects:
+        def delete(self, key: str) -> bool:
+            return True
+
+    storage = Storage()
+
+    # When retention fills a deletion batch of one.
+    result = await MediaRetentionService(
+        storage,
+        Objects(),
+        MediaRetentionPolicy(intermediate_days=7, enabled=True, dry_run=False),
+    ).sweep_workspace(7, now=datetime.now(timezone.utc), limit=1)
+
+    # Then scanning advances beyond protected rows to the eligible asset.
+    assert result.deleted == 1
+    assert storage.deleted == [101]

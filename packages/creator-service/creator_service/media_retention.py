@@ -67,7 +67,9 @@ def select_retention_candidates(
 
 
 class RetentionStorage(Protocol):
-    async def list_retention_assets(self, workspace_id: int, limit: int) -> list[RetentionAsset]: ...
+    async def list_retention_assets(
+        self, workspace_id: int, limit: int, *, after: RetentionAsset | None = None,
+    ) -> list[RetentionAsset]: ...
     async def referenced_asset_ids(self, workspace_id: int) -> frozenset[int]: ...
     async def approved_asset_ids(self, workspace_id: int) -> frozenset[int]: ...
     async def claim_retained_asset(self, asset_id: int, workspace_id: int) -> str | None: ...
@@ -106,15 +108,28 @@ class MediaRetentionService:
     ) -> RetentionSweepResult:
         if not self._policy.enabled:
             return RetentionSweepResult(0, 0, self._policy.dry_run, False)
-        assets = await self._storage.list_retention_assets(workspace_id, limit)
-        candidates = select_retention_candidates(
-            assets,
-            policy=self._policy,
-            referenced_asset_ids=await self._storage.referenced_asset_ids(workspace_id),
-            approved_asset_ids=await self._storage.approved_asset_ids(workspace_id),
-            workspace_id=workspace_id,
-            now=now,
-        )
+        referenced = await self._storage.referenced_asset_ids(workspace_id)
+        approved = await self._storage.approved_asset_ids(workspace_id)
+        candidates: list[RetentionAsset] = []
+        after: RetentionAsset | None = None
+        scan_limit = max(limit, 100)
+        while len(candidates) < limit:
+            assets = await self._storage.list_retention_assets(
+                workspace_id, scan_limit, after=after,
+            )
+            if not assets:
+                break
+            candidates.extend(select_retention_candidates(
+                assets,
+                policy=self._policy,
+                referenced_asset_ids=referenced,
+                approved_asset_ids=approved,
+                workspace_id=workspace_id,
+                now=now,
+            )[:limit - len(candidates)])
+            after = assets[-1]
+            if len(assets) < scan_limit:
+                break
         if self._policy.dry_run:
             return RetentionSweepResult(len(candidates), 0, True, True)
         deleted = 0
