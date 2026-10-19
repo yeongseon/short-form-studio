@@ -85,9 +85,13 @@ class BrokerEpochPersistenceRace(TaskTrackingService):
         self.injected = False
 
     async def set_observed_broker_epoch(
-        self, epoch: str, expected_epoch: str | None
+        self, epoch: str, expected_previous_epoch: str | None
     ) -> bool:
-        if epoch == "epoch-b" and expected_epoch == "epoch-a" and not self.injected:
+        if (
+            epoch == "epoch-b"
+            and expected_previous_epoch == "epoch-a"
+            and not self.injected
+        ):
             self.injected = True
             won = await super().set_observed_broker_epoch("epoch-c", "epoch-a")
             assert won
@@ -99,18 +103,18 @@ class BrokerEpochPersistenceRace(TaskTrackingService):
             )
             await self.promote_pending_to_queued("current-c")
             return False
-        return await super().set_observed_broker_epoch(epoch, expected_epoch)
+        return await super().set_observed_broker_epoch(epoch, expected_previous_epoch)
 
 
 class BrokerEpochInitializationRace(TaskTrackingService):
     async def set_observed_broker_epoch(
-        self, epoch: str, expected_epoch: str | None
+        self, epoch: str, expected_previous_epoch: str | None
     ) -> bool:
-        if epoch == "epoch-a" and expected_epoch is None:
+        if epoch == "epoch-a" and expected_previous_epoch is None:
             won = await super().set_observed_broker_epoch("epoch-c", None)
             assert won
             return False
-        return await super().set_observed_broker_epoch(epoch, expected_epoch)
+        return await super().set_observed_broker_epoch(epoch, expected_previous_epoch)
 
 
 async def _failed_enqueue(celery_task_id: str, task_type: str, run_id: int) -> bool:
