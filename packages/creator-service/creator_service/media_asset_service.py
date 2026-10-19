@@ -127,6 +127,22 @@ class MediaAssetService:
             origin=MediaOrigin.GENERATED, metadata=metadata,
         )
 
+    async def create_generated_file_asset(
+        self, *, workspace_id: int, project_id: int, run_id: int,
+        filename: str, content_type: str, media_type: MediaType, path: Path,
+    ) -> MediaAsset:
+        return await self._store_asset(
+            workspace_id=workspace_id,
+            safe_name=_safe_filename(filename),
+            data=path,
+            canonical_mime=content_type,
+            media_type=media_type,
+            probed=_ProbedMetadata(None, None, None),
+            project_id=project_id,
+            run_id=run_id,
+            origin=MediaOrigin.GENERATED,
+        )
+
     async def create_video_asset(
         self, *, workspace_id: int, filename: str, data: bytes, content_type: str,
         project_id: int | None = None, run_id: int | None = None,
