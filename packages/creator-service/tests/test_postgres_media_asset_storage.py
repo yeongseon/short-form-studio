@@ -683,13 +683,22 @@ async def test_postgres_process_death_releases_capacity_but_retains_tombstone(
     )
     await MediaUploadReconciler(objects, storage).sweep(now=verification_end)
 
-    # Then capacity is released exactly once while durable cleanup ownership remains.
+    # Then byte and slot capacity are released while durable cleanup ownership remains.
     await MediaUploadReconciler(objects, storage).sweep(now=verification_end)
-    usage = await storage.get_storage_usage(9101)
+    policy = StoragePolicy(max_stored_bytes=10, max_asset_count=1, max_reserved_bytes=10)
+    usage = await storage.get_storage_usage(9101, policy=policy)
+    replacement = await storage.create_upload_intent(UploadIntent(
+        id=0, owner_id="replacement-after-death", workspace_id=9101,
+        storage_key="workspaces/9101/assets/replacement-after-death.png",
+        state=UploadIntentState.PENDING,
+        lease_expires_at=verification_end + timedelta(minutes=30), reserved_bytes=1,
+    ), policy=policy)
     row = await db.fetch_one(
         "SELECT state FROM creator_media_upload_intents WHERE id = $1", intent.id,
     )
     assert usage.reserved_bytes == 0
+    assert usage.reserved_asset_count == 0
+    assert replacement.reserved_bytes == 1
     assert row == {"state": "late_upload_watch"}
 
 

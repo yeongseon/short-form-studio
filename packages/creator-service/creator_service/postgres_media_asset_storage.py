@@ -61,6 +61,7 @@ class PostgresMediaAssetStorage(PostgresUploadIntentStorage, PostgresMediaRetent
                         'late_upload_watch', 'exhausted'
                     )), 0) AS reserved_bytes,
                 (SELECT COUNT(*) FROM creator_media_upload_intents WHERE workspace_id = $1
+                    AND reserved_bytes > 0
                     AND state IN (
                         'pending', 'uploaded', 'cleanup_pending', 'reclaiming',
                         'late_upload_watch', 'exhausted'
@@ -204,7 +205,7 @@ class PostgresMediaAssetStorage(PostgresUploadIntentStorage, PostgresMediaRetent
                             'late_upload_watch', 'exhausted'
                         )), 0) AS reserved_bytes,
                     (SELECT COUNT(*) FROM creator_media_upload_intents
-                        WHERE workspace_id = $1 AND state IN (
+                        WHERE workspace_id = $1 AND reserved_bytes > 0 AND state IN (
                             'pending', 'uploaded', 'cleanup_pending', 'reclaiming',
                             'late_upload_watch', 'exhausted'
                         )) AS reserved_assets""",

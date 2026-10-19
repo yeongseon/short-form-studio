@@ -104,6 +104,31 @@ async def test_crash_sweep_retains_capacity_until_reclamation_finishes() -> None
     assert replacement.reserved_bytes == 1
 
 
+@pytest.mark.anyio
+async def test_late_upload_tombstone_releases_asset_slot() -> None:
+    # Given bounded verification releases a dead upload's byte reservation.
+    storage = InMemoryMediaAssetStorage()
+    policy = StoragePolicy(max_stored_bytes=10, max_asset_count=1, max_reserved_bytes=10)
+    intent = await storage.create_upload_intent(_intent("dead", 10), policy=policy)
+    claimed = await storage.claim_expired_upload_intents(
+        now=intent.lease_expires_at,
+        lease_expires_at=intent.lease_expires_at + timedelta(minutes=5),
+        limit=1,
+    )
+    await storage.watch_for_late_upload(
+        intent.id, claimed[0].claim_token or "", intent.lease_expires_at,
+        release_reservation=True,
+    )
+
+    # When a replacement requests the workspace's sole asset slot.
+    replacement = await storage.create_upload_intent(_intent("replacement", 1), policy=policy)
+
+    # Then admission succeeds while the durable tombstone remains owned.
+    intents = await storage.list_upload_intents()
+    assert replacement.reserved_bytes == 1
+    assert intents[0].state is UploadIntentState.LATE_UPLOAD_WATCH
+
+
 def test_temp_low_watermark_blocks_new_writes(monkeypatch) -> None:
     policy = StoragePolicy(temp_disk_low_watermark_bytes=100)
     usage = type("DiskUsage", (), {"free": 109})()

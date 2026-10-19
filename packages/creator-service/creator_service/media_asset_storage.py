@@ -189,11 +189,12 @@ class InMemoryMediaAssetStorage:
                 UploadIntentState.EXHAUSTED,
             }
         ]
+        slot_owners = [intent for intent in active if intent.reserved_bytes > 0]
         return StorageUsage(
             stored_bytes=sum(int(asset.get("metadata", {}).get("size_bytes", 0)) for asset in assets),
             stored_asset_count=len(assets),
             reserved_bytes=sum(intent.reserved_bytes for intent in active),
-            reserved_asset_count=len(active),
+            reserved_asset_count=len(slot_owners),
             max_stored_bytes=policy.max_stored_bytes,
             max_asset_count=policy.max_asset_count,
             max_reserved_bytes=policy.max_reserved_bytes,
