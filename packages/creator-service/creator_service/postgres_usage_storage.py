@@ -69,14 +69,19 @@ async def settle_owned_on_connection(
     )
     if source is None or source["status"] not in {"reserved", "consumed"}:
         return False
-    if not billable_unknown and source["status"] == "reserved" and source["settled_estimated_cost_usd"] <= 0:
-        return False
     unknown = await connection.fetchval(
         """UPDATE workspace_quota_reservation_attempts SET status = 'unknown'
            WHERE owner_id = $1 AND status = 'authorized'
            RETURNING estimated_cost_usd""",
         owner_id,
     )
+    if (
+        not billable_unknown
+        and source["status"] == "reserved"
+        and source["settled_estimated_cost_usd"] <= 0
+        and unknown is None
+    ):
+        return False
     unknown_total = await connection.fetchval(
         """SELECT COALESCE(SUM(estimated_cost_usd), 0)
            FROM workspace_quota_reservation_attempts
