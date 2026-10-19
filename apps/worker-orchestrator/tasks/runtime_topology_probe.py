@@ -49,7 +49,13 @@ class _TopologyRequest(Request):
             f"{self.id}:{self.worker_pid}" if isinstance(self.worker_pid, int) else None
         )
         if isinstance(run_id, int) and claim_token is not None:
-            finalize_hard_timeout(self.id, claim_token, run_id, timeout)
+            finalize_hard_timeout(
+                self.id,
+                claim_token,
+                run_id,
+                timeout,
+                frozenset({RunStage.RENDER_GENERATING.value}),
+            )
             if self.args[1] == "timeout_resources" and isinstance(self.args[2], str):
                 state = json.loads(_evidence_file(self.args[2]).read_text(encoding="utf-8"))
                 child_pid = state.get("child_pid")

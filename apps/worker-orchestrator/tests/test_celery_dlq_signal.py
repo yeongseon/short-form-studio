@@ -18,7 +18,13 @@ def test_hard_timeout_request_finalizes_task_run_and_quota(monkeypatch) -> None:
     )
 
     # When the parent observes the hard timeout after the child is killed.
-    hard_timeout.finalize_hard_timeout("timeout-delivery", "old-claim", 103, 2.0)
+    hard_timeout.finalize_hard_timeout(
+        "timeout-delivery",
+        "old-claim",
+        103,
+        2.0,
+        frozenset({"RENDER_GENERATING"}),
+    )
 
     # Then a stale timeout cannot update the run or quota after its claim CAS misses.
     finalize_claimed.assert_awaited_once_with(
@@ -60,7 +66,7 @@ def test_hard_timeout_finalizes_before_releasing_blocked_resources(
     monkeypatch.setattr(
         runtime_topology_probe,
         "finalize_hard_timeout",
-        lambda task_id, claim_token, run_id, timeout: events.append(
+        lambda task_id, claim_token, run_id, timeout, _stages: events.append(
             f"finalized:{task_id}:{claim_token}:{run_id}:{timeout}"
         ),
     )
