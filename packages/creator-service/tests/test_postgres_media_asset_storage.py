@@ -1111,6 +1111,8 @@ async def test_postgres_claimed_asset_rejects_concurrent_timeline_approval(
         workspace_id=9101, project_id=9101, filename="claimed-before-approval.png",
         data=image_bytes(), content_type="image/png",
     )
+    claim_token = await storage.claim_retained_asset(asset.id, 9101)
+    assert claim_token is not None
     await db.execute(
         """INSERT INTO creator_timelines (
                 project_id, workspace_id, timeline_id, revision, segments_json
@@ -1118,8 +1120,6 @@ async def test_postgres_claimed_asset_rejects_concurrent_timeline_approval(
         9101, 9101, "claimed", 1,
         json.dumps([{"id": "claimed", "asset_id": asset.id}]),
     )
-    claim_token = await storage.claim_retained_asset(asset.id, 9101)
-    assert claim_token is not None
 
     # When approval attempts to commit the same exact revision.
     with pytest.raises(ValueError, match="Approved Timeline revision not found"):
