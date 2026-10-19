@@ -167,6 +167,9 @@ class InMemoryMediaAssetStorage:
                 UploadIntentState.PENDING,
                 UploadIntentState.UPLOADED,
                 UploadIntentState.CLEANUP_PENDING,
+                UploadIntentState.RECLAIMING,
+                UploadIntentState.LATE_UPLOAD_WATCH,
+                UploadIntentState.EXHAUSTED,
             }
         ]
         return StorageUsage(

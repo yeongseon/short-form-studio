@@ -73,13 +73,35 @@ async def test_cleanup_pending_retains_capacity_until_object_delete_succeeds() -
     storage = InMemoryMediaAssetStorage()
     policy = StoragePolicy(max_stored_bytes=10, max_asset_count=1, max_reserved_bytes=10)
     intent = await storage.create_upload_intent(_intent("one", 10), policy=policy)
-    await storage.defer_upload_cleanup(intent.id)
+    await storage.compensate_upload(intent, deletion_failed=True)
 
     with pytest.raises(StorageBudgetExceeded):
         await storage.create_upload_intent(_intent("two", 1), policy=policy)
 
     usage = await storage.get_storage_usage(7, policy=policy)
     assert usage.reserved_bytes == 10
+
+
+@pytest.mark.anyio
+async def test_crash_sweep_retains_capacity_until_reclamation_finishes() -> None:
+    # Given an expired reservation whose uploader may still materialize its object.
+    storage = InMemoryMediaAssetStorage()
+    policy = StoragePolicy(max_stored_bytes=10, max_asset_count=1, max_reserved_bytes=10)
+    intent = await storage.create_upload_intent(_intent("one", 10), policy=policy)
+
+    # When the crash sweeper claims ownership but has not completed cleanup.
+    claimed = await storage.claim_expired_upload_intents(
+        now=intent.lease_expires_at,
+        lease_expires_at=intent.lease_expires_at + timedelta(minutes=5),
+        limit=1,
+    )
+
+    # Then admission remains blocked until the owned reclamation is terminal.
+    with pytest.raises(StorageBudgetExceeded):
+        await storage.create_upload_intent(_intent("two", 1), policy=policy)
+    await storage.record_upload_reclaimed(intent.id, claimed[0].claim_token)
+    replacement = await storage.create_upload_intent(_intent("two", 1), policy=policy)
+    assert replacement.reserved_bytes == 1
 
 
 def test_temp_low_watermark_blocks_new_writes(monkeypatch) -> None:

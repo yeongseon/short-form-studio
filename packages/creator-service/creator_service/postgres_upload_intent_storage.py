@@ -105,11 +105,13 @@ class PostgresUploadIntentStorage:
 
     async def record_upload_reclaimed(self, intent_id: int, claim_token: str | None = None) -> None:
         if claim_token is None:
-            await db.execute(
+            result = await db.execute(
                 """UPDATE creator_media_upload_intents SET state = 'reclaimed', updated_at = NOW()
                     WHERE id = $1 AND state = 'uploaded'""",
                 intent_id,
             )
+            if result != "UPDATE 1":
+                raise MediaAssetPersistenceFailed()
             return
         result = await db.execute(
             """UPDATE creator_media_upload_intents SET state = 'reclaimed', updated_at = NOW()
@@ -143,9 +145,9 @@ class PostgresUploadIntentStorage:
                     (state = 'reclaiming' AND claim_token = $3)) RETURNING state""",
             intent_id, max_retries, claim_token,
         )
-        if row is None and claim_token is not None:
+        if row is None:
             raise MediaAssetPersistenceFailed()
-        return row is not None and row["state"] == UploadIntentState.EXHAUSTED.value
+        return row["state"] == UploadIntentState.EXHAUSTED.value
 
 
 def _decode_intent(row: dict[str, object]) -> UploadIntent:

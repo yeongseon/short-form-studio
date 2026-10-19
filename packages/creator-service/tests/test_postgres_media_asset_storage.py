@@ -520,3 +520,42 @@ async def test_postgres_concurrent_admission_stays_within_budget(media_database:
         tasks.start_soon(collect, "budget-b")
 
     assert sorted(results) == [False, True]
+
+
+@pytest.mark.asyncio
+async def test_postgres_crash_claim_remains_reserved_until_terminal_reclaim(
+    media_database: None,
+) -> None:
+    # Given a reservation that has expired without an upload completing.
+    storage = MediaAssetService()._asset_storage
+    policy = StoragePolicy(max_stored_bytes=10, max_asset_count=1, max_reserved_bytes=10)
+    now = datetime.now(timezone.utc)
+    intent = await storage.create_upload_intent(
+        UploadIntent(
+            id=0, owner_id="crashed", workspace_id=9101,
+            storage_key="workspaces/9101/assets/crashed.png",
+            state=UploadIntentState.PENDING, lease_expires_at=now,
+            reserved_bytes=10,
+        ),
+        policy=policy,
+    )
+
+    # When the crash sweeper claims the reservation for cleanup.
+    claimed = await storage.claim_expired_upload_intents(
+        now=now, lease_expires_at=now + timedelta(minutes=5), limit=1,
+    )
+
+    # Then concurrent admission stays blocked until the owned claim is terminal.
+    with pytest.raises(StorageBudgetExceeded):
+        await storage.create_upload_intent(
+            UploadIntent(
+                id=0, owner_id="replacement", workspace_id=9101,
+                storage_key="workspaces/9101/assets/replacement.png",
+                state=UploadIntentState.PENDING,
+                lease_expires_at=now + timedelta(minutes=30), reserved_bytes=1,
+            ),
+            policy=policy,
+        )
+    await storage.record_upload_reclaimed(intent.id, claimed[0].claim_token)
+    usage = await storage.get_storage_usage(9101, policy=policy)
+    assert usage.reserved_bytes == 0
