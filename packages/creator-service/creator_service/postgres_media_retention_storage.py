@@ -126,16 +126,31 @@ class PostgresMediaRetentionStorage:
     async def delete_retained_asset(
         self, asset_id: int, workspace_id: int, claim_token: str,
     ) -> None:
-        await db.execute(
-            """DELETE FROM creator_media_assets
-                WHERE id = $1 AND workspace_id = $2
-                AND EXISTS (
-                    SELECT 1 FROM creator_media_asset_deletion_claims deletion
-                    WHERE deletion.asset_id = creator_media_assets.id
-                    AND deletion.claim_token = $3
-                )""",
-            asset_id, workspace_id, claim_token,
-        )
+        pool = await db.get_pool()
+        async with pool.acquire() as connection, connection.transaction():
+            key = await connection.fetchval(
+                """SELECT storage_key FROM creator_media_assets asset
+                    WHERE id = $1 AND workspace_id = $2
+                    AND EXISTS (
+                        SELECT 1 FROM creator_media_asset_deletion_claims deletion
+                        WHERE deletion.asset_id = asset.id AND deletion.claim_token = $3
+                    )""",
+                asset_id, workspace_id, claim_token,
+            )
+            if key is None:
+                return
+            await connection.execute(
+                "DELETE FROM creator_scene_assets WHERE storage_key = $1 AND is_active = false",
+                key,
+            )
+            await connection.execute(
+                "DELETE FROM creator_artifacts WHERE storage_key = $1",
+                key,
+            )
+            await connection.execute(
+                "DELETE FROM creator_media_assets WHERE id = $1 AND workspace_id = $2",
+                asset_id, workspace_id,
+            )
 
     async def claim_retained_asset(self, asset_id: int, workspace_id: int) -> str | None:
         claim_token = uuid.uuid4().hex
@@ -161,6 +176,12 @@ class PostgresMediaRetentionStorage:
                     AND NOT EXISTS (
                         SELECT 1 FROM creator_approved_timeline_assets approved
                         WHERE approved.workspace_id = $2 AND approved.asset_id = a.id
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1 FROM creator_scene_assets scene
+                        JOIN creator_runs run ON run.id = scene.run_id
+                        WHERE run.workspace_id = $2 AND scene.storage_key = a.storage_key
+                        AND scene.is_active = true
                     ) RETURNING asset_id""",
                 asset_id, workspace_id, claim_token, _CLAIM_LEASE,
             )
