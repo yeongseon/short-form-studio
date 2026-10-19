@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import os
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from .run_service import RunStorageBackend
     from .usage_service import UsageStorageBackend
+
+
+class BillingOutcome(StrEnum):
+    NOT_STARTED = "not_started"
+    ACCOUNTED = "accounted"
+    UNKNOWN = "unknown"
 
 
 class TaskTrackingStorageBackend(Protocol):
@@ -62,6 +69,7 @@ class TaskTrackingStorageBackend(Protocol):
         self, celery_task_id: str, token: str, usage_storage: UsageStorageBackend,
         error_code: str, error_message: str, run_storage: RunStorageBackend | None = None,
         run_id: int | None = None, expected_stages: frozenset[str] = frozenset(),
+        billing_outcome: BillingOutcome = BillingOutcome.NOT_STARTED,
     ) -> bool: ...
 
 

@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 from creator_domain.models import RunTask
 
 from .memory_task_tracking_storage import InMemoryTaskTrackingStorage as InMemoryTaskTrackingStorage
-from .task_tracking_storage import TaskTrackingStorageBackend, create_task_tracking_storage
+from .task_tracking_storage import BillingOutcome, TaskTrackingStorageBackend, create_task_tracking_storage
 
 
 class TaskTrackingService:
@@ -162,10 +162,11 @@ class TaskTrackingService:
         self, celery_task_id: str, token: str, usage_storage: UsageStorageBackend,
         error_code: str, error_message: str, run_storage: RunStorageBackend | None = None,
         run_id: int | None = None, expected_stages: frozenset[str] = frozenset(),
+        billing_outcome: BillingOutcome = BillingOutcome.NOT_STARTED,
     ) -> bool:
         return await self.storage.fail_claimed_and_cancel_quota(
             celery_task_id, token, usage_storage, error_code, error_message,
-            run_storage, run_id, expected_stages,
+            run_storage, run_id, expected_stages, billing_outcome,
         )
 
     async def mark_running(self, celery_task_id: str) -> RunTask | None:

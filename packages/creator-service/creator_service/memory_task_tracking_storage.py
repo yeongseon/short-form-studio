@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 
 import anyio
 
 if TYPE_CHECKING:
     from .run_service import InMemoryRunStorage
     from .usage_service import InMemoryUsageStorage
+
+from .task_tracking_storage import BillingOutcome
 
 
 class InMemoryTaskTrackingStorage:
@@ -182,6 +184,7 @@ class InMemoryTaskTrackingStorage:
         self, celery_task_id: str, token: str, usage_storage: InMemoryUsageStorage,
         error_code: str, error_message: str, run_storage: InMemoryRunStorage | None = None,
         run_id: int | None = None, expected_stages: frozenset[str] = frozenset(),
+        billing_outcome: BillingOutcome = BillingOutcome.NOT_STARTED,
     ) -> bool:
         async with self._ownership_lock:
             row_id = self._rows_by_celery_task_id.get(celery_task_id)
@@ -199,7 +202,15 @@ class InMemoryTaskTrackingStorage:
                 )
                 if row.get("status") != "running" or row.get("claim_token") != token:
                     return False
-            await usage_storage.cancel_owned(celery_task_id)
+            match billing_outcome:
+                case BillingOutcome.NOT_STARTED:
+                    await usage_storage.cancel_owned(celery_task_id)
+                case BillingOutcome.ACCOUNTED:
+                    await usage_storage.settle_owned(celery_task_id)
+                case BillingOutcome.UNKNOWN:
+                    await usage_storage.settle_owned(celery_task_id, billable_unknown=True)
+                case unreachable:
+                    assert_never(unreachable)
             row.update(
                 status="failed", claim_token=None, finished_at=datetime.now(timezone.utc),
                 error_code=error_code, error_message=error_message,
