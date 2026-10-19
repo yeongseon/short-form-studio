@@ -44,6 +44,7 @@ def test_production_request_finalizes_positional_run_id(monkeypatch) -> None:
     finalized = MagicMock()
     monkeypatch.setattr(hard_timeout.Request, "on_timeout", lambda *_args: None)
     monkeypatch.setattr(hard_timeout, "finalize_hard_timeout", finalized)
+    monkeypatch.setattr(hard_timeout, "gethostname", lambda: "worker-image@replica-1")
     request = object.__new__(hard_timeout.ProductionRequest)
     request.id = "positional-delivery"
     request._args = (103,)
@@ -76,6 +77,7 @@ def test_production_request_finalizes_keyword_run_id(monkeypatch) -> None:
     finalized = MagicMock()
     monkeypatch.setattr(hard_timeout.Request, "on_timeout", lambda *_args: None)
     monkeypatch.setattr(hard_timeout, "finalize_hard_timeout", finalized)
+    monkeypatch.setattr(hard_timeout, "gethostname", lambda: "worker-image@replica-1")
     request = object.__new__(hard_timeout.ProductionRequest)
     request.id = "keyword-delivery"
     request._args = ()

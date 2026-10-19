@@ -10,6 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from celery.exceptions import Ignore, SoftTimeLimitExceeded
+from celery.utils.nodenames import gethostname
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
 from creator_domain.sanitize import sanitize_path_component
@@ -27,7 +28,6 @@ from tasks.hard_timeout import (
     delivery_owner,
     production_task,
     production_time_limits,
-    worker_hostname,
 )
 from tasks.task_execution import TaskInputError
 from tasks.scene_batch_lifecycle import SAFE_FAILURE_STAGES, SAFE_SUCCESS_STAGES, SceneBatch
@@ -118,7 +118,7 @@ def generate_scene_image(
         provider = registry.get_provider(model_key)
         asset_dir = _asset_dir(run_id)
         asset_dir.mkdir(parents=True, exist_ok=True)
-        owner = delivery_owner(ctx.task_id, worker_hostname(self.request), os.getpid())
+        owner = delivery_owner(ctx.task_id, gethostname(), os.getpid())
 
         for idx, target_scene in enumerate(target_scenes):
             try:
