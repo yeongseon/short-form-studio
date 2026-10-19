@@ -32,7 +32,7 @@ class PostgresMediaRetentionStorage:
         ]
 
     async def referenced_asset_ids(self, workspace_id: int) -> frozenset[int]:
-        return await self._timeline_asset_ids(workspace_id, approved_only=False)
+        return await self._timeline_asset_ids(workspace_id)
 
     async def approved_asset_ids(self, workspace_id: int) -> frozenset[int]:
         rows = await db.fetch_all(
@@ -45,9 +45,7 @@ class PostgresMediaRetentionStorage:
         )
         return frozenset(int(row["id"]) for row in rows)
 
-    async def _timeline_asset_ids(
-        self, workspace_id: int, *, approved_only: bool,
-    ) -> frozenset[int]:
+    async def _timeline_asset_ids(self, workspace_id: int) -> frozenset[int]:
         rows = await db.fetch_all(
             "SELECT segments_json FROM creator_timelines WHERE workspace_id = $1",
             workspace_id,

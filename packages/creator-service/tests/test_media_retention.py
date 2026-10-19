@@ -8,6 +8,7 @@ from creator_service.media_retention import (
     RetentionAsset,
     select_retention_candidates,
 )
+from creator_service.object_storage import StorageDeletionError
 import pytest
 
 
@@ -86,4 +87,42 @@ async def test_storage_delete_failure_keeps_metadata_accounted() -> None:
     ).sweep_workspace(7, now=datetime.now(timezone.utc))
 
     assert result.deleted == 0
+    assert storage.deleted == []
+
+
+@pytest.mark.anyio
+async def test_storage_delete_error_keeps_metadata_accounted() -> None:
+    # Given an eligible asset whose object provider fails deletion.
+    asset = _asset(1, 7, origin="GENERATED", media_type="IMAGE")
+
+    class Storage:
+        deleted: list[int] = []
+
+        async def list_retention_assets(self, workspace_id: int, limit: int):
+            return [asset]
+
+        async def referenced_asset_ids(self, workspace_id: int):
+            return frozenset()
+
+        async def approved_asset_ids(self, workspace_id: int):
+            return frozenset()
+
+        async def delete_retained_asset(self, asset_id: int, workspace_id: int):
+            self.deleted.append(asset_id)
+
+    class Objects:
+        def delete(self, key: str) -> bool:
+            raise StorageDeletionError(key)
+
+    storage = Storage()
+
+    # When the active retention sweep attempts physical deletion.
+    with pytest.raises(StorageDeletionError):
+        await MediaRetentionService(
+            storage,
+            Objects(),
+            MediaRetentionPolicy(intermediate_days=7, enabled=True, dry_run=False),
+        ).sweep_workspace(7, now=datetime.now(timezone.utc))
+
+    # Then metadata remains accounted because its deletion was never attempted.
     assert storage.deleted == []
