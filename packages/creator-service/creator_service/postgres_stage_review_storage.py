@@ -27,7 +27,7 @@ class PostgresStageReviewStorage:
                     """INSERT INTO creator_approved_timeline_assets (
                         review_id, workspace_id, timeline_id, revision, asset_id
                     )
-                    SELECT $1, r.workspace_id, $3, $4,
+                    SELECT DISTINCT $1, r.workspace_id, $3, $4,
                         (segment->>'asset_id')::bigint
                     FROM creator_runs r
                     JOIN creator_timelines t ON t.project_id = r.project_id

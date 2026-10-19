@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import subprocess
 import sys
@@ -25,6 +26,7 @@ from creator_service.media_upload_reconciliation import (
 )
 from creator_service.object_storage import LocalStorageBackend
 from creator_service.postgres_media_asset_storage import PostgresMediaAssetStorage, _decode_asset
+from creator_service.postgres_stage_review_storage import PostgresStageReviewStorage
 from creator_service.postgres_timeline_storage import PostgresTimelineStorage
 from creator_service.storage_policy import StorageBudgetExceeded, StoragePolicy
 from creator_service.timeline_service import TimelineService
@@ -829,3 +831,69 @@ async def test_postgres_retention_successor_reclaims_expired_claim_once(
     await storage.delete_retained_asset(asset.id, 9101, successor_token)
     assert await service.get_asset(asset.id, 9101) is None
     assert await storage.claim_retained_asset(asset.id, 9101) is None
+
+
+@pytest.mark.asyncio
+async def test_postgres_approval_deduplicates_reused_timeline_asset(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given a persisted Timeline revision reuses one asset in two segments.
+    service = MediaAssetService(LocalStorageBackend(str(tmp_path)))
+    asset = await service.create_image_asset(
+        workspace_id=9101, project_id=9101, filename="reused.png",
+        data=image_bytes(), content_type="image/png",
+    )
+    await db.execute(
+        """INSERT INTO creator_timelines (
+                project_id, workspace_id, timeline_id, revision, segments_json
+            ) VALUES ($1, $2, $3, $4, $5::jsonb)""",
+        9101, 9101, "reused-asset", 3,
+        json.dumps([
+            {"id": "one", "asset_id": asset.id},
+            {"id": "two", "asset_id": asset.id},
+        ]),
+    )
+
+    # When that exact revision is approved.
+    review = await PostgresStageReviewStorage().create_review({
+        "run_id": 9101, "stage_name": "TIMELINE_REVIEW", "review_status": "approved",
+        "reviewer": "human", "notes": '{"timeline_id":"reused-asset","revision":3}',
+    })
+
+    # Then the normalized mapping contains exactly one row for the reused asset.
+    rows = await db.fetch_all(
+        "SELECT asset_id FROM creator_approved_timeline_assets WHERE review_id = $1",
+        int(review["id"]),
+    )
+    assert rows == [{"asset_id": asset.id}]
+
+
+@pytest.mark.asyncio
+async def test_postgres_legacy_approval_without_mapping_remains_protected(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given an approval predates normalized mapping rows.
+    service = MediaAssetService(LocalStorageBackend(str(tmp_path)))
+    asset = await service.create_image_asset(
+        workspace_id=9101, project_id=9101, filename="legacy-approved.png",
+        data=image_bytes(), content_type="image/png",
+    )
+    await db.execute(
+        """INSERT INTO creator_timelines (
+                project_id, workspace_id, timeline_id, revision, segments_json
+            ) VALUES ($1, $2, $3, $4, $5::jsonb)""",
+        9101, 9101, "legacy-approved", 4,
+        f'[{{"id":"only","asset_id":{asset.id}}}]',
+    )
+    await db.execute(
+        """INSERT INTO creator_stage_reviews (
+                run_id, stage_name, review_status, reviewer, notes
+            ) VALUES ($1, 'TIMELINE_REVIEW', 'approved', 'legacy', $2)""",
+        9101, '{"timeline_id":"legacy-approved","revision":4}',
+    )
+
+    # When retention resolves approved assets.
+    approved = await PostgresMediaAssetStorage().approved_asset_ids(9101)
+
+    # Then the legacy approved revision remains protected without a mapping row.
+    assert asset.id in approved

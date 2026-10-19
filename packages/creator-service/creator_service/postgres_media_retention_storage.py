@@ -52,8 +52,28 @@ class PostgresMediaRetentionStorage:
 
     async def approved_asset_ids(self, workspace_id: int) -> frozenset[int]:
         rows = await db.fetch_all(
-            """SELECT DISTINCT asset_id
-                FROM creator_approved_timeline_assets WHERE workspace_id = $1""",
+            """SELECT DISTINCT asset_id FROM (
+                    SELECT asset_id
+                    FROM creator_approved_timeline_assets WHERE workspace_id = $1
+                    UNION ALL
+                    SELECT (segment->>'asset_id')::bigint AS asset_id
+                    FROM creator_stage_reviews review
+                    JOIN creator_runs run ON run.id = review.run_id
+                    JOIN creator_timelines timeline
+                      ON timeline.project_id = run.project_id
+                     AND timeline.workspace_id = run.workspace_id
+                     AND timeline.timeline_id = review.notes::jsonb->>'timeline_id'
+                     AND timeline.revision = (review.notes::jsonb->>'revision')::integer
+                    CROSS JOIN LATERAL
+                        jsonb_array_elements(timeline.segments_json::jsonb) segment
+                    WHERE run.workspace_id = $1
+                      AND review.stage_name = 'TIMELINE_REVIEW'
+                      AND review.review_status = 'approved'
+                      AND NOT EXISTS (
+                          SELECT 1 FROM creator_approved_timeline_assets mapped
+                          WHERE mapped.review_id = review.id
+                      )
+                ) approved""",
             workspace_id,
         )
         return frozenset(int(row["asset_id"]) for row in rows)
