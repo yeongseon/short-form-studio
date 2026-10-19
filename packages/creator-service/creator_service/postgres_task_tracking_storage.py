@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 
 if TYPE_CHECKING:
     from .postgres_run_storage import PostgresRunStorage
+
+from .postgres_usage_storage import cancel_owned_on_connection, settle_owned_on_connection
+from .task_tracking_storage import BillingOutcome
 
 from . import db
 from .db import fetch_all, fetch_one
@@ -254,6 +257,7 @@ class PostgresTaskTrackingStorage:
         self, celery_task_id: str, token: str, usage_storage: Any,
         error_code: str, error_message: str, run_storage: PostgresRunStorage | None = None,
         run_id: int | None = None, expected_stages: frozenset[str] = frozenset(),
+        billing_outcome: BillingOutcome = BillingOutcome.NOT_STARTED,
     ) -> bool:
         pool = await db.get_pool()
         async with pool.acquire() as connection:
@@ -272,37 +276,17 @@ class PostgresTaskTrackingStorage:
                            AND status != ALL($3::text[])""",
                         run_id, list(expected_stages), ["failed", "cancelled", "completed"],
                     )
-                owner = await connection.fetchrow(
-                    """SELECT workspace_id
-                       FROM workspace_quota_reservation_owners
-                       WHERE owner_id=$1 AND status='reserved'""",
-                    celery_task_id,
-                )
-                if owner is not None:
-                    workspace_id = int(owner["workspace_id"])
-                    await connection.execute("SELECT pg_advisory_xact_lock($1)", workspace_id)
-                    owner = await connection.fetchrow(
-                        """SELECT period_start, operation_type
-                           FROM workspace_quota_reservation_owners
-                           WHERE owner_id=$1 AND status='reserved' FOR UPDATE""",
-                        celery_task_id,
-                    )
-                if owner is not None:
-                    await connection.execute(
-                        """UPDATE workspace_quota_reservation_owners SET status='cancelled'
-                           WHERE owner_id=$1 AND status='reserved'""",
-                        celery_task_id,
-                    )
-                    await connection.execute(
-                        """UPDATE workspace_quota_reservations SET
-                           llm_count=llm_count-$3, image_count=image_count-$4,
-                           tts_request_count=tts_request_count-$5, updated_at=NOW()
-                           WHERE workspace_id=$1 AND period_start=$2""",
-                        workspace_id, owner["period_start"],
-                        int(owner["operation_type"] == "llm"),
-                        int(owner["operation_type"] == "image_gen"),
-                        int(owner["operation_type"] in {"tts", "stt", "render"}),
-                    )
+                match billing_outcome:
+                    case BillingOutcome.NOT_STARTED:
+                        await cancel_owned_on_connection(connection, celery_task_id)
+                    case BillingOutcome.ACCOUNTED:
+                        await settle_owned_on_connection(connection, celery_task_id)
+                    case BillingOutcome.UNKNOWN:
+                        await settle_owned_on_connection(
+                            connection, celery_task_id, billable_unknown=True,
+                        )
+                    case unreachable:
+                        assert_never(unreachable)
                 await connection.execute(
                     """UPDATE creator_run_tasks SET status='failed', claim_token=NULL,
                        finished_at=NOW(), error_code=$2, error_message=$3 WHERE id=$1""",

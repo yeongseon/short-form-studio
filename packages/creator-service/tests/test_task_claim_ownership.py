@@ -1,10 +1,14 @@
 import pytest
 import anyio
+from decimal import Decimal
 from creator_service import db
 from creator_service.memory_task_tracking_storage import InMemoryTaskTrackingStorage
 from creator_service.postgres_task_tracking_storage import PostgresTaskTrackingStorage
 from creator_service.task_tracking_service import TaskTrackingService
+from creator_service.task_tracking_storage import BillingOutcome
+from creator_service.run_service import RunStorageBackend
 from creator_service.usage_service import InMemoryUsageStorage, UsageService
+from creator_service.usage_service import UsageStorageBackend
 
 from .quota_dispatch_support import quota_pool as quota_pool
 
@@ -239,45 +243,47 @@ async def test_postgres_atomic_failure_blocks_successor_claim_until_quota_cleanu
     assert await tracking.record_task_start(1, "generate_audio", "delivery-1", claim_token="owner-a")
     assert await usage.reserve_owned(1, "image_gen", "delivery-1")
     finalization: list[bool] = []
-    successor: list[object] = []
-    successor_started = anyio.Event()
+    finalization_blocked = anyio.Event()
+    release_finalization = anyio.Event()
+    original_finalize = tracking_storage.fail_claimed_and_cancel_quota
 
-    async with pool.acquire() as lock_connection:
-        lock_transaction = lock_connection.transaction()
-        await lock_transaction.start()
-        try:
-            await lock_connection.execute("SELECT pg_advisory_xact_lock($1)", 1)
+    async def blocked_finalize(
+        celery_task_id: str, token: str, usage_storage: UsageStorageBackend,
+        error_code: str, error_message: str, run_storage: RunStorageBackend | None = None,
+        run_id: int | None = None, expected_stages: frozenset[str] = frozenset(),
+        billing_outcome: BillingOutcome = BillingOutcome.NOT_STARTED,
+    ) -> bool:
+        finalization_blocked.set()
+        await release_finalization.wait()
+        return await original_finalize(
+            celery_task_id, token, usage_storage, error_code, error_message,
+            run_storage, run_id, expected_stages, billing_outcome,
+        )
 
-            async def finalize() -> None:
-                finalization.append(await tracking.fail_claimed_and_cancel_quota(
-                    "delivery-1", "owner-a", usage.storage, "TIMEOUT", "failed",
-                    PostgresRunStorage(), 1, frozenset({"AUDIO_GENERATING"}),
-                ))
+    tracking_storage.fail_claimed_and_cancel_quota = blocked_finalize
 
-            async def claim_successor() -> None:
-                successor_started.set()
-                successor.append(await tracking.record_task_start(
-                    1, "generate_audio", "delivery-1", claim_token="owner-b",
-                ))
+    async def finalize() -> None:
+        finalization.append(await tracking.fail_claimed_and_cancel_quota(
+            "delivery-1", "owner-a", usage.storage, "TIMEOUT", "failed",
+            PostgresRunStorage(), 1, frozenset({"AUDIO_GENERATING"}),
+        ))
 
-            # When finalization owns the task row and another worker attempts a claim.
-            async with anyio.create_task_group() as tasks:
-                tasks.start_soon(finalize)
-                while not await pool.fetchval(
-                    "SELECT EXISTS (SELECT 1 FROM pg_locks WHERE locktype='advisory' AND NOT granted)"
-                ):
-                    await anyio.lowlevel.checkpoint()
-                tasks.start_soon(claim_successor)
-                await successor_started.wait()
-                await anyio.lowlevel.checkpoint()
-                await lock_transaction.commit()
-        finally:
-            if lock_connection.is_in_transaction():
-                await lock_transaction.rollback()
+    # When finalization is blocked, the still-running owner rejects a successor claim.
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(finalize)
+        await finalization_blocked.wait()
+        successor = await tracking.record_task_start(
+            1, "generate_audio", "delivery-1", claim_token="owner-b",
+        )
+        assert successor is None
+        release_finalization.set()
 
     # Then releasing the lock commits one terminal task/run/quota outcome.
     assert finalization == [True]
-    assert len(successor) == 1 and successor[0] is not None
+    replacement = await tracking.record_task_start(
+        1, "generate_audio", "delivery-1", claim_token="owner-b",
+    )
+    assert replacement is not None
     task = await tracking_storage.get_by_celery_id("delivery-1")
     run = await PostgresRunStorage().get_run(1)
     owner_status = await pool.fetchval(
@@ -288,3 +294,51 @@ async def test_postgres_atomic_failure_blocks_successor_claim_until_quota_cleanu
     assert run is not None and (run["status"], run["current_stage"]) == ("failed", "FAILED")
     assert owner_status == "cancelled"
     assert not await usage.cancel_owned("delivery-1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("quota_pool", ["postgres"], indirect=True)
+async def test_postgres_atomic_failure_cancels_all_reserved_units_and_cost(
+    quota_pool: object,
+) -> None:
+    # Given a claimed task owns a three-unit reservation.
+    if quota_pool is None:
+        pytest.fail("PostgreSQL fixture required")
+    from creator_service.postgres_usage_storage import PostgresUsageStorage
+
+    pool = await db.get_pool()
+    await pool.execute("INSERT INTO creator_projects (id, workspace_id) VALUES (1, 1)")
+    await pool.execute(
+        "INSERT INTO creator_runs (id, project_id, workspace_id, current_stage) "
+        "VALUES (1, 1, 1, 'AUDIO_GENERATING')"
+    )
+    tracking = TaskTrackingService(PostgresTaskTrackingStorage())
+    usage = UsageService(PostgresUsageStorage())
+    await usage.set_quota(1, monthly_image_generations=3, monthly_cost_usd=10)
+    assert await tracking.record_task_start(
+        1, "generate_audio", "delivery-1", claim_token="owner-a",
+    )
+    assert await usage.reserve_owned(
+        1, "image_gen", "delivery-1", estimated_cost_usd=Decimal("6"), units=3,
+    )
+
+    # When pre-provider failure atomically finalizes the task.
+    assert await tracking.fail_claimed_and_cancel_quota(
+        "delivery-1", "owner-a", usage.storage, "INTERNAL", "failed",
+    )
+
+    # Then every reserved unit and dollar is released and the owner is terminal.
+    reservation = await pool.fetchrow(
+        "SELECT image_count, reserved_estimated_cost_usd "
+        "FROM workspace_quota_reservations WHERE workspace_id=1"
+    )
+    owner = await pool.fetchrow(
+        "SELECT status, reserved_units FROM workspace_quota_reservation_owners "
+        "WHERE owner_id='delivery-1'"
+    )
+    assert reservation is not None
+    assert (reservation["image_count"], reservation["reserved_estimated_cost_usd"]) == (
+        0, Decimal("0"),
+    )
+    assert owner is not None
+    assert (owner["status"], owner["reserved_units"]) == ("cancelled", 0)

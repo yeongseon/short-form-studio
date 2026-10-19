@@ -4,7 +4,113 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
+from asyncpg import Connection
+
 from .db import fetch_all, fetch_one, get_pool
+
+
+async def cancel_owned_on_connection(connection: Connection, owner_id: str) -> bool:
+    await connection.execute("SELECT pg_advisory_xact_lock($1)", 860)
+    workspace_id = await connection.fetchval(
+        "SELECT workspace_id FROM workspace_quota_reservation_owners WHERE owner_id = $1",
+        owner_id,
+    )
+    if workspace_id is None:
+        return False
+    await connection.execute("SELECT pg_advisory_xact_lock($1)", int(workspace_id))
+    owned = await connection.fetchrow(
+        """SELECT period_start, operation_type, estimated_cost_usd, reserved_units
+           FROM workspace_quota_reservation_owners
+           WHERE owner_id = $1 AND status = 'reserved' FOR UPDATE""",
+        owner_id,
+    )
+    if owned is None:
+        return False
+    await connection.execute(
+        """UPDATE workspace_quota_reservation_owners
+           SET status = 'cancelled', reserved_units = 0
+           WHERE owner_id = $1""",
+        owner_id,
+    )
+    released_units = int(owned["reserved_units"])
+    await connection.execute(
+        """UPDATE workspace_quota_reservations SET
+           llm_count = GREATEST(llm_count - $3, 0),
+           image_count = GREATEST(image_count - $4, 0),
+           tts_request_count = GREATEST(tts_request_count - $5, 0),
+           reserved_estimated_cost_usd = GREATEST(reserved_estimated_cost_usd - $6, 0),
+           updated_at = NOW()
+           WHERE workspace_id = $1 AND period_start = $2""",
+        int(workspace_id), owned["period_start"],
+        released_units * int(owned["operation_type"] == "llm"),
+        released_units * int(owned["operation_type"] == "image_gen"),
+        released_units * int(owned["operation_type"] in {"tts", "stt", "render"}),
+        owned["estimated_cost_usd"],
+    )
+    return True
+
+
+async def settle_owned_on_connection(
+    connection: Connection, owner_id: str, *, billable_unknown: bool = False,
+) -> bool:
+    await connection.execute("SELECT pg_advisory_xact_lock($1)", 860)
+    workspace_id = await connection.fetchval(
+        "SELECT workspace_id FROM workspace_quota_reservation_owners WHERE owner_id = $1",
+        owner_id,
+    )
+    if workspace_id is None:
+        return False
+    await connection.execute("SELECT pg_advisory_xact_lock($1)", int(workspace_id))
+    source = await connection.fetchrow(
+        """SELECT period_start, operation_type, estimated_cost_usd,
+                  settled_estimated_cost_usd, reserved_units, status
+           FROM workspace_quota_reservation_owners WHERE owner_id = $1 FOR UPDATE""",
+        owner_id,
+    )
+    if source is None or source["status"] not in {"reserved", "consumed"}:
+        return False
+    if not billable_unknown and source["status"] == "reserved" and source["settled_estimated_cost_usd"] <= 0:
+        return False
+    status = "billable_unknown" if billable_unknown else "settled"
+    await connection.execute(
+        """UPDATE workspace_quota_reservation_owners
+           SET status = $2, reserved_units = 0 WHERE owner_id = $1""",
+        owner_id, status,
+    )
+    unknown = await connection.fetchval(
+        """UPDATE workspace_quota_reservation_attempts SET status = 'unknown'
+           WHERE owner_id = $1 AND status = 'authorized'
+           RETURNING estimated_cost_usd""",
+        owner_id,
+    )
+    unknown_total = await connection.fetchval(
+        """SELECT COALESCE(SUM(estimated_cost_usd), 0)
+           FROM workspace_quota_reservation_attempts
+           WHERE owner_id = $1 AND status = 'unknown'""",
+        owner_id,
+    )
+    keep = source["estimated_cost_usd"] if billable_unknown else unknown_total
+    if unknown is not None and not billable_unknown:
+        await connection.execute(
+            "UPDATE workspace_quota_reservation_owners SET status = 'billable_unknown' WHERE owner_id = $1",
+            owner_id,
+        )
+    remaining_units = int(source["reserved_units"])
+    await connection.execute(
+        """UPDATE workspace_quota_reservations SET
+           llm_count = GREATEST(llm_count - $3, 0),
+           image_count = GREATEST(image_count - $4, 0),
+           tts_request_count = GREATEST(tts_request_count - $5, 0),
+           reserved_estimated_cost_usd = GREATEST(
+             reserved_estimated_cost_usd - $6 + $7, 0), updated_at = NOW()
+           WHERE workspace_id = $1 AND period_start = $2""",
+        int(workspace_id), source["period_start"],
+        remaining_units * int(source["operation_type"] == "llm"),
+        remaining_units * int(source["operation_type"] == "image_gen"),
+        remaining_units * int(source["operation_type"] in {"tts", "stt", "render"}),
+        source["estimated_cost_usd"], keep,
+    )
+    return True
 
 
 class PostgresUsageStorage:
@@ -529,116 +635,15 @@ class PostgresUsageStorage:
         pool = await get_pool()
         async with pool.acquire() as connection:
             async with connection.transaction():
-                await connection.execute("SELECT pg_advisory_xact_lock($1)", 860)
-                owner = await connection.fetchrow(
-                    "SELECT workspace_id FROM workspace_quota_reservation_owners WHERE owner_id = $1",
-                    owner_id,
-                )
-                if owner is None:
-                    return False
-                workspace_id = int(owner["workspace_id"])
-                await connection.execute("SELECT pg_advisory_xact_lock($1)", workspace_id)
-                owned = await connection.fetchrow(
-                    """UPDATE workspace_quota_reservation_owners SET status = 'cancelled'
-                       WHERE owner_id = $1 AND status = 'reserved'
-                       RETURNING period_start, operation_type, estimated_cost_usd,
-                                 reserved_units, status""",
-                    owner_id,
-                )
-                if owned is None:
-                    return False
-                await connection.execute(
-                    """UPDATE workspace_quota_reservations SET
-                       llm_count = llm_count - $3,
-                       image_count = image_count - $4,
-                       tts_request_count = tts_request_count - $5,
-                       reserved_estimated_cost_usd = GREATEST(reserved_estimated_cost_usd - $6, 0),
-                       updated_at = NOW()
-                       WHERE workspace_id = $1 AND period_start = $2""",
-                    workspace_id, owned["period_start"],
-                    int(owned["reserved_units"]) * int(owned["operation_type"] == "llm"),
-                    int(owned["reserved_units"]) * int(owned["operation_type"] == "image_gen"),
-                    int(owned["reserved_units"]) * int(owned["operation_type"] in {"tts", "stt", "render"}),
-                    owned["estimated_cost_usd"],
-                )
-                await connection.execute(
-                    "UPDATE workspace_quota_reservation_owners SET reserved_units = 0 WHERE owner_id = $1",
-                    owner_id,
-                )
-                return True
+                return await cancel_owned_on_connection(connection, owner_id)
 
     async def settle_owned(self, owner_id: str, *, billable_unknown: bool = False) -> bool:
         pool = await get_pool()
         async with pool.acquire() as connection:
             async with connection.transaction():
-                await connection.execute("SELECT pg_advisory_xact_lock($1)", 860)
-                owner = await connection.fetchrow(
-                    "SELECT workspace_id FROM workspace_quota_reservation_owners WHERE owner_id = $1",
-                    owner_id,
+                return await settle_owned_on_connection(
+                    connection, owner_id, billable_unknown=billable_unknown,
                 )
-                if owner is None:
-                    return False
-                workspace_id = int(owner["workspace_id"])
-                await connection.execute("SELECT pg_advisory_xact_lock($1)", workspace_id)
-                status = "billable_unknown" if billable_unknown else "settled"
-                source = await connection.fetchrow(
-                    """SELECT period_start, operation_type, estimated_cost_usd,
-                              settled_estimated_cost_usd, reserved_units, status
-                       FROM workspace_quota_reservation_owners WHERE owner_id = $1 FOR UPDATE""",
-                    owner_id,
-                )
-                if source is None or source["status"] not in {"reserved", "consumed"}:
-                    return False
-                if (
-                    not billable_unknown
-                    and source["status"] == "reserved"
-                    and source["settled_estimated_cost_usd"] <= 0
-                ):
-                    return False
-                settled = await connection.fetchrow(
-                    """UPDATE workspace_quota_reservation_owners
-                       SET status = $2, reserved_units = 0
-                       WHERE owner_id = $1 AND status IN ('reserved', 'consumed')
-                       RETURNING period_start, operation_type, estimated_cost_usd""",
-                    owner_id, status,
-                )
-                if settled is None:
-                    return False
-                unknown = await connection.fetchval(
-                    """UPDATE workspace_quota_reservation_attempts
-                       SET status = 'unknown'
-                       WHERE owner_id = $1 AND status = 'authorized'
-                       RETURNING estimated_cost_usd""",
-                    owner_id,
-                )
-                unknown_total = await connection.fetchval(
-                    """SELECT COALESCE(SUM(estimated_cost_usd), 0)
-                       FROM workspace_quota_reservation_attempts
-                       WHERE owner_id = $1 AND status = 'unknown'""",
-                    owner_id,
-                )
-                keep = settled["estimated_cost_usd"] if billable_unknown else unknown_total
-                if unknown is not None and not billable_unknown:
-                    await connection.execute(
-                        "UPDATE workspace_quota_reservation_owners SET status = 'billable_unknown' WHERE owner_id = $1",
-                        owner_id,
-                    )
-                remaining_units = int(source["reserved_units"])
-                await connection.execute(
-                    """UPDATE workspace_quota_reservations SET
-                       llm_count = GREATEST(llm_count - $3, 0),
-                       image_count = GREATEST(image_count - $4, 0),
-                       tts_request_count = GREATEST(tts_request_count - $5, 0),
-                       reserved_estimated_cost_usd = GREATEST(
-                         reserved_estimated_cost_usd - $6 + $7, 0), updated_at = NOW()
-                       WHERE workspace_id = $1 AND period_start = $2""",
-                    workspace_id, settled["period_start"],
-                    remaining_units * int(settled["operation_type"] == "llm"),
-                    remaining_units * int(settled["operation_type"] == "image_gen"),
-                    remaining_units * int(settled["operation_type"] in {"tts", "stt", "render"}),
-                    settled["estimated_cost_usd"], keep,
-                )
-                return True
 
     async def record_owned_event(self, row: dict[str, Any], owner_id: str) -> dict[str, Any]:
         pool = await get_pool()
