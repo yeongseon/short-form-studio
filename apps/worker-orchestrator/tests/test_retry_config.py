@@ -78,4 +78,27 @@ def test_production_time_limit_override_is_restricted_to_topology_tests(monkeypa
 
     monkeypatch.setenv("ENVIRONMENT", "test")
     monkeypatch.setenv("WORKER_TOPOLOGY_PROBE_ENABLED", "1")
+    monkeypatch.setenv("WORKER_TOPOLOGY_ALLOW_PRODUCTION_TIMEOUT_OVERRIDE", "1")
     assert production_time_limits(600, 660) == (None, 2)
+
+
+def test_production_time_limit_override_rejects_malformed_values(monkeypatch) -> None:
+    from tasks.hard_timeout import production_time_limits
+
+    monkeypatch.setenv("ENVIRONMENT", "test")
+    monkeypatch.setenv("WORKER_TOPOLOGY_PROBE_ENABLED", "1")
+    monkeypatch.setenv("WORKER_TOPOLOGY_ALLOW_PRODUCTION_TIMEOUT_OVERRIDE", "1")
+    monkeypatch.setenv("WORKER_TOPOLOGY_PRODUCTION_HARD_TIME_LIMIT", "invalid")
+
+    assert production_time_limits(600, 660) == (600, 660)
+
+
+def test_production_time_limit_override_rejects_non_positive_values(monkeypatch) -> None:
+    from tasks.hard_timeout import production_time_limits
+
+    monkeypatch.setenv("ENVIRONMENT", "test")
+    monkeypatch.setenv("WORKER_TOPOLOGY_PROBE_ENABLED", "1")
+    monkeypatch.setenv("WORKER_TOPOLOGY_ALLOW_PRODUCTION_TIMEOUT_OVERRIDE", "1")
+    monkeypatch.setenv("WORKER_TOPOLOGY_PRODUCTION_HARD_TIME_LIMIT", "0")
+
+    assert production_time_limits(600, 660) == (600, 660)

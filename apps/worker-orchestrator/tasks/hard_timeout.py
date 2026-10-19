@@ -92,8 +92,13 @@ def production_time_limits(soft: int, hard: int) -> tuple[int | None, int]:
     if (
         os.getenv("ENVIRONMENT") == "test"
         and os.getenv("WORKER_TOPOLOGY_PROBE_ENABLED") == "1"
+        and os.getenv("WORKER_TOPOLOGY_ALLOW_PRODUCTION_TIMEOUT_OVERRIDE") == "1"
         and override is not None
     ):
-        hard = int(override)
-        return None, hard
+        try:
+            override_hard = int(override)
+        except ValueError:
+            return soft, hard
+        if override_hard > 0:
+            return None, override_hard
     return soft, hard

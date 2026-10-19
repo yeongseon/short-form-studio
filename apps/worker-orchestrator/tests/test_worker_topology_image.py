@@ -268,7 +268,10 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
     worker(
         "topology-scaled-timeout",
         command,
-        {"WORKER_TOPOLOGY_PRODUCTION_HARD_TIME_LIMIT": "2"},
+        {
+            "WORKER_TOPOLOGY_ALLOW_PRODUCTION_TIMEOUT_OVERRIDE": "1",
+            "WORKER_TOPOLOGY_PRODUCTION_HARD_TIME_LIMIT": "2",
+        },
     )
 
     new_run(106)
