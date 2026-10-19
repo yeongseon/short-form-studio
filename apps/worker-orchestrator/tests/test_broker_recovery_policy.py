@@ -14,7 +14,6 @@ from creator_service.broker_recovery import (
 )
 from creator_service.memory_task_tracking_storage import InMemoryTaskTrackingStorage
 from creator_service.task_tracking_service import TaskTrackingService
-from tasks.reconcile_stale_dispatches import broker_epoch_witnesses
 
 
 @dataclass
@@ -312,18 +311,3 @@ def test_deferred_recovery_keeps_previous_epoch_for_retry() -> None:
     assert not should_persist_observed_epoch(previous_epoch="epoch-a", deferred=True)
     assert should_persist_observed_epoch(previous_epoch="epoch-a", deferred=False)
     assert should_persist_observed_epoch(previous_epoch=None, deferred=True)
-
-
-def test_fallback_epoch_does_not_become_database_cas_expectation() -> None:
-    # Given a pre-migration fallback witness without durable database state.
-    durable_epoch = None
-    fallback_epoch = "epoch-a"
-
-    # When
-    recovery_epoch, expected_database_epoch = broker_epoch_witnesses(
-        durable_epoch, fallback_epoch
-    )
-
-    # Then the fallback still drives recovery while database insertion remains first-observation.
-    assert recovery_epoch == "epoch-a"
-    assert expected_database_epoch is None

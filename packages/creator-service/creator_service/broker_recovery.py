@@ -37,6 +37,12 @@ class RecoveryTracking(Protocol):
         self, task_id: str, error_code: str, error_message: str
     ) -> RecoverableTask | None: ...
 
+    async def get_observed_broker_epoch(self) -> str | None: ...
+
+    async def set_observed_broker_epoch(
+        self, epoch: str, expected_epoch: str | None
+    ) -> bool: ...
+
 
 class OwnedUsage(Protocol):
     async def cancel_owned(self, task_id: str) -> bool: ...
@@ -132,6 +138,42 @@ async def recover_lost_tasks(
         deferred=False,
         recovery_failures=recovery_failures,
     )
+
+
+async def recover_broker_snapshot(
+    *,
+    fallback_epoch: str | None,
+    snapshot: BrokerSnapshot,
+    tracking: RecoveryTracking,
+    usage: OwnedUsage,
+    rollback: Callable[[int, str], Awaitable[None]],
+) -> tuple[BrokerRecoveryResult, bool]:
+    while True:
+        durable_epoch = await tracking.get_observed_broker_epoch()
+        if durable_epoch is None and fallback_epoch is not None:
+            initialized = await tracking.set_observed_broker_epoch(
+                fallback_epoch, None
+            )
+            if not initialized:
+                continue
+            durable_epoch = fallback_epoch
+
+        recovered = await recover_lost_tasks(
+            previous_epoch=durable_epoch,
+            snapshot=snapshot,
+            tracking=tracking,
+            usage=usage,
+            rollback=rollback,
+        )
+        if not should_persist_observed_epoch(
+            previous_epoch=durable_epoch, deferred=recovered.deferred
+        ):
+            return recovered, False
+        persisted = await tracking.set_observed_broker_epoch(
+            snapshot.epoch, durable_epoch
+        )
+        if persisted:
+            return recovered, True
 
 
 def _result(

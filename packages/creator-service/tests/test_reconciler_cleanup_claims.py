@@ -8,7 +8,11 @@ import asyncpg
 import pytest
 
 from creator_service.dispatch_reconciler import DispatchReconciler
-from creator_service.broker_recovery import BrokerSnapshot, recover_lost_tasks
+from creator_service.broker_recovery import (
+    BrokerSnapshot,
+    recover_broker_snapshot,
+    recover_lost_tasks,
+)
 from creator_service.memory_task_tracking_storage import InMemoryTaskTrackingStorage
 from creator_service.postgres_task_tracking_storage import PostgresTaskTrackingStorage
 from creator_service.postgres_usage_storage import PostgresUsageStorage
@@ -219,6 +223,78 @@ async def test_concurrent_first_broker_observers_adopt_one_generation(
         row["status"] not in ("pending", "queued", "running")
         for row in converged
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("quota_pool", ["memory", "postgres"], indirect=True)
+@pytest.mark.parametrize(
+    ("current_epoch", "expected_statuses"),
+    [
+        ("epoch-b", {"failed", "success"}),
+        ("epoch-a", {"pending", "queued", "running", "success"}),
+    ],
+)
+async def test_fallback_epoch_adopts_legacy_tasks_before_recovery(
+    quota_pool: asyncpg.Pool | None,
+    current_epoch: str,
+    expected_statuses: set[str],
+) -> None:
+    # Given durable state is absent while fallback A witnesses legacy active rows.
+    storage = (
+        PostgresTaskTrackingStorage()
+        if quota_pool is not None
+        else InMemoryTaskTrackingStorage()
+    )
+    tracking = TaskTrackingService(storage)
+    run_id = await _prepare_run(quota_pool)
+    for status in ("pending", "queued", "running", "success"):
+        await storage.create_task(
+            {
+                "run_id": run_id,
+                "task_type": "generate_audio",
+                "celery_task_id": f"fallback-{current_epoch}-{status}",
+                "status": status,
+                "attempt": 1,
+            }
+        )
+
+    # When recovery observes current broker A or replacement B.
+    result, persisted = await recover_broker_snapshot(
+        fallback_epoch="epoch-a",
+        snapshot=BrokerSnapshot(
+            epoch=current_epoch,
+            started_at=datetime.now(timezone.utc),
+            queue_length=0,
+            oldest_wait_seconds=0,
+            workers_online=1,
+        ),
+        tracking=tracking,
+        usage=UsageService(
+            PostgresUsageStorage()
+            if quota_pool is not None
+            else InMemoryUsageStorage()
+        ),
+        rollback=lambda _run_id, _task_id: asyncio.sleep(0),
+    )
+
+    # Then NULL rows first belong to A, so replacement B fails them instead of adopting B.
+    rows = await storage.list_by_run(run_id)
+    assert {row["status"] for row in rows} == expected_statuses
+    assert result.failed == (3 if current_epoch == "epoch-b" else 0)
+    assert persisted is True
+    assert await tracking.get_observed_broker_epoch() == current_epoch
+    if current_epoch == "epoch-b":
+        assert {
+            row.get("error_code")
+            for row in rows
+            if row["status"] == "failed"
+        } == {"broker_message_lost"}
+    if current_epoch == "epoch-a":
+        assert {
+            row["broker_generation"]
+            for row in rows
+            if row["status"] in ("pending", "queued", "running")
+        } == {"epoch-a"}
 
 
 @pytest.mark.asyncio

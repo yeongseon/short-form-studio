@@ -60,12 +60,6 @@ _BROKER_EPOCH_STATE_PATH = Path(
 )
 
 
-def broker_epoch_witnesses(
-    durable_epoch: str | None, fallback_epoch: str | None
-) -> tuple[str | None, str | None]:
-    return durable_epoch or fallback_epoch, durable_epoch
-
-
 async def _rollback_run(run_id: int, celery_task_id: str) -> None:
     """Roll back a run to FAILED state when its stale pending task cannot be recovered.
 
@@ -121,9 +115,8 @@ async def _reconcile_once() -> dict[str, Any]:
     from creator_service.broker_recovery import (
         BrokerSnapshot,
         oldest_active_wait_seconds,
-        recover_lost_tasks,
+        recover_broker_snapshot,
         routed_queue_names,
-        should_persist_observed_epoch,
     )
 
     recovery_summary = {
@@ -154,41 +147,28 @@ async def _reconcile_once() -> dict[str, Any]:
             oldest_wait_seconds=oldest_wait_seconds,
             workers_online=len(ping),
         )
-        durable_epoch = await task_tracking_service.get_observed_broker_epoch()
         fallback_epoch = (
             _BROKER_EPOCH_STATE_PATH.read_text(encoding="utf-8").strip()
             if _BROKER_EPOCH_STATE_PATH.exists()
             else None
         )
-        previous_epoch, expected_database_epoch = broker_epoch_witnesses(
-            durable_epoch, fallback_epoch
+        recovered, persisted = await recover_broker_snapshot(
+            fallback_epoch=fallback_epoch,
+            snapshot=snapshot,
+            tracking=task_tracking_service,
+            usage=import_module("creator_service.usage_service").usage_service,
+            rollback=_rollback_run,
         )
-        recovery_deferred = False
-        if previous_epoch is not None:
-            recovered = await recover_lost_tasks(
-                previous_epoch=previous_epoch,
-                snapshot=snapshot,
-                tracking=task_tracking_service,
-                usage=import_module("creator_service.usage_service").usage_service,
-                rollback=_rollback_run,
-            )
-            recovery_summary = {
-                "failed": recovered.failed,
-                "deferred": recovered.deferred,
-                "queue_length": recovered.queue_length,
-                "oldest_wait_seconds": recovered.oldest_wait_seconds,
-                "recovery_failures": recovered.recovery_failures,
-            }
-            recovery_deferred = recovered.deferred
-        if should_persist_observed_epoch(
-            previous_epoch=previous_epoch, deferred=recovery_deferred
-        ):
-            persisted = await task_tracking_service.set_observed_broker_epoch(
-                epoch.epoch, expected_database_epoch
-            )
-            if persisted:
-                _BROKER_EPOCH_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-                _BROKER_EPOCH_STATE_PATH.write_text(epoch.epoch, encoding="utf-8")
+        recovery_summary = {
+            "failed": recovered.failed,
+            "deferred": recovered.deferred,
+            "queue_length": recovered.queue_length,
+            "oldest_wait_seconds": recovered.oldest_wait_seconds,
+            "recovery_failures": recovered.recovery_failures,
+        }
+        if persisted:
+            _BROKER_EPOCH_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            _BROKER_EPOCH_STATE_PATH.write_text(epoch.epoch, encoding="utf-8")
     except Exception:  # noqa: BLE001 - top-level recovery boundary must fail closed
         logger.warning(
             "Broker recovery evidence unavailable; active work left unchanged",
