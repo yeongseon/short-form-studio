@@ -277,3 +277,13 @@ def test_ci_validates_single_alembic_head_without_parsing_cli_text() -> None:
 
     assert "ScriptDirectory.from_config" in commands
     assert "grep -E '^[0-9a-f]+'" not in commands
+
+
+def test_ci_executes_scene_upload_cancellation_against_postgres() -> None:
+    raw = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
+    commands = "\n".join(
+        step.get("run", "") for step in raw["jobs"]["first-short-runtime"]["steps"]
+    )
+
+    assert "apps/worker-orchestrator/tests/test_scene_upload_cancellation.py" in commands
+    assert "apps/worker-orchestrator/tests/test_scene_upload_sdk_errors.py" in commands
