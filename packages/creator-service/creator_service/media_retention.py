@@ -123,13 +123,10 @@ class MediaRetentionService:
             if claim_token is None:
                 continue
             try:
-                object_deleted = await self._io.run(partial(self._objects.delete, asset.storage_key))
+                await self._io.run(partial(self._objects.delete, asset.storage_key))
             except BaseException:
                 await self._storage.release_retained_asset(asset.id, workspace_id, claim_token)
                 raise
-            if not object_deleted:
-                await self._storage.release_retained_asset(asset.id, workspace_id, claim_token)
-                continue
             await self._storage.delete_retained_asset(asset.id, workspace_id, claim_token)
             deleted += 1
         return RetentionSweepResult(len(candidates), deleted, False, True)

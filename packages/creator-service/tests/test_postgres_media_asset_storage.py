@@ -18,6 +18,7 @@ import pytest_asyncio
 from creator_domain.models import MediaAsset, MediaOrigin, MediaType
 from creator_service import db
 from creator_service.media_asset_service import MediaAssetService
+from creator_service.media_retention import MediaRetentionPolicy, MediaRetentionService
 from creator_service.media_upload_reconciliation import (
     MediaAssetPersistenceFailed,
     MediaUploadReconciler,
@@ -831,6 +832,49 @@ async def test_postgres_retention_successor_reclaims_expired_claim_once(
     await storage.delete_retained_asset(asset.id, 9101, successor_token)
     assert await service.get_asset(asset.id, 9101) is None
     assert await storage.claim_retained_asset(asset.id, 9101) is None
+
+
+@pytest.mark.asyncio
+async def test_postgres_retention_successor_finalizes_already_deleted_object(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given a worker deletes the object and dies before deleting claimed metadata.
+    objects = LocalStorageBackend(str(tmp_path))
+    storage = PostgresMediaAssetStorage()
+    service = MediaAssetService(objects, storage)
+    asset = await service.create_image_asset(
+        workspace_id=9101, project_id=9101, filename="deleted-before-crash.png",
+        data=image_bytes(), content_type="image/png",
+    )
+    abandoned_token = await storage.claim_retained_asset(asset.id, 9101)
+    assert abandoned_token is not None
+    assert objects.delete(asset.storage_key)
+    await db.execute(
+        """UPDATE creator_media_assets SET created_at = now() - interval '30 days'
+            WHERE id = $1""",
+        asset.id,
+    )
+    await db.execute(
+        """UPDATE creator_media_asset_deletion_claims
+            SET lease_expires_at = now() - interval '1 second' WHERE asset_id = $1""",
+        asset.id,
+    )
+    retention = MediaRetentionService(
+        storage,
+        objects,
+        MediaRetentionPolicy(original_days=1, grace_days=0, enabled=True, dry_run=False),
+    )
+
+    # When a successor sweeps the expired claim twice.
+    first = await retention.sweep_workspace(9101, now=datetime.now(timezone.utc))
+    second = await retention.sweep_workspace(9101, now=datetime.now(timezone.utc))
+
+    # Then metadata and charged capacity are released exactly once.
+    assert first.deleted == 1
+    assert second.deleted == 0
+    usage = await storage.get_storage_usage(9101)
+    assert usage.stored_asset_count == 0
+    assert usage.stored_bytes == 0
 
 
 @pytest.mark.asyncio

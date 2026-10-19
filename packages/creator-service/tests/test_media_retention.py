@@ -57,7 +57,7 @@ def test_retention_preserves_references_approved_revisions_and_other_workspaces(
 
 
 @pytest.mark.anyio
-async def test_storage_delete_failure_keeps_metadata_accounted() -> None:
+async def test_storage_absent_object_removes_claimed_metadata() -> None:
     asset = _asset(1, 7, origin="GENERATED", media_type="IMAGE")
 
     class Storage:
@@ -92,8 +92,8 @@ async def test_storage_delete_failure_keeps_metadata_accounted() -> None:
         MediaRetentionPolicy(intermediate_days=7, enabled=True, dry_run=False),
     ).sweep_workspace(7, now=datetime.now(timezone.utc))
 
-    assert result.deleted == 0
-    assert storage.deleted == [-1]
+    assert result.deleted == 1
+    assert storage.deleted == [1]
 
 
 @pytest.mark.anyio
