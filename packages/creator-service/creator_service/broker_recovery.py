@@ -40,7 +40,10 @@ class RecoveryTracking(Protocol):
     async def get_observed_broker_epoch(self) -> str | None: ...
 
     async def set_observed_broker_epoch(
-        self, epoch: str, expected_epoch: str | None
+        self,
+        epoch: str,
+        expected_epoch: str | None,
+        active_generations: frozenset[str] = frozenset(),
     ) -> bool: ...
 
     async def list_pending_broker_cleanup_generations(self) -> list[str]: ...
@@ -82,6 +85,8 @@ class BrokerSnapshot:
     queue_length: int
     oldest_wait_seconds: float | None
     workers_online: int
+    confirmed_epoch: str | None = None
+    active_generations: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,6 +169,10 @@ async def recover_broker_snapshot(
     usage: OwnedUsage,
     rollback: Callable[[int, str], Awaitable[None]],
 ) -> tuple[BrokerRecoveryResult, bool]:
+    if snapshot.confirmed_epoch is not None and snapshot.confirmed_epoch != snapshot.epoch:
+        return _result(
+            snapshot, failed=0, deferred=True, recovery_failures=0
+        ), False
     durable_epoch = await tracking.get_observed_broker_epoch()
     if durable_epoch is None and fallback_epoch is not None:
         initialized = await tracking.set_observed_broker_epoch(fallback_epoch, None)
@@ -183,7 +192,11 @@ async def recover_broker_snapshot(
             usage=usage,
             rollback=rollback,
         ), False
-    persisted = await tracking.set_observed_broker_epoch(snapshot.epoch, durable_epoch)
+    persisted = await tracking.set_observed_broker_epoch(
+        snapshot.epoch,
+        durable_epoch,
+        snapshot.active_generations,
+    )
     if not persisted:
         return _result(
             snapshot,

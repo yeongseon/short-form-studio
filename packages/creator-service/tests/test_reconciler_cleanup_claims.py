@@ -85,7 +85,8 @@ class BrokerEpochPersistenceRace(TaskTrackingService):
         self.injected = False
 
     async def set_observed_broker_epoch(
-        self, epoch: str, expected_previous_epoch: str | None
+        self, epoch: str, expected_previous_epoch: str | None,
+        active_generations: frozenset[str] = frozenset(),
     ) -> bool:
         if (
             epoch == "epoch-b"
@@ -103,18 +104,23 @@ class BrokerEpochPersistenceRace(TaskTrackingService):
             )
             await self.promote_pending_to_queued("current-c")
             return False
-        return await super().set_observed_broker_epoch(epoch, expected_previous_epoch)
+        return await super().set_observed_broker_epoch(
+            epoch, expected_previous_epoch, active_generations
+        )
 
 
 class BrokerEpochInitializationRace(TaskTrackingService):
     async def set_observed_broker_epoch(
-        self, epoch: str, expected_previous_epoch: str | None
+        self, epoch: str, expected_previous_epoch: str | None,
+        active_generations: frozenset[str] = frozenset(),
     ) -> bool:
         if epoch == "epoch-a" and expected_previous_epoch is None:
             won = await super().set_observed_broker_epoch("epoch-c", None)
             assert won
             return False
-        return await super().set_observed_broker_epoch(epoch, expected_previous_epoch)
+        return await super().set_observed_broker_epoch(
+            epoch, expected_previous_epoch, active_generations
+        )
 
 
 async def _failed_enqueue(celery_task_id: str, task_type: str, run_id: int) -> bool:

@@ -142,3 +142,110 @@ async def test_delayed_same_epoch_observer_preserves_replacement_work(
     assert persisted is True
     assert current is not None and current["status"] == "queued"
     assert await tracking.get_observed_broker_epoch() == "epoch-b"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("quota_pool", ["memory", "postgres"], indirect=True)
+async def test_recovery_registers_unobserved_intermediate_generation(
+    quota_pool: asyncpg.Pool | None,
+) -> None:
+    # Given durable A while queued work belongs to unobserved generation B.
+    storage = (
+        PostgresTaskTrackingStorage()
+        if quota_pool is not None
+        else InMemoryTaskTrackingStorage()
+    )
+    tracking = TaskTrackingService(storage)
+    run_id = await _prepare_run(quota_pool)
+    assert await tracking.set_observed_broker_epoch("epoch-a", None)
+    await tracking.record_task_pending(
+        run_id,
+        "generate_audio",
+        "intermediate-b",
+        broker_generation="epoch-b",
+    )
+    await tracking.promote_pending_to_queued("intermediate-b")
+
+    # When reconciliation samples B work on a healthy, empty C broker.
+    result, persisted = await recover_broker_snapshot(
+        fallback_epoch=None,
+        snapshot=BrokerSnapshot(
+            epoch="epoch-c",
+            confirmed_epoch="epoch-c",
+            active_generations=frozenset({"epoch-b"}),
+            started_at=datetime.now(timezone.utc),
+            queue_length=0,
+            oldest_wait_seconds=0,
+            workers_online=1,
+        ),
+        tracking=tracking,
+        usage=UsageService(
+            PostgresUsageStorage()
+            if quota_pool is not None
+            else InMemoryUsageStorage()
+        ),
+        rollback=lambda _run_id, _task_id: asyncio.sleep(0),
+    )
+
+    # Then B is registered atomically and converges to explainable failure.
+    intermediate = await storage.get_by_celery_id("intermediate-b")
+    assert result.failed == 1
+    assert result.deferred is False
+    assert persisted is True
+    assert intermediate is not None and intermediate["status"] == "failed"
+    assert intermediate["error_code"] == "broker_message_lost"
+    assert await tracking.get_observed_broker_epoch() == "epoch-c"
+    assert await tracking.list_pending_broker_cleanup_generations() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("quota_pool", ["memory", "postgres"], indirect=True)
+async def test_recovery_defers_when_epoch_changes_after_sampling(
+    quota_pool: asyncpg.Pool | None,
+) -> None:
+    # Given reconciliation sampled C before Redis advanced to D with D-owned work.
+    storage = (
+        PostgresTaskTrackingStorage()
+        if quota_pool is not None
+        else InMemoryTaskTrackingStorage()
+    )
+    tracking = TaskTrackingService(storage)
+    run_id = await _prepare_run(quota_pool)
+    assert await tracking.set_observed_broker_epoch("epoch-a", None)
+    await tracking.record_task_pending(
+        run_id,
+        "generate_audio",
+        "current-d",
+        broker_generation="epoch-d",
+    )
+    await tracking.promote_pending_to_queued("current-d")
+
+    # When final confirmation observes D instead of the sampled C generation.
+    result, persisted = await recover_broker_snapshot(
+        fallback_epoch=None,
+        snapshot=BrokerSnapshot(
+            epoch="epoch-c",
+            confirmed_epoch="epoch-d",
+            active_generations=frozenset(),
+            started_at=datetime.now(timezone.utc),
+            queue_length=0,
+            oldest_wait_seconds=0,
+            workers_online=1,
+        ),
+        tracking=tracking,
+        usage=UsageService(
+            PostgresUsageStorage()
+            if quota_pool is not None
+            else InMemoryUsageStorage()
+        ),
+        rollback=lambda _run_id, _task_id: asyncio.sleep(0),
+    )
+
+    # Then reconciliation defers without registering sampled or newer work.
+    current = await storage.get_by_celery_id("current-d")
+    assert result.failed == 0
+    assert result.deferred is True
+    assert persisted is False
+    assert current is not None and current["status"] == "queued"
+    assert await tracking.get_observed_broker_epoch() == "epoch-a"
+    assert await tracking.list_pending_broker_cleanup_generations() == []
