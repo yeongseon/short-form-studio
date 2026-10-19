@@ -113,6 +113,29 @@ async def settle_owned_on_connection(
     return True
 
 
+async def finalize_revoked_owned_on_connection(
+    connection: Connection, owner_id: str,
+) -> bool:
+    await connection.execute("SELECT pg_advisory_xact_lock($1)", 860)
+    workspace_id = await connection.fetchval(
+        "SELECT workspace_id FROM workspace_quota_reservation_owners WHERE owner_id = $1",
+        owner_id,
+    )
+    if workspace_id is None:
+        return False
+    await connection.execute("SELECT pg_advisory_xact_lock($1)", int(workspace_id))
+    attempted = await connection.fetchval(
+        "SELECT EXISTS (SELECT 1 FROM workspace_quota_reservation_attempts "
+        "WHERE owner_id = $1)",
+        owner_id,
+    )
+    if attempted:
+        return await settle_owned_on_connection(
+            connection, owner_id, billable_unknown=True,
+        )
+    return await cancel_owned_on_connection(connection, owner_id)
+
+
 class PostgresUsageStorage:
     async def record_event(self, row: dict[str, Any]) -> dict[str, Any]:
         idempotency_key = row.get("idempotency_key")
@@ -636,6 +659,12 @@ class PostgresUsageStorage:
         async with pool.acquire() as connection:
             async with connection.transaction():
                 return await cancel_owned_on_connection(connection, owner_id)
+
+    async def finalize_revoked_owned(self, owner_id: str) -> bool:
+        pool = await get_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                return await finalize_revoked_owned_on_connection(connection, owner_id)
 
     async def settle_owned(self, owner_id: str, *, billable_unknown: bool = False) -> bool:
         pool = await get_pool()

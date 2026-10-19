@@ -98,6 +98,8 @@ class UsageStorageBackend(Protocol):
 
     async def cancel_owned(self, owner_id: str) -> bool: ...
 
+    async def finalize_revoked_owned(self, owner_id: str) -> bool: ...
+
     async def settle_owned(self, owner_id: str, *, billable_unknown: bool = False) -> bool: ...
 
     async def reservation_owner_id(self, task_id: str) -> str | None: ...
@@ -359,6 +361,11 @@ class InMemoryUsageStorage:
             return False
         async with self._lock_for_workspace(owned[0]):
             return self._finish_owned(owner_id, "cancelled")
+
+    async def finalize_revoked_owned(self, owner_id: str) -> bool:
+        if any(key[0] == owner_id for key in self._owned_attempts):
+            return await self.settle_owned(owner_id, billable_unknown=True)
+        return await self.cancel_owned(owner_id)
 
     async def settle_owned(self, owner_id: str, *, billable_unknown: bool = False) -> bool:
         async with self._spend_lock:
@@ -624,6 +631,9 @@ class UsageService:
 
     async def cancel_owned(self, owner_id: str) -> bool:
         return await self.storage.cancel_owned(owner_id)
+
+    async def finalize_revoked_owned(self, owner_id: str) -> bool:
+        return await self.storage.finalize_revoked_owned(owner_id)
 
     async def settle_owned(self, owner_id: str) -> bool:
         return await self.storage.settle_owned(owner_id)

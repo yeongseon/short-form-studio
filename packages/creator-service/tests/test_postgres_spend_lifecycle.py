@@ -149,6 +149,58 @@ async def test_postgres_multi_scene_cancel_releases_all_remaining_units(quota_po
     ) == 0
 
 
+async def test_postgres_queued_revocation_cancels_owned_reservation(quota_pool: object) -> None:
+    # Given a queued delivery that has not authorized provider work.
+    service = UsageService(PostgresUsageStorage())
+    await service.set_quota(1, monthly_cost_usd=Decimal("0.10"))
+    assert await service.reserve_owned(
+        1, "image_gen", "queued-revoke", estimated_cost_usd=Decimal("0.10"),
+    )
+
+    # When duplicate API/signal cleanup finalizes the revocation.
+    assert await service.finalize_revoked_owned("queued-revoke")
+    assert not await service.finalize_revoked_owned("queued-revoke")
+
+    # Then its reservation is cancelled and replacement spend is admitted.
+    assert await quota_pool.fetchval(
+        "SELECT status FROM workspace_quota_reservation_owners WHERE owner_id=$1",
+        "queued-revoke",
+    ) == "cancelled"
+    assert await service.reserve_owned(
+        1, "image_gen", "queued-replacement", estimated_cost_usd=Decimal("0.10"),
+    )
+
+
+async def test_postgres_active_revocation_retains_authorized_exposure(quota_pool: object) -> None:
+    # Given an active delivery with durable provider authorization.
+    service = UsageService(PostgresUsageStorage())
+    await service.set_quota(1, monthly_cost_usd=Decimal("0.10"))
+    assert await service.reserve_owned(
+        1, "image_gen", "active-revoke", estimated_cost_usd=Decimal("0.10"),
+    )
+    assert await service.authorize_owned_attempt(
+        "active-revoke", "attempt-1", Decimal("0.10"),
+    )
+
+    # When duplicate API/signal cleanup finalizes the revocation.
+    assert await service.finalize_revoked_owned("active-revoke")
+    assert not await service.finalize_revoked_owned("active-revoke")
+
+    # Then exposure becomes unknown, remains charged, and rejects replacement spend.
+    owner = await quota_pool.fetchrow(
+        "SELECT status, estimated_cost_usd FROM workspace_quota_reservation_owners "
+        "WHERE owner_id=$1",
+        "active-revoke",
+    )
+    assert dict(owner) == {
+        "status": "billable_unknown",
+        "estimated_cost_usd": Decimal("0.100000"),
+    }
+    assert not await service.reserve_owned(
+        1, "image_gen", "active-replacement", estimated_cost_usd=Decimal("0.10"),
+    )
+
+
 async def test_postgres_partial_multi_scene_settlement_releases_remaining_units(
     quota_pool: object,
 ) -> None:
