@@ -39,6 +39,82 @@ def test_hard_timeout_request_finalizes_task_run_and_quota(monkeypatch) -> None:
     )
 
 
+def test_production_request_finalizes_positional_run_id(monkeypatch) -> None:
+    # Given a hard-timeout request delivered with a positional run id.
+    finalized = MagicMock()
+    monkeypatch.setattr(hard_timeout.Request, "on_timeout", lambda *_args: None)
+    monkeypatch.setattr(hard_timeout, "finalize_hard_timeout", finalized)
+    request = object.__new__(hard_timeout.ProductionRequest)
+    request.id = "positional-delivery"
+    request._args = (103,)
+    request._kwargs = {}
+    request.worker_pid = 123
+    request._task = MagicMock(
+        hard_timeout_safe_failure_stages=frozenset({"SCRIPT_GENERATING"}),
+    )
+
+    # When the prefork parent observes the hard timeout.
+    request.on_timeout(False, 2.0)
+
+    # Then it finalizes the positional run before cleanup.
+    finalized.assert_called_once_with(
+        "positional-delivery",
+        "positional-delivery:123",
+        103,
+        2.0,
+        frozenset({"SCRIPT_GENERATING"}),
+    )
+
+
+def test_production_request_finalizes_keyword_run_id(monkeypatch) -> None:
+    # Given a production task delivered with its run id only in kwargs.
+    finalized = MagicMock()
+    monkeypatch.setattr(hard_timeout.Request, "on_timeout", lambda *_args: None)
+    monkeypatch.setattr(hard_timeout, "finalize_hard_timeout", finalized)
+    request = object.__new__(hard_timeout.ProductionRequest)
+    request.id = "keyword-delivery"
+    request._args = ()
+    request._kwargs = {"run_id": 104}
+    request.worker_pid = 124
+    request._task = MagicMock(
+        hard_timeout_safe_failure_stages=frozenset({"SCRIPT_GENERATING"}),
+    )
+
+    # When the prefork parent observes the hard timeout.
+    request.on_timeout(False, 3.0)
+
+    # Then it finalizes the keyword-delivered run.
+    finalized.assert_called_once_with(
+        "keyword-delivery",
+        "keyword-delivery:124",
+        104,
+        3.0,
+        frozenset({"SCRIPT_GENERATING"}),
+    )
+
+
+def test_production_request_rejects_conflicting_or_non_integer_run_id(monkeypatch) -> None:
+    # Given malformed production deliveries at the process boundary.
+    finalized = MagicMock()
+    monkeypatch.setattr(hard_timeout.Request, "on_timeout", lambda *_args: None)
+    monkeypatch.setattr(hard_timeout, "finalize_hard_timeout", finalized)
+
+    # When the parent handles conflicting and non-integer run ids.
+    for args, kwargs in (((103,), {"run_id": 104}), ((), {"run_id": "103"})):
+        request = object.__new__(hard_timeout.ProductionRequest)
+        request.id = "invalid-delivery"
+        request._args = args
+        request._kwargs = kwargs
+        request.worker_pid = 123
+        request._task = MagicMock(
+            hard_timeout_safe_failure_stages=frozenset({"SCRIPT_GENERATING"}),
+        )
+        request.on_timeout(False, 2.0)
+
+    # Then neither malformed delivery can finalize another run.
+    finalized.assert_not_called()
+
+
 def test_hard_timeout_finalizes_before_releasing_blocked_resources(
     monkeypatch, tmp_path,
 ) -> None:

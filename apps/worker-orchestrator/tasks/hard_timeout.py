@@ -47,9 +47,13 @@ def finalize_hard_timeout(
 class ProductionRequest(Request):
     def on_timeout(self, soft: bool, timeout: float) -> None:
         super().on_timeout(soft, timeout)
-        if soft or not isinstance(self.id, str) or not self.args:
+        if soft or not isinstance(self.id, str):
             return
-        run_id = self.args[0]
+        positional_run_id = self.args[0] if self.args else None
+        keyword_run_id = self.kwargs.get("run_id")
+        if positional_run_id is not None and keyword_run_id not in (None, positional_run_id):
+            return
+        run_id = positional_run_id if positional_run_id is not None else keyword_run_id
         safe_failure_stages = self.task.hard_timeout_safe_failure_stages
         if (
             isinstance(run_id, int)
