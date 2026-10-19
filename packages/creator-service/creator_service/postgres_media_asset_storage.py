@@ -168,13 +168,6 @@ class PostgresMediaAssetStorage(PostgresUploadIntentStorage, PostgresMediaRetent
         )
         return _decode_asset(row) if row is not None else None
 
-    async def delete_generated_asset(self, workspace_id: int, storage_key: str) -> None:
-        await db.execute(
-            """DELETE FROM creator_media_assets
-                WHERE workspace_id = $1 AND storage_key = $2 AND origin = 'GENERATED'""",
-            workspace_id, storage_key,
-        )
-
     async def list_assets(
         self, workspace_id: int, *, media_type: str | None = None,
         project_id: int | None = None, limit: int, offset: int,

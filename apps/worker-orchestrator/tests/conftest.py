@@ -4,8 +4,6 @@ import pytest
 from celery_app import celery_app
 from creator_domain.models import MediaType
 from creator_service.object_storage import StorageResult
-from creator_service import artifact_storage_integration
-from creator_service.object_storage import get_storage_backend
 
 
 @pytest.fixture
@@ -50,18 +48,9 @@ def stub_artifact_upload(monkeypatch: pytest.MonkeyPatch):
         local_path: str, content_type: str, media_type: MediaType,
     ) -> StorageResult:
         _ = workspace_id, project_id, media_type
-        return artifact_storage_integration.store_artifact_file(run_id, local_path, content_type)
+        return _store_artifact_file(run_id, local_path, content_type)
 
     monkeypatch.setattr(
         "creator_service.artifact_storage_integration.publish_generated_file",
         _publish_generated_file,
-    )
-
-    async def _discard_generated_file(workspace_id: int, storage_key: str) -> None:
-        _ = workspace_id
-        get_storage_backend().delete(storage_key)
-
-    monkeypatch.setattr(
-        "creator_service.artifact_storage_integration.discard_generated_file",
-        _discard_generated_file,
     )

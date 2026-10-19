@@ -264,10 +264,6 @@ class MediaAssetService:
             workspace_id, policy=self._storage_policy,
         )
 
-    async def discard_generated_asset(self, workspace_id: int, storage_key: str) -> None:
-        await self._io.run(partial(self._backend().delete, storage_key))
-        await self._asset_storage.delete_generated_asset(workspace_id, storage_key)
-
     async def list_assets(
         self, *, workspace_id: int, media_type: MediaType | None = None,
         project_id: int | None = None, limit: int = 50, offset: int = 0,
