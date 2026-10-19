@@ -29,6 +29,7 @@ class _Tracking:
     def __init__(self, tasks: list[_Task]) -> None:
         self.tasks = tasks
         self.failures: dict[str, tuple[str, str]] = {}
+        self.cleanup_generations: set[str] = set()
 
     async def list_broker_recovery_tasks(self) -> list[_Task]:
         return self.tasks
@@ -50,6 +51,13 @@ class _Tracking:
         task.status = "failed"
         self.failures[task_id] = (error_code, error_message)
         return task
+
+    async def list_pending_broker_cleanup_generations(self) -> list[str]:
+        return sorted(self.cleanup_generations)
+
+    async def complete_broker_cleanup(self, generation: str) -> bool:
+        self.cleanup_generations.discard(generation)
+        return True
 
 
 class _Usage:
@@ -131,6 +139,7 @@ async def test_new_empty_broker_fails_unknown_work_and_releases_owned_quota() ->
         ]
     )
     usage = _Usage()
+    tracking.cleanup_generations.add("epoch-a")
     rollbacks: list[tuple[int, str]] = []
 
     # When
@@ -192,6 +201,7 @@ async def test_new_attempt_created_after_recovery_epoch_is_preserved() -> None:
         ]
     )
     usage = _Usage()
+    tracking.cleanup_generations.add("epoch-a")
     rollbacks: list[tuple[int, str]] = []
 
     # When
@@ -236,6 +246,7 @@ async def test_reserved_task_from_current_generation_survives_first_recovery_pas
         ]
     )
     usage = _Usage()
+    tracking.cleanup_generations.add("epoch-a")
     rollbacks: list[tuple[int, str]] = []
 
     # When: the first pass sees an empty queue because the current task is reserved.
@@ -273,6 +284,8 @@ async def test_real_tracking_adapter_fences_late_success_after_recovery() -> Non
         1, "generate_audio", "lost-a", broker_generation="epoch-a"
     )
     await tracking.promote_pending_to_queued("lost-a")
+    assert await tracking.set_observed_broker_epoch("epoch-a", None)
+    assert await tracking.set_observed_broker_epoch("epoch-b", "epoch-a")
     usage = _Usage()
 
     # When

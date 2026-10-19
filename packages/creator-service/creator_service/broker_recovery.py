@@ -43,6 +43,10 @@ class RecoveryTracking(Protocol):
         self, epoch: str, expected_epoch: str | None
     ) -> bool: ...
 
+    async def list_pending_broker_cleanup_generations(self) -> list[str]: ...
+
+    async def complete_broker_cleanup(self, generation: str) -> bool: ...
+
 
 class OwnedUsage(Protocol):
     async def cancel_owned(self, task_id: str) -> bool: ...
@@ -112,8 +116,11 @@ async def recover_lost_tasks(
 
     failed = 0
     recovery_failures = 0
+    obsolete_generations = set(
+        await tracking.list_pending_broker_cleanup_generations()
+    )
     for task in await tracking.list_broker_recovery_tasks():
-        if task.broker_generation is None or task.broker_generation == snapshot.epoch:
+        if task.broker_generation not in obsolete_generations:
             continue
         marked = await tracking.mark_failed_if_active(
             task.celery_task_id,
@@ -134,6 +141,8 @@ async def recover_lost_tasks(
             error_message="Broker storage was replaced; use manual retry",
         )
         failed += 1
+    for generation in obsolete_generations:
+        await tracking.complete_broker_cleanup(generation)
     _RECOVERY_FAILURES.add(recovery_failures)
     return _result(
         snapshot,

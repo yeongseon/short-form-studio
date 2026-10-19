@@ -240,6 +240,7 @@ async def test_concurrent_first_broker_observers_adopt_one_generation(
 
     replacement_epoch = "epoch-b" if stored_epoch == "epoch-a" else "epoch-a"
     tracking = TaskTrackingService(storage)
+    assert await storage.set_observed_broker_epoch(replacement_epoch, stored_epoch)
     recovered = await recover_lost_tasks(
         previous_epoch=stored_epoch,
         snapshot=BrokerSnapshot(
@@ -257,8 +258,6 @@ async def test_concurrent_first_broker_observers_adopt_one_generation(
         ),
         rollback=lambda _run_id, _task_id: asyncio.sleep(0),
     )
-    await storage.set_observed_broker_epoch(replacement_epoch, stored_epoch)
-
     assert recovered.failed == 3
     assert await storage.get_observed_broker_epoch() == replacement_epoch
     converged = await storage.list_by_run(run_id)
