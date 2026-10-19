@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .db import fetch_one
+from . import db
 
 
 class PostgresTimelineStorage:
@@ -24,11 +24,23 @@ class PostgresTimelineStorage:
         segments_json: str,
         expected_revision: int,
     ) -> dict[str, Any] | None:
-        return await fetch_one(
+        pool = await db.get_pool()
+        async with pool.acquire() as connection, connection.transaction():
+            await connection.execute("SELECT pg_advisory_xact_lock($1)", workspace_id)
+            return await connection.fetchrow(
             """
             WITH authorized_project AS (
                 SELECT id FROM creator_projects
                 WHERE id = $1 AND workspace_id = $2
+            ),
+            available_assets AS (
+                SELECT COUNT(*) AS available
+                FROM jsonb_array_elements($4::jsonb) segment
+                JOIN creator_media_assets a
+                  ON a.id = (segment->>'asset_id')::bigint
+                 AND a.workspace_id = $2
+                 AND a.project_id = $1
+                 AND a.deleting = FALSE
             ),
             updated AS (
                 UPDATE creator_timelines
@@ -40,6 +52,7 @@ class PostgresTimelineStorage:
                   AND workspace_id = $2
                   AND revision = $5
                   AND EXISTS (SELECT 1 FROM authorized_project)
+                  AND (SELECT available FROM available_assets) = jsonb_array_length($4::jsonb)
                 RETURNING *
             ),
             inserted AS (
@@ -50,6 +63,7 @@ class PostgresTimelineStorage:
                 FROM authorized_project
                 WHERE $5 = 0
                   AND NOT EXISTS (SELECT 1 FROM updated)
+                  AND (SELECT available FROM available_assets) = jsonb_array_length($4::jsonb)
                 ON CONFLICT (project_id) DO NOTHING
                 RETURNING *
             )
@@ -67,7 +81,7 @@ class PostgresTimelineStorage:
     async def load_timeline(
         self, *, project_id: int, workspace_id: int
     ) -> dict[str, Any] | None:
-        return await fetch_one(
+        return await db.fetch_one(
             "SELECT * FROM creator_timelines WHERE project_id = $1 AND workspace_id = $2",
             project_id,
             workspace_id,

@@ -25,7 +25,11 @@ from creator_service.media_upload_reconciliation import (
 )
 from creator_service.object_storage import LocalStorageBackend
 from creator_service.postgres_media_asset_storage import PostgresMediaAssetStorage
+from creator_service.postgres_timeline_storage import PostgresTimelineStorage
 from creator_service.storage_policy import StorageBudgetExceeded, StoragePolicy
+from creator_service.timeline_service import TimelineService
+from creator_domain.models import Timeline
+from creator_domain.exceptions import ValidationError
 from PIL import Image
 
 
@@ -712,3 +716,36 @@ async def test_postgres_definite_upload_failure_releases_capacity(
     # Then PostgreSQL releases the unused reservation.
     usage = await storage.get_storage_usage(9101)
     assert usage.reserved_bytes == 0
+
+
+@pytest.mark.asyncio
+async def test_postgres_retention_claim_fences_timeline_save(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given retention atomically claims an unreferenced asset under the workspace lock.
+    storage = PostgresMediaAssetStorage()
+    service = MediaAssetService(LocalStorageBackend(str(tmp_path)), storage)
+    asset = await service.create_image_asset(
+        workspace_id=9101, project_id=9101, filename="race.png",
+        data=image_bytes(), content_type="image/png",
+    )
+    claimed = await storage.claim_retained_asset(asset.id, 9101)
+    timeline = Timeline.model_validate({
+        "id": "retention-race", "project_id": 9101, "revision": 0,
+        "segments": [{
+            "id": "segment", "scene_id": "scene", "asset_id": asset.id,
+            "timeline_start_seconds": 0, "duration_seconds": 1,
+        }],
+    })
+
+    # When Timeline save races after the claim becomes visible.
+    with pytest.raises(ValidationError):
+        await TimelineService(PostgresTimelineStorage()).save_timeline(
+            project_id=9101, workspace_id=9101, timeline=timeline, expected_revision=0,
+        )
+
+    # Then lookup rejects the deleting asset and the claim can be rolled back safely.
+    assert claimed
+    assert await service.get_asset(asset.id, 9101) is None
+    await storage.release_retained_asset(asset.id, 9101)
+    assert await service.get_asset(asset.id, 9101) is not None

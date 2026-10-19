@@ -20,6 +20,7 @@ _FILTER = """
     workspace_id = $1
     AND ($2::text IS NULL OR media_type = $2)
     AND ($3::integer IS NULL OR project_id = $3)
+    AND deleting = FALSE
 """
 _ORDER = """
     CASE origin WHEN 'UPLOADED' THEN 0 WHEN 'IMPORTED' THEN 1
@@ -152,7 +153,8 @@ class PostgresMediaAssetStorage(PostgresUploadIntentStorage, PostgresMediaRetent
 
     async def get_asset(self, asset_id: int, workspace_id: int) -> dict[str, object] | None:
         row = await db.fetch_one(
-            "SELECT * FROM creator_media_assets WHERE id = $1 AND workspace_id = $2",
+            """SELECT * FROM creator_media_assets
+                WHERE id = $1 AND workspace_id = $2 AND deleting = FALSE""",
             asset_id, workspace_id,
         )
         return _decode_asset(row) if row is not None else None
