@@ -38,9 +38,21 @@ def _asset_dir(run_id: int) -> Path:
 
 
 def _cleanup_hard_timeout_outputs(run_id: int, task_id: str) -> None:
+    from worker_loop import run_in_worker_loop
+
+    async def persisted_paths() -> set[Path]:
+        grouped = await _visual_asset_service.list_by_run(run_id)
+        return {
+            Path(asset.asset_path).resolve()
+            for assets in grouped.values()
+            for asset in assets
+        }
+
+    persisted = run_in_worker_loop(persisted_paths())
     safe_task_id = sanitize_path_component(task_id, label="task_id")
     for path in _asset_dir(run_id).glob(f"*-{safe_task_id}-*.png"):
-        path.unlink(missing_ok=True)
+        if path.resolve() not in persisted:
+            path.unlink(missing_ok=True)
 
 @celery_app.task(
     bind=True,
@@ -77,7 +89,7 @@ def generate_scene_image(
         success_stage=None,
     )
 
-    async def execute(ctx: TaskContext) -> TaskResult:
+    async def execute_batch(ctx: TaskContext, batch: SceneBatch) -> TaskResult:
         plan = await _visual_plan_service.get_active_plan(run_id)
         if plan is None:
             raise TaskInputError(f"No active visual plan for run {run_id}")
@@ -97,8 +109,6 @@ def generate_scene_image(
         asset_dir = _asset_dir(run_id)
         asset_dir.mkdir(parents=True, exist_ok=True)
         safe_task_id = sanitize_path_component(ctx.task_id, label="task_id")
-
-        batch = SceneBatch(ctx, _run_service)
 
         for idx, target_scene in enumerate(target_scenes):
             try:
@@ -292,5 +302,12 @@ def generate_scene_image(
                 "scene_id": scene_id,
             },
         )
+
+    async def execute(ctx: TaskContext) -> TaskResult:
+        batch = SceneBatch(ctx, _run_service)
+        try:
+            return await execute_batch(ctx, batch)
+        finally:
+            batch.cleanup_local_outputs()
 
     return run_task(self, run_id, config, execute)
