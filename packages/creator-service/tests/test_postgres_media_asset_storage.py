@@ -1098,3 +1098,45 @@ async def test_postgres_malformed_historical_approval_protects_noncurrent_asset(
     assert result.dry_run is True
     assert result.deleted == 0
     assert await service.get_asset(historical_asset.id, 9101) is not None
+
+
+@pytest.mark.asyncio
+async def test_postgres_claimed_asset_rejects_concurrent_timeline_approval(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given retention has won the workspace lock and actively claimed an exact-revision asset.
+    storage = PostgresMediaAssetStorage()
+    service = MediaAssetService(LocalStorageBackend(str(tmp_path)), storage)
+    asset = await service.create_image_asset(
+        workspace_id=9101, project_id=9101, filename="claimed-before-approval.png",
+        data=image_bytes(), content_type="image/png",
+    )
+    await db.execute(
+        """INSERT INTO creator_timelines (
+                project_id, workspace_id, timeline_id, revision, segments_json
+            ) VALUES ($1, $2, $3, $4, $5::jsonb)""",
+        9101, 9101, "claimed", 1,
+        json.dumps([{"id": "claimed", "asset_id": asset.id}]),
+    )
+    claim_token = await storage.claim_retained_asset(asset.id, 9101)
+    assert claim_token is not None
+
+    # When approval attempts to commit the same exact revision.
+    with pytest.raises(ValueError, match="Approved Timeline revision not found"):
+        await PostgresStageReviewStorage().create_review({
+            "run_id": 9101, "stage_name": "TIMELINE_REVIEW", "review_status": "approved",
+            "reviewer": "human", "notes": '{"timeline_id":"claimed","revision":1}',
+        })
+
+    # Then the approval rolls back without an approved review or partial asset mapping.
+    reviews = await db.fetch_all(
+        """SELECT id FROM creator_stage_reviews
+            WHERE run_id = $1 AND stage_name = 'TIMELINE_REVIEW'""",
+        9101,
+    )
+    mappings = await db.fetch_all(
+        "SELECT asset_id FROM creator_approved_timeline_assets WHERE asset_id = $1",
+        asset.id,
+    )
+    assert reviews == []
+    assert mappings == []
