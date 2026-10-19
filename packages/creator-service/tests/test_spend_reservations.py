@@ -392,6 +392,31 @@ async def test_revoked_accounted_attempt_releases_unstarted_quote_capacity() -> 
 
 
 @pytest.mark.asyncio
+async def test_revoked_authorized_attempt_retains_only_unknown_exposure() -> None:
+    # Given a revoked one-dollar owner with one authorized forty-cent attempt.
+    storage = InMemoryUsageStorage()
+    service = UsageService(storage)
+    await service.set_quota(1, monthly_cost_usd=Decimal("1"))
+    assert await service.reserve_owned(
+        1, "image_gen", "revoked", estimated_cost_usd=Decimal("1")
+    )
+    assert await service.authorize_owned_attempt(
+        "revoked", "revoked:scene:0", Decimal("0.40")
+    )
+
+    # When revocation finalizes the reserved owner.
+    assert await service.finalize_revoked_owned("revoked")
+
+    # Then only authorized exposure remains unknown and sixty cents is reusable.
+    assert storage._owned["revoked"][3:] == (
+        "billable_unknown", Decimal("0.40"), Decimal("0"),
+    )
+    assert await service.reserve_owned(
+        1, "image_gen", "replacement", estimated_cost_usd=Decimal("0.60")
+    )
+
+
+@pytest.mark.asyncio
 async def test_revoked_mixed_attempts_retain_only_authorized_unknown_exposure() -> None:
     # Given one accounted attempt and one still-authorized attempt within a dollar quote.
     service = UsageService(InMemoryUsageStorage())

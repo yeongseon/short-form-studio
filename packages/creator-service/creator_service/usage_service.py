@@ -373,12 +373,12 @@ class InMemoryUsageStorage:
             if owned is None or owned[3] in {"settled", "cancelled", "billable_unknown"}:
                 return False
             workspace_id, period_start, operation_type, status, estimate, settled = owned
-            if not billable_unknown and status == "reserved":
-                return False
             unknown = sum(
                 cost for key, cost in self._owned_attempts.items()
                 if key[0] == owner_id and key not in self._accounted_attempts
             )
+            if not billable_unknown and status == "reserved" and unknown == 0:
+                return False
             final_status = "billable_unknown" if billable_unknown or unknown > 0 else "settled"
             if status == "reserved":
                 self._finish_owned(owner_id, final_status)
