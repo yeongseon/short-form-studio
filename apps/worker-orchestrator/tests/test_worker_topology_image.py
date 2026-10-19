@@ -320,7 +320,7 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
     )
     timeout_assets = anyio.run(
         row,
-        "SELECT asset_path FROM creator_visual_assets WHERE run_id=106 AND scene_id='scene-persisted'",
+        "SELECT asset_path FROM creator_scene_assets WHERE run_id=106 AND scene_id='scene-persisted'",
     )
     timeout_files = list((EVIDENCE / "storage" / "106" / "scenes").glob("*.png"))
     assert timeout_run is not None and timeout_run["status"] == "failed"
