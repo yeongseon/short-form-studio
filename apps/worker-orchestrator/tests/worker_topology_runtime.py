@@ -238,7 +238,11 @@ def send_scene_image(run_id: int, task_id: str, *, time_limit: int) -> None:
     )
 
 
-def worker(name: str, command: list[str] | None = None) -> None:
+def worker(
+    name: str,
+    command: list[str] | None = None,
+    environment: dict[str, str] | None = None,
+) -> None:
     args = [
         "run",
         "-d",
@@ -267,6 +271,8 @@ def worker(name: str, command: list[str] | None = None) -> None:
         f"{EVIDENCE}:/evidence",
         IMAGE,
     ]
+    for key, value in (environment or {}).items():
+        args[-1:-1] = ["-e", f"{key}={value}"]
     if command is not None:
         args.extend(command)
     docker(*args)

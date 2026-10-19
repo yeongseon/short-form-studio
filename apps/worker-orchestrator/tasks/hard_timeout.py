@@ -85,3 +85,15 @@ def production_task(
         hard_timeout_cleanup = staticmethod(cleanup or (lambda _run_id, _task_id: None))
 
     return ConfiguredProductionTask
+
+
+def production_time_limits(soft: int, hard: int) -> tuple[int, int]:
+    override = os.getenv("WORKER_TOPOLOGY_PRODUCTION_HARD_TIME_LIMIT")
+    if (
+        os.getenv("ENVIRONMENT") == "test"
+        and os.getenv("WORKER_TOPOLOGY_PROBE_ENABLED") == "1"
+        and override is not None
+    ):
+        hard = int(override)
+        soft = max(hard - 1, 1)
+    return soft, hard

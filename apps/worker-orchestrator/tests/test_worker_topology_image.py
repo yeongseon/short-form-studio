@@ -265,7 +265,11 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
     capture_worker("topology-scaled-redelivered")
     docker("rm", "-f", "topology-scaled-redelivered")
     docker("exec", "topology-redis", "redis-cli", "DEL", "image")
-    worker("topology-scaled-timeout", [*command, "--time-limit=2"])
+    worker(
+        "topology-scaled-timeout",
+        command,
+        {"WORKER_TOPOLOGY_PRODUCTION_HARD_TIME_LIMIT": "2"},
+    )
 
     new_run(106)
     anyio.run(
