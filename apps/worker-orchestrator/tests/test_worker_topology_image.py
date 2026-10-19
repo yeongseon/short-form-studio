@@ -24,7 +24,6 @@ from tests.worker_topology_runtime import (
     Provider,
     capture_worker,
     container_ffmpeg_host_pid,
-    container_process_host_pid,
     docker,
     initialize_database,
     new_run,
@@ -33,11 +32,11 @@ from tests.worker_topology_runtime import (
     redis_available,
     row,
     send,
+    send_scene_image,
     send_delayed_failure,
     sql,
     stop_run,
     wait_state,
-    wait_host_process_exit,
     wait_task,
     worker,
 )
@@ -210,7 +209,6 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
     worker("topology-scaled-redelivery", command)
     redelivery_state = EVIDENCE / "active-redelivery.json"
     occupied_state = EVIDENCE / "occupied-slot.json"
-    timeout_state = EVIDENCE / "timeout.json"
     ffmpeg_state = EVIDENCE / "ffmpeg.json"
 
     # When a claimed delivery loses its worker, the broker redelivers it to the exact scaled command.
@@ -271,37 +269,53 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
     new_run(106)
     anyio.run(
         sql,
-        """INSERT INTO workspace_quota_reservations(workspace_id, period_start, image_count)
-        VALUES(1, date_trunc('month', now()), 1)
+        """UPDATE creator_runs
+        SET current_stage='VISUAL_ASSET_GENERATING' WHERE id=106;
+        INSERT INTO creator_visual_plans(run_id, scenes_json, version)
+        VALUES(106, '[{"scene_id":"scene-timeout","section_id":"section-1","scene_index":0,
+        "section_type":"body","original_text":"blocking provider",
+        "prompt":"blocking provider"}]', 1);
+        INSERT INTO workspace_quota_reservations(
+          workspace_id, period_start, image_count, reserved_estimated_cost_usd)
+        VALUES(1, date_trunc('month', now()), 1, 0.04)
         ON CONFLICT (workspace_id, period_start) DO UPDATE
-        SET image_count = workspace_quota_reservations.image_count + 1;
+        SET image_count = workspace_quota_reservations.image_count + 1,
+            reserved_estimated_cost_usd =
+              workspace_quota_reservations.reserved_estimated_cost_usd + 0.04;
         INSERT INTO workspace_quota_reservation_owners
-        (owner_id, workspace_id, period_start, operation_type, status)
-        VALUES('timeout-delivery', 1, date_trunc('month', now()), 'image_gen', 'reserved');""",
+        (owner_id, workspace_id, period_start, operation_type, status, estimated_cost_usd)
+        VALUES('timeout-delivery', 1, date_trunc('month', now()), 'image_gen', 'reserved', 0.04);""",
     )
-    send(
-        106,
-        "timeout-delivery",
-        "timeout_resources",
-        timeout_state,
-        queue="image",
-        time_limit=2,
-    )
-    timeout_resources = wait_state(timeout_state, "resources_active")
-    timeout_pid = int(timeout_resources["child_pid"])
-    timeout_host_pid = container_process_host_pid("topology-scaled-timeout", "python3")
-    timeout_file = EVIDENCE / str(timeout_resources["temporary_path"])
-    assert timeout_file.is_file()
+    Provider.image_calls = 0
+    Provider.image_release.clear()
+    send_scene_image(106, "timeout-delivery", time_limit=2)
+    deadline = time.monotonic() + 15
+    while Provider.image_calls == 0 and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert Provider.image_calls == 1
     wait_task("timeout-delivery", "failed")
+    Provider.image_release.set()
     timeout_run = anyio.run(row, "SELECT status FROM creator_runs WHERE id=106")
     timeout_quota = anyio.run(
         row,
-        "SELECT status FROM workspace_quota_reservation_owners WHERE owner_id='timeout-delivery'",
+        "SELECT status, estimated_cost_usd FROM workspace_quota_reservation_owners "
+        "WHERE owner_id='timeout-delivery'",
     )
+    timeout_attempt = anyio.run(
+        row,
+        "SELECT status FROM workspace_quota_reservation_attempts "
+        "WHERE owner_id='timeout-delivery'",
+    )
+    timeout_files = list((EVIDENCE / "storage" / "106" / "scenes").glob("*.png"))
     assert timeout_run is not None and timeout_run["status"] == "failed"
-    assert timeout_quota is not None and timeout_quota["status"] == "cancelled"
-    assert not timeout_file.exists()
-    wait_host_process_exit(timeout_host_pid)
+    assert timeout_quota is not None and timeout_quota["status"] == "billable_unknown"
+    assert timeout_quota["estimated_cost_usd"] == 0.04
+    assert timeout_attempt is not None and timeout_attempt["status"] == "unknown"
+    assert timeout_files == []
+    replacement = EVIDENCE / "timeout-replacement.json"
+    new_run(109)
+    send(109, "timeout-replacement", "complete", replacement, queue="image")
+    wait_state(replacement, "completed")
     persist_snapshot("timeout-final-state.json", 106)
     capture_worker("topology-scaled-timeout")
     docker("rm", "-f", "topology-scaled-timeout")

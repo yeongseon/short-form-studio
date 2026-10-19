@@ -5,6 +5,7 @@ import json
 import os
 import socket
 import subprocess
+import threading
 import time
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
@@ -40,12 +41,19 @@ SCALED_IMAGE_COMMAND = [
 
 class Provider(BaseHTTPRequestHandler):
     calls = 0
+    image_calls = 0
+    image_release = threading.Event()
 
     def do_GET(self) -> None:
         type(self).calls += 1
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"ok")
+
+    def do_POST(self) -> None:
+        type(self).image_calls += 1
+        self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        type(self).image_release.wait(timeout=30)
 
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002
         _ = (format, args)
@@ -219,6 +227,18 @@ def send(
     )
 
 
+def send_scene_image(run_id: int, task_id: str, *, time_limit: int) -> None:
+    from celery_app import celery_app
+
+    celery_app.send_task(
+        "generate_scene_image",
+        args=[run_id, "scene-timeout", "sd15"],
+        task_id=task_id,
+        queue="image",
+        time_limit=time_limit,
+    )
+
+
 def worker(name: str, command: list[str] | None = None) -> None:
     args = [
         "run",
@@ -240,6 +260,10 @@ def worker(name: str, command: list[str] | None = None) -> None:
         "WORKER_TOPOLOGY_EVIDENCE_DIR=/evidence",
         "-e",
         f"WORKER_TOPOLOGY_PROVIDER_URL={os.environ['TOPOLOGY_PROVIDER_URL']}",
+        "-e",
+        f"STABLE_DIFFUSION_BASE_URL={os.environ['TOPOLOGY_PROVIDER_URL']}",
+        "-e",
+        "ARTIFACT_ROOT=/evidence/storage",
         "-v",
         f"{EVIDENCE}:/evidence",
         IMAGE,
