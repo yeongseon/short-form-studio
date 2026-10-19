@@ -102,15 +102,18 @@ async def recover_lost_tasks(
         _OLDEST_WAIT.record(snapshot.oldest_wait_seconds)
     epoch_replaced = previous_epoch is not None and previous_epoch != snapshot.epoch
     evidence_complete = snapshot.queue_length == 0 and snapshot.workers_online > 0
-    if not epoch_replaced:
-        return _result(snapshot, failed=0, deferred=False, recovery_failures=0)
     if not evidence_complete:
-        return _result(snapshot, failed=0, deferred=True, recovery_failures=0)
+        return _result(
+            snapshot,
+            failed=0,
+            deferred=epoch_replaced,
+            recovery_failures=0,
+        )
 
     failed = 0
     recovery_failures = 0
     for task in await tracking.list_broker_recovery_tasks():
-        if task.broker_generation != previous_epoch:
+        if task.broker_generation is None or task.broker_generation == snapshot.epoch:
             continue
         marked = await tracking.mark_failed_if_active(
             task.celery_task_id,
