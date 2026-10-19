@@ -38,7 +38,8 @@ def _decode_asset(row: dict[str, object]) -> dict[str, object]:
     metadata = row["metadata"]
     if isinstance(metadata, str):
         metadata = _METADATA.validate_json(metadata)
-    return MediaAsset.model_validate({**row, "metadata": metadata}).model_dump()
+    domain_row = {key: value for key, value in row.items() if key != "deleting"}
+    return MediaAsset.model_validate({**domain_row, "metadata": metadata}).model_dump()
 
 
 class PostgresMediaAssetStorage(PostgresUploadIntentStorage, PostgresMediaRetentionStorage):
