@@ -7,6 +7,7 @@ from tasks.generate_audio import generate_audio
 from tasks.generate_paragraph_audio import generate_paragraph_audio
 from tasks.generate_paragraph_subtitles import generate_paragraph_subtitles
 from tasks.generate_scene_image import generate_scene_image
+from tasks import generate_scene_image as generate_scene_image_module
 from tasks.generate_script import generate_script
 from tasks.generate_subtitles import generate_subtitles
 from tasks.generate_visual_plan import generate_visual_plan
@@ -49,3 +50,21 @@ def test_task_retry_policies() -> None:
     _assert_common_retry_policy(
         render_video, max_retries=3, soft_time_limit=600, time_limit=660
     )
+
+
+def test_timeout_bearing_production_tasks_use_parent_visible_claim_request() -> None:
+    expected = {
+        generate_script: frozenset({"IDEA_READY", "SCRIPT_GENERATING"}),
+        generate_audio: frozenset({"VISUAL_ASSET_REVIEW", "AUDIO_GENERATING"}),
+        generate_subtitles: frozenset({"AUDIO_GENERATING", "SUBTITLE_GENERATING"}),
+        generate_visual_plan: frozenset({"VISUAL_PLAN_GENERATING"}),
+        generate_paragraph_audio: frozenset({"AUDIO_GENERATING", "SUBTITLE_GENERATING"}),
+        generate_paragraph_subtitles: frozenset({"AUDIO_GENERATING", "SUBTITLE_GENERATING"}),
+        generate_scene_image: generate_scene_image_module._SAFE_FAILURE_STAGES,
+        render_video: frozenset({"RENDER_GENERATING"}),
+    }
+    from tasks.hard_timeout import ProductionTask
+
+    for task, safe_failure_stages in expected.items():
+        assert isinstance(task, ProductionTask)
+        assert task.hard_timeout_safe_failure_stages == safe_failure_stages

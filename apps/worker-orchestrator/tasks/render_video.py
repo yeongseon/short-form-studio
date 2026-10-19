@@ -29,6 +29,7 @@ from tasks.legacy_render_contract import (
     resolve_profile as _resolve_profile,
 )
 from tasks.task_runner import TaskContext, TaskResult, TaskRunnerConfig, run_task
+from tasks.hard_timeout import production_task
 from tasks.timeline_render import RenderLayers, read_render_metadata, render_saved_timeline
 
 logger = logging.getLogger(__name__)
@@ -108,7 +109,8 @@ async def execute_render(ctx: TaskContext, render_profile: str = "shorts_default
 
 
 @celery_app.task(
-    bind=True, autoretry_for=(ProviderTimeoutError, RateLimitError),
+    bind=True, base=production_task(frozenset({RunStage.RENDER_GENERATING.value})),
+    autoretry_for=(ProviderTimeoutError, RateLimitError),
     retry_backoff=True, retry_jitter=True, max_retries=3,
     soft_time_limit=600, time_limit=660, name="render_video",
 )
