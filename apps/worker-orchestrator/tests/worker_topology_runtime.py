@@ -228,13 +228,17 @@ def send(
 
 
 def send_scene_image(run_id: int, task_id: str, *, time_limit: int) -> None:
-    from tasks.generate_scene_image import generate_scene_image
+    from celery_app import celery_app
 
-    generate_scene_image.apply_async(
+    replies = celery_app.control.time_limit(
+        "generate_scene_image", soft=None, hard=time_limit, reply=True, timeout=5,
+    )
+    assert replies and any("ok" in reply for response in replies for reply in response.values())
+    celery_app.send_task(
+        "generate_scene_image",
         args=[run_id, "scene-timeout", "sd15"],
         task_id=task_id,
         queue="image",
-        time_limit=time_limit,
     )
 
 
