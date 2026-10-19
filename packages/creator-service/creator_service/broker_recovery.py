@@ -148,32 +148,41 @@ async def recover_broker_snapshot(
     usage: OwnedUsage,
     rollback: Callable[[int, str], Awaitable[None]],
 ) -> tuple[BrokerRecoveryResult, bool]:
-    while True:
-        durable_epoch = await tracking.get_observed_broker_epoch()
-        if durable_epoch is None and fallback_epoch is not None:
-            initialized = await tracking.set_observed_broker_epoch(
-                fallback_epoch, None
-            )
-            if not initialized:
-                continue
-            durable_epoch = fallback_epoch
+    durable_epoch = await tracking.get_observed_broker_epoch()
+    if durable_epoch is None and fallback_epoch is not None:
+        initialized = await tracking.set_observed_broker_epoch(fallback_epoch, None)
+        if not initialized:
+            return _result(
+                snapshot, failed=0, deferred=True, recovery_failures=0
+            ), False
+        durable_epoch = fallback_epoch
 
-        recovered = await recover_lost_tasks(
+    epoch_replaced = durable_epoch is not None and durable_epoch != snapshot.epoch
+    evidence_complete = snapshot.queue_length == 0 and snapshot.workers_online > 0
+    if epoch_replaced and not evidence_complete:
+        return await recover_lost_tasks(
             previous_epoch=durable_epoch,
             snapshot=snapshot,
             tracking=tracking,
             usage=usage,
             rollback=rollback,
-        )
-        if not should_persist_observed_epoch(
-            previous_epoch=durable_epoch, deferred=recovered.deferred
-        ):
-            return recovered, False
-        persisted = await tracking.set_observed_broker_epoch(
-            snapshot.epoch, durable_epoch
-        )
-        if persisted:
-            return recovered, True
+        ), False
+    persisted = await tracking.set_observed_broker_epoch(snapshot.epoch, durable_epoch)
+    if not persisted:
+        return _result(
+            snapshot,
+            failed=0,
+            deferred=True,
+            recovery_failures=0,
+        ), False
+    recovered = await recover_lost_tasks(
+        previous_epoch=durable_epoch,
+        snapshot=snapshot,
+        tracking=tracking,
+        usage=usage,
+        rollback=rollback,
+    )
+    return recovered, True
 
 
 def _result(

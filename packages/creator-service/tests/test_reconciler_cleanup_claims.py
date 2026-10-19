@@ -74,6 +74,45 @@ class CleanupTakeoverBarrier(TaskTrackingService):
         return task
 
 
+class BrokerEpochPersistenceRace(TaskTrackingService):
+    def __init__(
+        self,
+        storage: InMemoryTaskTrackingStorage | PostgresTaskTrackingStorage,
+        run_id: int,
+    ) -> None:
+        super().__init__(storage)
+        self.run_id = run_id
+        self.injected = False
+
+    async def set_observed_broker_epoch(
+        self, epoch: str, expected_epoch: str | None
+    ) -> bool:
+        if epoch == "epoch-b" and expected_epoch == "epoch-a" and not self.injected:
+            self.injected = True
+            won = await super().set_observed_broker_epoch("epoch-c", "epoch-a")
+            assert won
+            await self.record_task_pending(
+                self.run_id,
+                "generate_audio",
+                "current-c",
+                broker_generation="epoch-c",
+            )
+            await self.promote_pending_to_queued("current-c")
+            return False
+        return await super().set_observed_broker_epoch(epoch, expected_epoch)
+
+
+class BrokerEpochInitializationRace(TaskTrackingService):
+    async def set_observed_broker_epoch(
+        self, epoch: str, expected_epoch: str | None
+    ) -> bool:
+        if epoch == "epoch-a" and expected_epoch is None:
+            won = await super().set_observed_broker_epoch("epoch-c", None)
+            assert won
+            return False
+        return await super().set_observed_broker_epoch(epoch, expected_epoch)
+
+
 async def _failed_enqueue(celery_task_id: str, task_type: str, run_id: int) -> bool:
     return False
 
@@ -295,6 +334,101 @@ async def test_fallback_epoch_adopts_legacy_tasks_before_recovery(
             for row in rows
             if row["status"] in ("pending", "queued", "running")
         } == {"epoch-a"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("quota_pool", ["memory", "postgres"], indirect=True)
+async def test_stale_snapshot_stops_after_losing_epoch_persistence_race(
+    quota_pool: asyncpg.Pool | None,
+) -> None:
+    # Given durable A while this observer holds stale snapshot B.
+    storage = (
+        PostgresTaskTrackingStorage()
+        if quota_pool is not None
+        else InMemoryTaskTrackingStorage()
+    )
+    run_id = await _prepare_run(quota_pool)
+    tracking = BrokerEpochPersistenceRace(storage, run_id)
+    assert await tracking.set_observed_broker_epoch("epoch-a", None)
+
+    # When a concurrent observer persists C before this observer can persist B.
+    result, persisted = await recover_broker_snapshot(
+        fallback_epoch=None,
+        snapshot=BrokerSnapshot(
+            epoch="epoch-b",
+            started_at=datetime.now(timezone.utc),
+            queue_length=0,
+            oldest_wait_seconds=0,
+            workers_online=1,
+        ),
+        tracking=tracking,
+        usage=UsageService(
+            PostgresUsageStorage()
+            if quota_pool is not None
+            else InMemoryUsageStorage()
+        ),
+        rollback=lambda _run_id, _task_id: asyncio.sleep(0),
+    )
+
+    # Then stale B is deferred without touching C-owned work or durable epoch C.
+    current = await storage.get_by_celery_id("current-c")
+    assert result.deferred is True
+    assert result.failed == 0
+    assert persisted is False
+    assert current is not None and current["status"] == "queued"
+    assert await tracking.get_observed_broker_epoch() == "epoch-c"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("quota_pool", ["memory", "postgres"], indirect=True)
+async def test_stale_snapshot_stops_after_losing_epoch_initialization_race(
+    quota_pool: asyncpg.Pool | None,
+) -> None:
+    # Given active work without a durable epoch while this observer holds snapshot B.
+    storage = (
+        PostgresTaskTrackingStorage()
+        if quota_pool is not None
+        else InMemoryTaskTrackingStorage()
+    )
+    run_id = await _prepare_run(quota_pool)
+    await storage.create_task(
+        {
+            "run_id": run_id,
+            "task_type": "generate_audio",
+            "celery_task_id": "current-c",
+            "status": "queued",
+            "attempt": 1,
+        }
+    )
+    tracking = BrokerEpochInitializationRace(storage)
+
+    # When concurrent observer C wins initialization before fallback A.
+    result, persisted = await recover_broker_snapshot(
+        fallback_epoch="epoch-a",
+        snapshot=BrokerSnapshot(
+            epoch="epoch-b",
+            started_at=datetime.now(timezone.utc),
+            queue_length=0,
+            oldest_wait_seconds=0,
+            workers_online=1,
+        ),
+        tracking=tracking,
+        usage=UsageService(
+            PostgresUsageStorage()
+            if quota_pool is not None
+            else InMemoryUsageStorage()
+        ),
+        rollback=lambda _run_id, _task_id: asyncio.sleep(0),
+    )
+
+    # Then stale B is deferred without touching C-owned work or durable epoch C.
+    current = await storage.get_by_celery_id("current-c")
+    assert result.deferred is True
+    assert result.failed == 0
+    assert persisted is False
+    assert current is not None and current["status"] == "queued"
+    assert current["broker_generation"] == "epoch-c"
+    assert await tracking.get_observed_broker_epoch() == "epoch-c"
 
 
 @pytest.mark.asyncio
