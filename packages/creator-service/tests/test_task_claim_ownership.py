@@ -275,7 +275,7 @@ async def test_postgres_atomic_failure_blocks_successor_claim_until_quota_cleanu
             tasks.start_soon(finalize)
             await _wait_for_postgres_wait(pool, "pg_advisory_xact_lock")
             tasks.start_soon(claim_successor)
-            await _wait_for_postgres_wait(pool, "UPDATE creator_run_tasks")
+            await _wait_for_postgres_wait(pool, "creator_run_tasks")
             await lock_transaction.rollback()
 
     # Then the pre-commit claim loses its observed-state CAS; a fresh claim succeeds.
