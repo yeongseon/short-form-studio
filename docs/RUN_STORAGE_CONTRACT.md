@@ -68,15 +68,19 @@ write. Repeated sweeps release capacity exactly once.
 `MEDIA_MAX_RESERVED_BYTES` default to `0` (unlimited). The authenticated
 `GET /api/creator/workspaces/{workspace_id}/assets/storage-usage` response shows
 stored and in-flight usage plus configured limits. Budget rejection is HTTP 413
-with error code `STORAGE_BUDGET`. Worker-generated scene images, narration audio,
-and final videos publish through the same reservation transaction into
-`creator_media_assets`; `creator_scene_assets` and `creator_artifacts` rows are
-aliases of that canonical object and are not counted a second time. Subtitles are
-excluded because they are small text artifacts rather than image/audio/video media.
+with error code `STORAGE_BUDGET`. These limits and usage totals cover
+`creator_media_assets` and `creator_media_upload_intents` only. Worker outputs
+published through `SceneBatch.upload` or `store_artifact_file` remain represented
+by `creator_scene_assets` and `creator_artifacts`; they are not reserved, counted,
+or converted by this ledger. Counting those rows here without routing publication
+through one workspace-aware reservation transaction would either double-count
+objects shared with MediaAsset rows or publish an object before durable capacity
+is secured.
 
 `MEDIA_TEMP_DISK_LOW_WATERMARK_BYTES` defaults to `0`; when positive it blocks
-MediaAsset upload staging and image/audio/video generation before provider or
-FFmpeg work starts. Reads, downloads, and cleanup remain available.
+MediaAsset upload staging. It does not currently gate the local image, audio,
+subtitle, or video generation that writes the legacy worker-output tables. Reads,
+downloads, and cleanup remain available.
 
 ## Media retention safety
 
@@ -86,13 +90,10 @@ disabled (`MEDIA_RETENTION_ENABLED=false`) and dry-run
 video windows default to `0`, so no arbitrary age policy is activated. Positive
 windows are configured independently with `MEDIA_RETENTION_ORIGINAL_DAYS`,
 `MEDIA_RETENTION_INTERMEDIATE_DAYS`, and `MEDIA_RETENTION_FINAL_VIDEO_DAYS`.
-Generated worker outputs are classified by their canonical MediaAsset: final
-videos use `MEDIA_RETENTION_FINAL_VIDEO_DAYS`, while scene images and narration
-audio use `MEDIA_RETENTION_INTERMEDIATE_DAYS`. Active scene aliases protect their
-canonical object; inactive aliases are removed transactionally with canonical
-metadata after physical deletion. Legacy rows created before this release and not
-linked to a canonical MediaAsset remain under artifact expiration rather than
-being guessed into a workspace retention class.
+These windows apply only to `creator_media_assets`. Legacy scene and artifact
+rows continue to use their existing artifact expiration behavior; in particular,
+`MEDIA_RETENTION_FINAL_VIDEO_DAYS` does not classify or retain videos in
+`creator_artifacts`.
 
 Candidates must also pass `MEDIA_RETENTION_GRACE_DAYS` (default 7), exact
 workspace-key ownership, current Timeline references, and approved-review
