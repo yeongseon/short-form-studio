@@ -439,7 +439,8 @@ class InMemoryTaskTrackingStorage:
         return self._observed_broker_epoch
 
     async def set_observed_broker_epoch(
-        self, epoch: str, expected_previous_epoch: str | None
+        self, epoch: str, expected_previous_epoch: str | None,
+        active_generations: frozenset[str] = frozenset(),
     ) -> bool:
         async with self._ownership_lock:
             if self._observed_broker_epoch is None:
@@ -456,8 +457,10 @@ class InMemoryTaskTrackingStorage:
             if self._observed_broker_epoch != expected_previous_epoch:
                 return False
             if epoch != expected_previous_epoch:
-                self._pending_broker_cleanup_generations.add(
-                    self._observed_broker_epoch
+                self._pending_broker_cleanup_generations.update(
+                    generation
+                    for generation in active_generations | {self._observed_broker_epoch}
+                    if generation != epoch
                 )
             self._observed_broker_epoch = epoch
             return True

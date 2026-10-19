@@ -484,7 +484,8 @@ class PostgresTaskTrackingStorage:
         return str(row["epoch"]) if row is not None else None
 
     async def set_observed_broker_epoch(
-        self, epoch: str, expected_previous_epoch: str | None
+        self, epoch: str, expected_previous_epoch: str | None,
+        active_generations: frozenset[str] = frozenset(),
     ) -> bool:
         pool = await db.get_pool()
         async with pool.acquire() as connection:
@@ -515,10 +516,16 @@ class PostgresTaskTrackingStorage:
                     expected_previous_epoch,
                 )
                 if updated is not None and epoch != expected_previous_epoch:
+                    cleanup_generations = active_generations
+                    if expected_previous_epoch is not None:
+                        cleanup_generations |= {expected_previous_epoch}
                     await connection.execute(
                         """INSERT INTO creator_broker_cleanup_generations (generation)
-                           VALUES ($1) ON CONFLICT (generation) DO NOTHING""",
-                        expected_previous_epoch,
+                           SELECT generation FROM UNNEST($1::text[]) AS generation
+                           WHERE generation != $2
+                           ON CONFLICT (generation) DO NOTHING""",
+                        list(cleanup_generations),
+                        epoch,
                     )
                 return updated is not None
 

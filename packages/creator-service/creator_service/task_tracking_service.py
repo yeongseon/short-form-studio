@@ -342,10 +342,11 @@ class TaskTrackingService:
         return await self.storage.get_observed_broker_epoch()
 
     async def set_observed_broker_epoch(
-        self, epoch: str, expected_previous_epoch: str | None
+        self, epoch: str, expected_previous_epoch: str | None,
+        active_generations: frozenset[str] = frozenset(),
     ) -> bool:
         return await self.storage.set_observed_broker_epoch(
-            epoch, expected_previous_epoch
+            epoch, expected_previous_epoch, active_generations
         )
 
     async def list_pending_broker_cleanup_generations(self) -> list[str]:
