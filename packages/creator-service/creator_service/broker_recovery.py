@@ -135,11 +135,15 @@ async def recover_lost_tasks(
         except Exception:  # noqa: BLE001 - compensation must continue for other owners
             recovery_failures += 1
             continue
-        await tracking.mark_failed(
-            task.celery_task_id,
-            error_code="broker_message_lost",
-            error_message="Broker storage was replaced; use manual retry",
-        )
+        try:
+            await tracking.mark_failed(
+                task.celery_task_id,
+                error_code="broker_message_lost",
+                error_message="Broker storage was replaced; use manual retry",
+            )
+        except Exception:  # noqa: BLE001 - persistence failure must not abort other owners
+            recovery_failures += 1
+            continue
         failed += 1
     for generation in obsolete_generations:
         await tracking.complete_broker_cleanup(generation)

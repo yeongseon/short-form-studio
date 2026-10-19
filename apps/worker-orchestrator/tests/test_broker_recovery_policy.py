@@ -30,6 +30,7 @@ class _Tracking:
         self.tasks = tasks
         self.failures: dict[str, tuple[str, str]] = {}
         self.cleanup_generations: set[str] = set()
+        self.finalization_failure: str | None = None
 
     async def list_broker_recovery_tasks(self) -> list[_Task]:
         return self.tasks
@@ -47,6 +48,8 @@ class _Tracking:
     async def mark_failed(
         self, task_id: str, error_code: str, error_message: str
     ) -> _Task | None:
+        if task_id == self.finalization_failure:
+            raise OSError("injected finalization failure")
         task = next(item for item in self.tasks if item.celery_task_id == task_id)
         task.status = "failed"
         self.failures[task_id] = (error_code, error_message)
@@ -163,6 +166,40 @@ async def test_new_empty_broker_fails_unknown_work_and_releases_owned_quota() ->
         code, message = tracking.failures[task_id]
         assert code == "broker_message_lost"
         assert "manual retry" in message.lower()
+
+
+@pytest.mark.asyncio
+async def test_finalization_failure_does_not_abort_other_obsolete_tasks() -> None:
+    # Given two obsolete owners and a final status persistence failure for the first.
+    now = datetime.now(timezone.utc)
+    tracking = _Tracking(
+        [
+            _Task("first-a", 1, "queued", now, "epoch-a"),
+            _Task("second-a", 2, "queued", now, "epoch-a"),
+        ]
+    )
+    tracking.cleanup_generations.add("epoch-a")
+    tracking.finalization_failure = "first-a"
+
+    # When cleanup processes the obsolete generation.
+    result = await recover_lost_tasks(
+        previous_epoch="epoch-a",
+        snapshot=BrokerSnapshot(
+            epoch="epoch-b",
+            started_at=now,
+            queue_length=0,
+            oldest_wait_seconds=None,
+            workers_online=1,
+        ),
+        tracking=tracking,
+        usage=_Usage(),
+        rollback=lambda _run_id, _task_id: _append_rollback([], 0, "ignored"),
+    )
+
+    # Then the failure is counted and the second owner still converges.
+    assert result.failed == 1
+    assert result.recovery_failures == 1
+    assert tracking.failures["second-a"][0] == "broker_message_lost"
 
 
 @pytest.mark.asyncio
