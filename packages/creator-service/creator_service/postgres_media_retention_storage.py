@@ -12,10 +12,14 @@ _CLAIM_LEASE: Final = timedelta(minutes=15)
 
 
 class PostgresMediaRetentionStorage:
-    async def list_retention_workspaces(self, limit: int) -> list[int]:
+    async def list_retention_workspaces(
+        self, limit: int, *, after_workspace_id: int | None = None,
+    ) -> list[int]:
         rows = await db.fetch_all(
-            "SELECT DISTINCT workspace_id FROM creator_media_assets ORDER BY workspace_id LIMIT $1",
-            limit,
+            """SELECT DISTINCT workspace_id FROM creator_media_assets
+                WHERE ($2::bigint IS NULL OR workspace_id > $2)
+                ORDER BY workspace_id LIMIT $1""",
+            limit, after_workspace_id,
         )
         return [int(row["workspace_id"]) for row in rows]
 
