@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 import uuid
+from collections.abc import Awaitable, Callable
 
 import anyio
 from creator_domain.models import MediaAsset, MediaOrigin
@@ -369,6 +370,21 @@ class InMemoryMediaAssetStorage:
                 if not (asset["id"] == asset_id and asset["workspace_id"] == workspace_id)
             ]
             self._deleting_asset_ids.pop(asset_id, None)
+
+    async def finalize_retained_asset(
+        self, asset_id: int, workspace_id: int, claim_token: str,
+        delete_object: Callable[[], Awaitable[bool]],
+    ) -> bool:
+        async with self._lock:
+            if self._deleting_asset_ids.get(asset_id) != claim_token:
+                return False
+            await delete_object()
+            self._assets = [
+                asset for asset in self._assets
+                if not (asset["id"] == asset_id and asset["workspace_id"] == workspace_id)
+            ]
+            self._deleting_asset_ids.pop(asset_id, None)
+            return True
 
     async def claim_retained_asset(self, asset_id: int, workspace_id: int) -> str | None:
         async with self._lock:

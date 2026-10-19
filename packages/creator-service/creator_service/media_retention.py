@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import os
-from functools import partial
+from collections.abc import Awaitable, Callable
 from typing import Protocol
 
 from .blocking_io import BlockingIO
@@ -77,9 +77,10 @@ class RetentionStorage(Protocol):
     async def release_retained_asset(
         self, asset_id: int, workspace_id: int, claim_token: str,
     ) -> None: ...
-    async def delete_retained_asset(
+    async def finalize_retained_asset(
         self, asset_id: int, workspace_id: int, claim_token: str,
-    ) -> None: ...
+        delete_object: Callable[[], Awaitable[bool]],
+    ) -> bool: ...
 
 
 class DeletableObjects(Protocol):
@@ -139,11 +140,17 @@ class MediaRetentionService:
             claim_token = await self._storage.claim_retained_asset(asset.id, workspace_id)
             if claim_token is None:
                 continue
+
+            async def delete_object() -> bool:
+                return await self._io.run(lambda: self._objects.delete(asset.storage_key))
+
             try:
-                await self._io.run(partial(self._objects.delete, asset.storage_key))
+                finalized = await self._storage.finalize_retained_asset(
+                    asset.id, workspace_id, claim_token, delete_object,
+                )
             except BaseException:
                 await self._storage.release_retained_asset(asset.id, workspace_id, claim_token)
                 raise
-            await self._storage.delete_retained_asset(asset.id, workspace_id, claim_token)
-            deleted += 1
+            if finalized:
+                deleted += 1
         return RetentionSweepResult(len(candidates), deleted, False, True)

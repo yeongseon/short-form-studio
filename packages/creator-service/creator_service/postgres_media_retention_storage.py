@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Final
 import uuid
@@ -151,6 +152,7 @@ class PostgresMediaRetentionStorage:
                     SELECT 1 FROM creator_media_asset_deletion_claims deletion
                     WHERE deletion.asset_id = creator_media_assets.id
                     AND deletion.claim_token = $3
+                    AND deletion.lease_expires_at > now()
                 )""",
             asset_id, workspace_id, claim_token,
         )
@@ -183,6 +185,43 @@ class PostgresMediaRetentionStorage:
                 asset_id, workspace_id, claim_token, _CLAIM_LEASE,
             )
         return claim_token if claimed is not None else None
+
+    async def finalize_retained_asset(
+        self, asset_id: int, workspace_id: int, claim_token: str,
+        delete_object: Callable[[], Awaitable[bool]],
+    ) -> bool:
+        pool = await db.get_pool()
+        async with pool.acquire() as connection, connection.transaction():
+            await connection.execute("SELECT pg_advisory_xact_lock($1)", workspace_id)
+            claim_is_valid = await connection.fetchval(
+                """SELECT EXISTS (
+                    SELECT 1 FROM creator_media_asset_deletion_claims deletion
+                    WHERE deletion.asset_id = $1 AND deletion.workspace_id = $2
+                      AND deletion.claim_token = $3 AND deletion.lease_expires_at > now()
+                      AND NOT EXISTS (
+                          SELECT 1 FROM creator_timelines timeline
+                          CROSS JOIN LATERAL
+                              jsonb_array_elements(timeline.segments_json::jsonb) segment
+                          WHERE timeline.workspace_id = $2
+                            AND (segment->>'asset_id')::bigint = deletion.asset_id
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM creator_approved_timeline_assets approved
+                          WHERE approved.workspace_id = $2
+                            AND approved.asset_id = deletion.asset_id
+                      )
+                )""",
+                asset_id, workspace_id, claim_token,
+            )
+            if not claim_is_valid:
+                return False
+            await delete_object()
+            result = await connection.execute(
+                """DELETE FROM creator_media_assets
+                    WHERE id = $1 AND workspace_id = $2""",
+                asset_id, workspace_id,
+            )
+        return result == "DELETE 1"
 
     async def release_retained_asset(
         self, asset_id: int, workspace_id: int, claim_token: str,

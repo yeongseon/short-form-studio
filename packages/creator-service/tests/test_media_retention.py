@@ -81,8 +81,12 @@ async def test_storage_absent_object_removes_claimed_metadata() -> None:
         async def release_retained_asset(self, asset_id: int, workspace_id: int, claim_token: str):
             self.deleted.append(-asset_id)
 
-        async def delete_retained_asset(self, asset_id: int, workspace_id: int, claim_token: str):
+        async def finalize_retained_asset(
+            self, asset_id: int, workspace_id: int, claim_token: str, delete_object,
+        ):
+            await delete_object()
             self.deleted.append(asset_id)
+            return True
 
     class Objects:
         def delete(self, key: str) -> bool:
@@ -125,8 +129,12 @@ async def test_storage_delete_error_keeps_metadata_accounted() -> None:
         async def release_retained_asset(self, asset_id: int, workspace_id: int, claim_token: str):
             self.deleted.append(-asset_id)
 
-        async def delete_retained_asset(self, asset_id: int, workspace_id: int, claim_token: str):
+        async def finalize_retained_asset(
+            self, asset_id: int, workspace_id: int, claim_token: str, delete_object,
+        ):
+            await delete_object()
             self.deleted.append(asset_id)
+            return True
 
     class Objects:
         def delete(self, key: str) -> bool:
@@ -173,8 +181,12 @@ async def test_retention_scans_past_full_page_of_protected_assets() -> None:
         async def release_retained_asset(self, asset_id, workspace_id, claim_token):
             raise AssertionError
 
-        async def delete_retained_asset(self, asset_id, workspace_id, claim_token):
+        async def finalize_retained_asset(
+            self, asset_id, workspace_id, claim_token, delete_object,
+        ):
+            await delete_object()
             self.deleted.append(asset_id)
+            return True
 
     class Objects:
         def delete(self, key: str) -> bool:
