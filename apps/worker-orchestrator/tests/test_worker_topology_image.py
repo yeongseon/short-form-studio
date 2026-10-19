@@ -7,6 +7,7 @@ import subprocess
 import threading
 import time
 from collections.abc import Iterator
+from decimal import Decimal
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import urlopen
@@ -309,7 +310,7 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
     timeout_files = list((EVIDENCE / "storage" / "106" / "scenes").glob("*.png"))
     assert timeout_run is not None and timeout_run["status"] == "failed"
     assert timeout_quota is not None and timeout_quota["status"] == "billable_unknown"
-    assert timeout_quota["estimated_cost_usd"] == 0.04
+    assert timeout_quota["estimated_cost_usd"] == Decimal("0.040000")
     assert timeout_attempt is not None and timeout_attempt["status"] == "unknown"
     assert timeout_files == []
     replacement = EVIDENCE / "timeout-replacement.json"
