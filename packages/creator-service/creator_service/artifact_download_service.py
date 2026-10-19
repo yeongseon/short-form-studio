@@ -204,10 +204,6 @@ class ArtifactDownloadService:
                 ") "
                 "AND COALESCE(delete_retry_count, 0) < $1 "
                 "AND storage_key IS NOT NULL AND storage_key != '' "
-                "AND NOT EXISTS ("
-                "  SELECT 1 FROM creator_media_assets media "
-                "  WHERE media.storage_key = creator_artifacts.storage_key"
-                ") "
                 "LIMIT 500 "
                 "FOR UPDATE SKIP LOCKED",
                 max_retries,
