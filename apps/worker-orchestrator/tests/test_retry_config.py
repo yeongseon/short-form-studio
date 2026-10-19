@@ -78,4 +78,4 @@ def test_production_time_limit_override_is_restricted_to_topology_tests(monkeypa
 
     monkeypatch.setenv("ENVIRONMENT", "test")
     monkeypatch.setenv("WORKER_TOPOLOGY_PROBE_ENABLED", "1")
-    assert production_time_limits(600, 660) == (1, 2)
+    assert production_time_limits(600, 660) == (None, 2)

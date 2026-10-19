@@ -87,7 +87,7 @@ def production_task(
     return ConfiguredProductionTask
 
 
-def production_time_limits(soft: int, hard: int) -> tuple[int, int]:
+def production_time_limits(soft: int, hard: int) -> tuple[int | None, int]:
     override = os.getenv("WORKER_TOPOLOGY_PRODUCTION_HARD_TIME_LIMIT")
     if (
         os.getenv("ENVIRONMENT") == "test"
@@ -95,5 +95,5 @@ def production_time_limits(soft: int, hard: int) -> tuple[int, int]:
         and override is not None
     ):
         hard = int(override)
-        soft = max(hard - 1, 1)
+        return None, hard
     return soft, hard
