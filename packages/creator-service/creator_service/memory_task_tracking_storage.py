@@ -18,6 +18,7 @@ class InMemoryTaskTrackingStorage:
         self._rows_by_celery_task_id: dict[str, int] = {}
         self._next_id = 1
         self._observed_broker_epoch: str | None = None
+        self._pending_broker_cleanup_generations: set[str] = set()
         self._ownership_lock = anyio.Lock()
 
     async def transition_run_and_create_pending(
@@ -454,7 +455,26 @@ class InMemoryTaskTrackingStorage:
                 return True
             if self._observed_broker_epoch != expected_previous_epoch:
                 return False
+            if epoch != expected_previous_epoch:
+                self._pending_broker_cleanup_generations.add(
+                    self._observed_broker_epoch
+                )
             self._observed_broker_epoch = epoch
+            return True
+
+    async def list_pending_broker_cleanup_generations(self) -> list[str]:
+        return sorted(self._pending_broker_cleanup_generations)
+
+    async def complete_broker_cleanup(self, generation: str) -> bool:
+        async with self._ownership_lock:
+            has_active_tasks = any(
+                row.get("broker_generation") == generation
+                and row.get("status") in ("pending", "queued", "running")
+                for row in self._rows.values()
+            )
+            if has_active_tasks:
+                return False
+            self._pending_broker_cleanup_generations.discard(generation)
             return True
 
     async def promote_pending_to_queued(self, celery_task_id: str) -> dict[str, Any] | None:

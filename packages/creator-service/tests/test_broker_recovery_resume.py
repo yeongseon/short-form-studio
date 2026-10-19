@@ -52,6 +52,7 @@ async def test_recovery_resumes_after_epoch_persisted_before_cleanup(
     )
     await tracking.promote_pending_to_queued("obsolete-a")
     assert await tracking.set_observed_broker_epoch("epoch-b", "epoch-a")
+    assert await tracking.list_pending_broker_cleanup_generations() == ["epoch-a"]
     await tracking.record_task_pending(
         run_id,
         "generate_audio",
@@ -87,5 +88,57 @@ async def test_recovery_resumes_after_epoch_persisted_before_cleanup(
     assert persisted is True
     assert obsolete is not None and obsolete["status"] == "failed"
     assert obsolete["error_code"] == "broker_message_lost"
+    assert current is not None and current["status"] == "queued"
+    assert await tracking.get_observed_broker_epoch() == "epoch-b"
+    assert await tracking.list_pending_broker_cleanup_generations() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("quota_pool", ["memory", "postgres"], indirect=True)
+async def test_delayed_same_epoch_observer_preserves_replacement_work(
+    quota_pool: asyncpg.Pool | None,
+) -> None:
+    # Given an observer read B before Redis was replaced with C.
+    storage = (
+        PostgresTaskTrackingStorage()
+        if quota_pool is not None
+        else InMemoryTaskTrackingStorage()
+    )
+    tracking = TaskTrackingService(storage)
+    run_id = await _prepare_run(quota_pool)
+    assert await tracking.set_observed_broker_epoch("epoch-b", None)
+    sampled_epoch = await tracking.get_observed_broker_epoch()
+    assert sampled_epoch == "epoch-b"
+    await tracking.record_task_pending(
+        run_id,
+        "generate_audio",
+        "current-c",
+        broker_generation="epoch-c",
+    )
+    await tracking.promote_pending_to_queued("current-c")
+
+    # When the delayed observer uses empty-queue/online-worker evidence from C.
+    result, persisted = await recover_broker_snapshot(
+        fallback_epoch=None,
+        snapshot=BrokerSnapshot(
+            epoch=sampled_epoch,
+            started_at=datetime.now(timezone.utc),
+            queue_length=0,
+            oldest_wait_seconds=0,
+            workers_online=1,
+        ),
+        tracking=tracking,
+        usage=UsageService(
+            PostgresUsageStorage()
+            if quota_pool is not None
+            else InMemoryUsageStorage()
+        ),
+        rollback=lambda _run_id, _task_id: asyncio.sleep(0),
+    )
+
+    # Then unmarked C work survives the delayed observer's idempotent B CAS.
+    current = await storage.get_by_celery_id("current-c")
+    assert result.failed == 0
+    assert persisted is True
     assert current is not None and current["status"] == "queued"
     assert await tracking.get_observed_broker_epoch() == "epoch-b"

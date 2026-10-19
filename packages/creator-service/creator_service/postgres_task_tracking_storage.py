@@ -514,7 +514,33 @@ class PostgresTaskTrackingStorage:
                     epoch,
                     expected_previous_epoch,
                 )
+                if updated is not None and epoch != expected_previous_epoch:
+                    await connection.execute(
+                        """INSERT INTO creator_broker_cleanup_generations (generation)
+                           VALUES ($1) ON CONFLICT (generation) DO NOTHING""",
+                        expected_previous_epoch,
+                    )
                 return updated is not None
+
+    async def list_pending_broker_cleanup_generations(self) -> list[str]:
+        rows = await fetch_all(
+            "SELECT generation FROM creator_broker_cleanup_generations ORDER BY generation"
+        )
+        return [str(row["generation"]) for row in rows]
+
+    async def complete_broker_cleanup(self, generation: str) -> bool:
+        removed = await fetch_one(
+            """DELETE FROM creator_broker_cleanup_generations AS cleanup
+               WHERE cleanup.generation=$1
+                 AND NOT EXISTS (
+                     SELECT 1 FROM creator_run_tasks AS tasks
+                     WHERE tasks.broker_generation=cleanup.generation
+                       AND tasks.status IN ('pending', 'queued', 'running')
+                 )
+               RETURNING generation""",
+            generation,
+        )
+        return removed is not None
 
     async def promote_pending_to_queued(self, celery_task_id: str) -> dict[str, Any] | None:
         """Atomically promote a task from 'pending' to 'queued'.

@@ -348,6 +348,12 @@ class TaskTrackingService:
             epoch, expected_previous_epoch
         )
 
+    async def list_pending_broker_cleanup_generations(self) -> list[str]:
+        return await self.storage.list_pending_broker_cleanup_generations()
+
+    async def complete_broker_cleanup(self, generation: str) -> bool:
+        return await self.storage.complete_broker_cleanup(generation)
+
     async def mark_failed_if_active(
         self, celery_task_id: str, error_code: str, error_message: str
     ) -> RunTask | None:
