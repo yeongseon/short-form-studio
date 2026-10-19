@@ -15,7 +15,7 @@ def release_revoked_task_quota(request: Any = None, **_: Any) -> None:
     from worker_loop import run_in_worker_loop
 
     try:
-        run_in_worker_loop(usage_service.cancel_owned(task_id))
+        run_in_worker_loop(usage_service.finalize_revoked_owned(task_id))
     except Exception:
         logging.getLogger(__name__).warning(
             "Failed to release revoked task quota",
