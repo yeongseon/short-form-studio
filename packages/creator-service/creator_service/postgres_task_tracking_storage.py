@@ -192,30 +192,34 @@ class PostgresTaskTrackingStorage:
         )
 
     async def claim_running(self, task_id: int, **kwargs: Any) -> dict[str, Any] | None:
-        """Atomically claim: only transition from queued/failed to running.
-
-        Uses WHERE status IN ('queued', 'failed') so only one concurrent caller wins.
-        """
-        claimed = await fetch_one(
-            """
-            UPDATE creator_run_tasks
-            SET status = 'running',
-                started_at = $2,
-                finished_at = NULL,
-                error_code = NULL,
-                error_message = NULL, claim_token = $3
-            WHERE id = $1 AND status IN ('pending', 'queued', 'failed')
-              AND (error_code IS NULL OR NOT (error_code = ANY($4::text[])))
-              AND claim_token IS NOT DISTINCT FROM $5
-            RETURNING *
-            """,
-            task_id,
-            kwargs.get("started_at"),
-            kwargs.get("claim_token"),
-            ["reconciler_pending_cleanup", "reconciler_stuck_cleanup", "reconciler_cleanup_claimed"],
-            kwargs.get("expected_claim_token"),
-        )
-        return claimed
+        """Lock and claim an eligible task after rechecking its observed owner."""
+        pool = await db.get_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                observed = await connection.fetchrow(
+                    "SELECT status, claim_token, error_code FROM creator_run_tasks "
+                    "WHERE id = $1 FOR UPDATE",
+                    task_id,
+                )
+                if observed is None:
+                    return None
+                if observed["claim_token"] != kwargs.get("expected_claim_token"):
+                    return None
+                if observed["status"] not in {"pending", "queued", "failed"}:
+                    return None
+                if observed["error_code"] in {
+                    "reconciler_pending_cleanup",
+                    "reconciler_stuck_cleanup",
+                    "reconciler_cleanup_claimed",
+                }:
+                    return None
+                claimed = await connection.fetchrow(
+                    """UPDATE creator_run_tasks SET status='running', started_at=$2,
+                       finished_at=NULL, error_code=NULL, error_message=NULL, claim_token=$3
+                       WHERE id=$1 RETURNING *""",
+                    task_id, kwargs.get("started_at"), kwargs.get("claim_token"),
+                )
+                return dict(claimed) if claimed is not None else None
 
     async def finish_if_claimed(
         self, celery_task_id: str, token: str, status: str,
