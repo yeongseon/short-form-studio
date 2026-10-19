@@ -180,7 +180,12 @@ class MediaAssetService:
             lease_expires_at=now + DEFAULT_UPLOAD_LEASE, created_at=now,
             reserved_bytes=incoming_bytes,
         ), policy=self._storage_policy)
-        await anyio.lowlevel.checkpoint()
+        try:
+            await anyio.lowlevel.checkpoint()
+        except anyio.get_cancelled_exc_class():
+            with anyio.CancelScope(shield=True):
+                await self._asset_storage.compensate_upload(intent, deletion_failed=False)
+            raise
         # Once upload starts, retain ownership through the async metadata save.
         with anyio.CancelScope(shield=True):
             def upload_data():
@@ -195,6 +200,9 @@ class MediaAssetService:
             except TimeoutError:
                 await self._compensate_upload(intent, storage_key)
                 raise MediaAssetPersistenceFailed() from None
+            except OSError:
+                await self._compensate_upload(intent, storage_key)
+                raise
             try:
                 await self._asset_storage.mark_upload_intent_uploaded(intent.id)
             except MediaAssetPersistenceFailed:

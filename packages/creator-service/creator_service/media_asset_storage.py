@@ -50,6 +50,7 @@ class MediaAssetStorageBackend(Protocol):
     async def record_upload_reclaimed(self, intent_id: int, claim_token: str | None = None) -> None: ...
     async def watch_for_late_upload(
         self, intent_id: int, claim_token: str, watch_expires_at: datetime,
+        *, release_reservation: bool = False,
     ) -> None: ...
     async def record_upload_cleanup_failure(
         self, intent_id: int, max_retries: int, claim_token: str | None = None,
@@ -155,7 +156,7 @@ class InMemoryMediaAssetStorage:
             created_at=intent.created_at,
             retry_count=changes.get("retry_count", intent.retry_count),
             claim_token=changes.get("claim_token", intent.claim_token),
-            reserved_bytes=intent.reserved_bytes,
+            reserved_bytes=changes.get("reserved_bytes", intent.reserved_bytes),
         )
 
     def _storage_usage(self, workspace_id: int, policy: StoragePolicy) -> StorageUsage:
@@ -259,10 +260,11 @@ class InMemoryMediaAssetStorage:
                 intent.state is not UploadIntentState.RECLAIMING or intent.claim_token != claim_token
             ):
                 raise MediaAssetPersistenceFailed()
-            self._set_intent(intent_id, UploadIntentState.RECLAIMED)
+            self._set_intent(intent_id, UploadIntentState.RECLAIMED, reserved_bytes=0)
 
     async def watch_for_late_upload(
         self, intent_id: int, claim_token: str, watch_expires_at: datetime,
+        *, release_reservation: bool = False,
     ) -> None:
         async with self._lock:
             intent = self._intents[intent_id]
@@ -271,6 +273,7 @@ class InMemoryMediaAssetStorage:
             self._set_intent(
                 intent_id, UploadIntentState.LATE_UPLOAD_WATCH,
                 lease_expires_at=watch_expires_at,
+                reserved_bytes=0 if release_reservation else intent.reserved_bytes,
             )
 
     async def record_upload_cleanup_failure(

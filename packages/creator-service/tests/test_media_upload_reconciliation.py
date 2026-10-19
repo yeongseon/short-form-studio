@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import threading
 from datetime import datetime, timedelta, timezone
+from functools import partial
 
 import anyio
 import pytest
@@ -18,6 +19,7 @@ from creator_service.media_upload_reconciliation import (
     UploadIntentState,
 )
 from creator_service.object_storage import StorageDeletionError
+from creator_service.storage_policy import StoragePolicy
 
 
 def _png() -> bytes:
@@ -114,6 +116,67 @@ class _FailingAssets(InMemoryMediaAssetStorage):
             await super().save_uploaded_asset(row, intent)
             raise MediaAssetPersistenceIndeterminate()
         raise MediaAssetPersistenceFailed()
+
+
+class _IntentBarrierAssets(InMemoryMediaAssetStorage):
+    def __init__(self) -> None:
+        super().__init__()
+        self.created = anyio.Event()
+
+    async def create_upload_intent(
+        self, intent: UploadIntent, *, policy: StoragePolicy | None = None,
+    ) -> UploadIntent:
+        saved = await super().create_upload_intent(intent, policy=policy)
+        self.created.set()
+        return saved
+
+
+@pytest.mark.asyncio
+async def test_cancellation_after_intent_creation_releases_reservation() -> None:
+    # Given an upload paused immediately after its durable intent is created.
+    objects = _Objects()
+    assets = _IntentBarrierAssets()
+    service = MediaAssetService(objects, assets)
+
+    # When the request is cancelled before object I/O starts.
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(
+            partial(
+                service.create_image_asset,
+            workspace_id=7,
+            filename="cancelled.png",
+            data=_png(),
+            content_type="image/png",
+            ),
+        )
+        await assets.created.wait()
+        tasks.cancel_scope.cancel()
+
+    # Then capacity is released and no object was written.
+    usage = await assets.get_storage_usage(7)
+    assert usage.reserved_bytes == 0
+    assert objects.objects == {}
+
+
+@pytest.mark.asyncio
+async def test_definite_upload_failure_releases_reservation() -> None:
+    # Given object storage fails before writing any bytes.
+    class UnavailableObjects(_Objects):
+        def upload(self, key: str, data: bytes, content_type: str = "application/octet-stream"):
+            raise OSError("storage unavailable")
+
+    assets = InMemoryMediaAssetStorage()
+    service = MediaAssetService(UnavailableObjects(), assets)
+
+    # When the upload fails definitively.
+    with pytest.raises(OSError):
+        await service.create_image_asset(
+            workspace_id=7, filename="failed.png", data=_png(), content_type="image/png",
+        )
+
+    # Then the unused reservation is released.
+    usage = await assets.get_storage_usage(7)
+    assert usage.reserved_bytes == 0
 
 
 @pytest.mark.asyncio
@@ -279,6 +342,7 @@ async def test_late_upload_after_absent_observation_is_deleted_by_later_sweep() 
     retention = now + timedelta(hours=1)
     await assets.expire_upload_intent(intent.id, retention)
     absent = await MediaUploadReconciler(objects, assets).sweep(now=retention)
+    usage_after_reclamation = await assets.get_storage_usage(7)
     objects.objects[intent.storage_key] = b"late upload"
     later = retention + timedelta(minutes=5)
     await assets.expire_upload_intent(intent.id, later)
@@ -286,6 +350,7 @@ async def test_late_upload_after_absent_observation_is_deleted_by_later_sweep() 
     # Then the absent sweep retains ownership and a later sweep deletes the object.
     assert first.reclaimed == 0
     assert absent.reclaimed == 0
+    assert usage_after_reclamation.reserved_bytes == 0
     assert second.reclaimed == 0
     assert objects.objects == {}
     assert (await assets.list_upload_intents())[0].state is UploadIntentState.LATE_UPLOAD_WATCH
