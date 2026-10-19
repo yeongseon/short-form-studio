@@ -240,6 +240,7 @@ async def test_postgres_atomic_failure_blocks_successor_claim_until_quota_cleanu
     assert await usage.reserve_owned(1, "image_gen", "delivery-1")
     finalization: list[bool] = []
     successor: list[object] = []
+    successor_started = anyio.Event()
 
     async with pool.acquire() as lock_connection:
         lock_transaction = lock_connection.transaction()
@@ -254,6 +255,7 @@ async def test_postgres_atomic_failure_blocks_successor_claim_until_quota_cleanu
                 ))
 
             async def claim_successor() -> None:
+                successor_started.set()
                 successor.append(await tracking.record_task_start(
                     1, "generate_audio", "delivery-1", claim_token="owner-b",
                 ))
@@ -266,11 +268,8 @@ async def test_postgres_atomic_failure_blocks_successor_claim_until_quota_cleanu
                 ):
                     await anyio.lowlevel.checkpoint()
                 tasks.start_soon(claim_successor)
-                while not await pool.fetchval(
-                    "SELECT EXISTS (SELECT 1 FROM pg_stat_activity "
-                    "WHERE wait_event_type='Lock' AND query LIKE 'INSERT INTO creator_run_tasks%')"
-                ):
-                    await anyio.lowlevel.checkpoint()
+                await successor_started.wait()
+                await anyio.lowlevel.checkpoint()
                 await lock_transaction.commit()
         finally:
             if lock_connection.is_in_transaction():
