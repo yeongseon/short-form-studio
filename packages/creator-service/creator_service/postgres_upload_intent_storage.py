@@ -50,9 +50,11 @@ class PostgresUploadIntentStorage:
     async def compensate_upload(self, intent: UploadIntent, deletion_failed: bool) -> None:
         state = UploadIntentState.CLEANUP_PENDING if deletion_failed else UploadIntentState.RECLAIMED
         result = await db.execute(
-            """UPDATE creator_media_upload_intents SET state = $3, updated_at = NOW()
+            """UPDATE creator_media_upload_intents SET state = $3,
+                    reserved_bytes = CASE WHEN $4 THEN reserved_bytes ELSE 0 END,
+                    updated_at = NOW()
                 WHERE id = $1 AND owner_id = $2""",
-            intent.id, intent.owner_id, state.value,
+            intent.id, intent.owner_id, state.value, deletion_failed,
         )
         if result != "UPDATE 1":
             raise MediaAssetPersistenceFailed()
@@ -123,12 +125,15 @@ class PostgresUploadIntentStorage:
 
     async def watch_for_late_upload(
         self, intent_id: int, claim_token: str, watch_expires_at: datetime,
+        *, release_reservation: bool = False,
     ) -> None:
         result = await db.execute(
             """UPDATE creator_media_upload_intents
-                SET state = 'late_upload_watch', lease_expires_at = $3, updated_at = NOW()
+                SET state = 'late_upload_watch', lease_expires_at = $3,
+                    reserved_bytes = CASE WHEN $4 THEN 0 ELSE reserved_bytes END,
+                    updated_at = NOW()
                 WHERE id = $1 AND state = 'reclaiming' AND claim_token = $2""",
-            intent_id, claim_token, watch_expires_at,
+            intent_id, claim_token, watch_expires_at, release_reservation,
         )
         if result != "UPDATE 1":
             raise MediaAssetPersistenceFailed()

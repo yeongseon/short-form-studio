@@ -24,6 +24,7 @@ from creator_service.media_upload_reconciliation import (
     UploadIntentState,
 )
 from creator_service.object_storage import LocalStorageBackend
+from creator_service.postgres_media_asset_storage import PostgresMediaAssetStorage
 from creator_service.storage_policy import StorageBudgetExceeded, StoragePolicy
 from PIL import Image
 
@@ -615,4 +616,99 @@ async def test_postgres_crash_claim_remains_reserved_until_terminal_reclaim(
         )
     await storage.record_upload_reclaimed(intent.id, claimed[0].claim_token)
     usage = await storage.get_storage_usage(9101, policy=policy)
+    assert usage.reserved_bytes == 0
+
+
+@pytest.mark.asyncio
+async def test_postgres_process_death_releases_capacity_but_retains_tombstone(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given an expired pending upload whose process died before object I/O.
+    storage = MediaAssetService()._asset_storage
+    objects = LocalStorageBackend(str(tmp_path))
+    now = datetime.now(timezone.utc)
+    intent = await storage.create_upload_intent(UploadIntent(
+        id=0, owner_id="dead-before-io", workspace_id=9101,
+        storage_key="workspaces/9101/assets/dead-before-io.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now,
+        reserved_bytes=9,
+    ))
+    await MediaUploadReconciler(objects, storage).sweep(now=now)
+
+    # When the bounded late-upload verification window elapses with no object.
+    verification_end = now + timedelta(hours=1)
+    await db.execute(
+        "UPDATE creator_media_upload_intents SET lease_expires_at = $2 WHERE id = $1",
+        intent.id, verification_end,
+    )
+    await MediaUploadReconciler(objects, storage).sweep(now=verification_end)
+
+    # Then capacity is released exactly once while durable cleanup ownership remains.
+    await MediaUploadReconciler(objects, storage).sweep(now=verification_end)
+    usage = await storage.get_storage_usage(9101)
+    row = await db.fetch_one(
+        "SELECT state FROM creator_media_upload_intents WHERE id = $1", intent.id,
+    )
+    assert usage.reserved_bytes == 0
+    assert row == {"state": "late_upload_watch"}
+
+
+@pytest.mark.asyncio
+async def test_postgres_cancellation_after_intent_releases_capacity(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given PostgreSQL admission pauses immediately after creating the intent.
+    class IntentBarrierStorage(PostgresMediaAssetStorage):
+        def __init__(self) -> None:
+            self.created = anyio.Event()
+
+        async def create_upload_intent(
+            self, intent: UploadIntent, *, policy: StoragePolicy | None = None,
+        ) -> UploadIntent:
+            saved = await super().create_upload_intent(intent, policy=policy)
+            self.created.set()
+            return saved
+
+    storage = IntentBarrierStorage()
+    service = MediaAssetService(LocalStorageBackend(str(tmp_path)), storage)
+
+    async def upload() -> None:
+        await service.create_image_asset(
+            workspace_id=9101, filename="cancelled.png",
+            data=image_bytes(), content_type="image/png",
+        )
+
+    # When cancellation arrives before object I/O starts.
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(upload)
+        await storage.created.wait()
+        tasks.cancel_scope.cancel()
+
+    # Then PostgreSQL releases the capacity without writing an object.
+    usage = await storage.get_storage_usage(9101)
+    assert usage.reserved_bytes == 0
+    assert list(tmp_path.rglob("*.png")) == []
+
+
+@pytest.mark.asyncio
+async def test_postgres_definite_upload_failure_releases_capacity(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given the object backend fails before any bytes are written.
+    class UnavailableStorage(LocalStorageBackend):
+        def upload(self, key, data, content_type="application/octet-stream"):
+            raise OSError("storage unavailable")
+
+    storage = PostgresMediaAssetStorage()
+    service = MediaAssetService(UnavailableStorage(str(tmp_path)), storage)
+
+    # When object upload fails definitively.
+    with pytest.raises(OSError):
+        await service.create_image_asset(
+            workspace_id=9101, filename="failed.png",
+            data=image_bytes(), content_type="image/png",
+        )
+
+    # Then PostgreSQL releases the unused reservation.
+    usage = await storage.get_storage_usage(9101)
     assert usage.reserved_bytes == 0
