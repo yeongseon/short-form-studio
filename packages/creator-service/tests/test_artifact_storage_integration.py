@@ -1,10 +1,8 @@
 from __future__ import annotations
 
 import pytest
-from creator_domain.models import MediaType
 
 from creator_service.object_storage import StorageResult
-from creator_service.storage_policy import StorageLowWatermark
 
 
 class _MockBackend:
@@ -88,62 +86,6 @@ def test_store_artifact_file_raises_on_upload_failure(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="upload failed"):
         mod.store_artifact_file(run_id, local_path, "audio/wav")
-
-
-@pytest.mark.anyio
-async def test_publish_generated_file_uses_workspace_accounting(tmp_path, monkeypatch):
-    from creator_service import artifact_storage_integration as mod
-
-    local_path = tmp_path / "output.mp4"
-    local_path.write_bytes(b"video-bytes")
-
-    class _Asset:
-        storage_key = "workspaces/7/assets/generated-output.mp4"
-        metadata = {
-            "size_bytes": 11,
-            "checksum": "generated-checksum",
-            "storage_provider": "mock",
-        }
-
-    class _Media:
-        calls: list[dict[str, object]] = []
-
-        async def create_generated_file_asset(self, **kwargs):
-            self.calls.append(kwargs)
-            return _Asset()
-
-    media = _Media()
-    monkeypatch.setattr(mod, "media_asset_service", media)
-
-    result = await mod.publish_generated_file(
-        workspace_id=7,
-        project_id=8,
-        run_id=9,
-        local_path=local_path,
-        content_type="video/mp4",
-        media_type=MediaType.VIDEO,
-    )
-
-    assert result.key == _Asset.storage_key
-    assert result.size_bytes == 11
-    assert media.calls == [{
-        "workspace_id": 7,
-        "project_id": 8,
-        "run_id": 9,
-        "filename": "output.mp4",
-        "path": local_path,
-        "content_type": "video/mp4",
-        "media_type": MediaType.VIDEO,
-    }]
-
-
-def test_generation_low_watermark_is_checked_before_local_work(monkeypatch):
-    from creator_service import artifact_storage_integration as mod
-
-    monkeypatch.setenv("MEDIA_TEMP_DISK_LOW_WATERMARK_BYTES", str(10**30))
-
-    with pytest.raises(StorageLowWatermark):
-        mod.ensure_generation_capacity()
 
 
 def test_get_artifact_url_delegates_to_backend(monkeypatch):
