@@ -48,6 +48,7 @@ class UploadIntent:
     retry_count: int = 0
     claim_token: str | None = None
     created_at: datetime | None = None
+    reserved_bytes: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +73,7 @@ class UploadIntentStorage(Protocol):
     async def record_upload_reclaimed(self, intent_id: int, claim_token: str | None = None) -> None: ...
     async def watch_for_late_upload(
         self, intent_id: int, claim_token: str, watch_expires_at: datetime,
+        *, release_reservation: bool = False,
     ) -> None: ...
     async def record_upload_cleanup_failure(
         self, intent_id: int, max_retries: int, claim_token: str | None = None,
@@ -137,5 +139,6 @@ class MediaUploadReconciler:
                     intent.id,
                     intent.claim_token,
                     swept_at + LATE_UPLOAD_WATCH_RETENTION,
+                    release_reservation=intent.state is UploadIntentState.LATE_UPLOAD_WATCH,
                 )
         return SweepResult(reclaimed, preserved, failed, exhausted)

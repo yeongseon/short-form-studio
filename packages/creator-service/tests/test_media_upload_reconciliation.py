@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import threading
 from datetime import datetime, timedelta, timezone
+from functools import partial
 
 import anyio
 import pytest
@@ -18,6 +19,7 @@ from creator_service.media_upload_reconciliation import (
     UploadIntentState,
 )
 from creator_service.object_storage import StorageDeletionError
+from creator_service.storage_policy import StoragePolicy
 
 
 def _png() -> bytes:
@@ -116,6 +118,67 @@ class _FailingAssets(InMemoryMediaAssetStorage):
         raise MediaAssetPersistenceFailed()
 
 
+class _IntentBarrierAssets(InMemoryMediaAssetStorage):
+    def __init__(self) -> None:
+        super().__init__()
+        self.created = anyio.Event()
+
+    async def create_upload_intent(
+        self, intent: UploadIntent, *, policy: StoragePolicy | None = None,
+    ) -> UploadIntent:
+        saved = await super().create_upload_intent(intent, policy=policy)
+        self.created.set()
+        return saved
+
+
+@pytest.mark.asyncio
+async def test_cancellation_after_intent_creation_releases_reservation() -> None:
+    # Given an upload paused immediately after its durable intent is created.
+    objects = _Objects()
+    assets = _IntentBarrierAssets()
+    service = MediaAssetService(objects, assets)
+
+    # When the request is cancelled before object I/O starts.
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(
+            partial(
+                service.create_image_asset,
+            workspace_id=7,
+            filename="cancelled.png",
+            data=_png(),
+            content_type="image/png",
+            ),
+        )
+        await assets.created.wait()
+        tasks.cancel_scope.cancel()
+
+    # Then capacity is released and no object was written.
+    usage = await assets.get_storage_usage(7)
+    assert usage.reserved_bytes == 0
+    assert objects.objects == {}
+
+
+@pytest.mark.asyncio
+async def test_definite_upload_failure_releases_reservation() -> None:
+    # Given object storage fails before writing any bytes.
+    class UnavailableObjects(_Objects):
+        def upload(self, key: str, data: bytes, content_type: str = "application/octet-stream"):
+            raise OSError("storage unavailable")
+
+    assets = InMemoryMediaAssetStorage()
+    service = MediaAssetService(UnavailableObjects(), assets)
+
+    # When the upload fails definitively.
+    with pytest.raises(OSError):
+        await service.create_image_asset(
+            workspace_id=7, filename="failed.png", data=_png(), content_type="image/png",
+        )
+
+    # Then the unused reservation is released.
+    usage = await assets.get_storage_usage(7)
+    assert usage.reserved_bytes == 0
+
+
 @pytest.mark.asyncio
 async def test_memory_failed_uploaded_asset_validation_remains_reconcilable() -> None:
     # Given an uploaded object and intent with invalid metadata.
@@ -132,13 +195,45 @@ async def test_memory_failed_uploaded_asset_validation_remains_reconcilable() ->
 
     # When metadata construction fails inside the atomic save operation.
     with pytest.raises(ValueError):
-        await assets.save_uploaded_asset({"workspace_id": 7}, intent)
+        await assets.save_uploaded_asset({
+            "workspace_id": 7, "storage_key": intent.storage_key,
+        }, intent)
 
     # Then the intent remains uploaded and a later sweep deletes the orphan.
     assert (await assets.list_upload_intents())[0].state is UploadIntentState.UPLOADED
     await assets.expire_upload_intent(intent.id, now)
     await MediaUploadReconciler(objects, assets).sweep(now=now)
     assert objects.objects == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["workspace_id", "storage_key"])
+async def test_memory_uploaded_asset_rejects_intent_binding_mismatch(field: str) -> None:
+    # Given an uploaded intent and asset row with mismatched ownership.
+    now = datetime.now(timezone.utc)
+    assets = InMemoryMediaAssetStorage()
+    intent = await assets.create_upload_intent(UploadIntent(
+        id=0, owner_id="binding", workspace_id=7,
+        storage_key="workspaces/7/assets/binding.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now,
+    ))
+    await assets.mark_upload_intent_uploaded(intent.id)
+    row = {
+        "workspace_id": 7, "project_id": None, "run_id": None,
+        "media_type": "IMAGE", "origin": "UPLOADED",
+        "storage_key": intent.storage_key, "mime_type": "image/png",
+        "width": 4, "height": 6, "duration_seconds": None,
+        "source_url": None, "metadata": {}, "created_at": now,
+    }
+    row[field] = 8 if field == "workspace_id" else "workspaces/7/assets/other.png"
+
+    # When the internal caller attempts completion with the forged row.
+    with pytest.raises(MediaAssetPersistenceFailed):
+        await assets.save_uploaded_asset(row, intent)
+
+    # Then the intent remains uploaded and no asset is persisted.
+    assert (await assets.list_upload_intents())[0].state is UploadIntentState.UPLOADED
+    assert (await assets.list_assets(7, limit=10, offset=0))[1] == 0
 
 
 @pytest.mark.asyncio
@@ -279,6 +374,7 @@ async def test_late_upload_after_absent_observation_is_deleted_by_later_sweep() 
     retention = now + timedelta(hours=1)
     await assets.expire_upload_intent(intent.id, retention)
     absent = await MediaUploadReconciler(objects, assets).sweep(now=retention)
+    usage_after_reclamation = await assets.get_storage_usage(7)
     objects.objects[intent.storage_key] = b"late upload"
     later = retention + timedelta(minutes=5)
     await assets.expire_upload_intent(intent.id, later)
@@ -286,6 +382,7 @@ async def test_late_upload_after_absent_observation_is_deleted_by_later_sweep() 
     # Then the absent sweep retains ownership and a later sweep deletes the object.
     assert first.reclaimed == 0
     assert absent.reclaimed == 0
+    assert usage_after_reclamation.reserved_bytes == 0
     assert second.reclaimed == 0
     assert objects.objects == {}
     assert (await assets.list_upload_intents())[0].state is UploadIntentState.LATE_UPLOAD_WATCH

@@ -16,6 +16,7 @@ from .media_upload_validation import (
     _PIL_FORMAT_TO_MIME,
     _safe_filename,
 )
+from .temp_byte_lease import temp_byte_lease
 
 UPLOAD_CHUNK_BYTES: Final = 64 * 1024
 
@@ -67,13 +68,16 @@ def _prepare(source: BinaryIO, path: Path, upload: FileUpload) -> PreparedUpload
 
 @asynccontextmanager
 async def prepare_upload(
-    source: BinaryIO, upload: FileUpload, io: BlockingIO,
+    source: BinaryIO, upload: FileUpload, io: BlockingIO, *, low_watermark_bytes: int = 0,
 ) -> AsyncIterator[PreparedUpload]:
     """Own only the staging directory; the caller retains the source stream."""
+    lease = temp_byte_lease(upload.max_bytes, low_watermark_bytes)
     with anyio.CancelScope(shield=True):
+        await io.run(lease.__enter__)
         temporary = await io.run(lambda: TemporaryDirectory(prefix="media-upload-"))
     try:
         yield await io.run(lambda: _prepare(source, Path(temporary.name) / "media", upload))
     finally:
         with anyio.CancelScope(shield=True):
             await io.run(temporary.cleanup)
+            await io.run(lambda: lease.__exit__(None, None, None))

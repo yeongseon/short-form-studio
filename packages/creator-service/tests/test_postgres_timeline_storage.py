@@ -10,8 +10,38 @@ rows) is caught without a live database.
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 
 from creator_service.postgres_timeline_storage import PostgresTimelineStorage
+
+
+class _FakeConnection:
+    def __init__(self, fetchrow) -> None:
+        self.fetchrow = fetchrow
+        self.executed: list[tuple[str, tuple[object, ...]]] = []
+
+    async def execute(self, query: str, *args: object) -> str:
+        self.executed.append((query, args))
+        return "SELECT 1"
+
+    def transaction(self):
+        @asynccontextmanager
+        async def context():
+            yield
+
+        return context()
+
+
+class _FakePool:
+    def __init__(self, fetchrow) -> None:
+        self.connection = _FakeConnection(fetchrow)
+
+    def acquire(self):
+        @asynccontextmanager
+        async def context():
+            yield self.connection
+
+        return context()
 
 
 def run(coro):
@@ -26,9 +56,12 @@ def test_save_sql_is_scoped_by_project_workspace_and_revision(monkeypatch) -> No
         calls.append((query, args))
         return None
 
-    monkeypatch.setattr(
-        "creator_service.postgres_timeline_storage.fetch_one", _fake_fetch_one
-    )
+    pool = _FakePool(_fake_fetch_one)
+
+    async def get_pool():
+        return pool
+
+    monkeypatch.setattr("creator_service.postgres_timeline_storage.db.get_pool", get_pool)
 
     run(
         storage.save_timeline(
@@ -45,6 +78,8 @@ def test_save_sql_is_scoped_by_project_workspace_and_revision(monkeypatch) -> No
     assert "creator_projects" in query
     assert "workspace_id = $2" in query
     assert "revision = $5" in query
+    assert "creator_media_asset_deletion_claims" in query
+    assert pool.connection.executed == [("SELECT pg_advisory_xact_lock($1)", (9,))]
     # update-first CTE + guarded first-write insert (not insert-only)
     assert "UPDATE creator_timelines" in query
     assert "INSERT INTO creator_timelines" in query
@@ -60,9 +95,7 @@ def test_load_sql_is_workspace_scoped(monkeypatch) -> None:
         calls.append((query, args))
         return None
 
-    monkeypatch.setattr(
-        "creator_service.postgres_timeline_storage.fetch_one", _fake_fetch_one
-    )
+    monkeypatch.setattr("creator_service.postgres_timeline_storage.db.fetch_one", _fake_fetch_one)
 
     run(storage.load_timeline(project_id=3, workspace_id=4))
 
@@ -111,9 +144,10 @@ class _FakeTimelineTable:
 def test_cte_branches_first_write_update_and_stale(monkeypatch) -> None:
     storage = PostgresTimelineStorage()
     fake = _FakeTimelineTable()
-    monkeypatch.setattr(
-        "creator_service.postgres_timeline_storage.fetch_one", fake.fetch_one
-    )
+    async def get_pool():
+        return _FakePool(fake.fetch_one)
+
+    monkeypatch.setattr("creator_service.postgres_timeline_storage.db.get_pool", get_pool)
 
     first = run(
         storage.save_timeline(

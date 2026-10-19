@@ -28,6 +28,7 @@ from creator_domain.exceptions import (
     ValidationError,
     VersionConflictError,
 )
+from .storage_policy import StorageBudgetExceeded
 from creator_domain.provider_errors import (
     ProviderAuthError,
     ProviderError,
@@ -47,6 +48,7 @@ class ErrorCategory(enum.Enum):
     UNAVAILABLE = "UNAVAILABLE"
     DATA_INTEGRITY = "DATA_INTEGRITY"
     INTERNAL = "INTERNAL"
+    STORAGE_BUDGET = "STORAGE_BUDGET"
 
 
 @dataclass(frozen=True)
@@ -96,6 +98,10 @@ _RECOVERY: dict[ErrorCategory, tuple[str, ...]] = {
         "Retry the operation",
         "If it persists, contact support",
     ),
+    ErrorCategory.STORAGE_BUDGET: (
+        "Remove unused media or increase the workspace storage limit",
+        "Retry after in-flight uploads finish",
+    ),
 }
 
 _RETRYABLE: frozenset[ErrorCategory] = frozenset(
@@ -108,6 +114,8 @@ def _category_for(exc: ServiceError) -> ErrorCategory:
     # ProviderConfigError is a ValidationError subclass — check the narrow types first.
     if isinstance(exc, VersionConflictError):
         return ErrorCategory.VERSION_CONFLICT
+    if isinstance(exc, StorageBudgetExceeded):
+        return ErrorCategory.STORAGE_BUDGET
     if isinstance(exc, NotFoundError):
         return ErrorCategory.NOT_FOUND
     if isinstance(exc, ProviderConfigError):

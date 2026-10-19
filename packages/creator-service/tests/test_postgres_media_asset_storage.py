@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import subprocess
 import sys
 import uuid
+import anyio
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -16,6 +18,7 @@ import pytest_asyncio
 from creator_domain.models import MediaAsset, MediaOrigin, MediaType
 from creator_service import db
 from creator_service.media_asset_service import MediaAssetService
+from creator_service.media_retention import MediaRetentionPolicy, MediaRetentionService
 from creator_service.media_upload_reconciliation import (
     MediaAssetPersistenceFailed,
     MediaUploadReconciler,
@@ -23,6 +26,13 @@ from creator_service.media_upload_reconciliation import (
     UploadIntentState,
 )
 from creator_service.object_storage import LocalStorageBackend
+from creator_service.postgres_media_asset_storage import PostgresMediaAssetStorage, _decode_asset
+from creator_service.postgres_stage_review_storage import PostgresStageReviewStorage
+from creator_service.postgres_timeline_storage import PostgresTimelineStorage
+from creator_service.storage_policy import StorageBudgetExceeded, StoragePolicy
+from creator_service.timeline_service import TimelineService
+from creator_domain.models import Timeline
+from creator_domain.exceptions import ValidationError
 from PIL import Image
 
 
@@ -134,6 +144,8 @@ async def test_generated_metadata_roundtrips_json(media_database: None, tmp_path
     assert restored is not None and restored.origin is MediaOrigin.GENERATED
 
 
+
+
 @pytest.mark.asyncio
 async def test_postgres_pagination_matches_memory_contract(media_database: None, tmp_path: Path) -> None:
     # Given mixed origins, media types, projects and tied timestamps.
@@ -238,6 +250,40 @@ async def test_failed_uploaded_asset_association_remains_reconcilable(
     )
     await MediaUploadReconciler(objects, storage).sweep(now=now)
     assert not (tmp_path / intent.storage_key).exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["workspace_id", "storage_key"])
+async def test_postgres_uploaded_asset_rejects_intent_binding_mismatch(
+    media_database: None, field: str,
+) -> None:
+    # Given an uploaded intent and otherwise valid metadata with forged ownership.
+    storage = PostgresMediaAssetStorage()
+    now = datetime.now(timezone.utc)
+    intent = await storage.create_upload_intent(UploadIntent(
+        id=0, owner_id=f"binding-{field}", workspace_id=9101,
+        storage_key=f"workspaces/9101/assets/binding-{field}.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now,
+    ))
+    await storage.mark_upload_intent_uploaded(intent.id)
+    row = {
+        "workspace_id": 9101, "project_id": None, "run_id": None,
+        "media_type": "IMAGE", "origin": "UPLOADED",
+        "storage_key": intent.storage_key, "mime_type": "image/png",
+        "width": 8, "height": 12, "duration_seconds": None,
+        "source_url": None, "metadata": {}, "created_at": now,
+    }
+    row[field] = 9102 if field == "workspace_id" else "workspaces/9101/assets/other.png"
+
+    # When completion claims the intent using the mismatched row.
+    with pytest.raises(MediaAssetPersistenceFailed):
+        await storage.save_uploaded_asset(row, intent)
+
+    # Then the claim rolls back and no forged asset is persisted.
+    persisted = await db.fetch_one(
+        "SELECT state FROM creator_media_upload_intents WHERE id = $1", intent.id,
+    )
+    assert persisted == {"state": "uploaded"}
 
 
 @pytest.mark.asyncio
@@ -487,3 +533,759 @@ async def test_postgres_successful_delete_keeps_watch_for_rematerialized_upload(
         "SELECT state FROM creator_media_upload_intents WHERE id = $1", intent.id,
     )
     assert row == {"state": "late_upload_watch"}
+@pytest.mark.asyncio
+async def test_postgres_concurrent_admission_stays_within_budget(media_database: None) -> None:
+    storage = MediaAssetService()._asset_storage
+    policy = StoragePolicy(max_stored_bytes=10, max_asset_count=10, max_reserved_bytes=10)
+    now = datetime.now(timezone.utc)
+
+    async def reserve(owner_id: str) -> bool:
+        try:
+            await storage.create_upload_intent(
+                UploadIntent(
+                    id=0, owner_id=owner_id, workspace_id=9101,
+                    storage_key=f"workspaces/9101/assets/{owner_id}.png",
+                    state=UploadIntentState.PENDING, lease_expires_at=now,
+                    reserved_bytes=6,
+                ),
+                policy=policy,
+            )
+        except StorageBudgetExceeded:
+            return False
+        return True
+
+    results: list[bool] = []
+
+    async def collect(owner_id: str) -> None:
+        results.append(await reserve(owner_id))
+
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(collect, "budget-a")
+        tasks.start_soon(collect, "budget-b")
+
+    assert sorted(results) == [False, True]
+
+
+@pytest.mark.asyncio
+async def test_postgres_completion_waits_for_workspace_admission_lock(
+    media_database: None,
+) -> None:
+    # Given admission is paused after observing usage while holding its workspace lock.
+    storage = MediaAssetService()._asset_storage
+    now = datetime.now(timezone.utc)
+    intent = await storage.create_upload_intent(UploadIntent(
+        id=0, owner_id="completion-race", workspace_id=9101,
+        storage_key="workspaces/9101/assets/completion-race.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now,
+        reserved_bytes=6,
+    ))
+    await storage.mark_upload_intent_uploaded(intent.id)
+    row = {
+        "workspace_id": 9101, "project_id": None, "run_id": None,
+        "media_type": MediaType.IMAGE.value, "origin": MediaOrigin.UPLOADED.value,
+        "storage_key": intent.storage_key, "mime_type": "image/png",
+        "width": 8, "height": 12, "duration_seconds": None, "source_url": None,
+        "metadata": {"size_bytes": 6}, "created_at": now,
+    }
+    pool = await db.get_pool()
+
+    async with pool.acquire() as admission:
+        transaction = admission.transaction()
+        await transaction.start()
+        await admission.execute("SELECT pg_advisory_xact_lock($1)", 9101)
+        completion_finished = anyio.Event()
+
+        async def complete() -> None:
+            await storage.save_uploaded_asset(row, intent)
+            completion_finished.set()
+
+        # When completion reaches the conversion while admission is paused.
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(complete)
+            with anyio.fail_after(5):
+                while True:
+                    waiting = await admission.fetchval(
+                        "SELECT EXISTS (SELECT 1 FROM pg_locks "
+                        "WHERE locktype = 'advisory' AND NOT granted)",
+                    )
+                    if waiting:
+                        break
+                    if completion_finished.is_set():
+                        pytest.fail("completion bypassed the workspace admission lock")
+                    await anyio.lowlevel.checkpoint()
+            # Then conversion cannot make admission miss both reservation and stored bytes.
+            assert not completion_finished.is_set()
+            await transaction.commit()
+
+    assert completion_finished.is_set()
+    usage = await storage.get_storage_usage(9101)
+    assert usage.stored_bytes == 6
+    assert usage.reserved_bytes == 0
+
+
+@pytest.mark.asyncio
+async def test_postgres_crash_claim_remains_reserved_until_terminal_reclaim(
+    media_database: None,
+) -> None:
+    # Given a reservation that has expired without an upload completing.
+    storage = MediaAssetService()._asset_storage
+    policy = StoragePolicy(max_stored_bytes=10, max_asset_count=1, max_reserved_bytes=10)
+    now = datetime.now(timezone.utc)
+    intent = await storage.create_upload_intent(
+        UploadIntent(
+            id=0, owner_id="crashed", workspace_id=9101,
+            storage_key="workspaces/9101/assets/crashed.png",
+            state=UploadIntentState.PENDING, lease_expires_at=now,
+            reserved_bytes=10,
+        ),
+        policy=policy,
+    )
+
+    # When the crash sweeper claims the reservation for cleanup.
+    claimed = await storage.claim_expired_upload_intents(
+        now=now, lease_expires_at=now + timedelta(minutes=5), limit=1,
+    )
+
+    # Then concurrent admission stays blocked until the owned claim is terminal.
+    with pytest.raises(StorageBudgetExceeded):
+        await storage.create_upload_intent(
+            UploadIntent(
+                id=0, owner_id="replacement", workspace_id=9101,
+                storage_key="workspaces/9101/assets/replacement.png",
+                state=UploadIntentState.PENDING,
+                lease_expires_at=now + timedelta(minutes=30), reserved_bytes=1,
+            ),
+            policy=policy,
+        )
+    await storage.record_upload_reclaimed(intent.id, claimed[0].claim_token)
+    usage = await storage.get_storage_usage(9101, policy=policy)
+    assert usage.reserved_bytes == 0
+
+
+@pytest.mark.asyncio
+async def test_postgres_process_death_releases_capacity_but_retains_tombstone(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given an expired pending upload whose process died before object I/O.
+    storage = MediaAssetService()._asset_storage
+    objects = LocalStorageBackend(str(tmp_path))
+    now = datetime.now(timezone.utc)
+    intent = await storage.create_upload_intent(UploadIntent(
+        id=0, owner_id="dead-before-io", workspace_id=9101,
+        storage_key="workspaces/9101/assets/dead-before-io.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now,
+        reserved_bytes=9,
+    ))
+    await MediaUploadReconciler(objects, storage).sweep(now=now)
+
+    # When the bounded late-upload verification window elapses with no object.
+    verification_end = now + timedelta(hours=1)
+    await db.execute(
+        "UPDATE creator_media_upload_intents SET lease_expires_at = $2 WHERE id = $1",
+        intent.id, verification_end,
+    )
+    await MediaUploadReconciler(objects, storage).sweep(now=verification_end)
+
+    # Then byte and slot capacity are released while durable cleanup ownership remains.
+    await MediaUploadReconciler(objects, storage).sweep(now=verification_end)
+    policy = StoragePolicy(max_stored_bytes=10, max_asset_count=1, max_reserved_bytes=10)
+    usage = await storage.get_storage_usage(9101, policy=policy)
+    replacement = await storage.create_upload_intent(UploadIntent(
+        id=0, owner_id="replacement-after-death", workspace_id=9101,
+        storage_key="workspaces/9101/assets/replacement-after-death.png",
+        state=UploadIntentState.PENDING,
+        lease_expires_at=verification_end + timedelta(minutes=30), reserved_bytes=1,
+    ), policy=policy)
+    row = await db.fetch_one(
+        "SELECT state FROM creator_media_upload_intents WHERE id = $1", intent.id,
+    )
+    assert usage.reserved_bytes == 0
+    assert usage.reserved_asset_count == 0
+    assert replacement.reserved_bytes == 1
+    assert row == {"state": "late_upload_watch"}
+
+
+@pytest.mark.asyncio
+async def test_postgres_cancellation_after_intent_releases_capacity(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given PostgreSQL admission pauses immediately after creating the intent.
+    class IntentBarrierStorage(PostgresMediaAssetStorage):
+        def __init__(self) -> None:
+            self.created = anyio.Event()
+
+        async def create_upload_intent(
+            self, intent: UploadIntent, *, policy: StoragePolicy | None = None,
+        ) -> UploadIntent:
+            saved = await super().create_upload_intent(intent, policy=policy)
+            self.created.set()
+            return saved
+
+    storage = IntentBarrierStorage()
+    service = MediaAssetService(LocalStorageBackend(str(tmp_path)), storage)
+
+    async def upload() -> None:
+        await service.create_image_asset(
+            workspace_id=9101, filename="cancelled.png",
+            data=image_bytes(), content_type="image/png",
+        )
+
+    # When cancellation arrives before object I/O starts.
+    async with anyio.create_task_group() as tasks:
+        tasks.start_soon(upload)
+        await storage.created.wait()
+        tasks.cancel_scope.cancel()
+
+    # Then PostgreSQL releases the capacity without writing an object.
+    usage = await storage.get_storage_usage(9101)
+    assert usage.reserved_bytes == 0
+    assert list(tmp_path.rglob("*.png")) == []
+
+
+@pytest.mark.asyncio
+async def test_postgres_definite_upload_failure_releases_capacity(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given the object backend fails before any bytes are written.
+    class UnavailableStorage(LocalStorageBackend):
+        def upload(self, key, data, content_type="application/octet-stream"):
+            raise OSError("storage unavailable")
+
+    storage = PostgresMediaAssetStorage()
+    service = MediaAssetService(UnavailableStorage(str(tmp_path)), storage)
+
+    # When object upload fails definitively.
+    with pytest.raises(OSError):
+        await service.create_image_asset(
+            workspace_id=9101, filename="failed.png",
+            data=image_bytes(), content_type="image/png",
+        )
+
+    # Then PostgreSQL releases the unused reservation.
+    usage = await storage.get_storage_usage(9101)
+    assert usage.reserved_bytes == 0
+
+
+@pytest.mark.asyncio
+async def test_postgres_retention_claim_fences_timeline_save(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given retention atomically claims an unreferenced asset under the workspace lock.
+    storage = PostgresMediaAssetStorage()
+    service = MediaAssetService(LocalStorageBackend(str(tmp_path)), storage)
+    asset = await service.create_image_asset(
+        workspace_id=9101, project_id=9101, filename="race.png",
+        data=image_bytes(), content_type="image/png",
+    )
+    claim_token = await storage.claim_retained_asset(asset.id, 9101)
+    timeline = Timeline.model_validate({
+        "id": "retention-race", "project_id": 9101, "revision": 0,
+        "segments": [{
+            "id": "segment", "scene_id": "scene", "asset_id": asset.id,
+            "timeline_start_seconds": 0, "duration_seconds": 1,
+        }],
+    })
+
+    # When Timeline save races after the claim becomes visible.
+    with pytest.raises(ValidationError):
+        await TimelineService(PostgresTimelineStorage()).save_timeline(
+            project_id=9101, workspace_id=9101, timeline=timeline, expected_revision=0,
+        )
+
+    # Then lookup rejects the deleting asset and the claim can be rolled back safely.
+    assert claim_token is not None
+    assert await service.get_asset(asset.id, 9101) is None
+    await storage.release_retained_asset(asset.id, 9101, claim_token)
+    assert await service.get_asset(asset.id, 9101) is not None
+
+
+@pytest.mark.asyncio
+async def test_postgres_retention_successor_reclaims_expired_claim_once(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given a worker dies after claiming an eligible asset.
+    storage = PostgresMediaAssetStorage()
+    service = MediaAssetService(LocalStorageBackend(str(tmp_path)), storage)
+    asset = await service.create_image_asset(
+        workspace_id=9101, project_id=9101, filename="orphaned-claim.png",
+        data=image_bytes(), content_type="image/png",
+    )
+    abandoned_token = await storage.claim_retained_asset(asset.id, 9101)
+    assert abandoned_token is not None
+    await db.execute(
+        """UPDATE creator_media_asset_deletion_claims
+            SET lease_expires_at = now() - interval '1 second' WHERE asset_id = $1""",
+        asset.id,
+    )
+
+    # When a successor enumerates candidates and claims the restored asset.
+    candidates = await storage.list_retention_assets(9101, 100)
+    successor_token = await storage.claim_retained_asset(asset.id, 9101)
+
+    # Then the stale owner cannot release while only finalization can remove metadata.
+    assert [candidate.id for candidate in candidates] == [asset.id]
+    assert successor_token is not None and successor_token != abandoned_token
+    await storage.release_retained_asset(asset.id, 9101, abandoned_token)
+    assert await service.get_asset(asset.id, 9101) is None
+    assert await storage.claim_retained_asset(asset.id, 9101) is None
+
+
+@pytest.mark.asyncio
+async def test_postgres_retention_successor_finalizes_already_deleted_object(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given a worker deletes the object and dies before deleting claimed metadata.
+    objects = LocalStorageBackend(str(tmp_path))
+    storage = PostgresMediaAssetStorage()
+    service = MediaAssetService(objects, storage)
+    asset = await service.create_image_asset(
+        workspace_id=9101, project_id=9101, filename="deleted-before-crash.png",
+        data=image_bytes(), content_type="image/png",
+    )
+    abandoned_token = await storage.claim_retained_asset(asset.id, 9101)
+    assert abandoned_token is not None
+    assert objects.delete(asset.storage_key)
+    await db.execute(
+        """UPDATE creator_media_assets SET created_at = now() - interval '30 days'
+            WHERE id = $1""",
+        asset.id,
+    )
+    await db.execute(
+        """UPDATE creator_media_asset_deletion_claims
+            SET lease_expires_at = now() - interval '1 second' WHERE asset_id = $1""",
+        asset.id,
+    )
+    retention = MediaRetentionService(
+        storage,
+        objects,
+        MediaRetentionPolicy(original_days=1, grace_days=0, enabled=True, dry_run=False),
+    )
+
+    # When a successor sweeps the expired claim twice.
+    first = await retention.sweep_workspace(9101, now=datetime.now(timezone.utc))
+    second = await retention.sweep_workspace(9101, now=datetime.now(timezone.utc))
+
+    # Then metadata and charged capacity are released exactly once.
+    assert first.deleted == 1
+    assert second.deleted == 0
+    usage = await storage.get_storage_usage(9101)
+    assert usage.stored_asset_count == 0
+    assert usage.stored_bytes == 0
+
+
+@pytest.mark.asyncio
+async def test_postgres_objectless_asset_stays_fenced_until_successor_finalizes(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given finalization deletes the object, then fails before metadata can commit.
+    objects = LocalStorageBackend(str(tmp_path))
+    storage = PostgresMediaAssetStorage()
+    service = MediaAssetService(objects, storage)
+    asset = await service.create_image_asset(
+        workspace_id=9101, project_id=9101, filename="ambiguous-finalize.png",
+        data=image_bytes(), content_type="image/png",
+    )
+    await db.execute(
+        "UPDATE creator_media_assets SET created_at = now() - interval '30 days' WHERE id = $1",
+        asset.id,
+    )
+    assert asset.storage_key is not None
+    claim_token = await storage.claim_retained_asset(asset.id, 9101)
+    assert claim_token is not None
+
+    async def delete_then_fail() -> None:
+        objects.delete(asset.storage_key)
+        raise OSError("database unavailable after object deletion")
+
+    with pytest.raises(OSError, match="database unavailable"):
+        await storage.finalize_retained_asset(
+            asset.id, 9101, claim_token, delete_then_fail,
+        )
+    assert not (tmp_path / asset.storage_key).exists()
+
+    timeline = Timeline.model_validate({
+        "id": "objectless-fenced", "project_id": 9101, "revision": 0,
+        "segments": [{
+            "id": "segment", "scene_id": "scene", "asset_id": asset.id,
+            "timeline_start_seconds": 0, "duration_seconds": 1,
+        }],
+    })
+
+    # When Timeline save and exact-revision approval encounter the surviving fence.
+    with pytest.raises(ValidationError):
+        await TimelineService(PostgresTimelineStorage()).save_timeline(
+            project_id=9101, workspace_id=9101, timeline=timeline, expected_revision=0,
+        )
+    await db.execute(
+        """INSERT INTO creator_timelines (
+                project_id, workspace_id, timeline_id, revision, segments_json
+            ) VALUES ($1, $2, $3, $4, $5::jsonb)""",
+        9101, 9101, "objectless-fenced", 1,
+        json.dumps([{"id": "segment", "asset_id": asset.id}]),
+    )
+    await db.execute(
+        """UPDATE creator_media_asset_deletion_claims
+            SET lease_expires_at = now() - interval '1 second' WHERE asset_id = $1""",
+        asset.id,
+    )
+    with pytest.raises(ValueError, match="Approved Timeline revision not found"):
+        await PostgresStageReviewStorage().create_review({
+            "run_id": 9101, "stage_name": "TIMELINE_REVIEW", "review_status": "approved",
+            "reviewer": "human", "notes": '{"timeline_id":"objectless-fenced","revision":1}',
+        })
+
+    # Then a successor takes over the expired lease and idempotently removes metadata.
+    await db.execute("DELETE FROM creator_timelines WHERE project_id = $1", 9101)
+    successor = MediaRetentionService(
+        storage, LocalStorageBackend(str(tmp_path)),
+        MediaRetentionPolicy(original_days=1, grace_days=0, enabled=True, dry_run=False),
+    )
+    result = await successor.sweep_workspace(9101, now=datetime.now(timezone.utc))
+    assert result.deleted == 1
+    assert await db.fetch_one(
+        "SELECT id FROM creator_media_assets WHERE id = $1", asset.id,
+    ) is None
+
+
+@pytest.mark.asyncio
+async def test_postgres_retention_scans_past_protected_page(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given 101 old assets where the first 100 are protected by one Timeline.
+    objects = LocalStorageBackend(str(tmp_path))
+    storage = PostgresMediaAssetStorage()
+    service = MediaAssetService(objects, storage)
+    assets = [
+        await service.create_image_asset(
+            workspace_id=9101, project_id=9101, filename=f"asset-{index}.png",
+            data=image_bytes(), content_type="image/png",
+        )
+        for index in range(101)
+    ]
+    await db.execute(
+        "UPDATE creator_media_assets SET created_at = now() - interval '30 days'",
+    )
+    await db.execute(
+        """INSERT INTO creator_timelines (
+                project_id, workspace_id, timeline_id, revision, segments_json
+            ) VALUES ($1, $2, $3, $4, $5::jsonb)""",
+        9101, 9101, "protected-page", 1,
+        json.dumps([{"id": str(asset.id), "asset_id": asset.id} for asset in assets[:100]]),
+    )
+
+    # When retention requests one deletion.
+    result = await MediaRetentionService(
+        storage,
+        objects,
+        MediaRetentionPolicy(original_days=1, grace_days=0, enabled=True, dry_run=False),
+    ).sweep_workspace(9101, now=datetime.now(timezone.utc), limit=1)
+
+    # Then keyset scanning reaches and removes the eligible 101st asset.
+    assert result.deleted == 1
+    assert await service.get_asset(assets[-1].id, 9101) is None
+    assert await service.get_asset(assets[0].id, 9101) is not None
+
+
+@pytest.mark.asyncio
+async def test_postgres_approval_deduplicates_reused_timeline_asset(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given a persisted Timeline revision reuses one asset in two segments.
+    service = MediaAssetService(LocalStorageBackend(str(tmp_path)))
+    asset = await service.create_image_asset(
+        workspace_id=9101, project_id=9101, filename="reused.png",
+        data=image_bytes(), content_type="image/png",
+    )
+    await db.execute(
+        """INSERT INTO creator_timelines (
+                project_id, workspace_id, timeline_id, revision, segments_json
+            ) VALUES ($1, $2, $3, $4, $5::jsonb)""",
+        9101, 9101, "reused-asset", 3,
+        json.dumps([
+            {"id": "one", "asset_id": asset.id},
+            {"id": "two", "asset_id": asset.id},
+        ]),
+    )
+
+    # When that exact revision is approved.
+    review = await PostgresStageReviewStorage().create_review({
+        "run_id": 9101, "stage_name": "TIMELINE_REVIEW", "review_status": "approved",
+        "reviewer": "human", "notes": '{"timeline_id":"reused-asset","revision":3}',
+    })
+
+    # Then the normalized mapping contains exactly one row for the reused asset.
+    rows = await db.fetch_all(
+        "SELECT asset_id FROM creator_approved_timeline_assets WHERE review_id = $1",
+        int(review["id"]),
+    )
+    assert rows == [{"asset_id": asset.id}]
+
+
+@pytest.mark.asyncio
+async def test_postgres_legacy_approval_without_mapping_remains_protected(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given an approval predates normalized mapping rows.
+    service = MediaAssetService(LocalStorageBackend(str(tmp_path)))
+    asset = await service.create_image_asset(
+        workspace_id=9101, project_id=9101, filename="legacy-approved.png",
+        data=image_bytes(), content_type="image/png",
+    )
+    await db.execute(
+        """INSERT INTO creator_timelines (
+                project_id, workspace_id, timeline_id, revision, segments_json
+            ) VALUES ($1, $2, $3, $4, $5::jsonb)""",
+        9101, 9101, "legacy-approved", 4,
+        f'[{{"id":"only","asset_id":{asset.id}}}]',
+    )
+    await db.execute(
+        """INSERT INTO creator_stage_reviews (
+                run_id, stage_name, review_status, reviewer, notes
+            ) VALUES ($1, 'TIMELINE_REVIEW', 'approved', 'legacy', $2)""",
+        9101, '{"timeline_id":"legacy-approved","revision":4}',
+    )
+
+    # When retention resolves approved assets.
+    approved = await PostgresMediaAssetStorage().approved_asset_ids(9101)
+
+    # Then the legacy approved revision remains protected without a mapping row.
+    assert asset.id in approved
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("notes", [None, "human approval", "{broken", '{"timeline_id":"legacy","revision":"old"}'])
+async def test_postgres_malformed_legacy_approval_fails_closed(
+    media_database: None, tmp_path: Path, notes: str | None,
+) -> None:
+    # Given an approved legacy review has notes that cannot identify a revision.
+    service = MediaAssetService(LocalStorageBackend(str(tmp_path)))
+    asset = await service.create_image_asset(
+        workspace_id=9101, project_id=9101, filename="legacy-fail-closed.png",
+        data=image_bytes(), content_type="image/png",
+    )
+    await db.execute(
+        """INSERT INTO creator_timelines (
+                project_id, workspace_id, timeline_id, revision, segments_json
+            ) VALUES ($1, $2, $3, $4, $5::jsonb)""",
+        9101, 9101, "legacy", 2, json.dumps([{"id": "only", "asset_id": asset.id}]),
+    )
+    await db.execute(
+        """INSERT INTO creator_stage_reviews (
+                run_id, stage_name, review_status, reviewer, notes
+            ) VALUES ($1, 'TIMELINE_REVIEW', 'approved', 'legacy', $2)""",
+        9101, notes,
+    )
+
+    # When retention resolves approved assets.
+    approved = await PostgresMediaAssetStorage().approved_asset_ids(9101)
+
+    # Then malformed historical data does not abort and the asset remains protected.
+    assert asset.id in approved
+
+
+@pytest.mark.asyncio
+async def test_postgres_replaced_historical_approval_forces_dry_run(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given revision N was approved before the mutable Timeline advanced to N+1.
+    objects = LocalStorageBackend(str(tmp_path))
+    service = MediaAssetService(objects)
+    approved_asset = await service.create_image_asset(
+        workspace_id=9101, project_id=9101, filename="historical-approved.png",
+        data=image_bytes(), content_type="image/png",
+    )
+    current_asset = await service.create_image_asset(
+        workspace_id=9101, project_id=9101, filename="current.png",
+        data=image_bytes(), content_type="image/png",
+    )
+    await db.execute(
+        """INSERT INTO creator_timelines (
+                project_id, workspace_id, timeline_id, revision, segments_json
+            ) VALUES ($1, $2, $3, $4, $5::jsonb)""",
+        9101, 9101, "advanced", 1,
+        json.dumps([{"id": "approved", "asset_id": approved_asset.id}]),
+    )
+    await db.execute(
+        """INSERT INTO creator_stage_reviews (
+                run_id, stage_name, review_status, reviewer, notes
+            ) VALUES ($1, 'TIMELINE_REVIEW', 'approved', 'legacy', $2)""",
+        9101, '{"timeline_id":"advanced","revision":1}',
+    )
+    await db.execute(
+        """UPDATE creator_timelines SET revision = 2, segments_json = $2::jsonb
+            WHERE project_id = $1""",
+        9101, json.dumps([{"id": "current", "asset_id": current_asset.id}]),
+    )
+    await db.execute(
+        """UPDATE creator_media_assets SET created_at = now() - interval '30 days'
+            WHERE id = $1""",
+        approved_asset.id,
+    )
+
+    # When destructive retention encounters the unresolved historical approval.
+    result = await MediaRetentionService(
+        PostgresMediaAssetStorage(), objects,
+        MediaRetentionPolicy(original_days=1, grace_days=0, enabled=True, dry_run=False),
+    ).sweep_workspace(9101, now=datetime.now(timezone.utc))
+
+    # Then it reports only: the historical asset remains physically and logically present.
+    assert result.dry_run is True
+    assert result.candidates == 1
+    assert result.deleted == 0
+    assert await service.get_asset(approved_asset.id, 9101) is not None
+
+
+@pytest.mark.asyncio
+async def test_postgres_malformed_historical_approval_protects_noncurrent_asset(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given malformed approval notes may refer to an old asset absent from the current Timeline.
+    objects = LocalStorageBackend(str(tmp_path))
+    service = MediaAssetService(objects)
+    historical_asset = await service.create_image_asset(
+        workspace_id=9101, project_id=9101, filename="unknown-approved.png",
+        data=image_bytes(), content_type="image/png",
+    )
+    await db.execute(
+        """INSERT INTO creator_stage_reviews (
+                run_id, stage_name, review_status, reviewer, notes
+            ) VALUES ($1, 'TIMELINE_REVIEW', 'approved', 'legacy', $2)""",
+        9101, f'{{"asset_id":{historical_asset.id},"revision":"broken"}}',
+    )
+    await db.execute(
+        """UPDATE creator_media_assets SET created_at = now() - interval '30 days'
+            WHERE id = $1""",
+        historical_asset.id,
+    )
+
+    # When destructive retention encounters the unresolvable approval.
+    result = await MediaRetentionService(
+        PostgresMediaAssetStorage(), objects,
+        MediaRetentionPolicy(original_days=1, grace_days=0, enabled=True, dry_run=False),
+    ).sweep_workspace(9101, now=datetime.now(timezone.utc))
+
+    # Then the workspace is report-only and the possibly approved asset remains protected.
+    assert result.dry_run is True
+    assert result.deleted == 0
+    assert await service.get_asset(historical_asset.id, 9101) is not None
+
+
+@pytest.mark.asyncio
+async def test_postgres_claimed_asset_rejects_concurrent_timeline_approval(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given retention has won the workspace lock and actively claimed an exact-revision asset.
+    storage = PostgresMediaAssetStorage()
+    service = MediaAssetService(LocalStorageBackend(str(tmp_path)), storage)
+    asset = await service.create_image_asset(
+        workspace_id=9101, project_id=9101, filename="claimed-before-approval.png",
+        data=image_bytes(), content_type="image/png",
+    )
+    claim_token = await storage.claim_retained_asset(asset.id, 9101)
+    assert claim_token is not None
+    await db.execute(
+        """INSERT INTO creator_timelines (
+                project_id, workspace_id, timeline_id, revision, segments_json
+            ) VALUES ($1, $2, $3, $4, $5::jsonb)""",
+        9101, 9101, "claimed", 1,
+        json.dumps([{"id": "claimed", "asset_id": asset.id}]),
+    )
+
+    # When approval attempts to commit the same exact revision.
+    with pytest.raises(ValueError, match="Approved Timeline revision not found"):
+        await PostgresStageReviewStorage().create_review({
+            "run_id": 9101, "stage_name": "TIMELINE_REVIEW", "review_status": "approved",
+            "reviewer": "human", "notes": '{"timeline_id":"claimed","revision":1}',
+        })
+
+    # Then the approval rolls back without an approved review or partial asset mapping.
+    reviews = await db.fetch_all(
+        """SELECT id FROM creator_stage_reviews
+            WHERE run_id = $1 AND stage_name = 'TIMELINE_REVIEW'""",
+        9101,
+    )
+    mappings = await db.fetch_all(
+        "SELECT asset_id FROM creator_approved_timeline_assets WHERE asset_id = $1",
+        asset.id,
+    )
+    assert reviews == []
+    assert mappings == []
+
+
+@pytest.mark.asyncio
+async def test_postgres_expired_retention_claim_yields_to_timeline_approval(
+    media_database: None, tmp_path: Path,
+) -> None:
+    # Given retention claims an eligible asset and its lease expires before approval.
+    objects = LocalStorageBackend(str(tmp_path))
+    storage = PostgresMediaAssetStorage()
+    service = MediaAssetService(objects, storage)
+    asset = await service.create_image_asset(
+        workspace_id=9101, project_id=9101, filename="approved-after-expiry.png",
+        data=image_bytes(), content_type="image/png",
+    )
+    await db.execute(
+        """UPDATE creator_media_assets SET created_at = now() - interval '30 days'
+            WHERE id = $1""",
+        asset.id,
+    )
+    stale_token = await storage.claim_retained_asset(asset.id, 9101)
+    assert stale_token is not None
+    await db.execute(
+        """UPDATE creator_media_asset_deletion_claims
+            SET lease_expires_at = now() - interval '1 second' WHERE asset_id = $1""",
+        asset.id,
+    )
+    await db.execute(
+        """INSERT INTO creator_timelines (
+                project_id, workspace_id, timeline_id, revision, segments_json
+            ) VALUES ($1, $2, $3, $4, $5::jsonb)""",
+        9101, 9101, "approved-after-expiry", 1,
+        json.dumps([{"id": "approved", "asset_id": asset.id}]),
+    )
+    review = await PostgresStageReviewStorage().create_review({
+        "run_id": 9101, "stage_name": "TIMELINE_REVIEW", "review_status": "approved",
+        "reviewer": "human", "notes": '{"timeline_id":"approved-after-expiry","revision":1}',
+    })
+    assert asset.storage_key is not None
+
+    async def delete_object() -> None:
+        await anyio.to_thread.run_sync(objects.delete, asset.storage_key)
+
+    # When the stale claimant resumes final object and metadata deletion.
+    deleted = await storage.finalize_retained_asset(
+        asset.id, 9101, stale_token, delete_object,
+    )
+
+    # Then approval wins: both object metadata and its exact approval mapping remain intact.
+    mappings = await db.fetch_all(
+        "SELECT asset_id FROM creator_approved_timeline_assets WHERE review_id = $1",
+        int(review["id"]),
+    )
+    assert deleted is False
+    assert await service.get_asset(asset.id, 9101) is not None
+    assert objects.download_bytes(asset.storage_key) == image_bytes()
+    assert mappings == [{"asset_id": asset.id}]
+
+
+@pytest.mark.asyncio
+async def test_postgres_empty_approved_revision_is_resolved(
+    media_database: None,
+) -> None:
+    # Given an exact Timeline revision with no MediaAsset segments.
+    await db.execute(
+        """INSERT INTO creator_timelines (
+                project_id, workspace_id, timeline_id, revision, segments_json
+            ) VALUES ($1, $2, $3, $4, $5::jsonb)""",
+        9101, 9101, "empty-approved", 1, "[]",
+    )
+    await PostgresStageReviewStorage().create_review({
+        "run_id": 9101, "stage_name": "TIMELINE_REVIEW", "review_status": "approved",
+        "reviewer": "human", "notes": '{"timeline_id":"empty-approved","revision":1}',
+    })
+
+    # When retention checks the explicit approval-resolution marker.
+    resolved = await PostgresMediaAssetStorage().retention_approvals_resolved(9101)
+
+    # Then a valid empty approval does not quarantine the workspace.
+    assert resolved is True
