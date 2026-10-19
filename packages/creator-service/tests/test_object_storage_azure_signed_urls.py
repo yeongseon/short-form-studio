@@ -28,7 +28,9 @@ def _install_fake_azure(account_key: str | None = "secret") -> None:
             self.credential = types.SimpleNamespace(account_key=account_key)
 
         @classmethod
-        def from_connection_string(cls, _conn: str) -> "_BlobServiceClient":
+        def from_connection_string(
+            cls, _conn: str, **_kwargs: int,
+        ) -> "_BlobServiceClient":
             return cls()
 
         def get_container_client(self, _container: str) -> _ContainerClient:

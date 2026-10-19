@@ -20,6 +20,15 @@ from .media_asset_storage import (
     MediaAssetStorageBackend as MediaAssetStorageBackend,
     MediaStorageBackend as MediaStorageBackend,
 )
+from .media_upload_reconciliation import (
+    DEFAULT_UPLOAD_LEASE,
+    MediaAssetPersistenceFailed,
+    MediaAssetPersistenceIndeterminate,
+    UploadIntent,
+    UploadIntentState,
+    UPLOAD_OPERATION_DEADLINE,
+)
+from .object_storage import StorageDeletionError
 from .media_probe import (
     ProbeResult as ProbeResult,
     _ProbedMetadata,
@@ -158,6 +167,12 @@ class MediaAssetService:
             "asset_path", "size_bytes", "checksum", "storage_provider", "original_filename",
         }
         annotations = {key: value for key, value in (metadata or {}).items() if key not in owned}
+        now = datetime.now(timezone.utc)
+        intent = await self._asset_storage.create_upload_intent(UploadIntent(
+            id=0, owner_id=uuid.uuid4().hex, workspace_id=workspace_id,
+            storage_key=storage_key, state=UploadIntentState.PENDING,
+            lease_expires_at=now + DEFAULT_UPLOAD_LEASE, created_at=now,
+        ))
         await anyio.lowlevel.checkpoint()
         # Once upload starts, retain ownership through the async metadata save.
         with anyio.CancelScope(shield=True):
@@ -167,7 +182,17 @@ class MediaAssetService:
                         return self._backend().upload(storage_key, stream, content_type=canonical_mime)
                 return self._backend().upload(storage_key, data, content_type=canonical_mime)
 
-            result = await self._io.run(upload_data)
+            try:
+                with anyio.fail_after(UPLOAD_OPERATION_DEADLINE.total_seconds()):
+                    result = await self._io.run(upload_data)
+            except TimeoutError:
+                await self._compensate_upload(intent, storage_key)
+                raise MediaAssetPersistenceFailed() from None
+            try:
+                await self._asset_storage.mark_upload_intent_uploaded(intent.id)
+            except MediaAssetPersistenceFailed:
+                await self._compensate_upload(intent, result.key)
+                raise
             row: dict[str, object] = {
                 "workspace_id": workspace_id, "project_id": project_id, "run_id": run_id,
                 "media_type": media_type.value, "origin": origin.value,
@@ -178,10 +203,24 @@ class MediaAssetService:
                     **annotations, "size_bytes": result.size_bytes, "checksum": result.checksum,
                     "storage_provider": result.storage_provider, "original_filename": safe_name,
                 },
-                "created_at": datetime.now(timezone.utc),
+                "created_at": now,
             }
-            saved = await self._asset_storage.save_asset(row)
+            try:
+                saved = await self._asset_storage.save_uploaded_asset(row, intent)
+            except MediaAssetPersistenceIndeterminate:
+                raise
+            except MediaAssetPersistenceFailed:
+                await self._compensate_upload(intent, result.key)
+                raise
         return MediaAsset.model_validate(saved)
+
+    async def _compensate_upload(self, intent: UploadIntent, storage_key: str) -> None:
+        try:
+            await self._io.run(partial(self._backend().delete, storage_key))
+        except StorageDeletionError:
+            await self._asset_storage.compensate_upload(intent, deletion_failed=True)
+        else:
+            await self._asset_storage.compensate_upload(intent, deletion_failed=False)
 
     async def get_asset(self, asset_id: int, workspace_id: int) -> MediaAsset | None:
         row = await self._asset_storage.get_asset(asset_id, workspace_id)

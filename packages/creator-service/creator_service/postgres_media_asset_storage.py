@@ -1,11 +1,17 @@
 from __future__ import annotations
 
 import json
-
+import asyncpg
 from creator_domain.models import MediaAsset
 from pydantic import TypeAdapter
 
 from . import db
+from .media_upload_reconciliation import (
+    MediaAssetPersistenceFailed,
+    MediaAssetPersistenceIndeterminate,
+    UploadIntent,
+)
+from .postgres_upload_intent_storage import PostgresUploadIntentStorage
 
 _METADATA = TypeAdapter(dict[str, object])
 _FILTER = """
@@ -21,7 +27,7 @@ _ORDER = """
 """
 
 
-class MediaAssetAssociationRejected(ValueError):
+class MediaAssetAssociationRejected(MediaAssetPersistenceFailed, ValueError):
     """A referenced project or run does not belong to the asset's workspace/project."""
 
 
@@ -32,11 +38,11 @@ def _decode_asset(row: dict[str, object]) -> dict[str, object]:
     return MediaAsset.model_validate({**row, "metadata": metadata}).model_dump()
 
 
-class PostgresMediaAssetStorage:
+class PostgresMediaAssetStorage(PostgresUploadIntentStorage):
     async def save_asset(self, row: dict[str, object]) -> dict[str, object]:
         asset = MediaAsset.model_validate({**row, "id": 1})
-        saved = await db.fetch_one(
-            """
+        try:
+            saved = await db.fetch_one("""
             INSERT INTO creator_media_assets (
                 workspace_id, project_id, run_id, media_type, origin, storage_key,
                 mime_type, width, height, duration_seconds, source_url, metadata, created_at
@@ -54,10 +60,57 @@ class PostgresMediaAssetStorage:
             asset.origin.value, asset.storage_key, asset.mime_type, asset.width, asset.height,
             asset.duration_seconds, asset.source_url,
             json.dumps(asset.metadata, allow_nan=False), asset.created_at,
-        )
+            )
+        except (OSError, asyncpg.PostgresConnectionError, asyncpg.InterfaceError) as error:
+            raise MediaAssetPersistenceIndeterminate() from error
+        except asyncpg.PostgresError as error:
+            raise MediaAssetPersistenceFailed() from error
         if saved is None:
             raise MediaAssetAssociationRejected("Media asset association not found")
         return _decode_asset(saved)
+
+    async def save_uploaded_asset(
+        self, row: dict[str, object], intent: UploadIntent,
+    ) -> dict[str, object]:
+        asset = MediaAsset.model_validate({**row, "id": 1})
+        try:
+            pool = await db.get_pool()
+            async with pool.acquire() as connection, connection.transaction():
+                claimed = await connection.fetchval(
+                    """UPDATE creator_media_upload_intents
+                        SET state = 'completed', updated_at = NOW()
+                        WHERE id = $1 AND owner_id = $2 AND state = 'uploaded'
+                        RETURNING id""",
+                    intent.id, intent.owner_id,
+                )
+                if claimed is None:
+                    raise MediaAssetPersistenceFailed()
+                saved = await connection.fetchrow(
+                    """INSERT INTO creator_media_assets (
+                        workspace_id, project_id, run_id, media_type, origin, storage_key,
+                        mime_type, width, height, duration_seconds, source_url, metadata, created_at
+                    ) SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::jsonb, $13
+                    WHERE ($2::integer IS NULL OR EXISTS (
+                        SELECT 1 FROM creator_projects WHERE id = $2 AND workspace_id = $1
+                    )) AND ($3::integer IS NULL OR EXISTS (
+                        SELECT 1 FROM creator_runs WHERE id = $3 AND workspace_id = $1
+                            AND ($2::integer IS NULL OR project_id = $2)
+                    ))
+                    RETURNING *""",
+                    asset.workspace_id, asset.project_id, asset.run_id, asset.media_type.value,
+                    asset.origin.value, asset.storage_key, asset.mime_type, asset.width,
+                    asset.height, asset.duration_seconds, asset.source_url,
+                    json.dumps(asset.metadata, allow_nan=False), asset.created_at,
+                )
+                if saved is None:
+                    raise MediaAssetPersistenceFailed()
+        except MediaAssetPersistenceFailed:
+            raise
+        except (OSError, asyncpg.PostgresConnectionError, asyncpg.InterfaceError) as error:
+            raise MediaAssetPersistenceIndeterminate() from error
+        except asyncpg.PostgresError as error:
+            raise MediaAssetPersistenceFailed() from error
+        return _decode_asset(dict(saved))
 
     async def get_asset(self, asset_id: int, workspace_id: int) -> dict[str, object] | None:
         row = await db.fetch_one(

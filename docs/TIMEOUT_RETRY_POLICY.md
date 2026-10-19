@@ -22,6 +22,21 @@ This document describes the timeout and retry configuration for all pipeline tas
 
 ## How Timeouts Work
 
+### Media Upload Object-I/O and Reconciliation
+
+S3 and Azure clients use a 30-second connection timeout and a 10-minute read
+timeout. The upload service's operation deadline is 30 minutes. If reconciliation
+claims an upload that was still `pending`, successful deletion is not proof that
+the blocking provider call has returned: S3 deletion is idempotent, and an
+in-flight local or Azure upload can rewrite the key. Such intents therefore stay
+in `late_upload_watch` and are retried hourly even after successful deletion.
+
+The local write and stream-spooling paths cannot enforce the service deadline
+while blocking I/O is active. A `pending` or `late_upload_watch` intent therefore
+cannot become terminal based on elapsed wall time alone. Its sweepable tombstone
+remains until the uploader durably records completion or compensation, so a key
+that materializes after an arbitrarily delayed blocking call is still reclaimed.
+
 ### Soft Time Limit (`soft_time_limit`)
 Raises `SoftTimeLimitExceeded` inside the task. The task can catch this and
 perform cleanup (save partial results, update status to FAILED).
