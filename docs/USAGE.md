@@ -300,15 +300,6 @@ Configure the window with the `ARTIFACT_RETENTION_DAYS` env var (values
 To exempt a specific artifact from expiry, set `expires_at = NULL`
 explicitly on its row (e.g. for a published/keep-forever artifact).
 
-Workspace MediaAsset budgets and `MEDIA_RETENTION_*` windows do not currently
-cover these generated worker outputs. Scene images are recorded in
-`creator_scene_assets`; audio, subtitles, and rendered video are recorded in
-`creator_artifacts`. Their bytes are therefore absent from the MediaAsset storage
-usage response, and `MEDIA_TEMP_DISK_LOW_WATERMARK_BYTES` does not reject their
-local generation. They remain governed by the artifact expiration process above.
-Operators must size and monitor `ARTIFACT_ROOT` separately until worker output
-publication uses the same durable workspace reservation ledger.
-
 Requires Celery Beat to be running (see the `beat` service in
 `docker-compose.yml`). Downloads return `410 Gone` once `expires_at` passes.
 

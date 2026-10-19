@@ -68,19 +68,9 @@ write. Repeated sweeps release capacity exactly once.
 `MEDIA_MAX_RESERVED_BYTES` default to `0` (unlimited). The authenticated
 `GET /api/creator/workspaces/{workspace_id}/assets/storage-usage` response shows
 stored and in-flight usage plus configured limits. Budget rejection is HTTP 413
-with error code `STORAGE_BUDGET`. These limits and usage totals cover
-`creator_media_assets` and `creator_media_upload_intents` only. Worker outputs
-published through `SceneBatch.upload` or `store_artifact_file` remain represented
-by `creator_scene_assets` and `creator_artifacts`; they are not reserved, counted,
-or converted by this ledger. Counting those rows here without routing publication
-through one workspace-aware reservation transaction would either double-count
-objects shared with MediaAsset rows or publish an object before durable capacity
-is secured.
-
-`MEDIA_TEMP_DISK_LOW_WATERMARK_BYTES` defaults to `0`; when positive it blocks
-MediaAsset upload staging. It does not currently gate the local image, audio,
-subtitle, or video generation that writes the legacy worker-output tables. Reads,
-downloads, and cleanup remain available.
+with error code `STORAGE_BUDGET`. `MEDIA_TEMP_DISK_LOW_WATERMARK_BYTES` defaults
+to `0`; when positive it blocks new upload staging and generation writes without
+blocking reads, downloads, or cleanup.
 
 ## Media retention safety
 
@@ -90,10 +80,6 @@ disabled (`MEDIA_RETENTION_ENABLED=false`) and dry-run
 video windows default to `0`, so no arbitrary age policy is activated. Positive
 windows are configured independently with `MEDIA_RETENTION_ORIGINAL_DAYS`,
 `MEDIA_RETENTION_INTERMEDIATE_DAYS`, and `MEDIA_RETENTION_FINAL_VIDEO_DAYS`.
-These windows apply only to `creator_media_assets`. Legacy scene and artifact
-rows continue to use their existing artifact expiration behavior; in particular,
-`MEDIA_RETENTION_FINAL_VIDEO_DAYS` does not classify or retain videos in
-`creator_artifacts`.
 
 Candidates must also pass `MEDIA_RETENTION_GRACE_DAYS` (default 7), exact
 workspace-key ownership, current Timeline references, and approved-review
