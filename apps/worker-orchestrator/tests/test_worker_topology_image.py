@@ -328,8 +328,9 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
     assert timeout_quota["estimated_cost_usd"] == Decimal("0.080000")
     assert timeout_attempt is not None and timeout_attempt["status"] == "unknown"
     assert timeout_assets is not None
-    assert Path(timeout_assets["asset_path"]).is_file()
-    assert timeout_files == [Path(timeout_assets["asset_path"])]
+    persisted_file = EVIDENCE / Path(timeout_assets["asset_path"]).relative_to("/evidence")
+    assert persisted_file.is_file()
+    assert timeout_files == [persisted_file]
     replacement = EVIDENCE / "timeout-replacement.json"
     new_run(109)
     send(109, "timeout-replacement", "complete", replacement, queue="image")

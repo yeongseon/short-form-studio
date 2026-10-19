@@ -207,8 +207,9 @@ def test_failure_scenario_uses_exact_scaled_command_and_container_process_namesp
     assert "active-redelivery" in scenario
     assert "send_scene_image" in scenario
     assert 'scene_id=\'scene-persisted\'' in scenario
-    assert 'Path(timeout_assets["asset_path"]).is_file()' in scenario
-    assert 'timeout_files == [Path(timeout_assets["asset_path"])]' in scenario
+    assert 'Path(timeout_assets["asset_path"]).relative_to("/evidence")' in scenario
+    assert "persisted_file.is_file()" in scenario
+    assert "timeout_files == [persisted_file]" in scenario
     assert "timeout-replacement" in scenario
 
 
