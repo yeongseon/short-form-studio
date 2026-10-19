@@ -8,6 +8,7 @@ import asyncpg
 import pytest
 
 from creator_service.dispatch_reconciler import DispatchReconciler
+from creator_service.broker_recovery import BrokerSnapshot, recover_lost_tasks
 from creator_service.memory_task_tracking_storage import InMemoryTaskTrackingStorage
 from creator_service.postgres_task_tracking_storage import PostgresTaskTrackingStorage
 from creator_service.postgres_usage_storage import PostgresUsageStorage
@@ -98,7 +99,7 @@ async def test_broker_epoch_witness_survives_recovery_process_state_loss(
         if quota_pool is not None
         else InMemoryTaskTrackingStorage()
     )
-    await first_storage.set_observed_broker_epoch("epoch-a")
+    await first_storage.set_observed_broker_epoch("epoch-a", None)
     second_storage = (
         PostgresTaskTrackingStorage()
         if quota_pool is not None
@@ -137,7 +138,7 @@ async def test_first_broker_observation_adopts_legacy_active_tasks_atomically(
         )
 
     # When the process establishes its first durable broker observation.
-    await tracking.set_observed_broker_epoch("epoch-a")
+    await tracking.set_observed_broker_epoch("epoch-a", None)
 
     # Then all active legacy rows belong to that generation; success stays unowned.
     tasks = {task.status: task for task in await tracking.list_run_tasks(run_id)}
@@ -149,13 +150,16 @@ async def test_first_broker_observation_adopts_legacy_active_tasks_atomically(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("quota_pool", ["postgres"], indirect=True)
+@pytest.mark.parametrize("quota_pool", ["memory", "postgres"], indirect=True)
 async def test_concurrent_first_broker_observers_adopt_one_generation(
     quota_pool: asyncpg.Pool | None,
 ) -> None:
-    # Given PostgreSQL legacy rows and two simultaneous first observations.
-    assert quota_pool is not None
-    storage = PostgresTaskTrackingStorage()
+    # Given legacy rows and two simultaneous first observations.
+    storage = (
+        PostgresTaskTrackingStorage()
+        if quota_pool is not None
+        else InMemoryTaskTrackingStorage()
+    )
     run_id = await _prepare_run(quota_pool)
     for status in ("pending", "queued", "running", "success"):
         await storage.create_task(
@@ -170,8 +174,8 @@ async def test_concurrent_first_broker_observers_adopt_one_generation(
 
     # When both observers race to establish different current epochs.
     await asyncio.gather(
-        storage.set_observed_broker_epoch("epoch-a"),
-        storage.set_observed_broker_epoch("epoch-b"),
+        storage.set_observed_broker_epoch("epoch-a", None),
+        storage.set_observed_broker_epoch("epoch-b", None),
     )
 
     # Then every active row adopts the same winning first epoch and success stays NULL.
@@ -182,9 +186,39 @@ async def test_concurrent_first_broker_observers_adopt_one_generation(
         if row["status"] in ("pending", "queued", "running")
     }
     success = next(row for row in rows if row["status"] == "success")
-    assert active_generations in ({"epoch-a"}, {"epoch-b"})
-    assert success["broker_generation"] is None
-    assert await storage.get_observed_broker_epoch() in {"epoch-a", "epoch-b"}
+    stored_epoch = await storage.get_observed_broker_epoch()
+    assert stored_epoch is not None
+    assert active_generations == {stored_epoch}
+    assert success.get("broker_generation") is None
+
+    replacement_epoch = "epoch-b" if stored_epoch == "epoch-a" else "epoch-a"
+    tracking = TaskTrackingService(storage)
+    recovered = await recover_lost_tasks(
+        previous_epoch=stored_epoch,
+        snapshot=BrokerSnapshot(
+            epoch=replacement_epoch,
+            started_at=datetime.now(timezone.utc),
+            queue_length=0,
+            oldest_wait_seconds=0,
+            workers_online=1,
+        ),
+        tracking=tracking,
+        usage=UsageService(
+            PostgresUsageStorage()
+            if quota_pool is not None
+            else InMemoryUsageStorage()
+        ),
+        rollback=lambda _run_id, _task_id: asyncio.sleep(0),
+    )
+    await storage.set_observed_broker_epoch(replacement_epoch, stored_epoch)
+
+    assert recovered.failed == 3
+    assert await storage.get_observed_broker_epoch() == replacement_epoch
+    converged = await storage.list_by_run(run_id)
+    assert all(
+        row["status"] not in ("pending", "queued", "running")
+        for row in converged
+    )
 
 
 @pytest.mark.asyncio

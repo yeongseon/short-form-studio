@@ -171,9 +171,12 @@ async def _reconcile_once() -> dict[str, Any]:
         if should_persist_observed_epoch(
             previous_epoch=previous_epoch, deferred=recovery_deferred
         ):
-            await task_tracking_service.set_observed_broker_epoch(epoch.epoch)
-            _BROKER_EPOCH_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-            _BROKER_EPOCH_STATE_PATH.write_text(epoch.epoch, encoding="utf-8")
+            persisted = await task_tracking_service.set_observed_broker_epoch(
+                epoch.epoch, previous_epoch
+            )
+            if persisted:
+                _BROKER_EPOCH_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+                _BROKER_EPOCH_STATE_PATH.write_text(epoch.epoch, encoding="utf-8")
     except Exception:  # noqa: BLE001 - top-level recovery boundary must fail closed
         logger.warning(
             "Broker recovery evidence unavailable; active work left unchanged",

@@ -341,8 +341,12 @@ class TaskTrackingService:
     async def get_observed_broker_epoch(self) -> str | None:
         return await self.storage.get_observed_broker_epoch()
 
-    async def set_observed_broker_epoch(self, epoch: str) -> None:
-        await self.storage.set_observed_broker_epoch(epoch)
+    async def set_observed_broker_epoch(
+        self, epoch: str, expected_previous_epoch: str | None
+    ) -> bool:
+        return await self.storage.set_observed_broker_epoch(
+            epoch, expected_previous_epoch
+        )
 
     async def mark_failed_if_active(
         self, celery_task_id: str, error_code: str, error_message: str
