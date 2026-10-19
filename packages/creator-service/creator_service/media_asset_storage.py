@@ -61,6 +61,8 @@ class MediaAssetStorageBackend(Protocol):
     async def list_retention_assets(self, workspace_id: int, limit: int) -> list[RetentionAsset]: ...
     async def referenced_asset_ids(self, workspace_id: int) -> frozenset[int]: ...
     async def approved_asset_ids(self, workspace_id: int) -> frozenset[int]: ...
+    async def claim_retained_asset(self, asset_id: int, workspace_id: int) -> bool: ...
+    async def release_retained_asset(self, asset_id: int, workspace_id: int) -> None: ...
     async def delete_retained_asset(self, asset_id: int, workspace_id: int) -> None: ...
 
 
@@ -82,6 +84,7 @@ class InMemoryMediaAssetStorage:
         self._lock = anyio.Lock()
         self._intents: dict[int, UploadIntent] = {}
         self._next_intent_id = 1
+        self._deleting_asset_ids: set[int] = set()
 
     async def save_asset(self, row: dict[str, object]) -> dict[str, object]:
         async with self._lock:
@@ -106,7 +109,11 @@ class InMemoryMediaAssetStorage:
     async def get_asset(self, asset_id: int, workspace_id: int) -> dict[str, object] | None:
         async with self._lock:
             for asset in self._assets:
-                if asset["id"] == asset_id and asset["workspace_id"] == workspace_id:
+                if (
+                    asset["id"] == asset_id
+                    and asset["workspace_id"] == workspace_id
+                    and asset_id not in self._deleting_asset_ids
+                ):
                     return dict(asset)
         return None
 
@@ -329,3 +336,19 @@ class InMemoryMediaAssetStorage:
                 asset for asset in self._assets
                 if not (asset["id"] == asset_id and asset["workspace_id"] == workspace_id)
             ]
+            self._deleting_asset_ids.discard(asset_id)
+
+    async def claim_retained_asset(self, asset_id: int, workspace_id: int) -> bool:
+        async with self._lock:
+            exists = any(
+                asset["id"] == asset_id and asset["workspace_id"] == workspace_id
+                for asset in self._assets
+            )
+            if not exists or asset_id in self._deleting_asset_ids:
+                return False
+            self._deleting_asset_ids.add(asset_id)
+            return True
+
+    async def release_retained_asset(self, asset_id: int, workspace_id: int) -> None:
+        async with self._lock:
+            self._deleting_asset_ids.discard(asset_id)

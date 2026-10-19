@@ -70,6 +70,8 @@ class RetentionStorage(Protocol):
     async def list_retention_assets(self, workspace_id: int, limit: int) -> list[RetentionAsset]: ...
     async def referenced_asset_ids(self, workspace_id: int) -> frozenset[int]: ...
     async def approved_asset_ids(self, workspace_id: int) -> frozenset[int]: ...
+    async def claim_retained_asset(self, asset_id: int, workspace_id: int) -> bool: ...
+    async def release_retained_asset(self, asset_id: int, workspace_id: int) -> None: ...
     async def delete_retained_asset(self, asset_id: int, workspace_id: int) -> None: ...
 
 
@@ -113,8 +115,15 @@ class MediaRetentionService:
             return RetentionSweepResult(len(candidates), 0, True, True)
         deleted = 0
         for asset in candidates:
-            object_deleted = await self._io.run(partial(self._objects.delete, asset.storage_key))
+            if not await self._storage.claim_retained_asset(asset.id, workspace_id):
+                continue
+            try:
+                object_deleted = await self._io.run(partial(self._objects.delete, asset.storage_key))
+            except BaseException:
+                await self._storage.release_retained_asset(asset.id, workspace_id)
+                raise
             if not object_deleted:
+                await self._storage.release_retained_asset(asset.id, workspace_id)
                 continue
             await self._storage.delete_retained_asset(asset.id, workspace_id)
             deleted += 1

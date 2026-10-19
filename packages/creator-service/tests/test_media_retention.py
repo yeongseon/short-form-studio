@@ -72,6 +72,12 @@ async def test_storage_delete_failure_keeps_metadata_accounted() -> None:
         async def approved_asset_ids(self, workspace_id: int):
             return frozenset()
 
+        async def claim_retained_asset(self, asset_id: int, workspace_id: int):
+            return True
+
+        async def release_retained_asset(self, asset_id: int, workspace_id: int):
+            self.deleted.append(-asset_id)
+
         async def delete_retained_asset(self, asset_id: int, workspace_id: int):
             self.deleted.append(asset_id)
 
@@ -87,7 +93,7 @@ async def test_storage_delete_failure_keeps_metadata_accounted() -> None:
     ).sweep_workspace(7, now=datetime.now(timezone.utc))
 
     assert result.deleted == 0
-    assert storage.deleted == []
+    assert storage.deleted == [-1]
 
 
 @pytest.mark.anyio
@@ -107,6 +113,12 @@ async def test_storage_delete_error_keeps_metadata_accounted() -> None:
         async def approved_asset_ids(self, workspace_id: int):
             return frozenset()
 
+        async def claim_retained_asset(self, asset_id: int, workspace_id: int):
+            return True
+
+        async def release_retained_asset(self, asset_id: int, workspace_id: int):
+            self.deleted.append(-asset_id)
+
         async def delete_retained_asset(self, asset_id: int, workspace_id: int):
             self.deleted.append(asset_id)
 
@@ -125,4 +137,4 @@ async def test_storage_delete_error_keeps_metadata_accounted() -> None:
         ).sweep_workspace(7, now=datetime.now(timezone.utc))
 
     # Then metadata remains accounted because its deletion was never attempted.
-    assert storage.deleted == []
+    assert storage.deleted == [-1]
