@@ -195,7 +195,9 @@ async def test_memory_failed_uploaded_asset_validation_remains_reconcilable() ->
 
     # When metadata construction fails inside the atomic save operation.
     with pytest.raises(ValueError):
-        await assets.save_uploaded_asset({"workspace_id": 7}, intent)
+        await assets.save_uploaded_asset({
+            "workspace_id": 7, "storage_key": intent.storage_key,
+        }, intent)
 
     # Then the intent remains uploaded and a later sweep deletes the orphan.
     assert (await assets.list_upload_intents())[0].state is UploadIntentState.UPLOADED
