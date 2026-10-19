@@ -14,6 +14,7 @@ from pathlib import Path
 
 from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
+from creator_domain.models import MediaType
 from creator_domain.models.stage import RunStage
 from creator_domain.sanitize import sanitize_path_component
 from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
@@ -130,6 +131,9 @@ def generate_audio(
     )
 
     async def execute(ctx: TaskContext) -> TaskResult:
+        from creator_service.artifact_storage_integration import ensure_generation_capacity
+
+        ensure_generation_capacity()
         draft = await _script_service.get_active_draft(run_id)
         if draft is None:
             raise TaskInputError(f"No script draft found for run {run_id}")
@@ -328,10 +332,19 @@ def generate_audio(
                 raise
             logger.warning("Failed to record provider usage", exc_info=True)
 
-        from creator_service.artifact_storage_integration import store_artifact_file
+        from creator_service.artifact_storage_integration import publish_generated_file
 
         mime_type = "audio/mpeg" if audio_path.endswith(".mp3") else "audio/wav"
-        uploaded = store_artifact_file(run_id, audio_path, mime_type)
+        if ctx.workspace_id is None or ctx.project_id is None:
+            raise ValueError("Generated media requires workspace and project ownership")
+        uploaded = await publish_generated_file(
+            workspace_id=ctx.workspace_id,
+            project_id=ctx.project_id,
+            run_id=run_id,
+            local_path=audio_path,
+            content_type=mime_type,
+            media_type=MediaType.AUDIO,
+        )
         artifact = await _audio_service.create_artifact(
             run_id=run_id,
             path=audio_path,

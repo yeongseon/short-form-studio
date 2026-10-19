@@ -61,7 +61,7 @@ class FakeStorage:
 
 
 def _make_storage(run_id: int = 101, stage: str = "VISUAL_ASSET_REVIEW") -> FakeStorage:
-    run_row: dict[str, object] = {"id": run_id, "current_stage": stage}
+    run_row: dict[str, object] = {"id": run_id, "project_id": 1, "current_stage": stage}
     return FakeStorage(runs={run_id: run_row})
 
 
@@ -384,7 +384,9 @@ def test_generate_audio_cas_skip_on_stage_change(monkeypatch: pytest.MonkeyPatch
     script_service = FakeScriptService(draft=FakeScriptDraft(markdown_content="Narration text"))
     audio_service = FakeAudioService(artifact_id=50)
 
-    run_row: dict[str, object] = {"id": 107, "current_stage": "VISUAL_ASSET_REVIEW"}
+    run_row: dict[str, object] = {
+        "id": 107, "project_id": 1, "current_stage": "VISUAL_ASSET_REVIEW",
+    }
     storage = _CASSkipStorage(runs={107: run_row})
     _patch_services(monkeypatch, script_service, audio_service, storage)
 

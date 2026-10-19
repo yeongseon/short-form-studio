@@ -99,7 +99,9 @@ class FakeStorage:
 def _make_storage(
     run_id: int = 101, stage: str = "VISUAL_PLAN_REVIEW", **extra: Any
 ) -> FakeStorage:
-    run_row: dict[str, object] = {"id": run_id, "current_stage": stage, **extra}
+    run_row: dict[str, object] = {
+        "id": run_id, "project_id": 1, "current_stage": stage, **extra,
+    }
     return FakeStorage(runs={run_id: run_row})
 
 
@@ -788,7 +790,9 @@ class RaceConditionStorage(FakeStorage):
     def __init__(
         self, run_id: int, initial_stage: str, advanced_stage: str, advance_after: int = 1
     ) -> None:
-        super().__init__(runs={run_id: {"id": run_id, "current_stage": initial_stage}})
+        super().__init__(runs={run_id: {
+            "id": run_id, "project_id": 1, "current_stage": initial_stage,
+        }})
         self._target_id = run_id
         self._advanced_stage = advanced_stage
         self._advance_after = advance_after

@@ -7,6 +7,7 @@ from pathlib import Path
 import anyio
 from celery.exceptions import Ignore, SoftTimeLimitExceeded
 from creator_domain.models.stage import RunStage
+from creator_domain.models import MediaType
 from creator_service import artifact_storage_integration
 from creator_service.object_storage import StorageResult, get_storage_backend
 from creator_service.run_service import RunService
@@ -68,22 +69,19 @@ class SceneBatch:
         await self.checkpoint()
         backend = get_storage_backend()
         path = Path(target_path)
-        uploaded = artifact_storage_integration.store_artifact_file(
-            self.ctx.run_id, path, "image/png",
+        if self.ctx.workspace_id is None or self.ctx.project_id is None:
+            raise ValueError("Generated media requires workspace and project ownership")
+        uploaded = await artifact_storage_integration.publish_generated_file(
+            workspace_id=self.ctx.workspace_id,
+            project_id=self.ctx.project_id,
+            run_id=self.ctx.run_id,
+            local_path=path,
+            content_type="image/png",
+            media_type=MediaType.IMAGE,
         )
         try:
             await self.checkpoint()
         except Ignore:
-            # Only the fresh batch-owned UUID key is eligible, never an adapter alias.
-            expected = path.resolve().relative_to(artifact_storage_integration._ARTIFACT_ROOT)
-            if path in self.local_outputs and uploaded.key == str(expected):
-                try:
-                    backend.delete(uploaded.key)
-                except SoftTimeLimitExceeded:
-                    raise
-                except Exception:
-                    # SDK cleanup failures must not replace the already-known cancellation.
-                    logger.warning("Scene upload cleanup failed", extra={"run_id": self.ctx.run_id})
             raise
         # Save may commit even if its acknowledgement raises; transfer before awaiting it.
         self.local_outputs.discard(path)

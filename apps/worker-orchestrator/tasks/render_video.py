@@ -7,6 +7,7 @@ from pathlib import Path
 from celery import Task
 from celery.exceptions import SoftTimeLimitExceeded
 from celery_app import celery_app
+from creator_domain.models import MediaType
 from creator_domain.models.stage import RunStage
 from creator_provider.exceptions import ProviderError, ProviderTimeoutError, RateLimitError
 from creator_service.audio_service import audio_service as _audio_service
@@ -38,6 +39,9 @@ _ARTIFACT_ROOT = os.getenv("ARTIFACT_ROOT", "data/artifacts")
 
 async def execute_render(ctx: TaskContext, render_profile: str = "shorts_default") -> TaskResult:
     """Shared task body for integrated tests; stage transitions belong to run_task."""
+    from creator_service.artifact_storage_integration import ensure_generation_capacity
+
+    ensure_generation_capacity()
     request = LegacyRequest(ctx.run_id, render_profile, _ARTIFACT_ROOT)
     output = request.output("output.mp4")
     audio: Path | None = None
@@ -92,9 +96,18 @@ async def execute_render(ctx: TaskContext, render_profile: str = "shorts_default
         if ctx.reservation_owner_id is not None:
             raise
         logger.warning("Failed to record provider usage", exc_info=True)
-    from creator_service.artifact_storage_integration import store_artifact_file
+    from creator_service.artifact_storage_integration import publish_generated_file
 
-    uploaded = store_artifact_file(ctx.run_id, output, "video/mp4")
+    if ctx.workspace_id is None or ctx.project_id is None:
+        raise ValueError("Generated media requires workspace and project ownership")
+    uploaded = await publish_generated_file(
+        workspace_id=ctx.workspace_id,
+        project_id=ctx.project_id,
+        run_id=ctx.run_id,
+        local_path=output,
+        content_type="video/mp4",
+        media_type=MediaType.VIDEO,
+    )
     artifact = await _render_service.create_artifact(
         run_id=ctx.run_id, path=str(output), render_profile=render_profile,
         storage_provider=uploaded.storage_provider, storage_key=uploaded.key,
