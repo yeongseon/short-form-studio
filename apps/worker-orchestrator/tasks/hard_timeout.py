@@ -56,7 +56,7 @@ class ProductionRequest(Request):
         run_id = positional_run_id if positional_run_id is not None else keyword_run_id
         safe_failure_stages = self.task.hard_timeout_safe_failure_stages
         if (
-            isinstance(run_id, int)
+            type(run_id) is int
             and isinstance(self.worker_pid, int)
             and isinstance(safe_failure_stages, frozenset)
         ):

@@ -100,7 +100,12 @@ def test_production_request_rejects_conflicting_or_non_integer_run_id(monkeypatc
     monkeypatch.setattr(hard_timeout, "finalize_hard_timeout", finalized)
 
     # When the parent handles conflicting and non-integer run ids.
-    for args, kwargs in (((103,), {"run_id": 104}), ((), {"run_id": "103"})):
+    for args, kwargs in (
+        ((103,), {"run_id": 104}),
+        ((), {"run_id": "103"}),
+        ((True,), {}),
+        ((), {"run_id": True}),
+    ):
         request = object.__new__(hard_timeout.ProductionRequest)
         request.id = "invalid-delivery"
         request._args = args
