@@ -440,21 +440,22 @@ class InMemoryTaskTrackingStorage:
     async def set_observed_broker_epoch(
         self, epoch: str, expected_previous_epoch: str | None
     ) -> bool:
-        if self._observed_broker_epoch is None:
-            if expected_previous_epoch is not None:
+        async with self._ownership_lock:
+            if self._observed_broker_epoch is None:
+                if expected_previous_epoch is not None:
+                    return False
+                for row in self._rows.values():
+                    if (
+                        row.get("status") in ("pending", "queued", "running")
+                        and row.get("broker_generation") is None
+                    ):
+                        row["broker_generation"] = epoch
+                self._observed_broker_epoch = epoch
+                return True
+            if self._observed_broker_epoch != expected_previous_epoch:
                 return False
-            for row in self._rows.values():
-                if (
-                    row.get("status") in ("pending", "queued", "running")
-                    and row.get("broker_generation") is None
-                ):
-                    row["broker_generation"] = epoch
             self._observed_broker_epoch = epoch
             return True
-        if self._observed_broker_epoch != expected_previous_epoch:
-            return False
-        self._observed_broker_epoch = epoch
-        return True
 
     async def promote_pending_to_queued(self, celery_task_id: str) -> dict[str, Any] | None:
         """Atomically promote a task from 'pending' to 'queued'. Returns None if not pending."""
