@@ -69,7 +69,7 @@ class TaskTrackingStorageBackend(Protocol):
         self, celery_task_id: str, token: str, usage_storage: UsageStorageBackend,
         error_code: str, error_message: str, run_storage: RunStorageBackend | None = None,
         run_id: int | None = None, expected_stages: frozenset[str] = frozenset(),
-        billing_outcome: BillingOutcome = BillingOutcome.NOT_STARTED,
+        billing_outcome: BillingOutcome | None = None,
     ) -> bool: ...
 
 

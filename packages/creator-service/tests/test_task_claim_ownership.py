@@ -1,16 +1,26 @@
 import pytest
 import anyio
+import asyncpg
 from decimal import Decimal
 from creator_service import db
 from creator_service.memory_task_tracking_storage import InMemoryTaskTrackingStorage
 from creator_service.postgres_task_tracking_storage import PostgresTaskTrackingStorage
 from creator_service.task_tracking_service import TaskTrackingService
-from creator_service.task_tracking_storage import BillingOutcome
-from creator_service.run_service import RunStorageBackend
 from creator_service.usage_service import InMemoryUsageStorage, UsageService
-from creator_service.usage_service import UsageStorageBackend
 
 from .quota_dispatch_support import quota_pool as quota_pool
+
+
+async def _wait_for_postgres_wait(pool: asyncpg.Pool, query_fragment: str) -> None:
+    with anyio.fail_after(5):
+        while not await pool.fetchval(
+            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity activity "
+            "JOIN pg_locks locks ON locks.pid=activity.pid AND NOT locks.granted "
+            "WHERE activity.datname=current_database() AND activity.wait_event_type='Lock' "
+            "AND activity.query LIKE '%' || $1 || '%')",
+            query_fragment,
+        ):
+            await anyio.sleep(0.01)
 
 
 @pytest.mark.asyncio
@@ -243,24 +253,7 @@ async def test_postgres_atomic_failure_blocks_successor_claim_until_quota_cleanu
     assert await tracking.record_task_start(1, "generate_audio", "delivery-1", claim_token="owner-a")
     assert await usage.reserve_owned(1, "image_gen", "delivery-1")
     finalization: list[bool] = []
-    finalization_blocked = anyio.Event()
-    release_finalization = anyio.Event()
-    original_finalize = tracking_storage.fail_claimed_and_cancel_quota
-
-    async def blocked_finalize(
-        celery_task_id: str, token: str, usage_storage: UsageStorageBackend,
-        error_code: str, error_message: str, run_storage: RunStorageBackend | None = None,
-        run_id: int | None = None, expected_stages: frozenset[str] = frozenset(),
-        billing_outcome: BillingOutcome = BillingOutcome.NOT_STARTED,
-    ) -> bool:
-        finalization_blocked.set()
-        await release_finalization.wait()
-        return await original_finalize(
-            celery_task_id, token, usage_storage, error_code, error_message,
-            run_storage, run_id, expected_stages, billing_outcome,
-        )
-
-    tracking_storage.fail_claimed_and_cancel_quota = blocked_finalize
+    successor_claims: list[object] = []
 
     async def finalize() -> None:
         finalization.append(await tracking.fail_claimed_and_cancel_quota(
@@ -268,18 +261,26 @@ async def test_postgres_atomic_failure_blocks_successor_claim_until_quota_cleanu
             PostgresRunStorage(), 1, frozenset({"AUDIO_GENERATING"}),
         ))
 
-    # When finalization is blocked, the still-running owner rejects a successor claim.
-    async with anyio.create_task_group() as tasks:
-        tasks.start_soon(finalize)
-        await finalization_blocked.wait()
-        successor = await tracking.record_task_start(
+    async def claim_successor() -> None:
+        successor_claims.append(await tracking.record_task_start(
             1, "generate_audio", "delivery-1", claim_token="owner-b",
-        )
-        assert successor is None
-        release_finalization.set()
+        ))
 
-    # Then releasing the lock commits one terminal task/run/quota outcome.
+    # When the real finalizer locks the task row and blocks on quota cleanup.
+    async with pool.acquire() as lock_connection:
+        lock_transaction = lock_connection.transaction()
+        await lock_transaction.start()
+        await lock_connection.execute("SELECT pg_advisory_xact_lock($1)", 860)
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(finalize)
+            await _wait_for_postgres_wait(pool, "pg_advisory_xact_lock")
+            tasks.start_soon(claim_successor)
+            await _wait_for_postgres_wait(pool, "UPDATE creator_run_tasks")
+            await lock_transaction.rollback()
+
+    # Then the pre-commit claim loses its observed-state CAS; a fresh claim succeeds.
     assert finalization == [True]
+    assert successor_claims == [None]
     replacement = await tracking.record_task_start(
         1, "generate_audio", "delivery-1", claim_token="owner-b",
     )
@@ -294,6 +295,55 @@ async def test_postgres_atomic_failure_blocks_successor_claim_until_quota_cleanu
     assert run is not None and (run["status"], run["current_stage"]) == ("failed", "FAILED")
     assert owner_status == "cancelled"
     assert not await usage.cancel_owned("delivery-1")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("quota_pool", ["postgres"], indirect=True)
+async def test_postgres_hard_timeout_retains_authorized_provider_exposure(
+    quota_pool: object,
+) -> None:
+    # Given a hard-timeout owner with a durable authorized provider attempt.
+    if quota_pool is None:
+        pytest.fail("PostgreSQL fixture required")
+    from creator_service.postgres_usage_storage import PostgresUsageStorage
+
+    pool = await db.get_pool()
+    await pool.execute("INSERT INTO creator_projects (id, workspace_id) VALUES (1, 1)")
+    await pool.execute(
+        "INSERT INTO creator_runs (id, project_id, workspace_id, current_stage) "
+        "VALUES (1, 1, 1, 'AUDIO_GENERATING')"
+    )
+    tracking = TaskTrackingService(PostgresTaskTrackingStorage())
+    usage = UsageService(PostgresUsageStorage())
+    await usage.set_quota(1, monthly_cost_usd=Decimal("0.10"))
+    assert await tracking.record_task_start(
+        1, "generate_audio", "hard-timeout", claim_token="owner-a",
+    )
+    assert await usage.reserve_owned(
+        1, "image_gen", "hard-timeout", estimated_cost_usd=Decimal("0.10"),
+    )
+    assert await usage.authorize_owned_attempt(
+        "hard-timeout", "attempt-1", Decimal("0.10"),
+    )
+
+    # When the hard-timeout path finalizes without an in-memory billing outcome.
+    assert await tracking.fail_claimed_and_cancel_quota(
+        "hard-timeout", "owner-a", usage.storage, "TIMEOUT", "hard timeout",
+    )
+
+    # Then durable authorization retains spend and prevents replacement admission.
+    owner = await pool.fetchrow(
+        "SELECT status, estimated_cost_usd FROM workspace_quota_reservation_owners "
+        "WHERE owner_id=$1",
+        "hard-timeout",
+    )
+    assert dict(owner) == {
+        "status": "billable_unknown",
+        "estimated_cost_usd": Decimal("0.100000"),
+    }
+    assert not await usage.reserve_owned(
+        1, "image_gen", "replacement", estimated_cost_usd=Decimal("0.10"),
+    )
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,11 @@ from typing import TYPE_CHECKING, Any, assert_never
 if TYPE_CHECKING:
     from .postgres_run_storage import PostgresRunStorage
 
-from .postgres_usage_storage import cancel_owned_on_connection, settle_owned_on_connection
+from .postgres_usage_storage import (
+    cancel_owned_on_connection,
+    finalize_revoked_owned_on_connection,
+    settle_owned_on_connection,
+)
 from .task_tracking_storage import BillingOutcome
 
 from . import db
@@ -202,12 +206,14 @@ class PostgresTaskTrackingStorage:
                 error_message = NULL, claim_token = $3
             WHERE id = $1 AND status IN ('pending', 'queued', 'failed')
               AND (error_code IS NULL OR NOT (error_code = ANY($4::text[])))
+              AND claim_token IS NOT DISTINCT FROM $5
             RETURNING *
             """,
             task_id,
             kwargs.get("started_at"),
             kwargs.get("claim_token"),
             ["reconciler_pending_cleanup", "reconciler_stuck_cleanup", "reconciler_cleanup_claimed"],
+            kwargs.get("expected_claim_token"),
         )
         return claimed
 
@@ -257,7 +263,7 @@ class PostgresTaskTrackingStorage:
         self, celery_task_id: str, token: str, usage_storage: Any,
         error_code: str, error_message: str, run_storage: PostgresRunStorage | None = None,
         run_id: int | None = None, expected_stages: frozenset[str] = frozenset(),
-        billing_outcome: BillingOutcome = BillingOutcome.NOT_STARTED,
+        billing_outcome: BillingOutcome | None = None,
     ) -> bool:
         pool = await db.get_pool()
         async with pool.acquire() as connection:
@@ -277,6 +283,10 @@ class PostgresTaskTrackingStorage:
                         run_id, list(expected_stages), ["failed", "cancelled", "completed"],
                     )
                 match billing_outcome:
+                    case None:
+                        await finalize_revoked_owned_on_connection(
+                            connection, celery_task_id,
+                        )
                     case BillingOutcome.NOT_STARTED:
                         await cancel_owned_on_connection(connection, celery_task_id)
                     case BillingOutcome.ACCOUNTED:

@@ -184,7 +184,7 @@ class InMemoryTaskTrackingStorage:
         self, celery_task_id: str, token: str, usage_storage: InMemoryUsageStorage,
         error_code: str, error_message: str, run_storage: InMemoryRunStorage | None = None,
         run_id: int | None = None, expected_stages: frozenset[str] = frozenset(),
-        billing_outcome: BillingOutcome = BillingOutcome.NOT_STARTED,
+        billing_outcome: BillingOutcome | None = None,
     ) -> bool:
         async with self._ownership_lock:
             row_id = self._rows_by_celery_task_id.get(celery_task_id)
@@ -203,6 +203,8 @@ class InMemoryTaskTrackingStorage:
                 if row.get("status") != "running" or row.get("claim_token") != token:
                     return False
             match billing_outcome:
+                case None:
+                    await usage_storage.finalize_revoked_owned(celery_task_id)
                 case BillingOutcome.NOT_STARTED:
                     await usage_storage.cancel_owned(celery_task_id)
                 case BillingOutcome.ACCOUNTED:
@@ -223,6 +225,8 @@ class InMemoryTaskTrackingStorage:
         if row is None:
             return None
         if row.get("status") not in ("pending", "queued", "failed"):
+            return None
+        if row.get("claim_token") != kwargs.get("expected_claim_token"):
             return None
         if row.get("error_code") in {
             "reconciler_pending_cleanup",
