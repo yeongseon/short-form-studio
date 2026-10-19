@@ -302,7 +302,7 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
     Provider.image_release.clear()
     send_scene_image(106, "timeout-delivery", time_limit=2)
     deadline = time.monotonic() + 15
-    while Provider.image_calls == 0 and time.monotonic() < deadline:
+    while Provider.image_calls < 2 and time.monotonic() < deadline:
         time.sleep(0.1)
     assert Provider.image_calls == 2
     wait_task("timeout-delivery", "failed")
