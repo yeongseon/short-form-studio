@@ -156,7 +156,7 @@ jobs:
           FIRST_SHORT_TEST_REDIS_URL: redis://127.0.0.1:56389/0
         run: |
           STUDIO_BROWSER_TEST=true npm --prefix apps/studio-web run build
-          python3 -m pytest packages/creator-service/tests/test_stale_pending_reconciler_fencing.py packages/creator-service/tests/test_reconciler_cleanup_claims.py -v --basetemp=/tmp/reconciler-fencing-runtime
+          python3 -m pytest packages/creator-service/tests/test_stale_pending_reconciler_fencing.py packages/creator-service/tests/test_reconciler_cleanup_claims.py packages/creator-service/tests/test_broker_recovery_resume.py -v --basetemp=/tmp/reconciler-fencing-runtime
           PYTHONPATH=tests/integration python3 -m pytest packages/creator-service/tests/test_postgres_media_asset_storage.py tests/integration/test_first_short_runtime.py tests/integration/test_studio_proxy_runtime.py -v --basetemp=/tmp/first-short-runtime
           PYTHONPATH=tests/integration python3 -m pytest tests/integration/test_studio_upload_browser.py -v --basetemp=/tmp/studio-browser-runtime
           python3 -m pytest packages/creator-service/tests/test_spend_reservations.py packages/creator-service/tests/test_owned_quota_lifecycle.py packages/creator-service/tests/test_postgres_spend_lifecycle.py packages/creator-service/tests/test_task_claim_ownership.py -v --basetemp=/tmp/spend-lifecycle-runtime
@@ -339,13 +339,13 @@ jobs:
           lifecycle_n="origin/main"
           lifecycle_context="$(mktemp -d)"
           git archive "$lifecycle_n" | tar -x -C "$lifecycle_context"
-          cat > apps/api/migrations/versions/044_release_lifecycle_additive.py <<'PY'
+          cat > apps/api/migrations/versions/045_release_lifecycle_additive.py <<'PY'
           from collections.abc import Sequence
 
           from alembic import op
 
-          revision: str = "044_release_lifecycle_additive"
-          down_revision: str | None = "043"
+          revision: str = "045_release_lifecycle_additive"
+          down_revision: str | None = "044"
           branch_labels: str | Sequence[str] | None = None
           depends_on: str | Sequence[str] | None = None
 
@@ -361,7 +361,7 @@ jobs:
           lifecycle_n_head="$(docker run --rm release-lifecycle-n python -c 'from alembic.config import Config; from alembic.script import ScriptDirectory; print(ScriptDirectory.from_config(Config("alembic.ini")).get_current_head())')"
           lifecycle_n_plus_one_head="$(docker run --rm release-lifecycle-n-plus-one python -c 'from alembic.config import Config; from alembic.script import ScriptDirectory; print(ScriptDirectory.from_config(Config("alembic.ini")).get_current_head())')"
           [ "$lifecycle_n_head" = 041 ]
-          [ "$lifecycle_n_plus_one_head" = 044_release_lifecycle_additive ]
+          [ "$lifecycle_n_plus_one_head" = 045_release_lifecycle_additive ]
           LIFECYCLE_N_HEAD="$lifecycle_n_head" LIFECYCLE_N_PLUS_ONE_HEAD="$lifecycle_n_plus_one_head" RELEASE_LIFECYCLE_EVIDENCE_DIR=/tmp/release-lifecycle-evidence scripts/release_lifecycle_acceptance.sh | tee /tmp/release-lifecycle-evidence.log
           grep -Fx 'release_n_started=true' /tmp/release-lifecycle-evidence/result.txt
           grep -Fx 'release_n_plus_one_project_media=true' /tmp/release-lifecycle-evidence/result.txt
