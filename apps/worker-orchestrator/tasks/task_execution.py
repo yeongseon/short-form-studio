@@ -155,6 +155,7 @@ def run_task(
                         runner._run_service.storage,
                         validated_run_id,
                         safe_failure_stages,
+                        billing_outcome,
                     )
                 )
             except Exception:
@@ -221,7 +222,7 @@ def run_task(
         try:
             from creator_service.usage_service import usage_service
 
-            finalized = runner.run_in_worker_loop(
+            runner.run_in_worker_loop(
                 runner._handle_general_failure(
                     task_id,
                     validated_run_id,
@@ -230,16 +231,9 @@ def run_task(
                     exc,
                     usage_service.storage,
                     claim_token,
+                    billing_outcome,
                 )
             )
-            if claimed and finalized:
-                match billing_outcome:
-                    case runner.BillingOutcome.NOT_STARTED:
-                        pass
-                    case runner.BillingOutcome.ACCOUNTED:
-                        settle_owned()
-                    case runner.BillingOutcome.UNKNOWN:
-                        settle_owned(billable_unknown=True)
         except Exception:
             runner.logger.exception("Failed error cleanup for run %d", validated_run_id)
         raise

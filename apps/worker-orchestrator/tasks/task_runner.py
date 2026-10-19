@@ -40,10 +40,10 @@ import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import StrEnum
 from typing import Any
 
 from creator_service.usage_service import UsageStorageBackend
+from creator_service.task_tracking_storage import BillingOutcome
 
 from celery.exceptions import Ignore, SoftTimeLimitExceeded
 from creator_domain.models.stage import REVIEW_STAGES, RunStage
@@ -92,12 +92,6 @@ class TaskRunnerConfig:
     skip_stage_guard: bool = False
     raise_on_stage_guard: bool = True
     no_fail_transition_exceptions: tuple[type[Exception], ...] = (TaskInputError,)
-
-
-class BillingOutcome(StrEnum):
-    NOT_STARTED = "not_started"
-    ACCOUNTED = "accounted"
-    UNKNOWN = "unknown"
 
 
 @dataclass
@@ -402,6 +396,7 @@ async def _handle_general_failure(
     exc: Exception,
     usage_storage: UsageStorageBackend,
     claim_token: str | None = None,
+    billing_outcome: BillingOutcome = BillingOutcome.NOT_STARTED,
 ) -> bool:
     """Consolidate error-handler async work into a single coroutine."""
     try:
@@ -416,6 +411,7 @@ async def _handle_general_failure(
                 _run_service.storage,
                 run_id,
                 safe_failure_stages,
+                billing_outcome,
             )
         else:
             outcome = await _task_tracking_service.mark_failed_if_running(task_id, code, message)
