@@ -23,6 +23,9 @@ class _Connection:
         self.execute_calls.append((query, args))
         return "INSERT 0 2"
 
+    async def fetchval(self, query: str, *args: object):
+        return 17
+
     def transaction(self):
         @asynccontextmanager
         async def context():
@@ -60,7 +63,7 @@ async def test_timeline_approval_persists_exact_revision_assets(monkeypatch) -> 
     })
 
     # Then the same transaction maps only that persisted revision's asset ids.
-    query, args = connection.execute_calls[0]
+    query, args = connection.execute_calls[1]
     assert "creator_approved_timeline_assets" in query
     assert "t.revision = $4" in query
     assert args == (41, 7, "timeline-1", 3)

@@ -20,6 +20,13 @@ class PostgresStageReviewStorage:
             if saved is None:
                 raise ValueError("Failed to create stage review")
             if saved["stage_name"] == "TIMELINE_REVIEW" and saved["review_status"] == "approved":
+                workspace_id = await connection.fetchval(
+                    "SELECT workspace_id FROM creator_runs WHERE id = $1",
+                    int(saved["run_id"]),
+                )
+                if workspace_id is None:
+                    raise ValueError("Approved Timeline run not found")
+                await connection.execute("SELECT pg_advisory_xact_lock($1)", int(workspace_id))
                 notes = json.loads(str(saved["notes"]))
                 timeline_id = str(notes["timeline_id"])
                 revision = int(notes["revision"])
@@ -39,10 +46,24 @@ class PostgresStageReviewStorage:
                             (segment->>'asset_id')::bigint
                         FROM exact_timeline exact
                         CROSS JOIN LATERAL jsonb_array_elements(exact.segments_json::jsonb) segment
+                        WHERE NOT EXISTS (
+                            SELECT 1 FROM creator_media_asset_deletion_claims deletion
+                            WHERE deletion.asset_id = (segment->>'asset_id')::bigint
+                              AND deletion.workspace_id = exact.workspace_id
+                              AND deletion.lease_expires_at > now()
+                        )
                         RETURNING review_id
                     )
                     INSERT INTO creator_resolved_timeline_approvals (review_id)
-                    SELECT $1::integer FROM exact_timeline RETURNING review_id""",
+                    SELECT $1::integer FROM exact_timeline exact
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                        FROM jsonb_array_elements(exact.segments_json::jsonb) segment
+                        JOIN creator_media_asset_deletion_claims deletion
+                          ON deletion.asset_id = (segment->>'asset_id')::bigint
+                         AND deletion.workspace_id = exact.workspace_id
+                         AND deletion.lease_expires_at > now()
+                    ) RETURNING review_id""",
                     int(saved["id"]), int(saved["run_id"]), timeline_id, revision,
                 )
                 if result == "INSERT 0 0":
