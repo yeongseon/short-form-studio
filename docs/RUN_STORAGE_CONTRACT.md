@@ -69,8 +69,25 @@ write. Repeated sweeps release capacity exactly once.
 `GET /api/creator/workspaces/{workspace_id}/assets/storage-usage` response shows
 stored and in-flight usage plus configured limits. Budget rejection is HTTP 413
 with error code `STORAGE_BUDGET`. `MEDIA_TEMP_DISK_LOW_WATERMARK_BYTES` defaults
-to `0`; when positive it blocks new upload staging and generation writes without
-blocking reads, downloads, or cleanup.
+to `0`; when positive it blocks new upload staging without blocking reads,
+downloads, or cleanup.
+
+### Worker-output scope
+
+This change does not make `creator_scene_assets` or `creator_artifacts`
+canonical `MediaAsset` records. Worker-generated scene images, paragraph and
+run audio, subtitles, and rendered videos therefore remain outside the
+workspace byte/asset budgets, temporary-disk admission control, and
+`MediaAsset` retention sweeps described here. Their existing artifact lifecycle
+continues to apply.
+
+Canonical worker publication requires one durable operation that couples an
+idempotent task-delivery/output-role identity, the canonical object and
+`MediaAsset`, and the workflow alias. Cancellation, alias-write failure,
+run/project deletion, and a crash between object and metadata deletion must all
+converge without double charging or deleting an object still owned by canonical
+metadata. That lifecycle is intentionally deferred to a follow-up issue rather
+than partially implemented in this change.
 
 ## Media retention safety
 
