@@ -67,13 +67,15 @@ class ProductionRequest(Request):
                 timeout,
                 safe_failure_stages,
             )
-            self.task.hard_timeout_cleanup(run_id, self.id)
+            self.task.hard_timeout_cleanup(run_id, self.id, self.worker_pid)
 
 
 class ProductionTask(Task):
     Request = ProductionRequest
     hard_timeout_safe_failure_stages: frozenset[str] = frozenset()
-    hard_timeout_cleanup: Callable[[int, str], None] = staticmethod(lambda _run_id, _task_id: None)
+    hard_timeout_cleanup: Callable[[int, str, int], None] = staticmethod(
+        lambda _run_id, _task_id, _worker_pid: None
+    )
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
         self.request.claim_token = f"{self.request.id}:{os.getpid()}"
@@ -82,11 +84,13 @@ class ProductionTask(Task):
 
 def production_task(
     safe_failure_stages: frozenset[str],
-    cleanup: Callable[[int, str], None] | None = None,
+    cleanup: Callable[[int, str, int], None] | None = None,
 ) -> type[ProductionTask]:
     class ConfiguredProductionTask(ProductionTask):
         hard_timeout_safe_failure_stages = safe_failure_stages
-        hard_timeout_cleanup = staticmethod(cleanup or (lambda _run_id, _task_id: None))
+        hard_timeout_cleanup = staticmethod(
+            cleanup or (lambda _run_id, _task_id, _worker_pid: None)
+        )
 
     return ConfiguredProductionTask
 
