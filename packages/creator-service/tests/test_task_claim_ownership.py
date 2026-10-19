@@ -11,14 +11,13 @@ from creator_service.usage_service import InMemoryUsageStorage, UsageService
 from .quota_dispatch_support import quota_pool as quota_pool
 
 
-async def _wait_for_postgres_wait(pool: asyncpg.Pool, query_fragment: str) -> None:
+async def _wait_for_postgres_wait(pool: asyncpg.Pool, minimum_waiters: int) -> None:
     with anyio.fail_after(5):
         while not await pool.fetchval(
-            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity activity "
+            "SELECT count(DISTINCT activity.pid) >= $1 FROM pg_stat_activity activity "
             "JOIN pg_locks locks ON locks.pid=activity.pid AND NOT locks.granted "
-            "WHERE activity.datname=current_database() AND activity.wait_event_type='Lock' "
-            "AND activity.query LIKE '%' || $1 || '%')",
-            query_fragment,
+            "WHERE activity.datname=current_database() AND activity.wait_event_type='Lock'",
+            minimum_waiters,
         ):
             await anyio.sleep(0.01)
 
@@ -273,9 +272,9 @@ async def test_postgres_atomic_failure_blocks_successor_claim_until_quota_cleanu
         await lock_connection.execute("SELECT pg_advisory_xact_lock($1)", 860)
         async with anyio.create_task_group() as tasks:
             tasks.start_soon(finalize)
-            await _wait_for_postgres_wait(pool, "pg_advisory_xact_lock")
+            await _wait_for_postgres_wait(pool, 1)
             tasks.start_soon(claim_successor)
-            await _wait_for_postgres_wait(pool, "creator_run_tasks")
+            await _wait_for_postgres_wait(pool, 2)
             await lock_transaction.rollback()
 
     # Then the pre-commit claim loses its observed-state CAS; a fresh claim succeeds.
