@@ -96,8 +96,10 @@ class MediaAssetService:
         )
 
     async def create_file_asset(self, source: BinaryIO, upload: FileUpload) -> MediaAsset:
-        self._storage_policy.ensure_temp_capacity(upload.max_bytes)
-        async with prepare_upload(source, upload, self._io) as prepared:
+        async with prepare_upload(
+            source, upload, self._io,
+            low_watermark_bytes=self._storage_policy.temp_disk_low_watermark_bytes,
+        ) as prepared:
             return await self._store_asset(
                 workspace_id=upload.workspace_id, safe_name=prepared.safe_name,
                 data=prepared.path, canonical_mime=prepared.mime_type,
