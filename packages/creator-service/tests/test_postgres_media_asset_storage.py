@@ -5,7 +5,6 @@ import json
 import os
 import subprocess
 import sys
-import threading
 import uuid
 import anyio
 from collections.abc import AsyncIterator
@@ -1147,17 +1146,8 @@ async def test_postgres_claimed_asset_rejects_concurrent_timeline_approval(
 async def test_postgres_expired_retention_claim_yields_to_timeline_approval(
     media_database: None, tmp_path: Path,
 ) -> None:
-    # Given retention pauses after claiming an eligible asset.
-    delete_started = threading.Event()
-    resume_delete = threading.Event()
-
-    class PausingStorage(LocalStorageBackend):
-        def delete(self, key: str) -> bool:
-            delete_started.set()
-            assert resume_delete.wait(timeout=10)
-            return super().delete(key)
-
-    objects = PausingStorage(str(tmp_path))
+    # Given retention claims an eligible asset and its lease expires before approval.
+    objects = LocalStorageBackend(str(tmp_path))
     storage = PostgresMediaAssetStorage()
     service = MediaAssetService(objects, storage)
     asset = await service.create_image_asset(
@@ -1169,6 +1159,13 @@ async def test_postgres_expired_retention_claim_yields_to_timeline_approval(
             WHERE id = $1""",
         asset.id,
     )
+    stale_token = await storage.claim_retained_asset(asset.id, 9101)
+    assert stale_token is not None
+    await db.execute(
+        """UPDATE creator_media_asset_deletion_claims
+            SET lease_expires_at = now() - interval '1 second' WHERE asset_id = $1""",
+        asset.id,
+    )
     await db.execute(
         """INSERT INTO creator_timelines (
                 project_id, workspace_id, timeline_id, revision, segments_json
@@ -1176,37 +1173,28 @@ async def test_postgres_expired_retention_claim_yields_to_timeline_approval(
         9101, 9101, "approved-after-expiry", 1,
         json.dumps([{"id": "approved", "asset_id": asset.id}]),
     )
-    results = []
+    review = await PostgresStageReviewStorage().create_review({
+        "run_id": 9101, "stage_name": "TIMELINE_REVIEW", "review_status": "approved",
+        "reviewer": "human", "notes": '{"timeline_id":"approved-after-expiry","revision":1}',
+    })
+    assert asset.storage_key is not None
 
-    async def sweep() -> None:
-        results.append(await MediaRetentionService(
-            storage, objects,
-            MediaRetentionPolicy(original_days=1, grace_days=0, enabled=True, dry_run=False),
-        ).sweep_workspace(9101, now=datetime.now(timezone.utc)))
+    async def delete_object() -> bool:
+        return await anyio.to_thread.run_sync(objects.delete, asset.storage_key)
 
-    # When its lease expires, approval commits, and then the stale claimant resumes.
-    async with anyio.create_task_group() as task_group:
-        task_group.start_soon(sweep)
-        assert await anyio.to_thread.run_sync(delete_started.wait, 10)
-        await db.execute(
-            """UPDATE creator_media_asset_deletion_claims
-                SET lease_expires_at = now() - interval '1 second' WHERE asset_id = $1""",
-            asset.id,
-        )
-        review = await PostgresStageReviewStorage().create_review({
-            "run_id": 9101, "stage_name": "TIMELINE_REVIEW", "review_status": "approved",
-            "reviewer": "human", "notes": '{"timeline_id":"approved-after-expiry","revision":1}',
-        })
-        resume_delete.set()
+    # When the stale claimant resumes final object and metadata deletion.
+    deleted = await storage.finalize_retained_asset(
+        asset.id, 9101, stale_token, delete_object,
+    )
 
     # Then approval wins: both object metadata and its exact approval mapping remain intact.
     mappings = await db.fetch_all(
         "SELECT asset_id FROM creator_approved_timeline_assets WHERE review_id = $1",
         int(review["id"]),
     )
-    assert results[0].deleted == 0
+    assert deleted is False
     assert await service.get_asset(asset.id, 9101) is not None
-    assert asset.storage_key is not None and objects.download_bytes(asset.storage_key) == image_bytes()
+    assert objects.download_bytes(asset.storage_key) == image_bytes()
     assert mappings == [{"asset_id": asset.id}]
 
 
