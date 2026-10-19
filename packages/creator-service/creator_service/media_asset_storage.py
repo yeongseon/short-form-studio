@@ -355,6 +355,9 @@ class InMemoryMediaAssetStorage:
     async def approved_asset_ids(self, workspace_id: int) -> frozenset[int]:
         return frozenset()
 
+    async def retention_approvals_resolved(self, workspace_id: int) -> bool:
+        return True
+
     async def delete_retained_asset(
         self, asset_id: int, workspace_id: int, claim_token: str,
     ) -> None:

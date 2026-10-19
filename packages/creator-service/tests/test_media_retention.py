@@ -72,6 +72,9 @@ async def test_storage_absent_object_removes_claimed_metadata() -> None:
         async def approved_asset_ids(self, workspace_id: int):
             return frozenset()
 
+        async def retention_approvals_resolved(self, workspace_id: int):
+            return True
+
         async def claim_retained_asset(self, asset_id: int, workspace_id: int):
             return "claim-token"
 
@@ -112,6 +115,9 @@ async def test_storage_delete_error_keeps_metadata_accounted() -> None:
 
         async def approved_asset_ids(self, workspace_id: int):
             return frozenset()
+
+        async def retention_approvals_resolved(self, workspace_id: int):
+            return True
 
         async def claim_retained_asset(self, asset_id: int, workspace_id: int):
             return "claim-token"
@@ -157,6 +163,9 @@ async def test_retention_scans_past_full_page_of_protected_assets() -> None:
 
         async def approved_asset_ids(self, workspace_id):
             return frozenset()
+
+        async def retention_approvals_resolved(self, workspace_id):
+            return True
 
         async def claim_retained_asset(self, asset_id, workspace_id):
             return "claim-token"

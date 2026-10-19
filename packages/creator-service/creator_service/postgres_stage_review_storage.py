@@ -24,17 +24,25 @@ class PostgresStageReviewStorage:
                 timeline_id = str(notes["timeline_id"])
                 revision = int(notes["revision"])
                 result = await connection.execute(
-                    """INSERT INTO creator_approved_timeline_assets (
-                        review_id, workspace_id, timeline_id, revision, asset_id
+                    """WITH exact_timeline AS (
+                        SELECT r.workspace_id, t.segments_json
+                        FROM creator_runs r
+                        JOIN creator_timelines t ON t.project_id = r.project_id
+                            AND t.workspace_id = r.workspace_id
+                            AND t.timeline_id = $3 AND t.revision = $4
+                        WHERE r.id = $2
+                    ), mapped AS (
+                        INSERT INTO creator_approved_timeline_assets (
+                            review_id, workspace_id, timeline_id, revision, asset_id
+                        )
+                        SELECT DISTINCT $1::integer, exact.workspace_id, $3::text, $4::integer,
+                            (segment->>'asset_id')::bigint
+                        FROM exact_timeline exact
+                        CROSS JOIN LATERAL jsonb_array_elements(exact.segments_json::jsonb) segment
+                        RETURNING review_id
                     )
-                    SELECT DISTINCT $1::integer, r.workspace_id, $3::text, $4::integer,
-                        (segment->>'asset_id')::bigint
-                    FROM creator_runs r
-                    JOIN creator_timelines t ON t.project_id = r.project_id
-                        AND t.workspace_id = r.workspace_id
-                        AND t.timeline_id = $3 AND t.revision = $4
-                    CROSS JOIN LATERAL jsonb_array_elements(t.segments_json::jsonb) segment
-                    WHERE r.id = $2""",
+                    INSERT INTO creator_resolved_timeline_approvals (review_id)
+                    SELECT $1::integer FROM exact_timeline RETURNING review_id""",
                     int(saved["id"]), int(saved["run_id"]), timeline_id, revision,
                 )
                 if result == "INSERT 0 0":

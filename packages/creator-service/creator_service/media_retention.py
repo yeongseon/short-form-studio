@@ -72,6 +72,7 @@ class RetentionStorage(Protocol):
     ) -> list[RetentionAsset]: ...
     async def referenced_asset_ids(self, workspace_id: int) -> frozenset[int]: ...
     async def approved_asset_ids(self, workspace_id: int) -> frozenset[int]: ...
+    async def retention_approvals_resolved(self, workspace_id: int) -> bool: ...
     async def claim_retained_asset(self, asset_id: int, workspace_id: int) -> str | None: ...
     async def release_retained_asset(
         self, asset_id: int, workspace_id: int, claim_token: str,
@@ -110,6 +111,7 @@ class MediaRetentionService:
             return RetentionSweepResult(0, 0, self._policy.dry_run, False)
         referenced = await self._storage.referenced_asset_ids(workspace_id)
         approved = await self._storage.approved_asset_ids(workspace_id)
+        approvals_resolved = await self._storage.retention_approvals_resolved(workspace_id)
         candidates: list[RetentionAsset] = []
         after: RetentionAsset | None = None
         scan_limit = max(limit, 100)
@@ -130,7 +132,7 @@ class MediaRetentionService:
             after = assets[-1]
             if len(assets) < scan_limit:
                 break
-        if self._policy.dry_run:
+        if self._policy.dry_run or not approvals_resolved:
             return RetentionSweepResult(len(candidates), 0, True, True)
         deleted = 0
         for asset in candidates:

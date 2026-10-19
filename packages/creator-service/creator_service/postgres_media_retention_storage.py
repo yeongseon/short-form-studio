@@ -73,8 +73,8 @@ class PostgresMediaRetentionStorage:
                   AND review.stage_name = 'TIMELINE_REVIEW'
                   AND review.review_status = 'approved'
                   AND NOT EXISTS (
-                      SELECT 1 FROM creator_approved_timeline_assets mapped
-                      WHERE mapped.review_id = review.id
+                      SELECT 1 FROM creator_resolved_timeline_approvals resolved
+                      WHERE resolved.review_id = review.id
                   )""",
             workspace_id,
         )
@@ -84,6 +84,24 @@ class PostgresMediaRetentionStorage:
                 return approved | await self._timeline_asset_ids(workspace_id)
             approved.update(timeline)
         return frozenset(approved)
+
+    async def retention_approvals_resolved(self, workspace_id: int) -> bool:
+        unresolved = await db.fetch_one(
+            """SELECT 1 FROM creator_media_retention_unresolved_workspaces
+                WHERE workspace_id = $1
+                UNION ALL
+                SELECT 1 FROM creator_stage_reviews review
+                JOIN creator_runs run ON run.id = review.run_id
+                WHERE run.workspace_id = $1
+                  AND review.stage_name = 'TIMELINE_REVIEW'
+                  AND review.review_status = 'approved'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM creator_approved_timeline_assets mapped
+                      WHERE mapped.review_id = review.id
+                  ) LIMIT 1""",
+            workspace_id,
+        )
+        return unresolved is None
 
     async def _legacy_approved_timeline(
         self, workspace_id: int, notes: str | None,
