@@ -100,9 +100,6 @@ def generate_scene_image(
     )
 
     async def execute_batch(ctx: TaskContext, batch: SceneBatch) -> TaskResult:
-        from creator_service.artifact_storage_integration import ensure_generation_capacity
-
-        ensure_generation_capacity()
         plan = await _visual_plan_service.get_active_plan(run_id)
         if plan is None:
             raise TaskInputError(f"No active visual plan for run {run_id}")

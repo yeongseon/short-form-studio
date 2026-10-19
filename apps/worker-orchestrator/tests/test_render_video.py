@@ -60,7 +60,7 @@ class FakeStorage:
 
 
 def _make_storage(run_id: int = 201, stage: str = "RENDER_GENERATING") -> FakeStorage:
-    run_row: dict[str, object] = {"id": run_id, "project_id": 1, "current_stage": stage}
+    run_row: dict[str, object] = {"id": run_id, "current_stage": stage}
     return FakeStorage(runs={run_id: run_row})
 
 
@@ -589,9 +589,7 @@ class _CASSkipStorage(FakeStorage):
 
 
 def test_render_video_cas_skip_on_stage_change(monkeypatch: pytest.MonkeyPatch) -> None:
-    run_row: dict[str, object] = {
-        "id": 206, "project_id": 1, "current_stage": "RENDER_GENERATING",
-    }
+    run_row: dict[str, object] = {"id": 206, "current_stage": "RENDER_GENERATING"}
     storage = _CASSkipStorage(runs={206: run_row})
     fake_render_service = FakeRenderService(
         manifest=_manifest(run_id=206),
