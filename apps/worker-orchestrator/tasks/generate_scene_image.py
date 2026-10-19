@@ -23,7 +23,12 @@ from creator_service.usage_service import record_provider_call
 from creator_service.visual_asset_service import visual_asset_service as _visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
 from tasks.task_runner import GpuLockContext, TaskContext, TaskResult, TaskRunnerConfig, run_task
-from tasks.hard_timeout import production_task, production_time_limits
+from tasks.hard_timeout import (
+    delivery_owner,
+    production_task,
+    production_time_limits,
+    worker_hostname,
+)
 from tasks.task_execution import TaskInputError
 from tasks.scene_batch_lifecycle import SAFE_FAILURE_STAGES, SAFE_SUCCESS_STAGES, SceneBatch
 
@@ -37,7 +42,12 @@ def _asset_dir(run_id: int) -> Path:
     return Path(_ARTIFACTS_BASE) / str(run_id) / "scenes"
 
 
-def _cleanup_hard_timeout_outputs(run_id: int, task_id: str, worker_pid: int) -> None:
+def _cleanup_hard_timeout_outputs(
+    run_id: int,
+    task_id: str,
+    worker_hostname: str,
+    worker_pid: int,
+) -> None:
     from worker_loop import run_in_worker_loop
 
     async def persisted_paths() -> set[Path]:
@@ -49,8 +59,8 @@ def _cleanup_hard_timeout_outputs(run_id: int, task_id: str, worker_pid: int) ->
         }
 
     persisted = run_in_worker_loop(persisted_paths())
-    safe_task_id = sanitize_path_component(task_id, label="task_id")
-    for path in _asset_dir(run_id).glob(f"*-{safe_task_id}-{worker_pid}-*.png"):
+    owner = delivery_owner(task_id, worker_hostname, worker_pid)
+    for path in _asset_dir(run_id).glob(f"*-{owner}-*.png"):
         if path.resolve() not in persisted:
             path.unlink(missing_ok=True)
 
@@ -108,8 +118,7 @@ def generate_scene_image(
         provider = registry.get_provider(model_key)
         asset_dir = _asset_dir(run_id)
         asset_dir.mkdir(parents=True, exist_ok=True)
-        safe_task_id = sanitize_path_component(ctx.task_id, label="task_id")
-        delivery_owner = f"{safe_task_id}-{os.getpid()}"
+        owner = delivery_owner(ctx.task_id, worker_hostname(self.request), os.getpid())
 
         for idx, target_scene in enumerate(target_scenes):
             try:
@@ -150,7 +159,7 @@ def generate_scene_image(
                         params.update(image_params)
                     safe_scene_id = sanitize_path_component(target_scene.scene_id, label="scene_id")
                     target_path = str(
-                        asset_dir / f"{safe_scene_id}-{delivery_owner}-{uuid4().hex}.png"
+                        asset_dir / f"{safe_scene_id}-{owner}-{uuid4().hex}.png"
                     )
                     batch.local_outputs.add(Path(target_path))
                     Path(target_path).touch()
@@ -213,7 +222,7 @@ def generate_scene_image(
                                 # Regenerate output path for retry
                                 target_path = str(
                                     asset_dir
-                                    / f"{safe_scene_id}-{delivery_owner}-{uuid4().hex}.png"
+                                    / f"{safe_scene_id}-{owner}-{uuid4().hex}.png"
                                 )
                                 params["output_path"] = target_path
                                 batch.local_outputs.add(Path(target_path))
