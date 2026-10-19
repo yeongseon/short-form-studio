@@ -138,14 +138,22 @@ async def _reconcile_once() -> dict[str, Any]:
         queue_length = sum(int(client.llen(queue)) for queue in queue_names)
         ping = celery_app.control.inspect(timeout=2).ping() or {}
         candidates = await task_tracking_service.list_broker_recovery_tasks()
+        active_generations = frozenset(
+            task.broker_generation
+            for task in candidates
+            if task.broker_generation is not None
+        )
         now = datetime.now(timezone.utc)
         oldest_wait_seconds = oldest_active_wait_seconds(candidates, now=now)
+        confirmed_epoch = ensure_broker_epoch()
         snapshot = BrokerSnapshot(
             epoch=epoch.epoch,
             started_at=epoch.started_at,
             queue_length=queue_length,
             oldest_wait_seconds=oldest_wait_seconds,
             workers_online=len(ping),
+            confirmed_epoch=confirmed_epoch.epoch,
+            active_generations=active_generations,
         )
         fallback_epoch = (
             _BROKER_EPOCH_STATE_PATH.read_text(encoding="utf-8").strip()
