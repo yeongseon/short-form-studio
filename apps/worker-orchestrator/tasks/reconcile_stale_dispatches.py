@@ -60,6 +60,12 @@ _BROKER_EPOCH_STATE_PATH = Path(
 )
 
 
+def broker_epoch_witnesses(
+    durable_epoch: str | None, fallback_epoch: str | None
+) -> tuple[str | None, str | None]:
+    return durable_epoch or fallback_epoch, durable_epoch
+
+
 async def _rollback_run(run_id: int, celery_task_id: str) -> None:
     """Roll back a run to FAILED state when its stale pending task cannot be recovered.
 
@@ -148,9 +154,15 @@ async def _reconcile_once() -> dict[str, Any]:
             oldest_wait_seconds=oldest_wait_seconds,
             workers_online=len(ping),
         )
-        previous_epoch = await task_tracking_service.get_observed_broker_epoch()
-        if previous_epoch is None and _BROKER_EPOCH_STATE_PATH.exists():
-            previous_epoch = _BROKER_EPOCH_STATE_PATH.read_text(encoding="utf-8").strip()
+        durable_epoch = await task_tracking_service.get_observed_broker_epoch()
+        fallback_epoch = (
+            _BROKER_EPOCH_STATE_PATH.read_text(encoding="utf-8").strip()
+            if _BROKER_EPOCH_STATE_PATH.exists()
+            else None
+        )
+        previous_epoch, expected_database_epoch = broker_epoch_witnesses(
+            durable_epoch, fallback_epoch
+        )
         recovery_deferred = False
         if previous_epoch is not None:
             recovered = await recover_lost_tasks(
@@ -172,7 +184,7 @@ async def _reconcile_once() -> dict[str, Any]:
             previous_epoch=previous_epoch, deferred=recovery_deferred
         ):
             persisted = await task_tracking_service.set_observed_broker_epoch(
-                epoch.epoch, previous_epoch
+                epoch.epoch, expected_database_epoch
             )
             if persisted:
                 _BROKER_EPOCH_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
