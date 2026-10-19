@@ -280,27 +280,31 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
         """UPDATE creator_runs
         SET current_stage='VISUAL_ASSET_GENERATING' WHERE id=106;
         INSERT INTO creator_visual_plans(run_id, scenes_json, version)
-        VALUES(106, '[{"scene_id":"scene-timeout","section_id":"section-1","scene_index":0,
+        VALUES(106, '[{"scene_id":"scene-persisted","section_id":"section-1","scene_index":0,
+        "section_type":"body","original_text":"persisted provider",
+        "prompt":"persisted provider"},
+        {"scene_id":"scene-timeout","section_id":"section-1","scene_index":1,
         "section_type":"body","original_text":"blocking provider",
         "prompt":"blocking provider"}]', 1);
         INSERT INTO workspace_quota_reservations(
           workspace_id, period_start, image_count, reserved_estimated_cost_usd)
-        VALUES(1, date_trunc('month', now()), 1, 0.04)
+        VALUES(1, date_trunc('month', now()), 2, 0.08)
         ON CONFLICT (workspace_id, period_start) DO UPDATE
-        SET image_count = workspace_quota_reservations.image_count + 1,
+        SET image_count = workspace_quota_reservations.image_count + 2,
             reserved_estimated_cost_usd =
-              workspace_quota_reservations.reserved_estimated_cost_usd + 0.04;
+              workspace_quota_reservations.reserved_estimated_cost_usd + 0.08;
         INSERT INTO workspace_quota_reservation_owners
         (owner_id, workspace_id, period_start, operation_type, status, estimated_cost_usd)
-        VALUES('timeout-delivery', 1, date_trunc('month', now()), 'image_gen', 'reserved', 0.04);""",
+        VALUES('timeout-delivery', 1, date_trunc('month', now()), 'image_gen', 'reserved', 0.08);""",
     )
     Provider.image_calls = 0
+    Provider.image_successes_before_block = 1
     Provider.image_release.clear()
     send_scene_image(106, "timeout-delivery", time_limit=2)
     deadline = time.monotonic() + 15
     while Provider.image_calls == 0 and time.monotonic() < deadline:
         time.sleep(0.1)
-    assert Provider.image_calls == 1
+    assert Provider.image_calls == 2
     wait_task("timeout-delivery", "failed")
     Provider.image_release.set()
     timeout_run = anyio.run(row, "SELECT status FROM creator_runs WHERE id=106")
@@ -314,12 +318,18 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
         "SELECT status FROM workspace_quota_reservation_attempts "
         "WHERE owner_id='timeout-delivery'",
     )
+    timeout_assets = anyio.run(
+        row,
+        "SELECT asset_path FROM creator_visual_assets WHERE run_id=106 AND scene_id='scene-persisted'",
+    )
     timeout_files = list((EVIDENCE / "storage" / "106" / "scenes").glob("*.png"))
     assert timeout_run is not None and timeout_run["status"] == "failed"
     assert timeout_quota is not None and timeout_quota["status"] == "billable_unknown"
-    assert timeout_quota["estimated_cost_usd"] == Decimal("0.040000")
+    assert timeout_quota["estimated_cost_usd"] == Decimal("0.080000")
     assert timeout_attempt is not None and timeout_attempt["status"] == "unknown"
-    assert timeout_files == []
+    assert timeout_assets is not None
+    assert Path(timeout_assets["asset_path"]).is_file()
+    assert timeout_files == [Path(timeout_assets["asset_path"])]
     replacement = EVIDENCE / "timeout-replacement.json"
     new_run(109)
     send(109, "timeout-replacement", "complete", replacement, queue="image")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import base64
 import json
 import os
 import socket
@@ -43,6 +44,7 @@ class Provider(BaseHTTPRequestHandler):
     calls = 0
     image_calls = 0
     image_release = threading.Event()
+    image_successes_before_block = 0
 
     def do_GET(self) -> None:
         type(self).calls += 1
@@ -53,6 +55,14 @@ class Provider(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         type(self).image_calls += 1
         self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        if type(self).image_calls <= type(self).image_successes_before_block:
+            body = json.dumps({"images": [base64.b64encode(b"persisted-scene").decode()]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         type(self).image_release.wait(timeout=30)
 
     def log_message(self, format: str, *args: object) -> None:  # noqa: A002
@@ -232,7 +242,7 @@ def send_scene_image(run_id: int, task_id: str, *, time_limit: int) -> None:
 
     celery_app.send_task(
         "generate_scene_image",
-        args=[run_id, "scene-timeout", "sd15"],
+        kwargs={"run_id": run_id, "model_key": "sd15"},
         task_id=task_id,
         queue="image",
     )
