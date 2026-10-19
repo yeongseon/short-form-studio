@@ -248,6 +248,40 @@ async def test_failed_uploaded_asset_association_remains_reconcilable(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["workspace_id", "storage_key"])
+async def test_postgres_uploaded_asset_rejects_intent_binding_mismatch(
+    media_database: None, field: str,
+) -> None:
+    # Given an uploaded intent and otherwise valid metadata with forged ownership.
+    storage = PostgresMediaAssetStorage()
+    now = datetime.now(timezone.utc)
+    intent = await storage.create_upload_intent(UploadIntent(
+        id=0, owner_id=f"binding-{field}", workspace_id=9101,
+        storage_key=f"workspaces/9101/assets/binding-{field}.png",
+        state=UploadIntentState.PENDING, lease_expires_at=now,
+    ))
+    await storage.mark_upload_intent_uploaded(intent.id)
+    row = {
+        "workspace_id": 9101, "project_id": None, "run_id": None,
+        "media_type": "IMAGE", "origin": "UPLOADED",
+        "storage_key": intent.storage_key, "mime_type": "image/png",
+        "width": 8, "height": 12, "duration_seconds": None,
+        "source_url": None, "metadata": {}, "created_at": now,
+    }
+    row[field] = 9102 if field == "workspace_id" else "workspaces/9101/assets/other.png"
+
+    # When completion claims the intent using the mismatched row.
+    with pytest.raises(MediaAssetPersistenceFailed):
+        await storage.save_uploaded_asset(row, intent)
+
+    # Then the claim rolls back and no forged asset is persisted.
+    persisted = await db.fetch_one(
+        "SELECT state FROM creator_media_upload_intents WHERE id = $1", intent.id,
+    )
+    assert persisted == {"state": "uploaded"}
+
+
+@pytest.mark.asyncio
 async def test_additive_migration_retains_legacy_assets(media_database: None) -> None:
     # Given a legacy scene asset inserted before the new migration.
     # When reading the old storage table after upgrading.

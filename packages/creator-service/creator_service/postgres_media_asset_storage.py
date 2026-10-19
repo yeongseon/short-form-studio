@@ -119,8 +119,9 @@ class PostgresMediaAssetStorage(PostgresUploadIntentStorage, PostgresMediaRetent
                     """UPDATE creator_media_upload_intents
                         SET state = 'completed', updated_at = NOW()
                         WHERE id = $1 AND owner_id = $2 AND state = 'uploaded'
+                        AND workspace_id = $3 AND storage_key = $4
                         RETURNING id""",
-                    intent.id, intent.owner_id,
+                    intent.id, intent.owner_id, asset.workspace_id, asset.storage_key,
                 )
                 if claimed is None:
                     raise MediaAssetPersistenceFailed()
