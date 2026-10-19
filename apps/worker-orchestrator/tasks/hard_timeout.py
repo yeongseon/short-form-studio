@@ -2,10 +2,25 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
+from hashlib import blake2s
 from typing import Any
 
 from celery import Task
+from celery.app.task import Context
+from celery.utils.nodenames import gethostname
 from celery.worker.request import Request
+from creator_domain.sanitize import sanitize_path_component
+
+
+def delivery_owner(task_id: str, worker_hostname: str, worker_pid: int) -> str:
+    safe_task_id = sanitize_path_component(task_id, label="task_id")
+    worker_digest = blake2s(worker_hostname.encode(), digest_size=8).hexdigest()
+    return f"{safe_task_id}-{worker_digest}-{worker_pid}"
+
+
+def worker_hostname(request: Context) -> str:
+    hostname = getattr(request, "worker_hostname", None)
+    return hostname if isinstance(hostname, str) else gethostname()
 
 
 def _terminal_services() -> Any:
@@ -45,6 +60,10 @@ def finalize_hard_timeout(
 
 
 class ProductionRequest(Request):
+    def execute_using_pool(self, pool: Any, **kwargs: Any) -> Any:
+        self.request_dict["worker_hostname"] = self.hostname
+        return super().execute_using_pool(pool, **kwargs)
+
     def on_timeout(self, soft: bool, timeout: float) -> None:
         super().on_timeout(soft, timeout)
         if soft or not isinstance(self.id, str):
@@ -58,11 +77,13 @@ class ProductionRequest(Request):
         if (
             type(run_id) is int
             and isinstance(self.worker_pid, int)
+            and isinstance(self.hostname, str)
             and isinstance(safe_failure_stages, frozenset)
         ):
+            owner = delivery_owner(self.id, self.hostname, self.worker_pid)
             finalize_hard_timeout(
                 self.id,
-                f"{self.id}:{self.worker_pid}",
+                owner,
                 run_id,
                 timeout,
                 safe_failure_stages,
@@ -78,7 +99,11 @@ class ProductionTask(Task):
     )
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        self.request.claim_token = f"{self.request.id}:{os.getpid()}"
+        self.request.claim_token = delivery_owner(
+            self.request.id,
+            worker_hostname(self.request),
+            os.getpid(),
+        )
         return super().__call__(*args, **kwargs)
 
 

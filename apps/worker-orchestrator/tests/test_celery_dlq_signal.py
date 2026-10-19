@@ -49,6 +49,7 @@ def test_production_request_finalizes_positional_run_id(monkeypatch) -> None:
     request._args = (103,)
     request._kwargs = {}
     request.worker_pid = 123
+    request._hostname = "worker-image@replica-1"
     request._task = MagicMock(
         hard_timeout_safe_failure_stages=frozenset({"SCRIPT_GENERATING"}),
     )
@@ -59,7 +60,11 @@ def test_production_request_finalizes_positional_run_id(monkeypatch) -> None:
     # Then it finalizes the positional run before cleanup.
     finalized.assert_called_once_with(
         "positional-delivery",
-        "positional-delivery:123",
+        hard_timeout.delivery_owner(
+            "positional-delivery",
+            "worker-image@replica-1",
+            123,
+        ),
         103,
         2.0,
         frozenset({"SCRIPT_GENERATING"}),
@@ -76,6 +81,7 @@ def test_production_request_finalizes_keyword_run_id(monkeypatch) -> None:
     request._args = ()
     request._kwargs = {"run_id": 104}
     request.worker_pid = 124
+    request._hostname = "worker-image@replica-1"
     request._task = MagicMock(
         hard_timeout_safe_failure_stages=frozenset({"SCRIPT_GENERATING"}),
     )
@@ -86,7 +92,11 @@ def test_production_request_finalizes_keyword_run_id(monkeypatch) -> None:
     # Then it finalizes the keyword-delivered run.
     finalized.assert_called_once_with(
         "keyword-delivery",
-        "keyword-delivery:124",
+        hard_timeout.delivery_owner(
+            "keyword-delivery",
+            "worker-image@replica-1",
+            124,
+        ),
         104,
         3.0,
         frozenset({"SCRIPT_GENERATING"}),
@@ -111,6 +121,7 @@ def test_production_request_rejects_conflicting_or_non_integer_run_id(monkeypatc
         request._args = args
         request._kwargs = kwargs
         request.worker_pid = 123
+        request._hostname = "worker-image@replica-1"
         request._task = MagicMock(
             hard_timeout_safe_failure_stages=frozenset({"SCRIPT_GENERATING"}),
         )
