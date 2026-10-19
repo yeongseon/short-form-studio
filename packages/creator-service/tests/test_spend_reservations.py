@@ -365,6 +365,64 @@ async def test_accounted_attempt_releases_only_unstarted_quote_capacity() -> Non
     )
 
 
+@pytest.mark.asyncio
+async def test_revoked_accounted_attempt_releases_unstarted_quote_capacity() -> None:
+    # Given a revoked one-dollar owner with one fully accounted forty-cent attempt.
+    service = UsageService(InMemoryUsageStorage())
+    await service.set_quota(1, monthly_cost_usd=Decimal("1"))
+    assert await service.reserve_owned(
+        1, "image_gen", "revoked", estimated_cost_usd=Decimal("1")
+    )
+    assert await service.authorize_owned_attempt(
+        "revoked", "revoked:scene:0", Decimal("0.40")
+    )
+    await service.record_usage(
+        1, 1, "fixture", "fixture", "image_gen", image_count=1,
+        estimated_cost_usd=Decimal("0.40"), idempotency_key="revoked:scene:0",
+        reservation_owner_id="revoked", reservation_attempt_id="revoked:scene:0",
+    )
+
+    # When revocation finalizes the owner.
+    assert await service.finalize_revoked_owned("revoked")
+
+    # Then known spend settles normally and the unused sixty cents is reusable.
+    assert await service.reserve_owned(
+        1, "image_gen", "replacement", estimated_cost_usd=Decimal("0.60")
+    )
+
+
+@pytest.mark.asyncio
+async def test_revoked_mixed_attempts_retain_only_authorized_unknown_exposure() -> None:
+    # Given one accounted attempt and one still-authorized attempt within a dollar quote.
+    service = UsageService(InMemoryUsageStorage())
+    await service.set_quota(1, monthly_cost_usd=Decimal("1"))
+    assert await service.reserve_owned(
+        1, "image_gen", "revoked", estimated_cost_usd=Decimal("1")
+    )
+    assert await service.authorize_owned_attempt(
+        "revoked", "revoked:accounted", Decimal("0.40")
+    )
+    assert await service.authorize_owned_attempt(
+        "revoked", "revoked:authorized", Decimal("0.20")
+    )
+    await service.record_usage(
+        1, 1, "fixture", "fixture", "image_gen", image_count=1,
+        estimated_cost_usd=Decimal("0.40"), idempotency_key="revoked:accounted",
+        reservation_owner_id="revoked", reservation_attempt_id="revoked:accounted",
+    )
+
+    # When revocation finalizes the owner.
+    assert await service.finalize_revoked_owned("revoked")
+
+    # Then settled plus unknown exposure retains sixty cents and releases forty cents.
+    assert await service.reserve_owned(
+        1, "image_gen", "replacement", estimated_cost_usd=Decimal("0.40")
+    )
+    assert not await service.reserve_owned(
+        1, "image_gen", "overflow", estimated_cost_usd=Decimal("0.01")
+    )
+
+
 def test_scene_quote_bounds_fanout_internal_attempts_and_retries() -> None:
     # Given two scenes, three internal attempts, and five Celery retries.
     quote = ReservationQuote.bounded(

@@ -364,7 +364,7 @@ class InMemoryUsageStorage:
 
     async def finalize_revoked_owned(self, owner_id: str) -> bool:
         if any(key[0] == owner_id for key in self._owned_attempts):
-            return await self.settle_owned(owner_id, billable_unknown=True)
+            return await self.settle_owned(owner_id)
         return await self.cancel_owned(owner_id)
 
     async def settle_owned(self, owner_id: str, *, billable_unknown: bool = False) -> bool:
