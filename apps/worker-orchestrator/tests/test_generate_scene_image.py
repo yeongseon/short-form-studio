@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from celery.exceptions import SoftTimeLimitExceeded
 from creator_domain.models.stage import RunStage
 from tasks import generate_scene_image as generate_scene_image_module
 
@@ -721,6 +722,29 @@ def test_releases_gpu_lock_when_provider_fails(monkeypatch: pytest.MonkeyPatch) 
 
     assert result["status"] == "failed"
     assert len(released) == 1  # GPU lock released even on failure
+
+
+def test_soft_timeout_removes_unfinished_scene_output(
+    monkeypatch: pytest.MonkeyPatch, tmp_path,
+) -> None:
+    # Given a provider that reaches the scene output boundary before a soft timeout.
+    provider = FakeImageProvider(error=SoftTimeLimitExceeded())
+    _patch_registry(monkeypatch, FakeRegistry(FakeEntry(requires_gpu=False), provider))
+    monkeypatch.setattr(generate_scene_image_module, "_ARTIFACTS_BASE", str(tmp_path))
+    plan = FakeVisualPlan(run_id=504, scenes=[FakeVisualScene()])
+    _patch_services(
+        monkeypatch,
+        FakeVisualPlanService(plan=plan),
+        FakeVisualAssetService(),
+        _make_storage(run_id=504, stage="VISUAL_PLAN_REVIEW"),
+    )
+
+    # When the production task receives the cooperative timeout.
+    with pytest.raises(SoftTimeLimitExceeded):
+        _invoke_task(run_id=504)
+
+    # Then no unfinished scene output remains on local storage.
+    assert list(tmp_path.rglob("*.png")) == []
 
 
 def test_release_gpu_lock_failure_does_not_mask_scene_error(

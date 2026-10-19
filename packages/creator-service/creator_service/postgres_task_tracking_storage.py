@@ -1,9 +1,16 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 
 if TYPE_CHECKING:
     from .postgres_run_storage import PostgresRunStorage
+
+from .postgres_usage_storage import (
+    cancel_owned_on_connection,
+    finalize_revoked_owned_on_connection,
+    settle_owned_on_connection,
+)
+from .task_tracking_storage import BillingOutcome
 
 from . import db
 from .db import fetch_all, fetch_one
@@ -185,28 +192,34 @@ class PostgresTaskTrackingStorage:
         )
 
     async def claim_running(self, task_id: int, **kwargs: Any) -> dict[str, Any] | None:
-        """Atomically claim: only transition from queued/failed to running.
-
-        Uses WHERE status IN ('queued', 'failed') so only one concurrent caller wins.
-        """
-        claimed = await fetch_one(
-            """
-            UPDATE creator_run_tasks
-            SET status = 'running',
-                started_at = $2,
-                finished_at = NULL,
-                error_code = NULL,
-                error_message = NULL, claim_token = $3
-            WHERE id = $1 AND status IN ('pending', 'queued', 'failed')
-              AND (error_code IS NULL OR NOT (error_code = ANY($4::text[])))
-            RETURNING *
-            """,
-            task_id,
-            kwargs.get("started_at"),
-            kwargs.get("claim_token"),
-            ["reconciler_pending_cleanup", "reconciler_stuck_cleanup", "reconciler_cleanup_claimed"],
-        )
-        return claimed
+        """Lock and claim an eligible task after rechecking its observed owner."""
+        pool = await db.get_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                observed = await connection.fetchrow(
+                    "SELECT status, claim_token, error_code FROM creator_run_tasks "
+                    "WHERE id = $1 FOR UPDATE",
+                    task_id,
+                )
+                if observed is None:
+                    return None
+                if observed["claim_token"] != kwargs.get("expected_claim_token"):
+                    return None
+                if observed["status"] not in {"pending", "queued", "failed"}:
+                    return None
+                if observed["error_code"] in {
+                    "reconciler_pending_cleanup",
+                    "reconciler_stuck_cleanup",
+                    "reconciler_cleanup_claimed",
+                }:
+                    return None
+                claimed = await connection.fetchrow(
+                    """UPDATE creator_run_tasks SET status='running', started_at=$2,
+                       finished_at=NULL, error_code=NULL, error_message=NULL, claim_token=$3
+                       WHERE id=$1 RETURNING *""",
+                    task_id, kwargs.get("started_at"), kwargs.get("claim_token"),
+                )
+                return dict(claimed) if claimed is not None else None
 
     async def finish_if_claimed(
         self, celery_task_id: str, token: str, status: str,
@@ -235,7 +248,7 @@ class PostgresTaskTrackingStorage:
                 )
                 if claimed is None:
                     return False
-                await connection.fetchrow(
+                run_updated = await connection.fetchrow(
                     """UPDATE creator_runs SET current_stage=$2, status=$3, version=version+1
                        WHERE id=$1 AND current_stage=ANY($4::text[])
                        AND status != ALL($5::text[]) RETURNING id""",
@@ -247,6 +260,51 @@ class PostgresTaskTrackingStorage:
                        finished_at=NOW(), error_code=$3, error_message=$4
                        WHERE id=$1 RETURNING id""",
                     claimed["id"], status, error_code, error_message,
+                )
+                return run_updated is not None
+
+    async def fail_claimed_and_cancel_quota(
+        self, celery_task_id: str, token: str, usage_storage: Any,
+        error_code: str, error_message: str, run_storage: PostgresRunStorage | None = None,
+        run_id: int | None = None, expected_stages: frozenset[str] = frozenset(),
+        billing_outcome: BillingOutcome | None = None,
+    ) -> bool:
+        pool = await db.get_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                claimed = await connection.fetchrow(
+                    """SELECT id, run_id FROM creator_run_tasks WHERE celery_task_id=$1
+                       AND claim_token=$2 AND status='running' FOR UPDATE""",
+                    celery_task_id, token,
+                )
+                if claimed is None:
+                    return False
+                if run_id is not None and int(claimed["run_id"]) == run_id:
+                    await connection.execute(
+                        """UPDATE creator_runs SET current_stage='FAILED', status='failed',
+                           version=version+1 WHERE id=$1 AND current_stage=ANY($2::text[])
+                           AND status != ALL($3::text[])""",
+                        run_id, list(expected_stages), ["failed", "cancelled", "completed"],
+                    )
+                match billing_outcome:
+                    case None:
+                        await finalize_revoked_owned_on_connection(
+                            connection, celery_task_id,
+                        )
+                    case BillingOutcome.NOT_STARTED:
+                        await cancel_owned_on_connection(connection, celery_task_id)
+                    case BillingOutcome.ACCOUNTED:
+                        await settle_owned_on_connection(connection, celery_task_id)
+                    case BillingOutcome.UNKNOWN:
+                        await settle_owned_on_connection(
+                            connection, celery_task_id, billable_unknown=True,
+                        )
+                    case unreachable:
+                        assert_never(unreachable)
+                await connection.execute(
+                    """UPDATE creator_run_tasks SET status='failed', claim_token=NULL,
+                       finished_at=NOW(), error_code=$2, error_message=$3 WHERE id=$1""",
+                    claimed["id"], error_code, error_message,
                 )
                 return True
 

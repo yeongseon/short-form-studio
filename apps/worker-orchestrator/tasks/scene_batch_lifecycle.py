@@ -37,6 +37,13 @@ class SceneBatch:
     cancelled: bool = False
     local_outputs: set[Path] = field(default_factory=set)
 
+    def cleanup_local_outputs(self) -> None:
+        for path in self.local_outputs:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Scene local cleanup failed", extra={"run_id": self.ctx.run_id})
+
     async def checkpoint(self) -> None:
         task = await task_runner._task_tracking_service.storage.get_by_celery_id(self.ctx.task_id)
         run = await self.runs.storage.get_run(self.ctx.run_id)
@@ -102,11 +109,7 @@ class SceneBatch:
             if not applied and row is not None and row.get("status") in task_runner._TERMINAL_STATUSES:
                 self.cancelled = True
         if self.cancelled:
-            for path in self.local_outputs:
-                try:
-                    path.unlink(missing_ok=True)
-                except OSError:
-                    logger.warning("Scene local cleanup failed", extra={"run_id": self.ctx.run_id})
+            self.cleanup_local_outputs()
         return TaskResult(
             status="cancelled" if self.cancelled else status,
             extra={

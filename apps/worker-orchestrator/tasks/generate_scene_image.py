@@ -10,6 +10,7 @@ from typing import Any
 from uuid import uuid4
 
 from celery.exceptions import Ignore, SoftTimeLimitExceeded
+from celery.utils.nodenames import gethostname
 from celery_app import celery_app
 from creator_domain.models.stage import RunStage
 from creator_domain.sanitize import sanitize_path_component
@@ -23,6 +24,11 @@ from creator_service.usage_service import record_provider_call
 from creator_service.visual_asset_service import visual_asset_service as _visual_asset_service
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
 from tasks.task_runner import GpuLockContext, TaskContext, TaskResult, TaskRunnerConfig, run_task
+from tasks.hard_timeout import (
+    delivery_owner,
+    production_task,
+    production_time_limits,
+)
 from tasks.task_execution import TaskInputError
 from tasks.scene_batch_lifecycle import SAFE_FAILURE_STAGES, SAFE_SUCCESS_STAGES, SceneBatch
 
@@ -30,18 +36,43 @@ logger = logging.getLogger(__name__)
 _ARTIFACTS_BASE = os.getenv("ARTIFACT_ROOT", "data/artifacts")
 _SAFE_SUCCESS_STAGES = SAFE_SUCCESS_STAGES
 _SAFE_FAILURE_STAGES = SAFE_FAILURE_STAGES
+_SOFT_TIME_LIMIT, _HARD_TIME_LIMIT = production_time_limits(600, 660)
 
 def _asset_dir(run_id: int) -> Path:
     return Path(_ARTIFACTS_BASE) / str(run_id) / "scenes"
 
+
+def _cleanup_hard_timeout_outputs(
+    run_id: int,
+    task_id: str,
+    worker_hostname: str,
+    worker_pid: int,
+) -> None:
+    from worker_loop import run_in_worker_loop
+
+    async def persisted_paths() -> set[Path]:
+        grouped = await _visual_asset_service.list_by_run(run_id)
+        return {
+            Path(asset.asset_path).resolve()
+            for assets in grouped.values()
+            for asset in assets
+        }
+
+    persisted = run_in_worker_loop(persisted_paths())
+    owner = delivery_owner(task_id, worker_hostname, worker_pid)
+    for path in _asset_dir(run_id).glob(f"*-{owner}-*.png"):
+        if path.resolve() not in persisted:
+            path.unlink(missing_ok=True)
+
 @celery_app.task(
     bind=True,
+    base=production_task(_SAFE_FAILURE_STAGES, _cleanup_hard_timeout_outputs),
     autoretry_for=(ProviderTimeoutError, RateLimitError),
     retry_backoff=30,
     retry_jitter=True,
     max_retries=5,
-    soft_time_limit=600,
-    time_limit=660,
+    soft_time_limit=_SOFT_TIME_LIMIT,
+    time_limit=_HARD_TIME_LIMIT,
     name="generate_scene_image",
 )
 @trace_task("generate_scene_image")
@@ -68,7 +99,7 @@ def generate_scene_image(
         success_stage=None,
     )
 
-    async def execute(ctx: TaskContext) -> TaskResult:
+    async def execute_batch(ctx: TaskContext, batch: SceneBatch) -> TaskResult:
         plan = await _visual_plan_service.get_active_plan(run_id)
         if plan is None:
             raise TaskInputError(f"No active visual plan for run {run_id}")
@@ -87,8 +118,7 @@ def generate_scene_image(
         provider = registry.get_provider(model_key)
         asset_dir = _asset_dir(run_id)
         asset_dir.mkdir(parents=True, exist_ok=True)
-
-        batch = SceneBatch(ctx, _run_service)
+        owner = delivery_owner(ctx.task_id, gethostname(), os.getpid())
 
         for idx, target_scene in enumerate(target_scenes):
             try:
@@ -128,8 +158,11 @@ def generate_scene_image(
                     if image_params:
                         params.update(image_params)
                     safe_scene_id = sanitize_path_component(target_scene.scene_id, label="scene_id")
-                    target_path = str(asset_dir / f"{safe_scene_id}-{uuid4().hex}.png")
+                    target_path = str(
+                        asset_dir / f"{safe_scene_id}-{owner}-{uuid4().hex}.png"
+                    )
                     batch.local_outputs.add(Path(target_path))
+                    Path(target_path).touch()
                     params["output_path"] = target_path
                     # Per-scene retry for SVG/XML parse errors (up to 3 attempts for groq-svg)
                     _scene_max_attempts = 3 if model_key == "groq-svg" else 1
@@ -188,10 +221,12 @@ def generate_scene_image(
                                 await batch.backoff(5)
                                 # Regenerate output path for retry
                                 target_path = str(
-                                    asset_dir / f"{safe_scene_id}-{uuid4().hex}.png"
+                                    asset_dir
+                                    / f"{safe_scene_id}-{owner}-{uuid4().hex}.png"
                                 )
                                 params["output_path"] = target_path
                                 batch.local_outputs.add(Path(target_path))
+                                Path(target_path).touch()
                                 continue
                             raise ProviderError(
                                 "Provider failed scene image generation "
@@ -277,5 +312,12 @@ def generate_scene_image(
                 "scene_id": scene_id,
             },
         )
+
+    async def execute(ctx: TaskContext) -> TaskResult:
+        batch = SceneBatch(ctx, _run_service)
+        try:
+            return await execute_batch(ctx, batch)
+        finally:
+            batch.cleanup_local_outputs()
 
     return run_task(self, run_id, config, execute)

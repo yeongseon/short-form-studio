@@ -159,7 +159,7 @@ jobs:
           python3 -m pytest packages/creator-service/tests/test_stale_pending_reconciler_fencing.py packages/creator-service/tests/test_reconciler_cleanup_claims.py -v --basetemp=/tmp/reconciler-fencing-runtime
           PYTHONPATH=tests/integration python3 -m pytest packages/creator-service/tests/test_postgres_media_asset_storage.py tests/integration/test_first_short_runtime.py tests/integration/test_studio_proxy_runtime.py -v --basetemp=/tmp/first-short-runtime
           PYTHONPATH=tests/integration python3 -m pytest tests/integration/test_studio_upload_browser.py -v --basetemp=/tmp/studio-browser-runtime
-          python3 -m pytest packages/creator-service/tests/test_spend_reservations.py packages/creator-service/tests/test_owned_quota_lifecycle.py packages/creator-service/tests/test_postgres_spend_lifecycle.py -v --basetemp=/tmp/spend-lifecycle-runtime
+          python3 -m pytest packages/creator-service/tests/test_spend_reservations.py packages/creator-service/tests/test_owned_quota_lifecycle.py packages/creator-service/tests/test_postgres_spend_lifecycle.py packages/creator-service/tests/test_task_claim_ownership.py -v --basetemp=/tmp/spend-lifecycle-runtime
           PYTHONPATH=apps/worker-orchestrator python3 -m pytest apps/worker-orchestrator/tests/test_terminal_validation_guards.py apps/worker-orchestrator/tests/test_terminal_validation_failure.py apps/worker-orchestrator/tests/test_visual_plan_terminal_validation.py -v --basetemp=/tmp/terminal-validation-runtime
           PYTHONPATH=apps/worker-orchestrator python3 -m pytest apps/worker-orchestrator/tests/test_late_worker_outcomes.py apps/worker-orchestrator/tests/test_worker_outcome_claims.py packages/creator-service/tests/test_revocation_dispatch_race.py -v --basetemp=/tmp/late-worker-outcomes-runtime
           python3 -m pytest packages/creator-service/tests/test_quota_stage_compensation.py packages/creator-service/tests/test_postgres_quota_compensation.py -v --basetemp=/tmp/quota-compensation-runtime
@@ -183,6 +183,90 @@ jobs:
       - name: Stop disposable databases
         if: always()
         run: docker rm -f first-short-postgres first-short-redis
+
+  worker-topology-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install pinned worker dependencies
+        run: |
+          python3 -m pip install -c constraints.txt -r apps/api/requirements.txt -r apps/worker-orchestrator/requirements.txt -r apps/worker-orchestrator/requirements-dev.txt
+          python3 -m pip install -c constraints.txt -e packages/creator-domain -e packages/creator-provider -e packages/creator-service
+          python3 -c "import celery; assert celery.__version__ == '5.6.3', celery.__version__"
+      - name: Build shipped worker image and start service containers
+        run: |
+          mkdir -p /tmp/worker-topology-runtime
+          chmod 777 /tmp/worker-topology-runtime
+          docker network create worker-topology
+          docker run -d --name topology-postgres --network worker-topology -p 127.0.0.1:55441:5432 \
+            -e POSTGRES_DB=topology -e POSTGRES_USER=review -e POSTGRES_PASSWORD=review-local-only \
+            postgres:16.6-alpine
+          docker run -d --name topology-redis --network worker-topology -p 127.0.0.1:56391:6379 redis:7.4-alpine
+          docker build --target runtime -f apps/worker-orchestrator/Dockerfile -t worker-topology-image .
+          docker image inspect worker-topology-image --format '{{.Id}}' > /tmp/worker-topology-runtime/image-digest.txt
+          docker image inspect worker-topology-image --format '{{json .Config.Entrypoint}} {{json .Config.Cmd}}' \
+            > /tmp/worker-topology-runtime/resolved-command.txt
+          until docker exec topology-postgres pg_isready -U review -d topology; do sleep 1; done
+          until docker exec topology-redis redis-cli ping; do sleep 1; done
+          (cd apps/api && DATABASE_URL=postgresql://review:review-local-only@127.0.0.1:55441/topology \
+            python3 -m alembic upgrade head)
+          docker run --rm worker-topology-image python -c \
+            "import subprocess; subprocess.run(['ffmpeg', '-version'], check=True)" \
+            > /tmp/worker-topology-runtime/ffmpeg-version.txt
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          manifest = {
+              "dockerfile": "apps/worker-orchestrator/Dockerfile",
+              "image": "worker-topology-image",
+              "postgres": "postgres:16.6-alpine",
+              "redis": "redis:7.4-alpine",
+              "celery": "5.6.3",
+              "scenarios": ["authenticated-stop", "quota-release", "artifact-suppression", "hard-timeout", "active-redelivery", "stale-attempt-fencing", "ffmpeg-cleanup", "fairness"],
+          }
+          Path("/tmp/worker-topology-runtime/manifest.json").write_text(json.dumps(manifest, indent=2))
+          PY
+      - name: Verify shipped worker cancellation and timeout topology
+        env:
+          PYTHONPATH: apps/api/src:apps/worker-orchestrator:packages/creator-domain:packages/creator-service:packages/creator-provider
+          DATABASE_URL: postgresql://review:review-local-only@127.0.0.1:55441/topology
+          REDIS_URL: redis://127.0.0.1:56391/0
+          WORKER_TOPOLOGY_IMAGE: worker-topology-image
+          WORKER_TOPOLOGY_EVIDENCE_DIR: /tmp/worker-topology-runtime
+          WORKER_TOPOLOGY_PROBE_ENABLED: "1"
+        run: >-
+          python3 -m pytest
+          apps/worker-orchestrator/tests/test_worker_topology_contract.py
+          apps/worker-orchestrator/tests/test_worker_topology_process.py
+          apps/worker-orchestrator/tests/test_worker_topology_image.py
+          -v --junitxml=/tmp/worker-topology-runtime/results.xml
+      - name: Capture worker runtime logs
+        if: always()
+        run: |
+          for container in topology-solo-cancel topology-scaled-redelivery topology-scaled-redelivered topology-scaled-ffmpeg topology-scaled-replacement; do
+            if docker inspect "$container" >/dev/null 2>&1; then
+              docker logs "$container" > "/tmp/worker-topology-runtime/${container}.worker.log" 2>&1
+            fi
+          done
+          test -s /tmp/worker-topology-runtime/topology-solo-cancel.worker.log
+          test -s /tmp/worker-topology-runtime/topology-scaled-redelivery.worker.log
+          test -s /tmp/worker-topology-runtime/topology-scaled-redelivered.worker.log
+          test -s /tmp/worker-topology-runtime/topology-scaled-ffmpeg.worker.log
+          test -s /tmp/worker-topology-runtime/topology-scaled-replacement.worker.log
+          test -s /tmp/worker-topology-runtime/cancellation-final-state.json
+          test -s /tmp/worker-topology-runtime/redelivery-final-state.json
+          test -s /tmp/worker-topology-runtime/timeout-final-state.json
+          cp /tmp/worker-topology-runtime/topology-solo-cancel.worker.log /tmp/worker-topology-runtime/worker.log
+      - name: Upload worker topology evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-topology-runtime-evidence
+          path: /tmp/worker-topology-runtime
 
   docker:
     runs-on: ubuntu-latest

@@ -70,6 +70,3 @@ def test_generate_script_propagates_soft_timeout(monkeypatch: pytest.MonkeyPatch
             model_key="test-model",
             instructions=None,
         )
-
-    # The outer timeout handler should have attempted to mark run as FAILED
-    mock_storage.conditional_update_run.assert_called()

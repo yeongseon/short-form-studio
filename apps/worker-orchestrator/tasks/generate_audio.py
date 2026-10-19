@@ -25,6 +25,7 @@ from creator_service.telemetry import trace_task
 from creator_service.usage_service import authorize_owned_provider_attempt, record_provider_call
 from creator_service.spend_quote import MAX_AUDIO_DURATION_SECONDS, audio_reservation_quote
 from tasks.task_runner import GpuLockContext, TaskContext, TaskResult, TaskRunnerConfig, run_task
+from tasks.hard_timeout import production_task
 from tasks.task_execution import TaskInputError
 
 logger = logging.getLogger(__name__)
@@ -103,6 +104,7 @@ def _get_audio_duration_seconds(path: str) -> float | None:
 
 @celery_app.task(
     bind=True,
+    base=production_task(frozenset({RunStage.VISUAL_ASSET_REVIEW.value, RunStage.AUDIO_GENERATING.value})),
     autoretry_for=(ProviderTimeoutError, RateLimitError),
     retry_backoff=30,
     retry_jitter=True,

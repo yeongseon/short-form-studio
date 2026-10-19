@@ -40,8 +40,10 @@ import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from enum import StrEnum
 from typing import Any
+
+from creator_service.usage_service import UsageStorageBackend
+from creator_service.task_tracking_storage import BillingOutcome
 
 from celery.exceptions import Ignore, SoftTimeLimitExceeded
 from creator_domain.models.stage import REVIEW_STAGES, RunStage
@@ -90,12 +92,6 @@ class TaskRunnerConfig:
     skip_stage_guard: bool = False
     raise_on_stage_guard: bool = True
     no_fail_transition_exceptions: tuple[type[Exception], ...] = (TaskInputError,)
-
-
-class BillingOutcome(StrEnum):
-    NOT_STARTED = "not_started"
-    ACCOUNTED = "accounted"
-    UNKNOWN = "unknown"
 
 
 @dataclass
@@ -355,8 +351,14 @@ async def _run_task_inner(
     # 6. Mark success/failure based on result status
     end_time = datetime.now(timezone.utc)
     try:
-        if result.status == "success":
+        if result.status == "success" and claim_token is not None:
+            await _task_tracking_service.mark_success_if_claimed(task_id, claim_token)
+        elif result.status == "success":
             await _task_tracking_service.mark_success_if_running(task_id)
+        elif claim_token is not None:
+            await _task_tracking_service.mark_failed_if_claimed(
+                task_id, claim_token, "task_result", f"status={result.status}"
+            )
         else:
             await _task_tracking_service.mark_failed_if_running(
                 task_id, "task_result", f"status={result.status}"
@@ -392,15 +394,25 @@ async def _handle_general_failure(
     config_task_name: str,
     safe_failure_stages: frozenset[str],
     exc: Exception,
+    usage_storage: UsageStorageBackend,
     claim_token: str | None = None,
+    billing_outcome: BillingOutcome = BillingOutcome.NOT_STARTED,
 ) -> bool:
     """Consolidate error-handler async work into a single coroutine."""
     try:
         code, message = _safe_failure_record(exc)
         if claim_token is not None:
-            outcome = await _task_tracking_service.mark_failed_if_claimed(task_id, claim_token, code, message)
-            if outcome is None:
-                return False
+            return await _task_tracking_service.fail_claimed_and_cancel_quota(
+                task_id,
+                claim_token,
+                usage_storage,
+                code,
+                message,
+                _run_service.storage,
+                run_id,
+                safe_failure_stages,
+                billing_outcome,
+            )
         else:
             outcome = await _task_tracking_service.mark_failed_if_running(task_id, code, message)
     except Exception:

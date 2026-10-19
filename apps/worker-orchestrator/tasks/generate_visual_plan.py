@@ -19,6 +19,7 @@ from creator_service.telemetry import trace_task
 from creator_service.usage_service import authorize_owned_provider_attempt, record_provider_call
 from creator_service.visual_plan_service import visual_plan_service as _visual_plan_service
 from tasks.task_runner import GpuLockContext, TaskContext, TaskResult, TaskRunnerConfig, run_task
+from tasks.hard_timeout import production_task
 from tasks.task_execution import TaskInputError
 
 logger = logging.getLogger(__name__)
@@ -102,6 +103,7 @@ def _parse_llm_response(raw: str, sections: list[dict[str, Any]]) -> list[Visual
 
 @celery_app.task(
     bind=True,
+    base=production_task(frozenset({RunStage.VISUAL_PLAN_GENERATING.value})),
     autoretry_for=(ProviderTimeoutError, RateLimitError),
     retry_backoff=30,
     retry_jitter=True,

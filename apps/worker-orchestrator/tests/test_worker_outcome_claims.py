@@ -55,6 +55,24 @@ def test_failed_worker_outcome_remains_reclaimable(runner_case: RunnerCase) -> N
     assert tracked.error_code is None and tracked.error_message is None
 
 
+def test_runtime_error_finalizes_claimed_task_and_run(runner_case: RunnerCase) -> None:
+    # Given an owned delivery whose execution fails after acquiring its claim.
+    case = runner_case
+
+    async def fail(_ctx: task_runner.TaskContext) -> task_runner.TaskResult:
+        raise RuntimeError("GPU lock was lost")
+
+    # When the release failure propagates through the worker boundary.
+    with pytest.raises(RuntimeError, match="GPU lock was lost"):
+        task_runner.run_task(case.delivery(), case.run_id, case.config, fail)
+
+    # Then general failure handling terminalizes both the claimed task and run.
+    tracked = run_in_worker_loop(case.tracking.list_run_tasks(case.run_id))[0]
+    run = run_in_worker_loop(case.runs.storage.get_run(case.run_id))
+    assert tracked.status == "failed"
+    assert (run["current_stage"], run["status"]) == ("FAILED", "failed")
+
+
 @pytest.mark.parametrize("status", ["pending", "queued", "running"])
 def test_active_task_cancellation_remains_allowed(runner_case: RunnerCase, status: str) -> None:
     # Given any active dispatch state, including a not-yet-claimed delivery.

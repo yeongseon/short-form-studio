@@ -36,6 +36,25 @@ class _TrackingServiceSingleStub:
         self.marked.extend(celery_ids)
 
 
+class _UsageServiceStub:
+    def __init__(self) -> None:
+        self.cancelled: list[str] = []
+
+    async def finalize_revoked_owned(self, owner_id: str) -> bool:
+        self.cancelled.append(owner_id)
+        return True
+
+
+def _module_stub(
+    name: str,
+    tracking: _TrackingServiceStub | _TrackingServiceSingleStub,
+    usage: _UsageServiceStub,
+) -> SimpleNamespace:
+    if name == "creator_service.usage_service":
+        return SimpleNamespace(usage_service=usage)
+    return SimpleNamespace(task_tracking_service=tracking)
+
+
 class _ControlStub:
     def __init__(self) -> None:
         self.calls: list[str] = []
@@ -51,13 +70,14 @@ async def test_revoke_active_tasks_marks_only_successful_broker_revokes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tracking = _TrackingServiceStub()
+    usage = _UsageServiceStub()
     control = _ControlStub()
     celery_app = SimpleNamespace(control=control)
 
     monkeypatch.setattr(
         creator_runs_utils,
         "import_module",
-        lambda _name: SimpleNamespace(task_tracking_service=tracking),
+        lambda name: _module_stub(name, tracking, usage),
     )
     original_import = builtins.__import__
 
@@ -79,10 +99,11 @@ async def test_collect_active_celery_ids_returns_tuple_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tracking = _TrackingServiceSingleStub(["id-1"])
+    usage = _UsageServiceStub()
     monkeypatch.setattr(
         creator_runs_utils,
         "import_module",
-        lambda _name: SimpleNamespace(task_tracking_service=tracking),
+        lambda name: _module_stub(name, tracking, usage),
     )
     result = await creator_runs_utils._collect_active_celery_ids(1)
     assert result == (["id-1"], True)
@@ -107,13 +128,14 @@ async def test_revoke_celery_ids_returns_true_on_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tracking = _TrackingServiceSingleStub(["id-1", "id-2"])
+    usage = _UsageServiceStub()
     control = _ControlStub()
     celery_app = SimpleNamespace(control=control)
 
     monkeypatch.setattr(
         creator_runs_utils,
         "import_module",
-        lambda _name: SimpleNamespace(task_tracking_service=tracking),
+        lambda name: _module_stub(name, tracking, usage),
     )
     original_import = builtins.__import__
 
@@ -128,17 +150,51 @@ async def test_revoke_celery_ids_returns_true_on_success(
 
 
 @pytest.mark.asyncio
+async def test_revoke_celery_ids_releases_owned_quota_after_broker_accepts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given two active deliveries with production quota ownership.
+    tracking = _TrackingServiceSingleStub(["id-1", "id-2"])
+    usage = _UsageServiceStub()
+    control = _ControlStub()
+    celery_app = SimpleNamespace(control=control)
+
+    def _module(name: str) -> SimpleNamespace:
+        if name == "creator_service.usage_service":
+            return SimpleNamespace(usage_service=usage)
+        return SimpleNamespace(task_tracking_service=tracking)
+
+    monkeypatch.setattr(creator_runs_utils, "import_module", _module)
+    original_import = builtins.__import__
+
+    def _import(name: str, *args, **kwargs):
+        if name == "celery_app":
+            return SimpleNamespace(celery_app=celery_app)
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _import)
+
+    # When the production revoke helper accepts both revocations.
+    result = await creator_runs_utils._revoke_celery_ids(["id-1", "id-2"], 1)
+
+    # Then each task's owned reservation is released exactly once.
+    assert result is True
+    assert usage.cancelled == ["id-1", "id-2"]
+
+
+@pytest.mark.asyncio
 async def test_revoke_celery_ids_returns_false_on_partial_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     tracking = _TrackingServiceSingleStub(["ok-1", "fail-1", "ok-2"])
+    usage = _UsageServiceStub()
     control = _ControlStub()
     celery_app = SimpleNamespace(control=control)
 
     monkeypatch.setattr(
         creator_runs_utils,
         "import_module",
-        lambda _name: SimpleNamespace(task_tracking_service=tracking),
+        lambda name: _module_stub(name, tracking, usage),
     )
     original_import = builtins.__import__
 

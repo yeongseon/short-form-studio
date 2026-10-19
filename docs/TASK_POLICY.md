@@ -13,6 +13,14 @@ All tasks use Celery's built-in retry mechanism with:
 - **Soft time limit** (raises `SoftTimeLimitExceeded` — task can clean up)
 - **Hard time limit** (kills task unconditionally — 60s after soft limit)
 
+These timeout bullets describe task declarations, not guarantees of every pool.
+The base, script, audio, and render Compose workers use Celery 5.6.3's `solo`
+pool. Its implementation executes inline (`celery/concurrency/solo.py`, lines
+11-30) and reports `timeouts: ()`; therefore Celery soft/hard limits and
+remote-control terminate cannot interrupt a running task in those workers.
+The scaled image worker uses `prefork`, where process tests verify a soft limit.
+No worker pool is changed by this policy.
+
 ---
 
 ## Per-Stage Configuration
@@ -89,6 +97,23 @@ celery -A celery_app worker -Q script --concurrency=4
 # Render worker (CPU-bound, single concurrency recommended)
 celery -A celery_app worker -Q render --concurrency=1
 ```
+
+## Cancellation and shutdown boundaries
+
+Application cancellation is cooperative: the API commits cancellation in
+durable run/task state, and a surviving worker observes that state at its next
+boundary. After cancellation is visible, the worker must not start another
+provider call or persist a new asset, and it must release delivery-owned files,
+quota reservations, and child processes. A request already sent to a remote
+provider cannot be recalled; its response must be discarded if cancellation
+wins before persistence.
+
+Celery 5.6.3 remote control is handled by the worker consumer. In a `solo`
+worker, the inline task blocks that consumer, so revoke is not processed until
+the task returns. `terminate=True` also has no separate child process to kill.
+SIGTERM starts warm shutdown and waits for active work; it does not itself
+cancel the running task. Operators must rely on cooperative cancellation and
+provider/child-process-specific deadlines for the shipped solo workers.
 
 ---
 

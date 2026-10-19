@@ -6,11 +6,12 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .run_service import RunStorageBackend
+    from .usage_service import UsageStorageBackend
 
 from creator_domain.models import RunTask
 
 from .memory_task_tracking_storage import InMemoryTaskTrackingStorage as InMemoryTaskTrackingStorage
-from .task_tracking_storage import TaskTrackingStorageBackend, create_task_tracking_storage
+from .task_tracking_storage import BillingOutcome, TaskTrackingStorageBackend, create_task_tracking_storage
 
 
 class TaskTrackingService:
@@ -93,9 +94,6 @@ class TaskTrackingService:
             status = existing.get("status")
             if status == "success":
                 return RunTask.from_row(existing)
-            if status == "running":
-                # Already claimed by another worker — do not execute
-                return None
         started_at = datetime.now(timezone.utc)
         if existing is None:
             row = await self.storage.create_task(
@@ -124,6 +122,7 @@ class TaskTrackingService:
             attempt=attempt,
             started_at=started_at,
             claim_token=claim_token,
+            expected_claim_token=existing.get("claim_token"),
         )
         if row is None:
             # Concurrent claim or task already succeeded — cannot claim
@@ -155,6 +154,17 @@ class TaskTrackingService:
         return await self.storage.finish_claimed_run(
             celery_task_id, token, status, run_storage, run_id,
             run_updates, expected_stages, rejected_statuses, error_code, error_message,
+        )
+
+    async def fail_claimed_and_cancel_quota(
+        self, celery_task_id: str, token: str, usage_storage: UsageStorageBackend,
+        error_code: str, error_message: str, run_storage: RunStorageBackend | None = None,
+        run_id: int | None = None, expected_stages: frozenset[str] = frozenset(),
+        billing_outcome: BillingOutcome | None = None,
+    ) -> bool:
+        return await self.storage.fail_claimed_and_cancel_quota(
+            celery_task_id, token, usage_storage, error_code, error_message,
+            run_storage, run_id, expected_stages, billing_outcome,
         )
 
     async def mark_running(self, celery_task_id: str) -> RunTask | None:

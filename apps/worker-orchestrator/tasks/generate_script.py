@@ -15,6 +15,7 @@ from creator_service.script_service import script_service as _script_service
 from creator_service.telemetry import trace_task
 from creator_service.usage_service import authorize_owned_provider_attempt, record_provider_call
 from tasks.task_runner import GpuLockContext, TaskContext, TaskResult, TaskRunnerConfig, run_task
+from tasks.hard_timeout import production_task
 
 from tasks.viral_prompts import build_viral_system_prompt
 
@@ -40,6 +41,7 @@ def _build_prompt(
 
 @celery_app.task(
     bind=True,
+    base=production_task(frozenset({RunStage.IDEA_READY.value, RunStage.SCRIPT_GENERATING.value})),
     autoretry_for=(ProviderTimeoutError, RateLimitError),
     retry_backoff=30,
     retry_jitter=True,

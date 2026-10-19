@@ -28,7 +28,7 @@ try:
 except ImportError:
     _worker_loop_module = None  # API context — worker_loop not available
 from creator_service.actionable_errors import build_run_failure_summary
-from creator_service.error_redaction import JsonValue, sanitize_error_json
+from creator_service.error_redaction import JsonValue, sanitize_error_json as _sanitize_for_dlq
 from creator_service.logging_config import setup_json_logging
 from kombu import Exchange, Queue
 
@@ -114,11 +114,8 @@ BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
     "reconcile-media-uploads": {"task": "reconcile_media_uploads", "schedule": 600.0},
 }
 
-celery_app = Celery(
-    "worker-orchestrator",
-    broker=redis_url,
-    backend=redis_url,
-    include=[
+def _worker_task_modules() -> list[str]:
+    modules = [
         "tasks.generate_script",
         "tasks.generate_visual_plan",
         "tasks.generate_scene_image",
@@ -131,7 +128,21 @@ celery_app = Celery(
         "tasks.retry_failed_artifact_deletions",
         "tasks.sweep_expired_artifacts",
         "tasks.reconcile_media_uploads",
-    ],
+        "tasks.revoked_quota",
+    ]
+    if (
+        os.getenv("WORKER_TOPOLOGY_PROBE_ENABLED") == "1"
+        and os.getenv("ENVIRONMENT") == "test"
+    ):
+        modules.append("tasks.runtime_topology_probe")
+    return modules
+
+
+celery_app = Celery(
+    "worker-orchestrator",
+    broker=redis_url,
+    backend=redis_url,
+    include=_worker_task_modules(),
 )
 celery_app.conf.task_default_queue = "creator"
 
@@ -223,9 +234,6 @@ def setup_worker_process_telemetry(**kwargs: object) -> None:
 
 
 
-_sanitize_for_dlq = sanitize_error_json
-
-
 def _record_failed_task_to_dlq(
     task_id: str | None,
     task_name: str,
@@ -288,6 +296,12 @@ def _should_record_to_dlq(sender: Any, exception: BaseException | None = None) -
     return True
 
 
+def _terminal_failure_services() -> Any:
+    from creator_service.task_tracking_service import task_tracking_service
+
+    return task_tracking_service.fail_claimed_and_cancel_quota
+
+
 @task_failure.connect
 def handle_task_failure(
     sender: Any = None,
@@ -301,6 +315,33 @@ def handle_task_failure(
         return
     if not _should_record_to_dlq(sender, exception):
         return
+
+    if isinstance(task_id, str):
+        from worker_loop import run_in_worker_loop
+
+        failure = build_run_failure_summary(exception)
+        request = getattr(sender, "request", None)
+        claim_token = getattr(request, "claim_token", None)
+        try:
+            if isinstance(claim_token, str):
+                from creator_service.usage_service import usage_service
+
+                finalize_claimed = _terminal_failure_services()
+                run_in_worker_loop(
+                    finalize_claimed(
+                        task_id,
+                        claim_token,
+                        usage_service.storage,
+                        str(failure["code"]),
+                        str(failure["message"]),
+                    )
+                )
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "Failed to finalize terminal task failure",
+                extra={"task_id": task_id},
+                exc_info=True,
+            )
 
     task_name = getattr(sender, "name", "unknown_task")
     _record_failed_task_to_dlq(

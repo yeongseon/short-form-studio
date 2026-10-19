@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 
 import anyio
 
 if TYPE_CHECKING:
     from .run_service import InMemoryRunStorage
+    from .usage_service import InMemoryUsageStorage
+
+from .task_tracking_storage import BillingOutcome
 
 
 class InMemoryTaskTrackingStorage:
@@ -171,11 +174,50 @@ class InMemoryTaskTrackingStorage:
         row = self._rows[row_id]
         if row.get("status") != "running" or row.get("claim_token") != token or row.get("run_id") != run_id:
             return False
-        await run_storage.conditional_update_run(
+        applied, _ = await run_storage.conditional_update_run(
             run_id, run_updates, expected_stages, rejected_statuses=rejected_statuses,
         )
         await self.finish_if_claimed(celery_task_id, token, status, error_code, error_message)
-        return True
+        return applied
+
+    async def fail_claimed_and_cancel_quota(
+        self, celery_task_id: str, token: str, usage_storage: InMemoryUsageStorage,
+        error_code: str, error_message: str, run_storage: InMemoryRunStorage | None = None,
+        run_id: int | None = None, expected_stages: frozenset[str] = frozenset(),
+        billing_outcome: BillingOutcome | None = None,
+    ) -> bool:
+        async with self._ownership_lock:
+            row_id = self._rows_by_celery_task_id.get(celery_task_id)
+            if row_id is None:
+                return False
+            row = self._rows[row_id]
+            if row.get("status") != "running" or row.get("claim_token") != token:
+                return False
+            if run_storage is not None and run_id is not None:
+                await run_storage.conditional_update_run(
+                    run_id,
+                    {"current_stage": "FAILED", "status": "failed"},
+                    expected_stages,
+                    rejected_statuses=frozenset({"failed", "cancelled", "completed"}),
+                )
+                if row.get("status") != "running" or row.get("claim_token") != token:
+                    return False
+            match billing_outcome:
+                case None:
+                    await usage_storage.finalize_revoked_owned(celery_task_id)
+                case BillingOutcome.NOT_STARTED:
+                    await usage_storage.cancel_owned(celery_task_id)
+                case BillingOutcome.ACCOUNTED:
+                    await usage_storage.settle_owned(celery_task_id)
+                case BillingOutcome.UNKNOWN:
+                    await usage_storage.settle_owned(celery_task_id, billable_unknown=True)
+                case unreachable:
+                    assert_never(unreachable)
+            row.update(
+                status="failed", claim_token=None, finished_at=datetime.now(timezone.utc),
+                error_code=error_code, error_message=error_message,
+            )
+            return True
 
     async def claim_running(self, task_id: int, **kwargs: Any) -> dict[str, Any] | None:
         """Atomically claim a task: only transition from pending/queued/failed to running."""
@@ -183,6 +225,8 @@ class InMemoryTaskTrackingStorage:
         if row is None:
             return None
         if row.get("status") not in ("pending", "queued", "failed"):
+            return None
+        if row.get("claim_token") != kwargs.get("expected_claim_token"):
             return None
         if row.get("error_code") in {
             "reconciler_pending_cleanup",
