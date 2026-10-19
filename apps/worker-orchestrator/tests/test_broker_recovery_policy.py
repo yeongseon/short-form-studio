@@ -1,0 +1,363 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from creator_service.broker_recovery import (
+    BrokerSnapshot,
+    oldest_active_wait_seconds,
+    routed_queue_names,
+    recover_lost_tasks,
+    should_persist_observed_epoch,
+)
+from creator_service.memory_task_tracking_storage import InMemoryTaskTrackingStorage
+from creator_service.task_tracking_service import TaskTrackingService
+
+
+@dataclass
+class _Task:
+    celery_task_id: str
+    run_id: int
+    status: str
+    created_at: datetime
+    broker_generation: str | None = None
+
+
+class _Tracking:
+    def __init__(self, tasks: list[_Task]) -> None:
+        self.tasks = tasks
+        self.failures: dict[str, tuple[str, str]] = {}
+        self.cleanup_generations: set[str] = set()
+        self.finalization_failure: str | None = None
+
+    async def list_broker_recovery_tasks(self) -> list[_Task]:
+        return self.tasks
+
+    async def mark_failed_if_active(
+        self, task_id: str, error_code: str, error_message: str
+    ) -> _Task | None:
+        task = next(item for item in self.tasks if item.celery_task_id == task_id)
+        if task.status not in {"pending", "queued", "running"}:
+            return None
+        task.status = "failed"
+        self.failures[task_id] = (error_code, error_message)
+        return task
+
+    async def mark_failed(
+        self, task_id: str, error_code: str, error_message: str
+    ) -> _Task | None:
+        if task_id == self.finalization_failure:
+            raise OSError("injected finalization failure")
+        task = next(item for item in self.tasks if item.celery_task_id == task_id)
+        task.status = "failed"
+        self.failures[task_id] = (error_code, error_message)
+        return task
+
+    async def list_pending_broker_cleanup_generations(self) -> list[str]:
+        return sorted(self.cleanup_generations)
+
+    async def complete_broker_cleanup(self, generation: str) -> bool:
+        self.cleanup_generations.discard(generation)
+        return True
+
+
+class _Usage:
+    def __init__(self) -> None:
+        self.cancelled: list[str] = []
+
+    async def cancel_owned(self, task_id: str) -> bool:
+        self.cancelled.append(task_id)
+        return True
+
+
+def test_routed_queue_names_include_effective_custom_routes() -> None:
+    # Given / When
+    queues = routed_queue_names(
+        default_queue="creator",
+        routes={
+            "tasks.generate_script.*": {"queue": "priority-script"},
+            "tasks.render_video.*": {"queue": "render"},
+        },
+    )
+
+    # Then
+    assert queues == ("creator", "priority-script", "render")
+
+
+def test_oldest_wait_includes_all_active_rows_independent_of_broker_epoch() -> None:
+    # Given
+    now = datetime.now(timezone.utc)
+    tasks = [
+        _Task("pending-a", 1, "pending", now - timedelta(minutes=7)),
+        _Task("queued-a", 2, "queued", now - timedelta(minutes=3)),
+        _Task("running-a", 3, "running", now - timedelta(hours=1)),
+        _Task("success-a", 4, "success", now - timedelta(hours=2)),
+    ]
+
+    # When / Then
+    assert oldest_active_wait_seconds(tasks, now=now) == 420.0
+
+
+@pytest.mark.asyncio
+async def test_slow_healthy_backlog_is_not_failed() -> None:
+    # Given: work is old, but the broker epoch is unchanged and has a backlog.
+    now = datetime.now(timezone.utc)
+    tracking = _Tracking([_Task("queued-a", 1, "queued", now - timedelta(hours=1))])
+    usage = _Usage()
+    rollbacks: list[tuple[int, str]] = []
+    snapshot = BrokerSnapshot(
+        epoch="epoch-a", started_at=now - timedelta(minutes=30),
+        queue_length=12, oldest_wait_seconds=900.0, workers_online=1
+    )
+
+    # When
+    result = await recover_lost_tasks(
+        previous_epoch="epoch-a",
+        snapshot=snapshot,
+        tracking=tracking,
+        usage=usage,
+        rollback=lambda run_id, task_id: _append_rollback(rollbacks, run_id, task_id),
+    )
+
+    # Then
+    assert result.failed == 0
+    assert tracking.tasks[0].status == "queued"
+    assert usage.cancelled == []
+    assert result.queue_length == 12
+    assert result.oldest_wait_seconds == 900.0
+
+
+@pytest.mark.asyncio
+async def test_new_empty_broker_fails_unknown_work_and_releases_owned_quota() -> None:
+    # Given: a healthy worker sees a different, empty broker epoch.
+    now = datetime.now(timezone.utc)
+    tracking = _Tracking(
+        [
+            _Task("pending-a", 1, "pending", now - timedelta(hours=1), "epoch-a"),
+            _Task("queued-a", 2, "queued", now - timedelta(hours=1), "epoch-a"),
+            _Task("running-a", 3, "running", now - timedelta(hours=1), "epoch-a"),
+            _Task("success-a", 4, "success", now - timedelta(hours=1)),
+        ]
+    )
+    usage = _Usage()
+    tracking.cleanup_generations.add("epoch-a")
+    rollbacks: list[tuple[int, str]] = []
+
+    # When
+    result = await recover_lost_tasks(
+        previous_epoch="epoch-a",
+        snapshot=BrokerSnapshot(
+            epoch="epoch-b", started_at=now, queue_length=0,
+            oldest_wait_seconds=None, workers_online=1
+        ),
+        tracking=tracking,
+        usage=usage,
+        rollback=lambda run_id, task_id: _append_rollback(rollbacks, run_id, task_id),
+    )
+
+    # Then: unknown arguments are never replayed; active rows converge to explainable failure.
+    assert result.failed == 3
+    assert usage.cancelled == ["pending-a", "queued-a", "running-a"]
+    assert rollbacks == [(1, "pending-a"), (2, "queued-a"), (3, "running-a")]
+    assert tracking.tasks[-1].status == "success"
+    for task_id in usage.cancelled:
+        code, message = tracking.failures[task_id]
+        assert code == "broker_message_lost"
+        assert "manual retry" in message.lower()
+
+
+@pytest.mark.asyncio
+async def test_finalization_failure_does_not_abort_other_obsolete_tasks() -> None:
+    # Given two obsolete owners and a final status persistence failure for the first.
+    now = datetime.now(timezone.utc)
+    tracking = _Tracking(
+        [
+            _Task("first-a", 1, "queued", now, "epoch-a"),
+            _Task("second-a", 2, "queued", now, "epoch-a"),
+        ]
+    )
+    tracking.cleanup_generations.add("epoch-a")
+    tracking.finalization_failure = "first-a"
+
+    # When cleanup processes the obsolete generation.
+    result = await recover_lost_tasks(
+        previous_epoch="epoch-a",
+        snapshot=BrokerSnapshot(
+            epoch="epoch-b",
+            started_at=now,
+            queue_length=0,
+            oldest_wait_seconds=None,
+            workers_online=1,
+        ),
+        tracking=tracking,
+        usage=_Usage(),
+        rollback=lambda _run_id, _task_id: _append_rollback([], 0, "ignored"),
+    )
+
+    # Then the failure is counted and the second owner still converges.
+    assert result.failed == 1
+    assert result.recovery_failures == 1
+    assert tracking.failures["second-a"][0] == "broker_message_lost"
+
+
+@pytest.mark.asyncio
+async def test_epoch_change_waits_for_worker_and_empty_queue_evidence() -> None:
+    # Given: the epoch changed, but worker health cannot yet verify an empty live broker.
+    now = datetime.now(timezone.utc)
+    tracking = _Tracking([_Task("queued-a", 1, "queued", now - timedelta(hours=1))])
+    usage = _Usage()
+
+    # When
+    result = await recover_lost_tasks(
+        previous_epoch="epoch-a",
+        snapshot=BrokerSnapshot(
+            epoch="epoch-b", started_at=now, queue_length=0,
+            oldest_wait_seconds=None, workers_online=0
+        ),
+        tracking=tracking,
+        usage=usage,
+        rollback=lambda run_id, task_id: _append_rollback([], run_id, task_id),
+    )
+
+    # Then
+    assert result.failed == 0
+    assert result.deferred is True
+    assert tracking.tasks[0].status == "queued"
+
+
+@pytest.mark.asyncio
+async def test_new_attempt_created_after_recovery_epoch_is_preserved() -> None:
+    # Given: manual retry created a successor after broker replacement.
+    now = datetime.now(timezone.utc)
+    tracking = _Tracking(
+        [
+            _Task("lost-a", 1, "queued", now - timedelta(hours=1), "epoch-a"),
+            _Task("retry-a", 1, "running", now + timedelta(seconds=1), "epoch-b"),
+        ]
+    )
+    usage = _Usage()
+    tracking.cleanup_generations.add("epoch-a")
+    rollbacks: list[tuple[int, str]] = []
+
+    # When
+    result = await recover_lost_tasks(
+        previous_epoch="epoch-a",
+        snapshot=BrokerSnapshot(
+            epoch="epoch-b", started_at=now, queue_length=0,
+            oldest_wait_seconds=None, workers_online=1
+        ),
+        tracking=tracking,
+        usage=usage,
+        rollback=lambda run_id, task_id: _append_rollback(rollbacks, run_id, task_id),
+    )
+
+    # Then: recovery cannot cancel quota or files owned by the successor attempt.
+    assert result.failed == 1
+    assert usage.cancelled == ["lost-a"]
+    assert rollbacks == [(1, "lost-a")]
+    assert tracking.tasks[1].status == "running"
+
+
+@pytest.mark.asyncio
+async def test_reserved_task_from_current_generation_survives_first_recovery_pass() -> None:
+    # Given: replacement Redis accepted and reserved work before the reconciler observed it.
+    now = datetime.now(timezone.utc)
+    tracking = _Tracking(
+        [
+            _Task(
+                "lost-a",
+                1,
+                "queued",
+                now - timedelta(minutes=5),
+                broker_generation="epoch-a",
+            ),
+            _Task(
+                "reserved-b",
+                2,
+                "running",
+                now - timedelta(seconds=1),
+                broker_generation="epoch-b",
+            ),
+        ]
+    )
+    usage = _Usage()
+    tracking.cleanup_generations.add("epoch-a")
+    rollbacks: list[tuple[int, str]] = []
+
+    # When: the first pass sees an empty queue because the current task is reserved.
+    result = await recover_lost_tasks(
+        previous_epoch="epoch-a",
+        snapshot=BrokerSnapshot(
+            epoch="epoch-b",
+            started_at=now,
+            queue_length=0,
+            oldest_wait_seconds=None,
+            workers_online=1,
+        ),
+        tracking=tracking,
+        usage=usage,
+        rollback=lambda run_id, task_id: _append_rollback(
+            rollbacks, run_id, task_id
+        ),
+    )
+
+    # Then: only work owned by the replaced generation is compensated.
+    assert result.failed == 1
+    assert tracking.tasks[0].status == "failed"
+    assert tracking.tasks[1].status == "running"
+    assert usage.cancelled == ["lost-a"]
+    assert rollbacks == [(1, "lost-a")]
+
+
+@pytest.mark.asyncio
+async def test_real_tracking_adapter_fences_late_success_after_recovery() -> None:
+    # Given
+    storage = InMemoryTaskTrackingStorage()
+    tracking = TaskTrackingService(storage)
+    now = datetime.now(timezone.utc)
+    await tracking.record_task_pending(
+        1, "generate_audio", "lost-a", broker_generation="epoch-a"
+    )
+    await tracking.promote_pending_to_queued("lost-a")
+    assert await tracking.set_observed_broker_epoch("epoch-a", None)
+    assert await tracking.set_observed_broker_epoch("epoch-b", "epoch-a")
+    usage = _Usage()
+
+    # When
+    result = await recover_lost_tasks(
+        previous_epoch="epoch-a",
+        snapshot=BrokerSnapshot(
+            epoch="epoch-b", started_at=now + timedelta(seconds=1),
+            queue_length=0, oldest_wait_seconds=None, workers_online=1
+        ),
+        tracking=tracking,
+        usage=usage,
+        rollback=lambda run_id, task_id: _append_rollback([], run_id, task_id),
+    )
+    late_success = await tracking.mark_success_if_running("lost-a")
+    late_claim = await tracking.record_task_start(
+        1, "generate_audio", "lost-a", claim_token="late-worker"
+    )
+
+    # Then
+    row = await storage.get_by_celery_id("lost-a")
+    assert result.failed == 1
+    assert late_success is None
+    assert late_claim is None
+    assert row is not None and row["status"] == "failed"
+    assert row["error_code"] == "broker_message_lost"
+
+
+async def _append_rollback(
+    destination: list[tuple[int, str]], run_id: int, task_id: str
+) -> None:
+    destination.append((run_id, task_id))
+
+
+def test_deferred_recovery_keeps_previous_epoch_for_retry() -> None:
+    # Given / When / Then
+    assert not should_persist_observed_epoch(previous_epoch="epoch-a", deferred=True)
+    assert should_persist_observed_epoch(previous_epoch="epoch-a", deferred=False)
+    assert should_persist_observed_epoch(previous_epoch=None, deferred=True)

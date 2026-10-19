@@ -58,12 +58,22 @@ async def _dispatch_image(
     pending_created = False
     published = False
     try:
-        await task_tracking_service.record_task_pending(run_id, "generate_scene_image", task_id)
+        broker_generation = await run_blocking(
+            task_dispatch_service.broker_generation
+        )
+        await task_tracking_service.record_task_pending(
+            run_id, "generate_scene_image", task_id, broker_generation
+        )
         pending_created = True
         returned_id = await run_blocking(partial(dispatch_generate_scene_image, run_id=run_id, task_id=task_id, **kwargs))
         published = True
         if returned_id != task_id:
             raise RuntimeError("Dispatch task ID mismatch")
+        observed_generation = await run_blocking(
+            task_dispatch_service.broker_generation
+        )
+        if observed_generation != broker_generation:
+            raise RuntimeError("Broker generation changed during dispatch")
         await task_tracking_service.promote_pending_to_queued(task_id)
         run = await run_service.get_run(run_id, workspace_id=workspace_id)
         if run is None or run.status == "cancelled":

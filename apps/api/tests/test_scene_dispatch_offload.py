@@ -54,7 +54,9 @@ async def test_scene_dispatch_keeps_loop_alive_until_tracking(monkeypatch):
             release.set()
     assert UUID(results[0]["task_id"]).version == 4
     assert owners == [results[0]["task_id"]]
-    tracking.assert_awaited_once_with(1, "generate_scene_image", results[0]["task_id"])
+    tracking.assert_awaited_once_with(
+        1, "generate_scene_image", results[0]["task_id"], None
+    )
 
 
 @pytest.mark.asyncio
@@ -147,3 +149,61 @@ async def test_scene_dispatch_terminalizes_pending_task_when_publish_raises(monk
     assert revoked == [owners]
     assert cancelled == owners
     assert dispatcher_cancel == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replacement_phase", ["before_publish", "after_publish"])
+async def test_scene_dispatch_rejects_broker_replacement_around_publish(
+    monkeypatch: pytest.MonkeyPatch, replacement_phase: str,
+) -> None:
+    # Given a broker generation that changes immediately around publish.
+    generation = ["epoch-a"]
+    revoked: list[str] = []
+    cancelled: list[str] = []
+    promoted = AsyncMock()
+
+    async def reserve(*_args, **_kwargs):
+        return True, "ok"
+
+    async def cancel(task_id: str) -> bool:
+        cancelled.append(task_id)
+        return True
+
+    def publish(**kwargs):
+        if replacement_phase == "before_publish":
+            generation[0] = "epoch-b"
+        return kwargs["task_id"]
+
+    def observe_generation() -> str:
+        if replacement_phase == "after_publish" and publish.called:
+            generation[0] = "epoch-b"
+        return generation[0]
+
+    publish.called = False
+
+    def tracked_publish(**kwargs):
+        result = publish(**kwargs)
+        publish.called = True
+        return result
+
+    monkeypatch.setattr(routes, "reserve_owned_quota", reserve)
+    monkeypatch.setattr(routes, "cancel_owned_quota_reservation", cancel)
+    monkeypatch.setattr(routes, "dispatch_generate_scene_image", tracked_publish)
+    monkeypatch.setattr(routes.task_dispatch_service, "broker_generation", observe_generation)
+    monkeypatch.setattr(routes.task_dispatch_service.dispatcher, "cancel", revoked.append)
+    monkeypatch.setattr(routes.task_tracking_service, "record_task_pending", AsyncMock())
+    monkeypatch.setattr(routes.task_tracking_service, "promote_pending_to_queued", promoted)
+    monkeypatch.setattr(routes.task_tracking_service, "mark_tasks_revoked", AsyncMock())
+    monkeypatch.setattr(
+        routes.run_service, "get_run", AsyncMock(return_value=SimpleNamespace(status="running")),
+    )
+
+    # When dispatch crosses the replacement boundary.
+    with pytest.raises(HTTPException) as error:
+        await routes._dispatch_image(1, 1, internal_attempts=1)
+
+    # Then the uncertain attempt is revoked, compensated, and never promoted.
+    assert error.value.status_code == 503
+    assert len(revoked) == 1
+    assert cancelled == revoked
+    promoted.assert_not_awaited()

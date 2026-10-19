@@ -19,12 +19,14 @@ async def test_cancel_during_publish_waits_then_revokes_before_releasing_quota(m
     service = TaskDispatchService(adapter)
     monkeypatch.setenv("REDIS_URL", "redis://unused")
     monkeypatch.setattr(adapter, "_get_trace_headers", lambda: {})
+    monkeypatch.setattr(adapter, "broker_generation", lambda: "epoch-a")
     run = SimpleNamespace(status="running", project_id=1)
 
     async def pending(
         run_storage, run_id, updates, expected_stages, task_type, task_id,
-        *, workspace_id, rejected_statuses,
+        *, workspace_id, rejected_statuses, broker_generation,
     ):
+        assert broker_generation == "epoch-a"
         del task_type, task_id
         ok, row = await run_storage.conditional_update_run(
             run_id, updates, expected_stages=expected_stages,

@@ -57,6 +57,12 @@ def test_checksummed_corrupt_dump_cannot_restore_to_fresh_database(
             check=True,
         )
         for _ in range(60):
+            logs = subprocess.run(
+                ["docker", "logs", container],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
             ready = subprocess.run(
                 [
                     "docker", "exec", container, "psql", "-U", "postgres",
@@ -65,7 +71,11 @@ def test_checksummed_corrupt_dump_cannot_restore_to_fresh_database(
                 capture_output=True,
                 check=False,
             )
-            if ready.returncode == 0:
+            initialization_complete = (
+                "PostgreSQL init process complete; ready for start up."
+                in logs.stdout + logs.stderr
+            )
+            if initialization_complete and ready.returncode == 0:
                 break
             time.sleep(1)
         else:

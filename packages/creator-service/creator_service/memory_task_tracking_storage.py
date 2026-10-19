@@ -17,6 +17,8 @@ class InMemoryTaskTrackingStorage:
         self._rows: dict[int, dict[str, Any]] = {}
         self._rows_by_celery_task_id: dict[str, int] = {}
         self._next_id = 1
+        self._observed_broker_epoch: str | None = None
+        self._pending_broker_cleanup_generations: set[str] = set()
         self._ownership_lock = anyio.Lock()
 
     async def transition_run_and_create_pending(
@@ -53,10 +55,14 @@ class InMemoryTaskTrackingStorage:
                     "reconciler_pending_cleanup",
                     "reconciler_stuck_cleanup",
                     "reconciler_cleanup_claimed",
+                    "broker_recovery_cleanup",
+                    "broker_message_lost",
                 }:
                     return None
                 incoming_status = row.get("status", "queued")
                 existing["status"] = incoming_status
+                if row.get("broker_generation") is not None:
+                    existing["broker_generation"] = row["broker_generation"]
                 if incoming_status == "queued":
                     existing["claim_token"] = None
                     existing["attempt"] = int(existing.get("attempt", 0)) + 1
@@ -148,6 +154,24 @@ class InMemoryTaskTrackingStorage:
         row["error_message"] = kwargs.get("error_message")
         return dict(row)
 
+    async def update_task_status_if_active(
+        self, celery_task_id: str, status: str, **kwargs: Any
+    ) -> dict[str, Any] | None:
+        row_id = self._rows_by_celery_task_id.get(celery_task_id)
+        if row_id is None:
+            return None
+        row = self._rows[row_id]
+        if row.get("status") not in ("pending", "queued", "running"):
+            return None
+        row.update(
+            status=status,
+            finished_at=kwargs.get("finished_at"),
+            error_code=kwargs.get("error_code"),
+            error_message=kwargs.get("error_message"),
+            claim_token=None,
+        )
+        return dict(row)
+
     async def finish_if_claimed(
         self, celery_task_id: str, token: str, status: str,
         error_code: str | None = None, error_message: str | None = None,
@@ -232,6 +256,8 @@ class InMemoryTaskTrackingStorage:
             "reconciler_pending_cleanup",
             "reconciler_stuck_cleanup",
             "reconciler_cleanup_claimed",
+            "broker_recovery_cleanup",
+            "broker_message_lost",
         }:
             return None
         row["status"] = "running"
@@ -302,6 +328,7 @@ class InMemoryTaskTrackingStorage:
                 row.get("error_code") in {
                     "reconciler_pending_cleanup",
                     "reconciler_stuck_cleanup",
+                    "broker_recovery_cleanup",
                 }
                 or (
                     row.get("error_code") == "reconciler_cleanup_claimed"
@@ -334,6 +361,7 @@ class InMemoryTaskTrackingStorage:
         if error_code not in {
             "reconciler_pending_cleanup",
             "reconciler_stuck_cleanup",
+            "broker_recovery_cleanup",
         } and not lease_expired:
             return None
         if error_code != "reconciler_cleanup_claimed":
@@ -365,7 +393,11 @@ class InMemoryTaskTrackingStorage:
         if row.get("error_code") != "reconciler_cleanup_claimed" or row.get("claim_token") != claim_token:
             return None
         marker = row.get("error_message")
-        if marker not in {"reconciler_pending_cleanup", "reconciler_stuck_cleanup"}:
+        if marker not in {
+            "reconciler_pending_cleanup",
+            "reconciler_stuck_cleanup",
+            "broker_recovery_cleanup",
+        }:
             return None
         row.update(error_code=marker, error_message="Cleanup retry required", claim_token=None)
         return dict(row)
@@ -393,6 +425,60 @@ class InMemoryTaskTrackingStorage:
                 run_id, {"current_stage": "FAILED", "status": "failed"},
                 expected_stages=expected_stages, rejected_statuses=rejected_statuses,
             )
+
+    async def list_broker_recovery_tasks(self) -> list[dict[str, Any]]:
+        rows = [
+            dict(row)
+            for row in self._rows.values()
+            if row.get("status") in ("pending", "queued", "running")
+        ]
+        rows.sort(key=lambda row: row.get("created_at"))
+        return rows
+
+    async def get_observed_broker_epoch(self) -> str | None:
+        return self._observed_broker_epoch
+
+    async def set_observed_broker_epoch(
+        self, epoch: str, expected_previous_epoch: str | None,
+        active_generations: frozenset[str] = frozenset(),
+    ) -> bool:
+        async with self._ownership_lock:
+            if self._observed_broker_epoch is None:
+                if expected_previous_epoch is not None:
+                    return False
+                for row in self._rows.values():
+                    if (
+                        row.get("status") in ("pending", "queued", "running")
+                        and row.get("broker_generation") is None
+                    ):
+                        row["broker_generation"] = epoch
+                self._observed_broker_epoch = epoch
+                return True
+            if self._observed_broker_epoch != expected_previous_epoch:
+                return False
+            if epoch != expected_previous_epoch:
+                self._pending_broker_cleanup_generations.update(
+                    generation
+                    for generation in active_generations | {self._observed_broker_epoch}
+                    if generation != epoch
+                )
+            self._observed_broker_epoch = epoch
+            return True
+
+    async def list_pending_broker_cleanup_generations(self) -> list[str]:
+        return sorted(self._pending_broker_cleanup_generations)
+
+    async def complete_broker_cleanup(self, generation: str) -> bool:
+        async with self._ownership_lock:
+            has_active_tasks = any(
+                row.get("broker_generation") == generation
+                and row.get("status") in ("pending", "queued", "running")
+                for row in self._rows.values()
+            )
+            if has_active_tasks:
+                return False
+            self._pending_broker_cleanup_generations.discard(generation)
+            return True
 
     async def promote_pending_to_queued(self, celery_task_id: str) -> dict[str, Any] | None:
         """Atomically promote a task from 'pending' to 'queued'. Returns None if not pending."""

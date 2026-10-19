@@ -14,7 +14,11 @@ from __future__ import annotations
 
 from worker_loop import run_in_worker_loop
 import logging
+import os
+from importlib import import_module
 from typing import Any
+from pathlib import Path
+from datetime import datetime, timezone
 
 from celery_app import celery_app
 
@@ -48,6 +52,12 @@ _RUN_LEVEL_TASK_TYPES = frozenset({
     "generate_subtitles",
     "render_video",
 })
+_BROKER_EPOCH_STATE_PATH = Path(
+    os.getenv(
+        "BROKER_EPOCH_STATE_PATH",
+        "/var/lib/short-form-studio/dlq/observed-broker-epoch",
+    )
+)
 
 
 async def _rollback_run(run_id: int, celery_task_id: str) -> None:
@@ -102,6 +112,77 @@ async def _reconcile_once() -> dict[str, Any]:
     """Run one reconciliation pass."""
     from creator_service.dispatch_reconciler import DispatchReconciler
     from creator_service.task_tracking_service import task_tracking_service
+    from creator_service.broker_recovery import (
+        BrokerSnapshot,
+        oldest_active_wait_seconds,
+        recover_broker_snapshot,
+        routed_queue_names,
+    )
+
+    recovery_summary = {
+        "failed": 0,
+        "deferred": False,
+        "queue_length": 0,
+        "oldest_wait_seconds": None,
+        "recovery_failures": 0,
+    }
+    try:
+        from celery_app import ensure_broker_epoch, redis, redis_url
+
+        epoch = ensure_broker_epoch()
+        client = redis.Redis.from_url(redis_url)
+        queue_names = routed_queue_names(
+            default_queue=celery_app.conf.task_default_queue,
+            routes=celery_app.conf.task_routes,
+        )
+        queue_length = sum(int(client.llen(queue)) for queue in queue_names)
+        ping = celery_app.control.inspect(timeout=2).ping() or {}
+        candidates = await task_tracking_service.list_broker_recovery_tasks()
+        active_generations = frozenset(
+            task.broker_generation
+            for task in candidates
+            if task.broker_generation is not None
+        )
+        now = datetime.now(timezone.utc)
+        oldest_wait_seconds = oldest_active_wait_seconds(candidates, now=now)
+        confirmed_epoch = ensure_broker_epoch()
+        snapshot = BrokerSnapshot(
+            epoch=epoch.epoch,
+            started_at=epoch.started_at,
+            queue_length=queue_length,
+            oldest_wait_seconds=oldest_wait_seconds,
+            workers_online=len(ping),
+            confirmed_epoch=confirmed_epoch.epoch,
+            active_generations=active_generations,
+        )
+        fallback_epoch = (
+            _BROKER_EPOCH_STATE_PATH.read_text(encoding="utf-8").strip()
+            if _BROKER_EPOCH_STATE_PATH.exists()
+            else None
+        )
+        recovered, persisted = await recover_broker_snapshot(
+            fallback_epoch=fallback_epoch,
+            snapshot=snapshot,
+            tracking=task_tracking_service,
+            usage=import_module("creator_service.usage_service").usage_service,
+            rollback=_rollback_run,
+        )
+        recovery_summary = {
+            "failed": recovered.failed,
+            "deferred": recovered.deferred,
+            "queue_length": recovered.queue_length,
+            "oldest_wait_seconds": recovered.oldest_wait_seconds,
+            "recovery_failures": recovered.recovery_failures,
+        }
+        if persisted:
+            _BROKER_EPOCH_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            _BROKER_EPOCH_STATE_PATH.write_text(epoch.epoch, encoding="utf-8")
+    except Exception:  # noqa: BLE001 - top-level recovery boundary must fail closed
+        logger.warning(
+            "Broker recovery evidence unavailable; active work left unchanged",
+            extra={"recovery_failures": 1},
+            exc_info=True,
+        )
 
     reconciler = DispatchReconciler(
         task_tracking_service=task_tracking_service,
@@ -116,6 +197,7 @@ async def _reconcile_once() -> dict[str, Any]:
         "rolled_back": result.rolled_back,
         "stuck_failed": result.stuck_failed,
         "errors": result.errors,
+        "broker_recovery": recovery_summary,
     }
     if result.reenqueued or result.rolled_back or result.stuck_failed or result.errors:
         logger.info("Reconciler pass complete: %s", summary)

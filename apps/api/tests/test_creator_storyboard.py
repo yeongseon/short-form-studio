@@ -80,7 +80,13 @@ class StubTaskTrackingService:
     def __init__(self) -> None:
         self.calls: list[tuple[int, str, str]] = []
 
-    async def record_task_pending(self, run_id: int, task_type: str, task_id: str) -> None:
+    async def record_task_pending(
+        self,
+        run_id: int,
+        task_type: str,
+        task_id: str,
+        broker_generation: str | None = None,
+    ) -> None:
         self.calls.append((run_id, task_type, task_id))
 
     async def promote_pending_to_queued(self, task_id: str) -> None:

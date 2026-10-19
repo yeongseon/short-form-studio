@@ -128,7 +128,9 @@ Tasks that exhaust all retries are stored in Redis list `dlq:creator` with:
 - Worker hostname
 
 DLQ max size is controlled by `DLQ_MAX_SIZE` env var (default: 10000).
-If Redis is unavailable, failures are written to `DLQ_FALLBACK_PATH` (JSONL file).
+If Redis is unavailable, failures are written to the bounded, durable
+`DLQ_FALLBACK_PATH` JSONL file. See [QUEUE_DURABILITY.md](QUEUE_DURABILITY.md) for
+the recovery, rotation, and operator collection contract.
 
 ### Run Status on Failure
 
@@ -212,5 +214,6 @@ The `reconcile_stale_dispatches` beat task runs every 60 seconds and:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DLQ_MAX_SIZE` | 10000 | Maximum entries in Redis DLQ |
-| `DLQ_FALLBACK_PATH` | `/tmp/dlq_fallback.jsonl` | File path when Redis DLQ unavailable |
+| `DLQ_FALLBACK_PATH` | `/tmp/dlq_fallback.jsonl` | File path when Redis DLQ unavailable; Compose overrides this to a mounted volume |
+| `DLQ_FALLBACK_MAX_BYTES` | 10485760 | Rotate fallback after this many bytes; one `.1` segment is retained |
 | `CELERY_TASK_ROUTES` | — | JSON override for task routing |

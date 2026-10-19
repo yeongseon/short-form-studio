@@ -13,6 +13,9 @@ class RecordingDispatcher:
     def uses_queue(self) -> bool:
         return self.queued
 
+    def broker_generation(self) -> str | None:
+        return "test-generation" if self.queued else None
+
     def dispatch(self, submission: TaskSubmission) -> str:
         self.submissions.append(submission)
         return submission.task_id or "injected-task"

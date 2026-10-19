@@ -21,11 +21,12 @@ class PostgresTaskTrackingStorage:
     async def _insert_pending_task(self, connection: Any, row: dict[str, Any]) -> dict[str, Any] | None:
         saved = await connection.fetchrow(
             """INSERT INTO creator_run_tasks
-               (run_id, task_type, celery_task_id, status, attempt)
-               VALUES ($1, $2, $3, 'pending', $4)
+               (run_id, task_type, celery_task_id, status, attempt, broker_generation)
+               VALUES ($1, $2, $3, 'pending', $4, $5)
                ON CONFLICT (celery_task_id) DO NOTHING RETURNING *""",
             row.get("run_id"), row.get("task_type"), row.get("celery_task_id"),
             row.get("attempt", 1),
+            row.get("broker_generation"),
         )
         return dict(saved) if saved is not None else None
 
@@ -78,9 +79,9 @@ class PostgresTaskTrackingStorage:
                 started_at,
                 finished_at,
                 error_code,
-                error_message, claim_token
+                error_message, claim_token, broker_generation
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             ON CONFLICT (celery_task_id) DO UPDATE
             SET status = EXCLUDED.status,
                 attempt = CASE
@@ -107,11 +108,14 @@ class PostgresTaskTrackingStorage:
                 END,
                 claim_token = CASE WHEN EXCLUDED.status = 'running' THEN EXCLUDED.claim_token
                                    WHEN EXCLUDED.status = 'queued' THEN NULL
-                                   ELSE creator_run_tasks.claim_token END
+                                   ELSE creator_run_tasks.claim_token END,
+                broker_generation = COALESCE(
+                    EXCLUDED.broker_generation, creator_run_tasks.broker_generation
+                )
             WHERE creator_run_tasks.status NOT IN ('success', 'running')
               AND (
                   creator_run_tasks.error_code IS NULL
-                  OR NOT (creator_run_tasks.error_code = ANY($11::text[]))
+                   OR NOT (creator_run_tasks.error_code = ANY($12::text[]))
               )
             RETURNING *
             """,
@@ -125,7 +129,14 @@ class PostgresTaskTrackingStorage:
             row.get("error_code"),
             row.get("error_message"),
             row.get("claim_token"),
-            ["reconciler_pending_cleanup", "reconciler_stuck_cleanup", "reconciler_cleanup_claimed"],
+            row.get("broker_generation"),
+            [
+                "reconciler_pending_cleanup",
+                "reconciler_stuck_cleanup",
+                "reconciler_cleanup_claimed",
+                "broker_recovery_cleanup",
+                "broker_message_lost",
+            ],
         )
         return saved
 
@@ -191,6 +202,21 @@ class PostgresTaskTrackingStorage:
             kwargs.get("error_message"),
         )
 
+    async def update_task_status_if_active(
+        self, celery_task_id: str, status: str, **kwargs: Any
+    ) -> dict[str, Any] | None:
+        return await fetch_one(
+            """UPDATE creator_run_tasks SET status=$2, claim_token=NULL,
+               finished_at=$3, error_code=$4, error_message=$5
+               WHERE celery_task_id=$1 AND status IN ('pending', 'queued', 'running')
+               RETURNING *""",
+            celery_task_id,
+            status,
+            kwargs.get("finished_at"),
+            kwargs.get("error_code"),
+            kwargs.get("error_message"),
+        )
+
     async def claim_running(self, task_id: int, **kwargs: Any) -> dict[str, Any] | None:
         """Lock and claim an eligible task after rechecking its observed owner."""
         pool = await db.get_pool()
@@ -211,6 +237,8 @@ class PostgresTaskTrackingStorage:
                     "reconciler_pending_cleanup",
                     "reconciler_stuck_cleanup",
                     "reconciler_cleanup_claimed",
+                    "broker_recovery_cleanup",
+                    "broker_message_lost",
                 }:
                     return None
                 claimed = await connection.fetchrow(
@@ -354,7 +382,8 @@ class PostgresTaskTrackingStorage:
             """SELECT * FROM creator_run_tasks
                WHERE status='failed' AND (
                    error_code IN (
-                       'reconciler_pending_cleanup', 'reconciler_stuck_cleanup'
+                        'reconciler_pending_cleanup', 'reconciler_stuck_cleanup',
+                        'broker_recovery_cleanup'
                    ) OR (
                        error_code='reconciler_cleanup_claimed'
                        AND finished_at < NOW() - make_interval(secs => $1)
@@ -375,7 +404,10 @@ class PostgresTaskTrackingStorage:
                    error_code='reconciler_cleanup_claimed',
                    claim_token=$2, finished_at=NOW()
                WHERE id=$1 AND status='failed' AND (
-                   error_code IN ('reconciler_pending_cleanup', 'reconciler_stuck_cleanup')
+                    error_code IN (
+                        'reconciler_pending_cleanup', 'reconciler_stuck_cleanup',
+                        'broker_recovery_cleanup'
+                    )
                    OR (error_code='reconciler_cleanup_claimed'
                        AND finished_at < NOW() - make_interval(secs => $3))
                ) RETURNING *""",
@@ -400,7 +432,10 @@ class PostgresTaskTrackingStorage:
                SET error_code=error_message, error_message='Cleanup retry required', claim_token=NULL
                WHERE celery_task_id=$1 AND claim_token=$2
                  AND error_code='reconciler_cleanup_claimed'
-                 AND error_message IN ('reconciler_pending_cleanup', 'reconciler_stuck_cleanup')
+                  AND error_message IN (
+                      'reconciler_pending_cleanup', 'reconciler_stuck_cleanup',
+                      'broker_recovery_cleanup'
+                  )
                RETURNING *""",
             celery_task_id, claim_token,
         )
@@ -434,6 +469,85 @@ class PostgresTaskTrackingStorage:
                     return True, dict(updated)
                 current = await connection.fetchrow("SELECT * FROM creator_runs WHERE id=$1", run_id)
                 return False, dict(current) if current is not None else None
+
+    async def list_broker_recovery_tasks(self) -> list[dict[str, Any]]:
+        return await fetch_all(
+            """SELECT * FROM creator_run_tasks
+               WHERE status IN ('pending', 'queued', 'running')
+               ORDER BY created_at ASC"""
+        )
+
+    async def get_observed_broker_epoch(self) -> str | None:
+        row = await fetch_one(
+            "SELECT epoch FROM creator_broker_state WHERE singleton = TRUE"
+        )
+        return str(row["epoch"]) if row is not None else None
+
+    async def set_observed_broker_epoch(
+        self, epoch: str, expected_previous_epoch: str | None,
+        active_generations: frozenset[str] = frozenset(),
+    ) -> bool:
+        pool = await db.get_pool()
+        async with pool.acquire() as connection:
+            async with connection.transaction():
+                inserted = await connection.fetchrow(
+                    """INSERT INTO creator_broker_state (singleton, epoch, observed_at)
+                       SELECT TRUE, $1, NOW() WHERE $2::text IS NULL
+                       ON CONFLICT (singleton) DO NOTHING
+                       RETURNING epoch""",
+                    epoch,
+                    expected_previous_epoch,
+                )
+                if inserted is not None:
+                    await connection.execute(
+                        """UPDATE creator_run_tasks SET broker_generation=$1
+                           WHERE broker_generation IS NULL
+                             AND status IN ('pending', 'queued', 'running')""",
+                        epoch,
+                    )
+                    return True
+                updated = await connection.fetchrow(
+                    """UPDATE creator_broker_state
+                       SET epoch=$1, observed_at=NOW()
+                       WHERE singleton=TRUE
+                         AND epoch IS NOT DISTINCT FROM $2
+                       RETURNING epoch""",
+                    epoch,
+                    expected_previous_epoch,
+                )
+                if updated is not None and epoch != expected_previous_epoch:
+                    cleanup_generations = active_generations
+                    if expected_previous_epoch is not None:
+                        cleanup_generations |= {expected_previous_epoch}
+                    await connection.execute(
+                        """INSERT INTO creator_broker_cleanup_generations (generation)
+                           SELECT generation FROM UNNEST($1::text[]) AS generation
+                           WHERE generation != $2
+                           ON CONFLICT (generation) DO NOTHING""",
+                        list(cleanup_generations),
+                        epoch,
+                    )
+                return updated is not None
+
+    async def list_pending_broker_cleanup_generations(self) -> list[str]:
+        rows = await fetch_all(
+            "SELECT generation FROM creator_broker_cleanup_generations ORDER BY generation"
+        )
+        return [str(row["generation"]) for row in rows]
+
+    async def complete_broker_cleanup(self, generation: str) -> bool:
+        removed = await fetch_one(
+            """DELETE FROM creator_broker_cleanup_generations AS cleanup
+               WHERE cleanup.generation=$1
+                 AND NOT EXISTS (
+                     SELECT 1 FROM creator_run_tasks AS tasks
+                     WHERE tasks.broker_generation=cleanup.generation
+                       AND tasks.status IN ('pending', 'queued', 'running')
+                 )
+               RETURNING generation""",
+            generation,
+        )
+        return removed is not None
 
     async def promote_pending_to_queued(self, celery_task_id: str) -> dict[str, Any] | None:
         """Atomically promote a task from 'pending' to 'queued'.

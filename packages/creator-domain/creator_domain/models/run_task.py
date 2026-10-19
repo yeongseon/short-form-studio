@@ -14,6 +14,7 @@ class RunTask(BaseModel):
     run_id: int = Field(ge=1)
     task_type: str = Field(max_length=100)
     celery_task_id: str = Field(max_length=255)
+    broker_generation: str | None = Field(default=None, max_length=255)
     status: Literal["queued", "pending", "running", "success", "failed", "revoked", "rejected"] = (
         "queued"
     )

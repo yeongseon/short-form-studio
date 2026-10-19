@@ -19,7 +19,8 @@ class TaskTrackingService:
         self.storage = storage
 
     async def record_task_pending(
-        self, run_id: int, task_type: str, celery_task_id: str
+        self, run_id: int, task_type: str, celery_task_id: str,
+        broker_generation: str | None = None,
     ) -> RunTask:
         """Record the durable pending state before broker enqueue."""
         row = await self.storage.create_task(
@@ -27,6 +28,7 @@ class TaskTrackingService:
                 "run_id": run_id,
                 "task_type": task_type,
                 "celery_task_id": celery_task_id,
+                "broker_generation": broker_generation,
                 "status": "pending",
                 "attempt": 1,
             }
@@ -42,6 +44,7 @@ class TaskTrackingService:
         self, run_storage: RunStorageBackend, run_id: int, updates: dict[str, Any],
         expected_stages: frozenset[str], task_type: str, celery_task_id: str,
         *, workspace_id: int | None = None,
+        broker_generation: str | None = None,
         rejected_statuses: frozenset[str] = frozenset(),
     ) -> tuple[bool, dict[str, Any] | None]:
         return await self.storage.transition_run_and_create_pending(
@@ -53,6 +56,7 @@ class TaskTrackingService:
                 "run_id": run_id,
                 "task_type": task_type,
                 "celery_task_id": celery_task_id,
+                "broker_generation": broker_generation,
                 "status": "pending",
                 "attempt": 1,
             },
@@ -66,6 +70,7 @@ class TaskTrackingService:
         return RunTask.from_row(row) if row is not None else None
 
     async def record_task_queued(self, run_id: int, task_type: str, celery_task_id: str) -> RunTask:
+        """Record compatibility deliveries that did not use DB-first pending dispatch."""
         row = await self.storage.create_task(
             {
                 "run_id": run_id,
@@ -328,6 +333,39 @@ class TaskTrackingService:
             celery_task_id, run_storage, run_id, eligible_task_types,
             expected_stages, rejected_statuses,
         )
+
+    async def list_broker_recovery_tasks(self) -> list[RunTask]:
+        rows = await self.storage.list_broker_recovery_tasks()
+        return [RunTask.from_row(row) for row in rows]
+
+    async def get_observed_broker_epoch(self) -> str | None:
+        return await self.storage.get_observed_broker_epoch()
+
+    async def set_observed_broker_epoch(
+        self, epoch: str, expected_previous_epoch: str | None,
+        active_generations: frozenset[str] = frozenset(),
+    ) -> bool:
+        return await self.storage.set_observed_broker_epoch(
+            epoch, expected_previous_epoch, active_generations
+        )
+
+    async def list_pending_broker_cleanup_generations(self) -> list[str]:
+        return await self.storage.list_pending_broker_cleanup_generations()
+
+    async def complete_broker_cleanup(self, generation: str) -> bool:
+        return await self.storage.complete_broker_cleanup(generation)
+
+    async def mark_failed_if_active(
+        self, celery_task_id: str, error_code: str, error_message: str
+    ) -> RunTask | None:
+        row = await self.storage.update_task_status_if_active(
+            celery_task_id,
+            "failed",
+            finished_at=datetime.now(timezone.utc),
+            error_code=error_code,
+            error_message=error_message,
+        )
+        return RunTask.from_row(row) if row is not None else None
 
     async def list_run_tasks(self, run_id: int) -> list[RunTask]:
         rows = await self.storage.list_by_run(run_id)

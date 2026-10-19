@@ -14,8 +14,10 @@ import logging
 import os
 import json
 import signal
+import time
 from datetime import datetime, timezone
 import resource
+from pathlib import Path
 from typing import Any
 
 from celery import Celery
@@ -42,6 +44,8 @@ try:
     import worker_release_identity as _worker_release_identity_module  # noqa: F401 — register signal handler
 except ImportError:
     _worker_release_identity_module = None
+from creator_service.celery_dlq_fallback import append_fallback_entry, read_fallback_entries
+from creator_service.broker_recovery import BrokerSnapshot
 
 
 def _parse_int_env(name: str, default: int) -> int:
@@ -113,6 +117,9 @@ BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
     "sweep-expired-artifacts": {"task": "sweep_expired_artifacts", "schedule": 600.0},
     "reconcile-media-uploads": {"task": "reconcile_media_uploads", "schedule": 600.0},
 }
+dlq_fallback_max_bytes = _parse_int_env("DLQ_FALLBACK_MAX_BYTES", 10 * 1024 * 1024)
+broker_recovery_epoch_key = os.getenv("BROKER_RECOVERY_EPOCH_KEY", "queue:recovery_epoch")
+broker_epoch_read_attempts = _parse_int_env("BROKER_EPOCH_READ_ATTEMPTS", 3)
 
 def _worker_task_modules() -> list[str]:
     modules = [
@@ -241,6 +248,9 @@ def _record_failed_task_to_dlq(
     kwargs: dict[str, object],
     exception: BaseException,
 ) -> None:
+    meter = import_module("creator_service.telemetry").get_meter(__name__)
+    retention_failures = meter.create_counter("worker.dlq.retention_failures")
+    retained_entries = meter.create_counter("worker.dlq.retained_entries")
     failure = build_run_failure_summary(exception)
     payload = _sanitize_for_dlq({
         "task_id": task_id,
@@ -255,15 +265,19 @@ def _record_failed_task_to_dlq(
     def _write_dlq_fallback(entry: JsonValue, error: BaseException | None = None) -> None:
         logger = logging.getLogger(__name__)
         try:
-            with open(dlq_fallback_path, "a", encoding="utf-8") as fallback_file:
-                fallback_file.write(json.dumps(entry, allow_nan=False))
-                fallback_file.write("\n")
+            append_fallback_entry(
+                Path(dlq_fallback_path), entry, max_bytes=dlq_fallback_max_bytes
+            )
+            retained_entries.add(1, {"source": "fallback"})
             logger.warning(
                 "DLQ Redis write failed; wrote entry to fallback file",
+                extra={"dlq_retention_failure": 0, "dlq_source": "fallback"},
             )
-        except OSError:
+        except (OSError, ValueError):
+            retention_failures.add(1, {"source": "fallback"})
             logger.error(
                 "DLQ Redis write failed and fallback file write also failed",
+                extra={"dlq_retention_failure": 1, "dlq_source": "fallback"},
             )
         if error is not None:
             logger.error(
@@ -278,8 +292,42 @@ def _record_failed_task_to_dlq(
         client = redis.Redis.from_url(redis_url)
         client.lpush("dlq:creator", json.dumps(payload, allow_nan=False))
         client.ltrim("dlq:creator", 0, dlq_max_size - 1)
+        retained_entries.add(1, {"source": "redis"})
     except Exception as redis_error:
         _write_dlq_fallback(payload, redis_error)
+
+
+def read_dlq_fallback(limit: int = 100) -> list[dict[str, JsonValue]]:
+    return read_fallback_entries(Path(dlq_fallback_path), limit=limit)
+
+
+def ensure_broker_epoch() -> BrokerSnapshot:
+    if redis is None:
+        raise RuntimeError("Redis client unavailable")
+    client = redis.Redis.from_url(redis_url)
+    stored = None
+    for attempt in range(broker_epoch_read_attempts):
+        try:
+            started_at = datetime.now(timezone.utc)
+            generated = f"{os.urandom(16).hex()}|{started_at.isoformat()}"
+            client.set(broker_recovery_epoch_key, generated, nx=True)
+            stored = client.get(broker_recovery_epoch_key)
+            break
+        except redis.exceptions.RedisError:
+            if attempt + 1 == broker_epoch_read_attempts:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+    if not isinstance(stored, (bytes, str)):
+        raise RuntimeError("Broker recovery epoch unavailable")
+    decoded = stored.decode() if isinstance(stored, bytes) else stored
+    epoch, encoded_started_at = decoded.split("|", maxsplit=1)
+    return BrokerSnapshot(
+        epoch=epoch,
+        started_at=datetime.fromisoformat(encoded_started_at),
+        queue_length=0,
+        oldest_wait_seconds=None,
+        workers_online=0,
+    )
 
 
 def _should_record_to_dlq(sender: Any, exception: BaseException | None = None) -> bool:
