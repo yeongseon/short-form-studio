@@ -316,7 +316,7 @@ def test_prefork_hard_timeout_and_ffmpeg_child_die_withworker() -> None:
     timeout_attempt = anyio.run(
         row,
         "SELECT status FROM workspace_quota_reservation_attempts "
-        "WHERE owner_id='timeout-delivery'",
+        "WHERE owner_id='timeout-delivery' AND status='unknown'",
     )
     timeout_assets = anyio.run(
         row,
