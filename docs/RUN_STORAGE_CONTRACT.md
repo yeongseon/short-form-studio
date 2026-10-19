@@ -24,9 +24,9 @@ including a disposable migrated PostgreSQL schema, in
 
 Every workspace media upload has a durable `creator_media_upload_intents` row
 before object I/O. Its `owner_id` identifies one attempt; `workspace_id` and the
-workspace-prefixed `storage_key` bind that attempt to exactly one object. Future
-quota work may consume this ownership API, but reconciliation does not account
-or enforce upload budgets.
+workspace-prefixed `storage_key` bind that attempt to exactly one object. The
+upload-intent lifecycle is also the authoritative byte and asset-slot
+reservation ledger used by workspace admission and reconciliation.
 
 States and terminal policy:
 
@@ -38,7 +38,8 @@ States and terminal policy:
   deleted by reconciliation. This also preserves Timeline-referenced media
   because Timeline references resolve through persisted `MediaAsset` rows.
 - validation failure occurs before intent/object creation and leaves no durable
-  upload state. Cancellation before upload leaves `pending`; cancellation after
+  upload state. Cancellation before object I/O immediately compensates the
+  intent and releases its byte and asset-slot reservation. Cancellation after
   upload is shielded through metadata completion. A hard process death at either
   point converges through the expired lease.
 - a definite metadata rollback triggers compensation. Successful deletion ends
@@ -56,8 +57,12 @@ until the lease expires and registration has been checked by exact key.
 Media uploads reserve their validated byte size and one asset slot on the durable
 upload intent before object I/O. Admission checks `stored + reserved + incoming`
 under a workspace lock. Success converts the reservation to stored metadata;
-failed or cancelled attempts retain capacity until their object is actually
-removed, after which the terminal intent releases it idempotently.
+definite failures and cancellations before object I/O release bytes and the
+asset slot immediately. Ambiguous process death retains capacity through a
+bounded late-upload verification window. Once that window observes no object,
+both byte and slot capacity are released while a zero-reservation
+`late_upload_watch` tombstone remains durable to detect and remove a delayed
+write. Repeated sweeps release capacity exactly once.
 
 `MEDIA_MAX_STORED_BYTES`, `MEDIA_MAX_ASSET_COUNT`, and
 `MEDIA_MAX_RESERVED_BYTES` default to `0` (unlimited). The authenticated
