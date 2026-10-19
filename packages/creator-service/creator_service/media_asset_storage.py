@@ -44,6 +44,7 @@ class MediaAssetStorageBackend(Protocol):
     ) -> None: ...
     async def compensate_upload(self, intent: UploadIntent, deletion_failed: bool) -> None: ...
     async def asset_exists_for_key(self, workspace_id: int, storage_key: str) -> bool: ...
+    async def delete_generated_asset(self, workspace_id: int, storage_key: str) -> None: ...
     async def claim_expired_upload_intents(
         self, *, now: datetime, lease_expires_at: datetime, limit: int,
     ) -> list[UploadIntent]: ...
@@ -239,6 +240,17 @@ class InMemoryMediaAssetStorage:
                 asset["workspace_id"] == workspace_id and asset.get("storage_key") == storage_key
                 for asset in self._assets
             )
+
+    async def delete_generated_asset(self, workspace_id: int, storage_key: str) -> None:
+        async with self._lock:
+            self._assets = [
+                asset for asset in self._assets
+                if not (
+                    asset["workspace_id"] == workspace_id
+                    and asset.get("storage_key") == storage_key
+                    and asset.get("origin") == MediaOrigin.GENERATED.value
+                )
+            ]
 
     async def claim_expired_upload_intents(
         self, *, now: datetime, lease_expires_at: datetime, limit: int,

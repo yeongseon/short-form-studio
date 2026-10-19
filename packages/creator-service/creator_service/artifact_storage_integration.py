@@ -51,6 +51,10 @@ async def publish_generated_file(
     )
 
 
+async def discard_generated_file(workspace_id: int, storage_key: str) -> None:
+    await media_asset_service.discard_generated_asset(workspace_id, storage_key)
+
+
 def get_artifact_url(key: str, expires_in: int = 3600) -> str:
     backend = get_storage_backend()
     return backend.download_url(key, expires_in)

@@ -82,6 +82,16 @@ class SceneBatch:
         try:
             await self.checkpoint()
         except Ignore:
+            expected = path.resolve().relative_to(artifact_storage_integration._ARTIFACT_ROOT)
+            if path in self.local_outputs and uploaded.key == str(expected):
+                try:
+                    await artifact_storage_integration.discard_generated_file(
+                        self.ctx.workspace_id, uploaded.key,
+                    )
+                except SoftTimeLimitExceeded:
+                    raise
+                except Exception:
+                    logger.warning("Scene upload cleanup failed", extra={"run_id": self.ctx.run_id})
             raise
         # Save may commit even if its acknowledgement raises; transfer before awaiting it.
         self.local_outputs.discard(path)
