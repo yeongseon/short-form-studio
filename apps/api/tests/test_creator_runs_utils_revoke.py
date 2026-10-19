@@ -40,7 +40,7 @@ class _UsageServiceStub:
     def __init__(self) -> None:
         self.cancelled: list[str] = []
 
-    async def cancel_owned(self, owner_id: str) -> bool:
+    async def finalize_revoked_owned(self, owner_id: str) -> bool:
         self.cancelled.append(owner_id)
         return True
 
