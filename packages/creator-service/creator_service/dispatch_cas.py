@@ -1,9 +1,12 @@
+from __future__ import annotations
+
 import logging
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import partial
 from decimal import Decimal
 from importlib import import_module
+from typing import Protocol, TYPE_CHECKING
 from uuid import uuid4
 
 from creator_domain.exceptions import ConflictError, NotFoundError, ServiceError, ServiceUnavailableError
@@ -15,6 +18,13 @@ from creator_service.blocking_io import owned_operation, run_blocking, run_contr
 from creator_service.dispatch_runtime import DispatchRun, DispatchRunService, DispatchRuntime
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from creator_domain.models import RunTask
+
+
+class UncertainTaskTracking(Protocol):
+    async def mark_revoked(self, task_id: str) -> RunTask | None: ...
 
 _DISPATCH_TASK_TYPES = {
     "dispatch_generate_script": "generate_script",
@@ -63,6 +73,19 @@ class DispatchCAS(DispatchRuntime):
             await run_control(partial(self.dispatcher.cancel, task_id))
         except Exception:
             logger.warning("Failed to revoke task", extra={"task_id": task_id}, exc_info=True)
+
+    async def _terminalize_uncertain_task(
+        self, task_id: str, tracking_service: UncertainTaskTracking
+    ) -> None:
+        await self._cancel_task_safe(task_id)
+        try:
+            await tracking_service.mark_revoked(task_id)
+        except Exception:
+            logger.warning(
+                "Failed to mark uncertain task revoked",
+                extra={"task_id": task_id},
+                exc_info=True,
+            )
 
     @owned_operation
     async def cas_dispatch_with_rollback(
@@ -169,17 +192,15 @@ class DispatchCAS(DispatchRuntime):
             if owner_id is not None and task_id != owner_id:
                 raise ServiceUnavailableError("Task identity changed during dispatch")
             if broker_generation is not None:
-                observed_generation = await run_blocking(self.broker_generation)
+                try:
+                    observed_generation = await run_blocking(self.broker_generation)
+                except Exception:
+                    await self._terminalize_uncertain_task(task_id, task_tracking_service)
+                    raise ServiceUnavailableError(
+                        "Unable to verify broker generation after dispatch"
+                    ) from None
                 if observed_generation != broker_generation:
-                    await self._cancel_task_safe(task_id)
-                    try:
-                        await task_tracking_service.mark_revoked(task_id)
-                    except Exception:
-                        logger.warning(
-                            "Failed to mark uncertain task revoked",
-                            extra={"task_id": task_id},
-                            exc_info=True,
-                        )
+                    await self._terminalize_uncertain_task(task_id, task_tracking_service)
                     raise ServiceUnavailableError("Broker generation changed during dispatch")
         except SynchronousTaskExecutionError:
             await cancel_quota(reserved_workspace, quota_operation_type, owner_id=owner_id)

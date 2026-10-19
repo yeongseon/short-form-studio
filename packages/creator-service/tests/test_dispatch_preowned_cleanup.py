@@ -3,8 +3,10 @@ from decimal import Decimal
 import pytest
 from creator_domain.exceptions import ConflictError, ServiceUnavailableError
 from creator_service import dispatch_cas
+from creator_service.memory_task_tracking_storage import InMemoryTaskTrackingStorage
 from creator_service.run_service import InMemoryRunStorage, RunService
 from creator_service.task_dispatch_service import TaskDispatchService
+from creator_service.task_tracking_service import TaskTrackingService
 from creator_service.usage_service import InMemoryUsageStorage, UsageService
 
 from .test_dispatch_port import RecordingDispatcher
@@ -163,6 +165,47 @@ async def test_dispatch_compensates_broker_replacement_around_publish(
 
     # Then the uncertain attempt is revoked and run/quota state is compensated.
     assert len(revoked) == 1
+    assert await usage.reserve_owned(1, "render", "replacement", Decimal("0.004"))
+    run = await runs.get_run(run_id, workspace_id=1)
+    assert run is not None and run.current_stage == "TIMELINE_REVIEW"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_compensates_when_post_publish_generation_read_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given an approved dispatch that publishes before broker observation fails.
+    runs, usage, dispatch, run_id = await _approved_render()
+    tracking = TaskTrackingService(InMemoryTaskTrackingStorage())
+    observations = 0
+    monkeypatch.setattr("creator_service.usage_service.usage_service", usage)
+    monkeypatch.setattr(
+        "creator_service.task_tracking_service.task_tracking_service", tracking
+    )
+
+    async def reserve(*_args: object, **_kwargs: object) -> int:
+        return 1
+
+    def observe_generation() -> str:
+        nonlocal observations
+        observations += 1
+        if observations == 2:
+            raise ConnectionError("broker unavailable after publish")
+        return "epoch-a"
+
+    monkeypatch.setattr(dispatch_cas, "reserve_quota", reserve)
+    monkeypatch.setattr(dispatch, "broker_generation", observe_generation)
+
+    # When the post-publish generation read raises.
+    with pytest.raises(ServiceUnavailableError):
+        await _dispatch_preowned(runs, dispatch, run_id)
+
+    # Then the uncertain attempt is revoked, terminalized, and compensated.
+    task_id = dispatch.dispatcher.submissions[0].task_id
+    assert task_id is not None
+    task = await tracking.storage.get_by_celery_id(task_id)
+    assert dispatch.dispatcher.cancelled == [task_id]
+    assert task is not None and task["status"] == "revoked"
     assert await usage.reserve_owned(1, "render", "replacement", Decimal("0.004"))
     run = await runs.get_run(run_id, workspace_id=1)
     assert run is not None and run.current_stage == "TIMELINE_REVIEW"
