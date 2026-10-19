@@ -104,8 +104,8 @@ async def test_storage_absent_object_removes_claimed_metadata() -> None:
 
 
 @pytest.mark.anyio
-async def test_storage_delete_error_keeps_metadata_accounted() -> None:
-    # Given an eligible asset whose object provider fails deletion.
+async def test_storage_delete_error_keeps_deletion_fence() -> None:
+    # Given an eligible asset whose object deletion outcome is ambiguous.
     asset = _asset(1, 7, origin="GENERATED", media_type="IMAGE")
 
     class Storage:
@@ -150,8 +150,8 @@ async def test_storage_delete_error_keeps_metadata_accounted() -> None:
             MediaRetentionPolicy(intermediate_days=7, enabled=True, dry_run=False),
         ).sweep_workspace(7, now=datetime.now(timezone.utc))
 
-    # Then metadata remains accounted because its deletion was never attempted.
-    assert storage.deleted == [-1]
+    # Then metadata remains accounted and the irreversible deletion fence stays owned.
+    assert storage.deleted == []
 
 
 @pytest.mark.anyio

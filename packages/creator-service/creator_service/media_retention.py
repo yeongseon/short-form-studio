@@ -144,13 +144,9 @@ class MediaRetentionService:
             async def delete_object() -> None:
                 await self._io.run(lambda: self._objects.delete(asset.storage_key))
 
-            try:
-                finalized = await self._storage.finalize_retained_asset(
-                    asset.id, workspace_id, claim_token, delete_object,
-                )
-            except BaseException:
-                await self._storage.release_retained_asset(asset.id, workspace_id, claim_token)
-                raise
+            finalized = await self._storage.finalize_retained_asset(
+                asset.id, workspace_id, claim_token, delete_object,
+            )
             if finalized:
                 deleted += 1
         return RetentionSweepResult(len(candidates), deleted, False, True)
