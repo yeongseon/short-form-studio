@@ -160,7 +160,7 @@ def run_task(
             except Exception:
                 runner.logger.warning("Failed to record task timeout", exc_info=True)
                 raise
-            if outcome is None:
+            if not outcome:
                 raise
         elif not claimed:
             raise

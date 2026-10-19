@@ -85,6 +85,29 @@ def test_terminal_failure_uses_atomic_claim_run_and_quota_finalizer(
     assert finalize.await_args.args[7] == frozenset({"SCRIPT_GENERATING"})
 
 
+def test_lost_timeout_claim_does_not_settle_successor_reservation(
+    runner_case: RunnerCase,
+    quota_case: UsageService,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given atomic timeout finalization rejects a stale delivery claim.
+    finalize = AsyncMock(return_value=False)
+    settle = AsyncMock()
+    monkeypatch.setattr(runner_case.tracking, "fail_claimed_and_cancel_quota", finalize)
+    monkeypatch.setattr(quota_case, "settle_owned", settle)
+
+    async def execute(ctx: task_runner.TaskContext) -> task_runner.TaskResult:
+        ctx.billing_outcome = task_runner.BillingOutcome.ACCOUNTED
+        raise SoftTimeLimitExceeded()
+
+    # When the stale delivery handles its timeout.
+    with pytest.raises(SoftTimeLimitExceeded):
+        task_runner.run_task(runner_case.delivery(), runner_case.run_id, runner_case.config, execute)
+
+    # Then it cannot settle quota now owned by a successor.
+    settle.assert_not_awaited()
+
+
 def test_retryable_failure_keeps_reservation(
     runner_case: RunnerCase, quota_case: UsageService,
 ) -> None:
