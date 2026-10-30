@@ -3,6 +3,8 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 from billiard.exceptions import SoftTimeLimitExceeded
 from creator_provider.exceptions import ProviderTimeoutError
+from creator_service.postgres_task_tracking_storage import PostgresTaskTrackingStorage
+from creator_service.postgres_usage_storage import PostgresUsageStorage
 from creator_service.usage_service import InMemoryUsageStorage, UsageService
 from tasks import task_runner
 from tasks.task_execution import TaskInputError
@@ -15,7 +17,9 @@ from .provider_boundary_support import GenerationCase, generation_case as genera
 
 @pytest.fixture
 def quota_case(runner_case: RunnerCase, monkeypatch: pytest.MonkeyPatch) -> UsageService:
-    service = UsageService(InMemoryUsageStorage())
+    # The terminal finalizer cancels quota in the task-row backend, so reservations must live there.
+    postgres = isinstance(runner_case.tracking.storage, PostgresTaskTrackingStorage)
+    service = UsageService(PostgresUsageStorage() if postgres else InMemoryUsageStorage())
     run_in_worker_loop(service.set_quota(1, monthly_llm_calls=2))
     assert run_in_worker_loop(service.reserve_owned(1, "llm", "validation-task"))
     assert run_in_worker_loop(service.reserve_owned(1, "llm", "other-task"))

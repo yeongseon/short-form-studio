@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import asyncpg
 import pytest
-from creator_service import db
+from creator_service import db, postgres_usage_storage
 from worker_loop import run_in_worker_loop
 
 
@@ -48,6 +48,7 @@ def terminal_pool(monkeypatch: pytest.MonkeyPatch) -> Iterator[asyncpg.Pool]:
                 return pool
 
             monkeypatch.setattr(db, "get_pool", get_pool)
+            monkeypatch.setattr(postgres_usage_storage, "get_pool", get_pool)
             yield pool
         finally:
             run_in_worker_loop(pool.close())
