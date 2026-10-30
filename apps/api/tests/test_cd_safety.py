@@ -192,12 +192,15 @@ def test_lifecycle_builds_additive_newer_head_and_runs_cd_rollback_verification(
     lifecycle = (ROOT / "scripts/release_lifecycle_acceptance.sh").read_text()
 
     assert "051_release_lifecycle_additive" in workflow
-    assert "down_revision: str | None = \"050\"" in workflow
     lifecycle_step = workflow[workflow.index("Build two API releases"):]
-    assert lifecycle_step.count("ScriptDirectory.from_config") == 2
+    assert lifecycle_step.count("ScriptDirectory.from_config") == 3
+    assert 'down_revision: str | None = "${lifecycle_base_head}"' in lifecycle_step
+    assert lifecycle_step.index("lifecycle_base_head=") < lifecycle_step.index(
+        "051_release_lifecycle_additive.py"
+    )
     assert 'LIFECYCLE_N_HEAD="$lifecycle_n_head"' in workflow
     assert 'LIFECYCLE_N_PLUS_ONE_HEAD="$lifecycle_n_plus_one_head"' in workflow
-    assert '[ "$lifecycle_n_head" = 044 ]' in workflow
+    assert '[ "$lifecycle_n_head" = 044 ]' not in workflow
     assert '[ "$lifecycle_n_plus_one_head" = 051_release_lifecycle_additive ]' in workflow
     assert "MigrationContext.configure(connection).get_current_heads()" in lifecycle
     assert "verify-db-compatible" in lifecycle
