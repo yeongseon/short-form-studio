@@ -1,7 +1,7 @@
 # Security Model
 
 This document describes the authentication architecture, trust boundaries,
-and deployment constraints for Short Form Studio.
+and deployment constraints for AI Video Studio.
 
 ---
 

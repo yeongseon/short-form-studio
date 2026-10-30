@@ -1,1 +1,1 @@
-"""creator-domain: shared domain models for short-form pipeline."""
+"""creator-domain: shared domain models for AI Video Studio."""

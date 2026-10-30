@@ -1,7 +1,7 @@
 [project]
 name = "creator-provider"
 version = "0.1.0"
-description = "AI model provider abstractions for short-form pipeline"
+description = "AI model provider adapters for AI Video Studio"
 requires-python = ">=3.12"
 license = {text = "MIT"}
 authors = [{name = "Yeongseon Choe"}]

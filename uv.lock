@@ -12,7 +12,7 @@ members = [
     "creator-domain",
     "creator-provider",
     "creator-service",
-    "short-form-studio",
+    "ai-video-studio",
 ]
 
 [[package]]
@@ -1616,7 +1616,7 @@ wheels = [
 ]
 
 [[package]]
-name = "short-form-studio"
+name = "ai-video-studio"
 version = "0.4.0"
 source = { virtual = "." }
 

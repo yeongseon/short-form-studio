@@ -28,7 +28,7 @@ describe("AppShell", () => {
 
   it("renders brand link", () => {
     renderWithRoute("/create");
-    expect(screen.getByText("Short-Form Pipeline")).toBeInTheDocument();
+    expect(screen.getByText("AI Video Studio")).toBeInTheDocument();
   });
 
   it("renders creator nav section", () => {

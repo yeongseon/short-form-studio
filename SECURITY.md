@@ -2,7 +2,7 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability in Short Form Studio, please report it responsibly.
+If you discover a security vulnerability in AI Video Studio, please report it responsibly.
 
 **DO NOT** open a public GitHub issue for security vulnerabilities.
 

@@ -1,6 +1,6 @@
 # Local Docker Compose Setup
 
-This guide explains how to run Short Form Studio on a local server using Docker Compose.
+This guide explains how to run AI Video Studio on a local server using Docker Compose.
 
 ## 1. Create environment file
 
