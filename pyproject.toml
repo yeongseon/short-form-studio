@@ -1,7 +1,7 @@
 [project]
-name = "short-form-studio"
+name = "ai-video-studio"
 version = "0.4.0"
-description = "AI-powered short-form video production pipeline with human-in-the-loop review"
+description = "AI-assisted video production studio with human-in-the-loop review; short-form first"
 readme = "README.md"
 requires-python = ">=3.12"
 license = {text = "MIT"}

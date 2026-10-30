@@ -54,7 +54,7 @@ export default function AppShell() {
             marginRight: 16,
           }}
         >
-          Short-Form Pipeline
+          AI Video Studio
         </Link>
 
         <div style={{ display: "flex", gap: 4 }} data-testid="creator-nav">

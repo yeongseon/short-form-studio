@@ -1,10 +1,10 @@
-# Short Form Studio
+# AI Video Studio
 
-AI-powered short-form video production pipeline -- from idea to rendered video in minutes.
+AI-assisted video creation with human review, flexible timelines, and reusable media workflows.
 
 ## Overview
 
-Short Form Studio is an open-source platform that automates short-form video creation using AI.
+AI Video Studio is an open-source, AI-assisted video production studio. Its currently implemented creation workflows focus on short-form videos; end-to-end long-form production remains under development.
 It takes an idea or structured script and produces a complete video with:
 
 - AI-generated scripts (via LLM)
@@ -14,6 +14,8 @@ It takes an idea or structured script and produces a complete video with:
 - Final video rendering (via FFmpeg)
 
 The pipeline is stage-based with human-in-the-loop review at each step.
+
+> **Current support:** Short-form creation and editing are the primary supported workflows. Longer target durations and landscape output are not evidence that the full long-form workflow is complete. Track long-form delivery in [#882–#885](https://github.com/yeongseon/short-form-studio/issues/882) and repository-name migration in [#886](https://github.com/yeongseon/short-form-studio/issues/886).
 
 ## Architecture
 
@@ -50,7 +52,7 @@ graph TB
     subgraph Infrastructure
         PG[(PostgreSQL)]
         REDIS[(Redis)]
-        S3[Artifact Storage<br/>Local / S3]
+        S3[Artifact Storage<br/>Local / S3 / Azure Blob]
     end
 
     subgraph AI Services [AI Services - Optional GPU]

@@ -111,7 +111,7 @@ then rolls the application back to N without a DB downgrade and verifies both
 resources remain accessible. Real registry promotion and protected-environment
 deployments still require hosted infrastructure and explicit operator approval.
 
-This document outlines the production deployment workflow for Short Form Studio, with a focus on database migration safety and rollback strategies.
+This document outlines the production deployment workflow for AI Video Studio, with a focus on database migration safety and rollback strategies.
 
 ## Overview
 

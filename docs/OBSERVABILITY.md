@@ -1,7 +1,7 @@
 # Observability Guide
 
 This document covers the OpenTelemetry integration and structured logging
-setup for Short Form Studio.
+setup for AI Video Studio.
 
 ---
 

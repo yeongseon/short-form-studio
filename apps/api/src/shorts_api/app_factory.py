@@ -64,7 +64,7 @@ def create_app() -> FastAPI:
     production_hardened = environment == "production"
 
     app = FastAPI(
-        title="short-form-studio API",
+        title="AI Video Studio API",
         lifespan=lifespan,
         docs_url=None if production_hardened else "/docs",
         redoc_url=None if production_hardened else "/redoc",

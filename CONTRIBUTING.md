@@ -1,4 +1,4 @@
-# Contributing to Short Form Studio
+# Contributing to AI Video Studio
 
 Thank you for your interest in contributing! This guide will help you get started.
 
