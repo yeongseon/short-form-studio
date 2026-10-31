@@ -5,7 +5,14 @@ AI-assisted video creation with human review, flexible timelines, and reusable m
 ## Overview
 
 AI Video Studio is an open-source, AI-assisted video production studio. Its currently implemented creation workflows focus on short-form videos; end-to-end long-form production remains under development.
-It takes an idea or structured script and produces a complete video with:
+
+The product direction is to turn ideas and media assets into editable short-form
+videos: an AI draft first, then scene-level control, a simple timeline, and AI-assisted
+editing. These studio capabilities are the target, not a claim that the roadmap
+is already implemented.
+
+The current foundation is a stage-based AI production pipeline. It takes an idea
+or structured script and produces a video with:
 
 - AI-generated scripts (via LLM)
 - Visual plans and image generation (via Stable Diffusion or DALL-E)
@@ -16,6 +23,18 @@ It takes an idea or structured script and produces a complete video with:
 The pipeline is stage-based with human-in-the-loop review at each step.
 
 > **Current support:** Short-form creation and editing are the primary supported workflows. Longer target durations and landscape output are not evidence that the full long-form workflow is complete. Track long-form delivery in [#882–#885](https://github.com/yeongseon/short-form-studio/issues/882) and repository-name migration in [#886](https://github.com/yeongseon/short-form-studio/issues/886).
+
+### Product direction
+
+**Short-first product, long-form-ready architecture.** Short form is a product
+constraint, not a core domain constraint. We focus on real assets, scene editing,
+a simple timeline, AI editing, and easy OSS setup. Long-form UI, chapters, sequences,
+and chunk rendering are not current deliverables; the repository name stays unchanged.
+
+- [Product direction](docs/PRODUCT_DIRECTION.md) — scope, target experience, and success criteria
+- [Roadmap](docs/ROADMAP.md) — planned P0–P3 work and milestone acceptance criteria
+- [Media core architecture](docs/architecture/SHORT_FIRST_MEDIA_CORE.md) — generic core, short-first product
+- [Future long-form extension](docs/architecture/LONG_FORM_EXTENSION.md) — checklist only, not active work
 
 ## Architecture
 
@@ -371,6 +390,10 @@ See [`docs/LIGHTWEIGHT.md`](docs/LIGHTWEIGHT.md) for setup and tradeoffs.
 
 - [First Short Walkthrough](docs/FIRST_SHORT_WALKTHROUGH.md) -- Offline demo, explicit Timeline approval, render and download
 - [Quick Start](docs/QUICKSTART.md) -- Local bootstrap and server-side authentication wiring
+- [Product Direction](docs/PRODUCT_DIRECTION.md) -- Short-first scope and target user experience
+- [Roadmap](docs/ROADMAP.md) -- Planned foundations, studio editing, AI editing, and OSS usability
+- [Media Core Architecture](docs/architecture/SHORT_FIRST_MEDIA_CORE.md) -- Target architecture and compatibility boundaries
+- [Future Long-form Extension](docs/architecture/LONG_FORM_EXTENSION.md) -- Deferred extension checklist
 - [Usage Guide](docs/USAGE.md) -- Detailed feature walkthrough
 - [Security Model](docs/SECURITY.md) -- Authentication, trust boundaries, network policy
 - [Deployment Guide](docs/CUTOVER.md) -- Production deployment checklist
