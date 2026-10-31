@@ -50,7 +50,80 @@ All security-critical and production-hardening changes MUST follow this workflow
 
 ### 6. Merge
 - Only merge after Oracle 100/100 AND full test suite green
+- Required CI must also be green on the exact final head SHA (see **CI Failure Handling** below)
 - Squash merge preferred for clean history
+
+## CI Failure Handling
+
+This section follows the TDD workflows above and does not relax any of their gates
+(full API suite, Oracle 100/100, 404 anti-enumeration). It applies whenever CI fails on a
+pull request or during implementation work.
+
+### Classify the cause first
+
+Read the failing job log and reproduce the failure locally when possible. Then label it:
+
+- **Change-related regression**: the current change caused it.
+- **Pre-existing defect**: a real defect that already existed and was exposed by the change or by CI.
+- **Infrastructure, external dependency or flaky failure**: runner, registry, network, an external
+  service, or a nondeterministic test.
+- **Test/environment prerequisite gap**: a test needs something (FFmpeg, an import path, a Compose
+  fixture) that CI does not declare.
+
+### Change-related regressions
+
+- Fix them in the same PR. Add or strengthen a regression test that fails for the intended reason
+  first (Red), then passes (Green).
+- Re-run the focused tests, then every required CI check.
+- Flow: implement → CI fails → reproduce → regression test → fix → focused tests → full required CI →
+  exact final head SHA green → review → merge.
+
+### Newly discovered defects (issue-first)
+
+When CI exposes a defect that the change did not cause:
+
+1. Check whether an issue already covers it.
+2. If not, open an issue first (or add it explicitly to the current issue's scope), with the evidence.
+3. If it affects correctness, security, data integrity, or release readiness, fix it before merging.
+4. If it does not block, it may be deferred explicitly: record the evidence and a priority on the
+   issue and link it from the PR.
+5. The minimal fix needed to finish the current PR safely may ride in the same PR once the issue is
+   linked. Never mix in unrelated refactors or cleanup.
+
+### Infrastructure, external and flaky failures
+
+- Do not work around them in application code.
+- Confirm whether the failure reproduces and what the external cause is.
+- If the CI environment or a fixture is at fault, fix it and add a check that would catch a recurrence.
+- A green re-run does not count as a fix for a flaky or infrastructure failure.
+
+### Prerequisite gaps
+
+Declare what the test really needs and keep the test. Example: a real-media render test fails on the
+runner because FFmpeg is missing. Install FFmpeg and ffprobe in the CI job, add an executable and
+version check, keep the render test, and re-run the full CI. Do not skip the test.
+
+### Never make CI green by
+
+- weakening an assertion
+- adding a skip or xfail marker without evidence
+- disabling a required check
+- lowering a coverage threshold
+- suppressing type or lint errors
+- deleting a failing test
+- removing a security or authorization check
+- retrying a failing job until it passes in order to hide the failure
+
+### Merge gate
+
+- Merge only when every required check (lint, tests, docker/runtime, security, review gates, and
+  anything else the repository requires) is green on the **exact final head SHA** of the PR.
+- A green result from an earlier SHA is not evidence for the final head. After every push, wait for
+  the checks on the new head.
+- Documentation-only changes are verified with content and consistency checks (diff hygiene, links,
+  referenced paths and commands) instead of artificial tests.
+
+This is a working rule, not automation: it does not add a CI auto-repair bot or unlimited retries.
 
 ## Access Control Pattern
 
