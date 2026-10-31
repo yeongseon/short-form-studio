@@ -1,5 +1,21 @@
 # Agent Rules
 
+## TDD for All Implementation Work
+
+All feature, bug-fix, and refactoring implementation MUST use TDD:
+
+1. Write behavior or regression tests before changing production code.
+2. Run them and confirm they fail for the intended reason (Red).
+3. Implement the minimum change needed to pass (Green).
+4. Refactor while keeping the tests green; do not weaken assertions to pass.
+5. Run relevant regression tests, type checks, lint, and builds. Include the
+   failing and passing commands/results in the implementation handoff or PR.
+
+For existing behavior, add characterization tests before refactoring and record
+the passing baseline; new or changed behavior still requires a failing test first.
+Documentation-only changes use content/link checks rather than artificial tests.
+The additional security and production-hardening gates below still apply.
+
 ## TDD + Oracle Review Workflow
 
 All security-critical and production-hardening changes MUST follow this workflow:
