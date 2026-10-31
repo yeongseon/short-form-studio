@@ -344,6 +344,58 @@ async def test_db_error_during_workspace_resolution_returns_503(api_key, monkeyp
 
 
 @pytest.mark.asyncio
+async def test_workspace_resolution_queries_db_once(api_key, monkeypatch: pytest.MonkeyPatch):
+    """Regression for #619: workspace membership must be queried exactly once.
+
+    _resolve_member_workspaces previously ran the SAME query twice; the second
+    fetch overwrote the first result and swallowed errors, converting a
+    transient DB failure into a false 404. This test issues a hard error on any
+    second fetch, so the buggy swallow-block would map it to 404 instead of
+    resolving the membership.
+    """
+    expected_hash = hashlib.sha256(api_key.encode("utf-8")).hexdigest()
+    fetch_calls = {"count": 0}
+
+    class _Conn:
+        async def fetchrow(self, query: str, key_hash: str):
+            if key_hash != expected_hash:
+                return None
+            return {"user_id": 1}
+
+        async def fetch(self, _query: str, user_id: int):
+            fetch_calls["count"] += 1
+            if fetch_calls["count"] > 1:
+                raise RuntimeError("workspace query issued more than once")
+            return [{"workspace_id": 1}]
+
+    class _Acquire:
+        async def __aenter__(self):
+            return _Conn()
+
+        async def __aexit__(self, exc_type, exc, tb):
+            _ = (exc_type, exc, tb)
+            return False
+
+    class _Pool:
+        def acquire(self):
+            return _Acquire()
+
+    async def _get_pool_stub(self):
+        _ = self
+        return _Pool()
+
+    monkeypatch.setattr("shorts_api.auth.ApiKeyMiddleware._get_pool", _get_pool_stub)
+
+    app = _make_app()
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+        response = await ac.get("/api/creator/data", headers={"X-API-Key": api_key})
+        assert response.status_code == 200
+        assert response.json() == {"data": "secret"}
+    assert fetch_calls["count"] == 1
+
+
+@pytest.mark.asyncio
 async def test_revoked_api_key_returns_401(api_key, monkeypatch: pytest.MonkeyPatch):
     """A revoked key (revoked_at set in the DB) must NOT authenticate.
 
