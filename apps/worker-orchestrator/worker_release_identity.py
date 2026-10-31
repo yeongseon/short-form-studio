@@ -11,6 +11,10 @@ HEARTBEAT_INTERVAL_SECONDS: Final = 60
 IDENTITY_TTL_SECONDS: Final = HEARTBEAT_INTERVAL_SECONDS * 3
 
 
+def _release_metadata() -> tuple[str | None, str | None]:
+    return os.getenv("SOURCE_SHA") or None, os.getenv("WORKER_IMAGE_DIGEST") or None
+
+
 def _write_release_identity() -> None:
     client = redis.Redis.from_url(
         os.getenv("REDIS_URL", "redis://redis:6379/0"),
@@ -32,8 +36,7 @@ def _write_release_identity() -> None:
 
 @worker_ready.connect
 def publish_release_identity(**_kwargs: object) -> None:
-    source_sha = os.getenv("SOURCE_SHA")
-    image_digest = os.getenv("WORKER_IMAGE_DIGEST")
+    source_sha, image_digest = _release_metadata()
     if source_sha is None and image_digest is None:
         return
     if source_sha is None or image_digest is None:
@@ -47,7 +50,7 @@ def publish_release_identity(**_kwargs: object) -> None:
 
 @heartbeat_sent.connect
 def refresh_release_identity(**_kwargs: object) -> None:
-    if os.getenv("SOURCE_SHA") is None and os.getenv("WORKER_IMAGE_DIGEST") is None:
+    if _release_metadata() == (None, None):
         return
     try:
         _write_release_identity()
