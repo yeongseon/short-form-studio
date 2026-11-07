@@ -12,6 +12,7 @@ from billiard.exceptions import SoftTimeLimitExceeded
 from creator_provider.base import AudioResult, TTSProvider
 from creator_provider.exceptions import ProviderError
 from creator_provider.validation import MAX_TTS_TEXT_CHARS, validate_prompt_length
+from creator_provider.word_timing_envelope import envelope, parse_sdk_rows, write_atomic
 
 # Default Korean voices
 _DEFAULT_VOICES: dict[str, str] = {
@@ -70,7 +71,17 @@ class EdgeTTSProvider(TTSProvider):
             communicate = edge_tts.Communicate(
                 text=text, voice=voice_name, rate=rate, pitch=pitch, volume=volume
             )
-            await communicate.save(str(output_path))
+            word_timestamps_path = Path(f"{output_path}.words.jsonl")
+            with tempfile.NamedTemporaryFile(
+                dir=output_path.parent, suffix=".words.jsonl", delete=False
+            ) as metadata_file:
+                sdk_metadata_path = Path(metadata_file.name)
+            try:
+                await communicate.save(str(output_path), str(sdk_metadata_path))
+                words = parse_sdk_rows(sdk_metadata_path.read_text(encoding="utf-8"))
+                write_atomic(word_timestamps_path, envelope(output_path, text, words))
+            finally:
+                sdk_metadata_path.unlink(missing_ok=True)
         except SoftTimeLimitExceeded:
             raise
         except ConnectionError as exc:
@@ -89,4 +100,5 @@ class EdgeTTSProvider(TTSProvider):
             audio_path=str(output_path),
             duration_seconds=duration,
             model_key=self.model_key,
+            metadata={"word_timestamps_path": str(word_timestamps_path)},
         )

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+import hashlib
 from dataclasses import dataclass
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -157,6 +160,69 @@ def _invoke_task(**kwargs: Any) -> dict[str, object]:
     task = generate_audio_module.generate_audio
     run_callable = getattr(task, "run", task)
     return run_callable(**kwargs)
+
+
+def test_merge_word_timing_sidecars_rebases_section_offsets(tmp_path: Path) -> None:
+    # Given two section-audio timing sidecars and measured section durations.
+    first = tmp_path / "first.mp3"
+    second = tmp_path / "second.mp3"
+    first.write_bytes(b"first")
+    second.write_bytes(b"second")
+    for path, text in ((first, "하나"), (second, "둘")):
+        Path(f"{path}.words.jsonl").write_text(
+            json.dumps(
+                {
+                    "format": "short-form-studio/tts-word-timings",
+                    "version": 1,
+                    "audio_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    "script_sha256": hashlib.sha256(text.encode()).hexdigest(),
+                    "words": [
+                        {
+                            "type": "WordBoundary",
+                            "offset": 0,
+                            "duration": 10_000_000,
+                            "text": text,
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+    class FakeFFmpeg:
+        def get_audio_duration(self, path: str) -> float:
+            return 1.5 if path == str(first) else 2.0
+
+    output = tmp_path / "full.mp3"
+    output.write_bytes(b"concatenated")
+
+    # When timing metadata is merged for the concatenated audio.
+    generate_audio_module._merge_word_timing_sidecars(
+        [(str(first), "하나"), (str(second), "둘")], str(output), FakeFFmpeg()
+    )
+
+    # Then the second section starts after the measured first-section duration.
+    envelope = json.loads(Path(f"{output}.words.jsonl").read_text(encoding="utf-8"))
+    rows = envelope["words"]
+    assert [row["offset"] for row in rows] == [0, 15_000_000]
+    assert envelope["format"] == "short-form-studio/tts-word-timings"
+    assert envelope["version"] == 1
+    assert envelope["audio_sha256"] == hashlib.sha256(b"concatenated").hexdigest()
+    assert envelope["script_sha256"] == hashlib.sha256("하나\n둘".encode()).hexdigest()
+
+
+def test_invalidate_word_timing_sidecar_removes_stale_alignment(tmp_path: Path) -> None:
+    # Given a full-audio sidecar left by a failed per-section attempt.
+    audio_path = tmp_path / "audio.mp3"
+    sidecar = Path(f"{audio_path}.words.jsonl")
+    sidecar.write_text('{"text":"stale"}\n', encoding="utf-8")
+
+    # When the worker switches to single-pass fallback.
+    generate_audio_module._invalidate_word_timing_sidecar(str(audio_path))
+
+    # Then stale timings cannot be paired with replacement audio.
+    assert not sidecar.exists()
 
 
 def test_generate_audio_success(monkeypatch: pytest.MonkeyPatch) -> None:

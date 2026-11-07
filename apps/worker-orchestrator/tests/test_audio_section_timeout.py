@@ -88,14 +88,14 @@ def test_edge_sdk_timeout_reaches_audio_task_without_fallback(
 ) -> None:
     # Given the real Edge adapter whose SDK save raises a soft deadline.
     case = audio_case
-    calls: list[str] = []
+    calls: list[tuple[str, str | None]] = []
 
     class FakeCommunicate:
         def __init__(self, **_kwargs: str) -> None:
             pass
 
-        async def save(self, path: str) -> None:
-            calls.append(path)
+        async def save(self, path: str, metadata_path: str | None = None) -> None:
+            calls.append((path, metadata_path))
             raise SoftTimeLimitExceeded()
 
     provider = EdgeTTSProvider(endpoint="", model_key="edge-tts")
@@ -117,7 +117,14 @@ def test_edge_sdk_timeout_reaches_audio_task_without_fallback(
     # Then the deadline identity and single invocation survive without fallback.
     assert result.state == "FAILURE"
     assert isinstance(result.result, SoftTimeLimitExceeded)
+    output_path = (
+        case.root / str(case.runner.run_id) / "audio" / "edge-sdk-timeout" / "section_0.mp3"
+    )
     assert len(calls) == 1
+    assert calls[0][0] == str(output_path)
+    assert calls[0][1] is not None
+    assert calls[0][1] != f"{output_path}.words.jsonl"
+    assert not Path(f"{output_path}.words.jsonl").exists()
     case.usage.assert_not_awaited()
 
 
